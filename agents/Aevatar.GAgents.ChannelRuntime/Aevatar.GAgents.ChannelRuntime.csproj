@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />

@@ -3,7 +3,10 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,7 +38,7 @@ public sealed class AgentBuilderTool : IAgentTool
             },
             "template": {
               "type": "string",
-              "description": "Template name, currently supports daily_report"
+              "description": "Template name, currently supports daily_report and social_media"
             },
             "agent_id": {
               "type": "string",
@@ -44,6 +47,18 @@ public sealed class AgentBuilderTool : IAgentTool
             "github_username": {
               "type": "string",
               "description": "GitHub username for the daily_report template"
+            },
+            "topic": {
+              "type": "string",
+              "description": "Primary topic or campaign focus for the social_media template"
+            },
+            "audience": {
+              "type": "string",
+              "description": "Optional audience descriptor for the social_media template"
+            },
+            "style": {
+              "type": "string",
+              "description": "Optional tone/style instruction for the social_media template"
             },
             "repositories": {
               "type": "string",
@@ -89,7 +104,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var action = args.Str("action", "list_templates");
         if (string.Equals(action, "list_templates", StringComparison.Ordinal))
-            return JsonSerializer.Serialize(new { templates = SkillRunnerTemplates.ListTemplates() });
+            return JsonSerializer.Serialize(new { templates = AgentBuilderTemplates.ListTemplates() });
 
         var queryPort = _serviceProvider.GetService<IAgentRegistryQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
@@ -128,10 +143,23 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         var template = (args.Str("template") ?? string.Empty).Trim();
-        if (!string.Equals(template, "daily_report", StringComparison.OrdinalIgnoreCase))
-            return JsonSerializer.Serialize(new { error = $"Unsupported template '{template}'. Only daily_report is implemented in this PR." });
+        return template.ToLowerInvariant() switch
+        {
+            "daily_report" => await CreateDailyReportAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
+            "social_media" => await CreateSocialMediaAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
+            _ => JsonSerializer.Serialize(new { error = $"Unsupported template '{template}'. Supported templates: daily_report, social_media." }),
+        };
+    }
 
-        if (!SkillRunnerTemplates.TryBuildDailyReportSpec(
+    private async Task<string> CreateDailyReportAgentAsync(
+        BuilderArgs args,
+        IAgentRegistryQueryPort queryPort,
+        IActorRuntime actorRuntime,
+        NyxIdApiClient nyxClient,
+        string token,
+        CancellationToken ct)
+    {
+        if (!AgentBuilderTemplates.TryBuildDailyReportSpec(
                 args.Str("github_username") ?? string.Empty,
                 args.Str("repositories"),
                 out var templateSpec,
@@ -208,27 +236,13 @@ public sealed class AgentBuilderTool : IAgentTool
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
 
-        var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(500, ct);
-
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-
-            var after = await queryPort.GetAsync(agentId, ct);
-            if (after == null)
-                continue;
-
-            if (string.Equals(after.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
-                string.Equals(after.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal))
-            {
-                confirmed = true;
-                break;
-            }
-        }
+        var confirmed = await WaitForCreatedAgentAsync(
+            queryPort,
+            agentId,
+            versionBefore,
+            entry => string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
+                     string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
+            ct);
 
         return JsonSerializer.Serialize(new
         {
@@ -240,6 +254,130 @@ public sealed class AgentBuilderTool : IAgentTool
             conversation_id = conversationId,
             api_key_id = apiKeyId,
             note = confirmed ? "" : "Agent initialization accepted but registry projection is not yet confirmed.",
+        });
+    }
+
+    private async Task<string> CreateSocialMediaAgentAsync(
+        BuilderArgs args,
+        IAgentRegistryQueryPort queryPort,
+        IActorRuntime actorRuntime,
+        NyxIdApiClient nyxClient,
+        string token,
+        CancellationToken ct)
+    {
+        var scopeId = AgentToolRequestContext.TryGet("scope_id");
+        if (string.IsNullOrWhiteSpace(scopeId))
+            return """{"error":"scope_id is required for the social_media template"}""";
+
+        var workflowCommandPort = _serviceProvider.GetService<IScopeWorkflowCommandPort>();
+        if (workflowCommandPort is null)
+            return """{"error":"Scope workflow command port is not registered."}""";
+
+        var scheduleCron = args.Str("schedule_cron");
+        if (string.IsNullOrWhiteSpace(scheduleCron))
+            return """{"error":"schedule_cron is required for create_agent"}""";
+
+        var scheduleTimezone = args.Str("schedule_timezone") ?? WorkflowAgentDefaults.DefaultTimezone;
+        if (!SkillRunnerScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
+            return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
+
+        var conversationId = args.Str("conversation_id")
+            ?? AgentToolRequestContext.TryGet(ChannelMetadataKeys.ConversationId);
+        if (string.IsNullOrWhiteSpace(conversationId))
+            return """{"error":"conversation_id is required when no current channel conversation is available"}""";
+
+        var ownerNyxUserId = await ResolveCurrentUserIdAsync(nyxClient, token, ct);
+        if (string.IsNullOrWhiteSpace(ownerNyxUserId))
+            return """{"error":"Could not resolve current NyxID user id"}""";
+
+        var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
+        var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
+            ? WorkflowAgentDefaults.GenerateActorId()
+            : args.Str("agent_id")!.Trim();
+
+        if (!AgentBuilderTemplates.TryBuildSocialMediaSpec(
+                agentId,
+                args.Str("topic") ?? string.Empty,
+                args.Str("audience"),
+                args.Str("style"),
+                out var templateSpec,
+                out var templateError))
+        {
+            return JsonSerializer.Serialize(new { error = templateError });
+        }
+
+        var createKeyResponse = await nyxClient.CreateApiKeyAsync(
+            token,
+            BuildCreateApiKeyPayload(agentId, []),
+            ct);
+
+        if (IsErrorPayload(createKeyResponse))
+            return createKeyResponse;
+
+        if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
+            return JsonSerializer.Serialize(new { error = apiKeyError });
+
+        var workflowUpsert = await workflowCommandPort.UpsertAsync(
+            new ScopeWorkflowUpsertRequest(
+                scopeId.Trim(),
+                templateSpec!.WorkflowId,
+                templateSpec.WorkflowYaml,
+                templateSpec.WorkflowName,
+                templateSpec.DisplayName),
+            ct);
+
+        var actor = await actorRuntime.GetAsync(agentId)
+                    ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(agentId, ct);
+
+        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        var initialize = new InitializeWorkflowAgentCommand
+        {
+            WorkflowId = workflowUpsert.Workflow.WorkflowId,
+            WorkflowName = templateSpec.WorkflowName,
+            WorkflowActorId = workflowUpsert.Workflow.ActorId,
+            ExecutionPrompt = templateSpec.ExecutionPrompt,
+            ScheduleCron = scheduleCron.Trim(),
+            ScheduleTimezone = scheduleTimezone.Trim(),
+            ConversationId = conversationId.Trim(),
+            NyxProviderSlug = providerSlug,
+            NyxApiKey = apiKeyValue!,
+            OwnerNyxUserId = ownerNyxUserId!,
+            ApiKeyId = apiKeyId!,
+            Enabled = true,
+            ScopeId = scopeId.Trim(),
+        };
+
+        await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
+
+        var confirmed = await WaitForCreatedAgentAsync(
+            queryPort,
+            agentId,
+            versionBefore,
+            entry => string.Equals(entry.AgentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal) &&
+                     string.Equals(entry.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.Ordinal),
+            ct);
+
+        if (args.Bool("run_immediately") == true && confirmed)
+        {
+            await actor.HandleEventAsync(
+                BuildDirectEnvelope(actor.Id, new TriggerWorkflowAgentExecutionCommand { Reason = "create_agent" }),
+                ct);
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            status = confirmed ? "created" : "accepted",
+            agent_id = agentId,
+            agent_type = WorkflowAgentDefaults.AgentType,
+            template = WorkflowAgentDefaults.TemplateName,
+            next_scheduled_run = nextRunAtUtc,
+            conversation_id = conversationId,
+            workflow_id = workflowUpsert.Workflow.WorkflowId,
+            workflow_actor_id = workflowUpsert.Workflow.ActorId,
+            api_key_id = apiKeyId,
+            note = confirmed
+                ? string.Empty
+                : "Agent initialization accepted but registry projection is not yet confirmed. Immediate approval delivery is deferred until the registry projection becomes visible.",
         });
     }
 
@@ -299,14 +437,9 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
-        if (string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
-        {
-            var actor = await actorRuntime.GetAsync(entry.AgentId)
-                        ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.AgentId, ct);
-            await actor.HandleEventAsync(
-                BuildDirectEnvelope(actor.Id, new DisableSkillRunnerCommand { Reason = "delete_agent" }),
-                ct);
-        }
+        var disableResult = await DispatchAgentLifecycleAsync(entry, actorRuntime, "delete_agent", LifecycleAction.Disable, ct);
+        if (disableResult.error != null)
+            return disableResult.error;
 
         if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
             await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
@@ -370,17 +503,16 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
-        if (!string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
+        if (!SupportsManagedLifecycle(entry.AgentType))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
 
-        if (string.Equals(entry.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
+        if (string.Equals(entry.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal) ||
+            string.Equals(entry.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' is disabled. Enable it before running." });
 
-        var actor = await actorRuntime.GetAsync(entry.AgentId)
-                    ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.AgentId, ct);
-        await actor.HandleEventAsync(
-            BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "run_agent" }),
-            ct);
+        var dispatch = await DispatchAgentLifecycleAsync(entry, actorRuntime, "run_agent", LifecycleAction.Run, ct);
+        if (dispatch.error != null)
+            return dispatch.error;
 
         return JsonSerializer.Serialize(new
         {
@@ -397,18 +529,17 @@ public sealed class AgentBuilderTool : IAgentTool
         IActorRuntime actorRuntime,
         CancellationToken ct)
     {
-        var entry = await RequireSkillRunnerAsync(args, queryPort, "disable_agent", ct);
+        var entry = await RequireManagedAgentAsync(args, queryPort, "disable_agent", ct);
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
+        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal) ||
+            string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
-        var actor = await actorRuntime.GetAsync(entry.value.AgentId)
-                    ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.value.AgentId, ct);
-        await actor.HandleEventAsync(
-            BuildDirectEnvelope(actor.Id, new DisableSkillRunnerCommand { Reason = "disable_agent" }),
-            ct);
+        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "disable_agent", LifecycleAction.Disable, ct);
+        if (dispatch.error != null)
+            return dispatch.error;
 
         var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusDisabled, ct) ?? entry.value;
         return SerializeAgentStatus(after, "Agent disabled. Scheduling paused.");
@@ -420,18 +551,17 @@ public sealed class AgentBuilderTool : IAgentTool
         IActorRuntime actorRuntime,
         CancellationToken ct)
     {
-        var entry = await RequireSkillRunnerAsync(args, queryPort, "enable_agent", ct);
+        var entry = await RequireManagedAgentAsync(args, queryPort, "enable_agent", ct);
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal))
+        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal) ||
+            string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
 
-        var actor = await actorRuntime.GetAsync(entry.value.AgentId)
-                    ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.value.AgentId, ct);
-        await actor.HandleEventAsync(
-            BuildDirectEnvelope(actor.Id, new EnableSkillRunnerCommand { Reason = "enable_agent" }),
-            ct);
+        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "enable_agent", LifecycleAction.Enable, ct);
+        if (dispatch.error != null)
+            return dispatch.error;
 
         var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusRunning, ct) ?? entry.value;
         return SerializeAgentStatus(after, "Agent enabled. Scheduling resumed.");
@@ -516,7 +646,7 @@ public sealed class AgentBuilderTool : IAgentTool
             .ToArray();
     }
 
-    private async Task<(AgentRegistryEntry? value, string? error)> RequireSkillRunnerAsync(
+    private async Task<(AgentRegistryEntry? value, string? error)> RequireManagedAgentAsync(
         BuilderArgs args,
         IAgentRegistryQueryPort queryPort,
         string actionName,
@@ -530,10 +660,34 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry is null)
             return (null, JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" }));
 
-        if (!string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
+        if (!SupportsManagedLifecycle(entry.AgentType))
             return (null, JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support {actionName}" }));
 
         return (entry, null);
+    }
+
+    private async Task<bool> WaitForCreatedAgentAsync(
+        IAgentRegistryQueryPort queryPort,
+        string agentId,
+        long versionBefore,
+        Func<AgentRegistryEntry, bool> predicate,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(500, ct);
+
+            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+            if (versionAfter <= versionBefore)
+                continue;
+
+            var entry = await queryPort.GetAsync(agentId, ct);
+            if (entry != null && predicate(entry))
+                return true;
+        }
+
+        return false;
     }
 
     private async Task<AgentRegistryEntry?> WaitForAgentStatusAsync(
@@ -554,6 +708,54 @@ public sealed class AgentBuilderTool : IAgentTool
 
         return await queryPort.GetAsync(agentId, ct);
     }
+
+    private async Task<(bool success, string? error)> DispatchAgentLifecycleAsync(
+        AgentRegistryEntry entry,
+        IActorRuntime actorRuntime,
+        string reason,
+        LifecycleAction action,
+        CancellationToken ct)
+    {
+        if (string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
+        {
+            var actor = await actorRuntime.GetAsync(entry.AgentId)
+                        ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.AgentId, ct);
+
+            IMessage payload = action switch
+            {
+                LifecycleAction.Run => new TriggerSkillRunnerExecutionCommand { Reason = reason },
+                LifecycleAction.Disable => new DisableSkillRunnerCommand { Reason = reason },
+                LifecycleAction.Enable => new EnableSkillRunnerCommand { Reason = reason },
+                _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
+            };
+
+            await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, payload), ct);
+            return (true, null);
+        }
+
+        if (string.Equals(entry.AgentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal))
+        {
+            var actor = await actorRuntime.GetAsync(entry.AgentId)
+                        ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(entry.AgentId, ct);
+
+            IMessage payload = action switch
+            {
+                LifecycleAction.Run => new TriggerWorkflowAgentExecutionCommand { Reason = reason },
+                LifecycleAction.Disable => new DisableWorkflowAgentCommand { Reason = reason },
+                LifecycleAction.Enable => new EnableWorkflowAgentCommand { Reason = reason },
+                _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
+            };
+
+            await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, payload), ct);
+            return (true, null);
+        }
+
+        return (false, JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support {action.ToString().ToLowerInvariant()}." }));
+    }
+
+    private static bool SupportsManagedLifecycle(string? agentType) =>
+        string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) ||
+        string.Equals(agentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal);
 
     private async Task<string?> ResolveCurrentUserIdAsync(NyxIdApiClient client, string token, CancellationToken ct)
     {
@@ -752,5 +954,12 @@ public sealed class AgentBuilderTool : IAgentTool
                 _ => null,
             };
         }
+    }
+
+    private enum LifecycleAction
+    {
+        Run,
+        Disable,
+        Enable,
     }
 }

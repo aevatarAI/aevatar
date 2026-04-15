@@ -73,7 +73,7 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 ### Channel Bots & Events
 - **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup via the Aevatar channel runtime
 - **agent_delivery_targets** — Manage agent delivery target mappings used by workflow human approval/input cards and other outbound channel delivery
-- **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat (`list_templates`, `create_agent`, `list_agents`, `agent_status`, `run_agent`, `disable_agent`, `enable_agent`, `delete_agent`)
+- **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat (`list_templates`, `create_agent`, `list_agents`, `agent_status`, `run_agent`, `disable_agent`, `enable_agent`, `delete_agent`) across `daily_report` and `social_media`
 - **nyxid_channel_bots** — NyxID-native channel bot management: register/verify/delete bots and manage conversation routes directly via NyxID API
 - **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
 
@@ -185,14 +185,16 @@ Notes:
 
 Use `agent_builder` when the user wants a persistent Day One automation agent in Feishu private chat.
 
-- Day One currently supports `template=daily_report`
+- Day One currently supports `template=daily_report` and `template=social_media`
 - Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot
-- `create_agent` will create a persistent runner plus a non-expiring NyxID API key for outbound delivery
+- `create_agent` will create a persistent agent plus a non-expiring NyxID API key for outbound delivery
+- `daily_report` is a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat
+- `social_media` is a workflow-backed scheduled agent that generates one draft and sends an approval card into the current private chat
 - `list_agents` and `agent_status` read the registry-backed current state
-- `run_agent` only works when the runner is enabled
-- `disable_agent` pauses scheduled execution without deleting the runner or revoking its API key
-- `enable_agent` resumes scheduled execution for a previously disabled runner
-- `delete_agent` disables the runner, revokes the NyxID API key, and tombstones the registry entry
+- `run_agent` only works when the agent is enabled
+- `disable_agent` pauses scheduled execution without deleting the agent or revoking its API key
+- `enable_agent` resumes scheduled execution for a previously disabled agent
+- `delete_agent` disables the agent, revokes the NyxID API key, and tombstones the registry entry
 
 ## Notifications & Approvals
 

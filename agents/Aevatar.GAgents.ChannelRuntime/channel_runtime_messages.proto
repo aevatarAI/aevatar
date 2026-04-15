@@ -375,6 +375,95 @@ message SkillRunnerEnabledEvent {
   string reason = 1;
 }
 
+// ─── Workflow Agent (persistent scheduled workflow trigger) ───
+
+message WorkflowAgentState {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  string owner_nyx_user_id = 10;
+  string api_key_id = 11;
+  google.protobuf.Timestamp last_run_at = 12;
+  google.protobuf.Timestamp next_run_at = 13;
+  int32 error_count = 14;
+  string last_error = 15;
+  bool enabled = 16;
+  string scope_id = 17;
+}
+
+message InitializeWorkflowAgentCommand {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  string owner_nyx_user_id = 10;
+  string api_key_id = 11;
+  bool enabled = 12;
+  string scope_id = 13;
+}
+
+message WorkflowAgentInitializedEvent {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  string owner_nyx_user_id = 10;
+  string api_key_id = 11;
+  bool enabled = 12;
+  string scope_id = 13;
+}
+
+message TriggerWorkflowAgentExecutionCommand {
+  string reason = 1;
+}
+
+message WorkflowAgentNextRunScheduledEvent {
+  google.protobuf.Timestamp next_run_at = 1;
+}
+
+message WorkflowAgentExecutionDispatchedEvent {
+  google.protobuf.Timestamp dispatched_at = 1;
+  string workflow_run_actor_id = 2;
+  string command_id = 3;
+}
+
+message WorkflowAgentExecutionFailedEvent {
+  google.protobuf.Timestamp failed_at = 1;
+  string error = 2;
+}
+
+message DisableWorkflowAgentCommand {
+  string reason = 1;
+}
+
+message EnableWorkflowAgentCommand {
+  string reason = 1;
+}
+
+message WorkflowAgentDisabledEvent {
+  string reason = 1;
+}
+
+message WorkflowAgentEnabledEvent {
+  string reason = 1;
+}
+
 // ─── Channel Chat Lifecycle (continuation pattern) ───
 
 // Domain event: chat session requested — carries full replay context

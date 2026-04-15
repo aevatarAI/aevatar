@@ -8,7 +8,9 @@ internal static class AgentBuilderCardFlow
     private const string PrivateChatType = "p2p";
     private const string CardActionChatType = "card_action";
     private const string OpenDailyReportFormAction = "open_daily_report_form";
+    private const string OpenSocialMediaFormAction = "open_social_media_form";
     private const string DailyReportAction = "create_daily_report";
+    private const string SocialMediaAction = "create_social_media";
     private const string ListTemplatesAction = "list_templates";
     private const string ListAgentsAction = "list_agents";
     private const string AgentStatusAction = "agent_status";
@@ -18,6 +20,7 @@ internal static class AgentBuilderCardFlow
     private const string ConfirmDeleteAgentAction = "confirm_delete_agent";
     private const string DeleteAgentAction = "delete_agent";
     private const string DefaultScheduleTime = "09:00";
+    private const string SocialMediaCommand = "/social-media";
     private const string AgentStatusCommand = "/agent-status";
     private const string RunAgentCommand = "/run-agent";
     private const string DisableAgentCommand = "/disable-agent";
@@ -31,6 +34,15 @@ internal static class AgentBuilderCardFlow
         "create daily report",
         "创建日报助手",
         "创建日报agent",
+    };
+
+    private static readonly HashSet<string> SocialMediaIntents = new(StringComparer.OrdinalIgnoreCase)
+    {
+        SocialMediaCommand,
+        "/create-social-media",
+        "create social media",
+        "创建社媒助手",
+        "创建社媒agent",
     };
 
     private static readonly HashSet<string> ListIntents = new(StringComparer.OrdinalIgnoreCase)
@@ -59,6 +71,12 @@ internal static class AgentBuilderCardFlow
             if (LaunchIntents.Contains(normalized))
             {
                 decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard());
+                return true;
+            }
+
+            if (SocialMediaIntents.Contains(normalized))
+            {
+                decision = AgentBuilderFlowDecision.DirectReply(BuildSocialMediaCard());
                 return true;
             }
 
@@ -92,6 +110,10 @@ internal static class AgentBuilderCardFlow
                 decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard());
                 return true;
 
+            case OpenSocialMediaFormAction:
+                decision = AgentBuilderFlowDecision.DirectReply(BuildSocialMediaCard());
+                return true;
+
             case DailyReportAction:
                 if (!TryBuildCreateDailyReportArguments(evt, out var argumentsJson, out var validationError))
                 {
@@ -100,6 +122,16 @@ internal static class AgentBuilderCardFlow
                 }
 
                 decision = AgentBuilderFlowDecision.ToolCall(DailyReportAction, argumentsJson!);
+                return true;
+
+            case SocialMediaAction:
+                if (!TryBuildCreateSocialMediaArguments(evt, out argumentsJson, out validationError))
+                {
+                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
+                    return true;
+                }
+
+                decision = AgentBuilderFlowDecision.ToolCall(SocialMediaAction, argumentsJson!);
                 return true;
 
             case ListAgentsAction:
@@ -183,6 +215,7 @@ internal static class AgentBuilderCardFlow
             return decision.ToolAction switch
             {
                 DailyReportAction => FormatCreateDailyReportResult(doc.RootElement),
+                SocialMediaAction => FormatCreateSocialMediaResult(doc.RootElement),
                 ListTemplatesAction => FormatListTemplatesResult(doc.RootElement),
                 ListAgentsAction => FormatListAgentsResult(doc.RootElement),
                 AgentStatusAction => FormatAgentStatusResult(doc.RootElement),
@@ -246,6 +279,55 @@ internal static class AgentBuilderCardFlow
             template = "daily_report",
             github_username = githubUsername,
             repositories,
+            schedule_cron = scheduleCron,
+            schedule_timezone = scheduleTimezone,
+            run_immediately = runImmediately,
+        });
+        return true;
+    }
+
+    private static bool TryBuildCreateSocialMediaArguments(
+        ChannelInboundEvent evt,
+        out string? argumentsJson,
+        out string? validationError)
+    {
+        argumentsJson = null;
+        validationError = null;
+
+        if (!TryGetRequiredExtra(evt, "topic", out var topic))
+        {
+            validationError = "Topic is required. Send /social-media and fill in the form again.";
+            return false;
+        }
+
+        if (!TryBuildDailyCron(evt.Extra.TryGetValue("schedule_time", out var scheduleTime) ? scheduleTime : null, out var scheduleCron, out validationError))
+            return false;
+
+        var scheduleTimezone = (evt.Extra.TryGetValue("schedule_timezone", out var rawTimezone)
+                ? rawTimezone
+                : null) ?? SkillRunnerDefaults.DefaultTimezone;
+        scheduleTimezone = string.IsNullOrWhiteSpace(scheduleTimezone)
+            ? SkillRunnerDefaults.DefaultTimezone
+            : scheduleTimezone.Trim();
+
+        var audience = evt.Extra.TryGetValue("audience", out var rawAudience)
+            ? NormalizeOptional(rawAudience)
+            : null;
+        var style = evt.Extra.TryGetValue("style", out var rawStyle)
+            ? NormalizeOptional(rawStyle)
+            : null;
+
+        var runImmediately = !evt.Extra.TryGetValue("run_immediately", out var rawRunImmediately) ||
+                             !bool.TryParse(rawRunImmediately, out var parsedRunImmediately) ||
+                             parsedRunImmediately;
+
+        argumentsJson = JsonSerializer.Serialize(new
+        {
+            action = "create_agent",
+            template = "social_media",
+            topic,
+            audience,
+            style,
             schedule_cron = scheduleCron,
             schedule_timezone = scheduleTimezone,
             run_immediately = runImmediately,
@@ -509,6 +591,76 @@ internal static class AgentBuilderCardFlow
         });
     }
 
+    private static string BuildSocialMediaCard()
+    {
+        return JsonSerializer.Serialize(new
+        {
+            config = new
+            {
+                wide_screen_mode = true,
+            },
+            header = new
+            {
+                title = new
+                {
+                    tag = "plain_text",
+                    content = "Create Social Media Agent",
+                },
+                template = "orange",
+            },
+            elements = new object[]
+            {
+                new
+                {
+                    tag = "markdown",
+                    content =
+                        "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send an approval card into this Feishu private chat.",
+                },
+                BuildInput("topic", "Topic", "Launch update for the new workflow feature"),
+                BuildInput("audience", "Audience (Optional)", "Developers and technical founders"),
+                BuildInput("style", "Style (Optional)", "Confident, concise, product-focused"),
+                BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
+                BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
+                new
+                {
+                    tag = "action",
+                    actions = new object[]
+                    {
+                        new
+                        {
+                            tag = "button",
+                            type = "primary",
+                            text = new
+                            {
+                                tag = "plain_text",
+                                content = "Create Agent",
+                            },
+                            value = new
+                            {
+                                agent_builder_action = SocialMediaAction,
+                                run_immediately = true,
+                            },
+                        },
+                        new
+                        {
+                            tag = "button",
+                            type = "default",
+                            text = new
+                            {
+                                tag = "plain_text",
+                                content = "List Agents",
+                            },
+                            value = new
+                            {
+                                agent_builder_action = ListAgentsAction,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+    }
+
     private static object BuildInput(string name, string label, string placeholder)
     {
         return new
@@ -566,6 +718,46 @@ internal static class AgentBuilderCardFlow
             });
     }
 
+    private static string FormatCreateSocialMediaResult(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return $"Create social media agent failed: {error}";
+
+        var status = ReadString(root, "status") ?? "accepted";
+        var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
+        var workflowId = ReadString(root, "workflow_id") ?? "pending";
+        var nextRun = ReadString(root, "next_scheduled_run") ?? "pending";
+        var note = ReadString(root, "note");
+
+        var lines = new List<string>
+        {
+            string.Equals(status, "created", StringComparison.OrdinalIgnoreCase)
+                ? $"Social media agent created: {agentId}"
+                : $"Social media agent accepted: {agentId}",
+            $"Workflow ID: `{workflowId}`",
+            $"Next scheduled run: {nextRun}",
+        };
+
+        if (!string.IsNullOrWhiteSpace(note))
+            lines.Add(note!);
+
+        return BuildInfoCard(
+            "Social Media Agent",
+            string.Join("\n", lines),
+            "orange",
+            new object[]
+            {
+                BuildButton("View Agents", "primary", new
+                {
+                    agent_builder_action = ListAgentsAction,
+                }),
+                BuildButton("Create Another", "default", new
+                {
+                    agent_builder_action = OpenSocialMediaFormAction,
+                }),
+            });
+    }
+
     private static string FormatListTemplatesResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
@@ -612,6 +804,21 @@ internal static class AgentBuilderCardFlow
                         BuildButton("Create Daily Report", "primary", new
                         {
                             agent_builder_action = OpenDailyReportFormAction,
+                        }),
+                    },
+                });
+            }
+            else if (string.Equals(name, "social_media", StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase))
+            {
+                elements.Add(new
+                {
+                    tag = "action",
+                    actions = new object[]
+                    {
+                        BuildButton("Create Social Media", "primary", new
+                        {
+                            agent_builder_action = OpenSocialMediaFormAction,
                         }),
                     },
                 });
@@ -841,7 +1048,7 @@ internal static class AgentBuilderCardFlow
             new
             {
                 tag = "markdown",
-                content = "Quick commands: `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
+                content = "Quick commands: `/daily-report`, `/social-media`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
             },
         };
 
@@ -895,6 +1102,10 @@ internal static class AgentBuilderCardFlow
                 {
                     agent_builder_action = OpenDailyReportFormAction,
                 }),
+                BuildButton("Create Social Media", "default", new
+                {
+                    agent_builder_action = OpenSocialMediaFormAction,
+                }),
                 BuildButton("View Templates", "default", new
                 {
                     agent_builder_action = ListTemplatesAction,
@@ -941,12 +1152,12 @@ internal static class AgentBuilderCardFlow
         elements.Add(new
         {
             tag = "markdown",
-            content = "No agents found yet. Create your first daily report agent from here.",
+            content = "No agents found yet. Create your first daily report or social media agent from here.",
         });
         elements.Add(new
         {
             tag = "markdown",
-            content = "Quick commands: `/templates`, `/daily-report`, `/agent-status <agent_id>`",
+            content = "Quick commands: `/templates`, `/daily-report`, `/social-media`, `/agent-status <agent_id>`",
         });
         elements.Add(new
         {
@@ -960,6 +1171,10 @@ internal static class AgentBuilderCardFlow
                 BuildButton("View Templates", "default", new
                 {
                     agent_builder_action = ListTemplatesAction,
+                }),
+                BuildButton("Create Social Media", "default", new
+                {
+                    agent_builder_action = OpenSocialMediaFormAction,
                 }),
             },
         });

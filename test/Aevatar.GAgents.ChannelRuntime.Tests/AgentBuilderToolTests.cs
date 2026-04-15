@@ -5,6 +5,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -175,6 +177,124 @@ public sealed class AgentBuilderToolTests
                     e.Payload != null &&
                     e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
                     e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "create_agent"),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_SocialMedia_UpsertsWorkflowAndInitializesWorkflowAgent()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetStateVersionAsync("workflow-agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "workflow-agent-1",
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+                Status = WorkflowAgentDefaults.StatusRunning,
+            }));
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("workflow-agent-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<WorkflowAgentGAgent>("workflow-agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(workflowAgentActor));
+
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+        workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ScopeWorkflowUpsertResult(
+                new ScopeWorkflowSummary(
+                    "scope-1",
+                    "social-media-workflow-agent-1",
+                    "Social Media Approval workflow-agent-1",
+                    "service-key",
+                    "social_media_workflow_agent_1",
+                    "workflow-actor-1",
+                    "rev-1",
+                    "deploy-1",
+                    "active",
+                    DateTimeOffset.UtcNow),
+                "rev-1",
+                "workflow-actor-prefix",
+                "workflow-actor-1")));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(workflowCommandPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "social_media",
+                  "agent_id": "workflow-agent-1",
+                  "topic": "Launch update for the new workflow feature",
+                  "audience": "Developers",
+                  "style": "Confident and concise",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "run_immediately": true
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+            doc.RootElement.GetProperty("agent_id").GetString().Should().Be("workflow-agent-1");
+            doc.RootElement.GetProperty("agent_type").GetString().Should().Be(WorkflowAgentDefaults.AgentType);
+            doc.RootElement.GetProperty("workflow_id").GetString().Should().Be("social-media-workflow-agent-1");
+            doc.RootElement.GetProperty("api_key_id").GetString().Should().Be("key-2");
+
+            await workflowCommandPort.Received(1).UpsertAsync(
+                Arg.Is<ScopeWorkflowUpsertRequest>(request =>
+                    request.ScopeId == "scope-1" &&
+                    request.WorkflowId == "social-media-workflow-agent-1" &&
+                    request.WorkflowYaml.Contains("provider: nyxid", StringComparison.Ordinal) &&
+                    request.WorkflowYaml.Contains("type: human_approval", StringComparison.Ordinal) &&
+                    request.WorkflowYaml.Contains("delivery_target_id: \"workflow-agent-1\"", StringComparison.Ordinal)),
+                Arg.Any<CancellationToken>());
+
+            await workflowAgentActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(InitializeWorkflowAgentCommand.Descriptor) &&
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowActorId == "workflow-actor-1" &&
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ConversationId == "oc_chat_1" &&
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().NyxApiKey == "full-key-2" &&
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ApiKeyId == "key-2"),
+                Arg.Any<CancellationToken>());
+
+            await workflowAgentActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
+                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "create_agent"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -379,6 +499,66 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RunAgent_DispatchesWorkflowTrigger()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "workflow-agent-1",
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+                Status = WorkflowAgentDefaults.StatusRunning,
+            }));
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("workflow-agent-1").Returns(Task.FromResult<IActor?>(workflowAgentActor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler())
+            {
+                BaseAddress = new Uri("https://nyx.example.com"),
+            }));
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "run_agent",
+                  "agent_id": "workflow-agent-1"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("agent_id").GetString().Should().Be("workflow-agent-1");
+
+            await workflowAgentActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
+                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "run_agent"),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DisableAgent_DispatchesDisableAndReturnsStatus()
     {
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();
@@ -514,6 +694,78 @@ public sealed class AgentBuilderToolTests
                     e.Payload != null &&
                     e.Payload.Is(EnableSkillRunnerCommand.Descriptor) &&
                     e.Payload.Unpack<EnableSkillRunnerCommand>().Reason == "enable_agent"),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DisableAgent_DispatchesWorkflowDisableAndReturnsStatus()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "workflow-agent-1",
+                    AgentType = WorkflowAgentDefaults.AgentType,
+                    TemplateName = WorkflowAgentDefaults.TemplateName,
+                    Status = WorkflowAgentDefaults.StatusRunning,
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "UTC",
+                }),
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "workflow-agent-1",
+                    AgentType = WorkflowAgentDefaults.AgentType,
+                    TemplateName = WorkflowAgentDefaults.TemplateName,
+                    Status = WorkflowAgentDefaults.StatusDisabled,
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "UTC",
+                }));
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("workflow-agent-1").Returns(Task.FromResult<IActor?>(workflowAgentActor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler())
+            {
+                BaseAddress = new Uri("https://nyx.example.com"),
+            }));
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "disable_agent",
+                  "agent_id": "workflow-agent-1"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(WorkflowAgentDefaults.StatusDisabled);
+            doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling paused");
+
+            await workflowAgentActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(DisableWorkflowAgentCommand.Descriptor) &&
+                    e.Payload.Unpack<DisableWorkflowAgentCommand>().Reason == "disable_agent"),
                 Arg.Any<CancellationToken>());
         }
         finally

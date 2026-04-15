@@ -10,6 +10,8 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -349,6 +351,33 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
+    public async Task HandleInbound_SocialMediaIntent_ShouldSendInteractiveBuilderCard()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+        inbound.Text = "/social-media";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Create Social Media Agent");
+
+        agent.State.PendingSessions.Should().BeEmpty();
+        agent.State.ProcessedMessageIds.Should().Contain("om_msg_1");
+    }
+
+    [Fact]
     public async Task HandleInbound_CreateDailyReportCardAction_ShouldExecuteAgentBuilder()
     {
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();
@@ -450,6 +479,122 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
+    public async Task HandleInbound_CreateSocialMediaCardAction_ShouldExecuteAgentBuilder()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = callInfo.ArgAt<string>(0),
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+                Status = WorkflowAgentDefaults.StatusRunning,
+            }));
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<WorkflowAgentGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(workflowAgentActor));
+
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+        workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ScopeWorkflowUpsertResult(
+                new ScopeWorkflowSummary(
+                    "scope-1",
+                    "social-media-workflow-agent-1",
+                    "Social Media Approval workflow-agent-1",
+                    "service-key",
+                    "social_media_workflow_agent_1",
+                    "workflow-actor-1",
+                    "rev-1",
+                    "deploy-1",
+                    "active",
+                    DateTimeOffset.UtcNow),
+                "rev-1",
+                "workflow-actor-prefix",
+                "workflow-actor-1")));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+                serviceCollection.AddSingleton(workflowCommandPort);
+                serviceCollection.AddSingleton(nyxClient);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"create_social_media"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_card_social_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "create_social_media" },
+                { "topic", "Launch update for the new workflow feature" },
+                { "audience", "Developers" },
+                { "style", "Confident and concise" },
+                { "schedule_time", "09:00" },
+                { "schedule_timezone", "UTC" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Social media agent created: workflow-agent-");
+        adapter.Replies[0].ReplyText.Should().Contain("View Agents");
+        agent.State.PendingSessions.Should().BeEmpty();
+        agent.State.ProcessedMessageIds.Should().Contain("evt_card_social_1");
+
+        await workflowAgentActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(InitializeWorkflowAgentCommand.Descriptor) &&
+                e.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowActorId == "workflow-actor-1" &&
+                e.Payload.Unpack<InitializeWorkflowAgentCommand>().ConversationId == "oc_chat_1"),
+            Arg.Any<CancellationToken>());
+
+        await workflowAgentActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
+                e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "create_agent"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleInbound_ListAgentsIntent_ShouldSendInteractiveAgentListCard()
     {
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();
@@ -501,6 +646,7 @@ public class ChannelUserGAgentContinuationTests
         adapter.Replies.Should().ContainSingle();
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
         adapter.Replies[0].ReplyText.Should().Contain("Create Daily Report");
+        adapter.Replies[0].ReplyText.Should().Contain("Create Social Media");
         adapter.Replies[0].ReplyText.Should().Contain("Refresh List");
         adapter.Replies[0].ReplyText.Should().Contain("View Templates");
         adapter.Replies[0].ReplyText.Should().Contain("/enable-agent");
@@ -535,6 +681,7 @@ public class ChannelUserGAgentContinuationTests
         adapter.Replies[0].ReplyText.Should().Contain("daily_report");
         adapter.Replies[0].ReplyText.Should().Contain("social_media");
         adapter.Replies[0].ReplyText.Should().Contain("Create Daily Report");
+        adapter.Replies[0].ReplyText.Should().Contain("Create Social Media");
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
