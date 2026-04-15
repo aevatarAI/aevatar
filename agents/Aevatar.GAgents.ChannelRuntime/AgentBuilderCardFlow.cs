@@ -13,11 +13,15 @@ internal static class AgentBuilderCardFlow
     private const string ListAgentsAction = "list_agents";
     private const string AgentStatusAction = "agent_status";
     private const string RunAgentAction = "run_agent";
+    private const string DisableAgentAction = "disable_agent";
+    private const string EnableAgentAction = "enable_agent";
     private const string ConfirmDeleteAgentAction = "confirm_delete_agent";
     private const string DeleteAgentAction = "delete_agent";
     private const string DefaultScheduleTime = "09:00";
     private const string AgentStatusCommand = "/agent-status";
     private const string RunAgentCommand = "/run-agent";
+    private const string DisableAgentCommand = "/disable-agent";
+    private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
 
     private static readonly HashSet<string> LaunchIntents = new(StringComparer.OrdinalIgnoreCase)
@@ -122,6 +126,26 @@ internal static class AgentBuilderCardFlow
                 decision = AgentBuilderFlowDecision.ToolCall(RunAgentAction, argumentsJson!);
                 return true;
 
+            case DisableAgentAction:
+                if (!TryBuildAgentActionArguments(evt, "disable_agent", out argumentsJson, out validationError))
+                {
+                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
+                    return true;
+                }
+
+                decision = AgentBuilderFlowDecision.ToolCall(DisableAgentAction, argumentsJson!);
+                return true;
+
+            case EnableAgentAction:
+                if (!TryBuildAgentActionArguments(evt, "enable_agent", out argumentsJson, out validationError))
+                {
+                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
+                    return true;
+                }
+
+                decision = AgentBuilderFlowDecision.ToolCall(EnableAgentAction, argumentsJson!);
+                return true;
+
             case ConfirmDeleteAgentAction:
                 if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
                 {
@@ -163,6 +187,8 @@ internal static class AgentBuilderCardFlow
                 ListAgentsAction => FormatListAgentsResult(doc.RootElement),
                 AgentStatusAction => FormatAgentStatusResult(doc.RootElement),
                 RunAgentAction => FormatRunAgentResult(doc.RootElement),
+                DisableAgentAction => FormatDisableAgentResult(doc.RootElement),
+                EnableAgentAction => FormatEnableAgentResult(doc.RootElement),
                 DeleteAgentAction => FormatDeleteAgentResult(doc.RootElement),
                 _ => toolResultJson,
             };
@@ -289,6 +315,42 @@ internal static class AgentBuilderCardFlow
                 JsonSerializer.Serialize(new
                 {
                     action = RunAgentAction,
+                    agent_id = agentId,
+            }));
+            return true;
+        }
+
+        if (TryParseAgentCommand(normalizedText, DisableAgentCommand, out agentId, out errorReply))
+        {
+            if (errorReply != null)
+            {
+                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
+                return true;
+            }
+
+            decision = AgentBuilderFlowDecision.ToolCall(
+                DisableAgentAction,
+                JsonSerializer.Serialize(new
+                {
+                    action = DisableAgentAction,
+                    agent_id = agentId,
+                }));
+            return true;
+        }
+
+        if (TryParseAgentCommand(normalizedText, EnableAgentCommand, out agentId, out errorReply))
+        {
+            if (errorReply != null)
+            {
+                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
+                return true;
+            }
+
+            decision = AgentBuilderFlowDecision.ToolCall(
+                EnableAgentAction,
+                JsonSerializer.Serialize(new
+                {
+                    action = EnableAgentAction,
                     agent_id = agentId,
                 }));
             return true;
@@ -627,6 +689,7 @@ internal static class AgentBuilderCardFlow
         var nextRunAt = ReadString(root, "next_scheduled_run") ?? "n/a";
         var errorCount = ReadString(root, "error_count") ?? "0";
         var lastError = ReadString(root, "last_error");
+        var note = ReadString(root, "note");
 
         var lines = new List<string>
         {
@@ -641,34 +704,14 @@ internal static class AgentBuilderCardFlow
 
         if (!string.IsNullOrWhiteSpace(lastError))
             lines.Add($"Last error: `{lastError}`");
+        if (!string.IsNullOrWhiteSpace(note))
+            lines.Add(note!);
 
         return BuildInfoCard(
             "Agent Status",
             string.Join("\n", lines),
-            "green",
-            new object[]
-            {
-                BuildButton("Refresh Status", "default", new
-                {
-                    agent_builder_action = AgentStatusAction,
-                    agent_id = agentId,
-                }),
-                BuildButton("Run Now", "primary", new
-                {
-                    agent_builder_action = RunAgentAction,
-                    agent_id = agentId,
-                }),
-                BuildButton("Back to Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Delete Agent", "danger", new
-                {
-                    agent_builder_action = ConfirmDeleteAgentAction,
-                    agent_id = agentId,
-                    template,
-                }),
-            });
+            string.Equals(status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase) ? "grey" : "green",
+            BuildStatusCardActions(agentId, template, status));
     }
 
     private static string FormatRunAgentResult(JsonElement root)
@@ -696,6 +739,22 @@ internal static class AgentBuilderCardFlow
                     agent_id = agentId,
                 }),
             });
+    }
+
+    private static string FormatDisableAgentResult(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return $"Disable agent failed: {error}";
+
+        return FormatAgentStatusResult(root);
+    }
+
+    private static string FormatEnableAgentResult(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return $"Enable agent failed: {error}";
+
+        return FormatAgentStatusResult(root);
     }
 
     private static string FormatDeleteAgentResult(JsonElement root)
@@ -782,7 +841,7 @@ internal static class AgentBuilderCardFlow
             new
             {
                 tag = "markdown",
-                content = "Quick commands: `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/delete-agent <agent_id>`",
+                content = "Quick commands: `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
             },
         };
 
@@ -812,11 +871,7 @@ internal static class AgentBuilderCardFlow
                         agent_builder_action = AgentStatusAction,
                         agent_id = agent.AgentId,
                     }),
-                    BuildButton("Run Now", "default", new
-                    {
-                        agent_builder_action = RunAgentAction,
-                        agent_id = agent.AgentId,
-                    }),
+                    BuildAgentListPrimaryAction(agent),
                     BuildButton("Delete", "danger", new
                     {
                         agent_builder_action = ConfirmDeleteAgentAction,
@@ -891,7 +946,7 @@ internal static class AgentBuilderCardFlow
         elements.Add(new
         {
             tag = "markdown",
-            content = "Quick commands: `/templates`, `/daily-report`",
+            content = "Quick commands: `/templates`, `/daily-report`, `/agent-status <agent_id>`",
         });
         elements.Add(new
         {
@@ -1003,6 +1058,71 @@ internal static class AgentBuilderCardFlow
         value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("`", "\\`", StringComparison.Ordinal);
+
+    private static object[] BuildStatusCardActions(string agentId, string template, string status)
+    {
+        var actions = new List<object>
+        {
+            BuildButton("Refresh Status", "default", new
+            {
+                agent_builder_action = AgentStatusAction,
+                agent_id = agentId,
+            }),
+        };
+
+        if (string.Equals(status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase))
+        {
+            actions.Add(BuildButton("Enable Agent", "primary", new
+            {
+                agent_builder_action = EnableAgentAction,
+                agent_id = agentId,
+            }));
+        }
+        else
+        {
+            actions.Add(BuildButton("Run Now", "primary", new
+            {
+                agent_builder_action = RunAgentAction,
+                agent_id = agentId,
+            }));
+            actions.Add(BuildButton("Disable Agent", "default", new
+            {
+                agent_builder_action = DisableAgentAction,
+                agent_id = agentId,
+            }));
+        }
+
+        actions.Add(BuildButton("Back to Agents", "default", new
+        {
+            agent_builder_action = ListAgentsAction,
+        }));
+        actions.Add(BuildButton("Delete Agent", "danger", new
+        {
+            agent_builder_action = ConfirmDeleteAgentAction,
+            agent_id = agentId,
+            template,
+        }));
+
+        return actions.ToArray();
+    }
+
+    private static object BuildAgentListPrimaryAction(AgentListCardItem agent)
+    {
+        if (string.Equals(agent.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildButton("Enable", "default", new
+            {
+                agent_builder_action = EnableAgentAction,
+                agent_id = agent.AgentId,
+            });
+        }
+
+        return BuildButton("Run Now", "default", new
+        {
+            agent_builder_action = RunAgentAction,
+            agent_id = agent.AgentId,
+        });
+    }
 
     private static IReadOnlyList<AgentListCardItem> ReadAgentList(JsonElement root)
     {

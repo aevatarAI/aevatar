@@ -23,7 +23,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     public string Description =>
         "Create and manage persistent user-facing automation agents for the current channel context. " +
-        "Actions: list_templates, create_agent, list_agents, agent_status, run_agent, delete_agent.";
+        "Actions: list_templates, create_agent, list_agents, agent_status, run_agent, disable_agent, enable_agent, delete_agent.";
 
     public string ParametersSchema => """
         {
@@ -31,7 +31,7 @@ public sealed class AgentBuilderTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list_templates", "create_agent", "list_agents", "agent_status", "run_agent", "delete_agent"]
+              "enum": ["list_templates", "create_agent", "list_agents", "agent_status", "run_agent", "disable_agent", "enable_agent", "delete_agent"]
             },
             "template": {
               "type": "string",
@@ -105,6 +105,8 @@ public sealed class AgentBuilderTool : IAgentTool
             "list_agents" => await ListAgentsAsync(args, queryPort, nyxClient, token, ct),
             "agent_status" => await GetAgentStatusAsync(args, queryPort, ct),
             "run_agent" => await RunAgentAsync(args, queryPort, actorRuntime, ct),
+            "disable_agent" => await DisableAgentAsync(args, queryPort, actorRuntime, ct),
+            "enable_agent" => await EnableAgentAsync(args, queryPort, actorRuntime, ct),
             "delete_agent" => await DeleteAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
@@ -267,21 +269,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
-        return JsonSerializer.Serialize(new
-        {
-            agent_id = entry.AgentId,
-            agent_type = entry.AgentType,
-            template = entry.TemplateName,
-            status = entry.Status,
-            scope_id = entry.ScopeId,
-            schedule_cron = entry.ScheduleCron,
-            schedule_timezone = entry.ScheduleTimezone,
-            last_run_at = entry.LastRunAt,
-            next_scheduled_run = entry.NextRunAt,
-            error_count = entry.ErrorCount,
-            last_error = entry.LastError,
-            conversation_id = entry.ConversationId,
-        });
+        return SerializeAgentStatus(entry);
     }
 
     private async Task<string> DeleteAgentAsync(
@@ -385,6 +373,9 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
 
+        if (string.Equals(entry.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
+            return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' is disabled. Enable it before running." });
+
         var actor = await actorRuntime.GetAsync(entry.AgentId)
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.AgentId, ct);
         await actor.HandleEventAsync(
@@ -398,6 +389,52 @@ public sealed class AgentBuilderTool : IAgentTool
             template = entry.TemplateName,
             note = "Manual run dispatched.",
         });
+    }
+
+    private async Task<string> DisableAgentAsync(
+        BuilderArgs args,
+        IAgentRegistryQueryPort queryPort,
+        IActorRuntime actorRuntime,
+        CancellationToken ct)
+    {
+        var entry = await RequireSkillRunnerAsync(args, queryPort, "disable_agent", ct);
+        if (entry.error != null)
+            return entry.error;
+
+        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
+            return SerializeAgentStatus(entry.value, "Agent is already disabled.");
+
+        var actor = await actorRuntime.GetAsync(entry.value.AgentId)
+                    ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.value.AgentId, ct);
+        await actor.HandleEventAsync(
+            BuildDirectEnvelope(actor.Id, new DisableSkillRunnerCommand { Reason = "disable_agent" }),
+            ct);
+
+        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusDisabled, ct) ?? entry.value;
+        return SerializeAgentStatus(after, "Agent disabled. Scheduling paused.");
+    }
+
+    private async Task<string> EnableAgentAsync(
+        BuilderArgs args,
+        IAgentRegistryQueryPort queryPort,
+        IActorRuntime actorRuntime,
+        CancellationToken ct)
+    {
+        var entry = await RequireSkillRunnerAsync(args, queryPort, "enable_agent", ct);
+        if (entry.error != null)
+            return entry.error;
+
+        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal))
+            return SerializeAgentStatus(entry.value, "Agent is already enabled.");
+
+        var actor = await actorRuntime.GetAsync(entry.value.AgentId)
+                    ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.value.AgentId, ct);
+        await actor.HandleEventAsync(
+            BuildDirectEnvelope(actor.Id, new EnableSkillRunnerCommand { Reason = "enable_agent" }),
+            ct);
+
+        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusRunning, ct) ?? entry.value;
+        return SerializeAgentStatus(after, "Agent enabled. Scheduling resumed.");
     }
 
     private static EventEnvelope BuildDirectEnvelope(string targetActorId, IMessage payload)
@@ -435,6 +472,26 @@ public sealed class AgentBuilderTool : IAgentTool
         return JsonSerializer.Serialize(payload);
     }
 
+    private static string SerializeAgentStatus(AgentRegistryEntry entry, string? note = null)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            agent_id = entry.AgentId,
+            agent_type = entry.AgentType,
+            template = entry.TemplateName,
+            status = entry.Status,
+            scope_id = entry.ScopeId,
+            schedule_cron = entry.ScheduleCron,
+            schedule_timezone = entry.ScheduleTimezone,
+            last_run_at = entry.LastRunAt,
+            next_scheduled_run = entry.NextRunAt,
+            error_count = entry.ErrorCount,
+            last_error = entry.LastError,
+            conversation_id = entry.ConversationId,
+            note = note ?? string.Empty,
+        });
+    }
+
     private async Task<object[]> QueryAgentsForOwnerAsync(
         IAgentRegistryQueryPort queryPort,
         string? ownerFilter,
@@ -457,6 +514,45 @@ public sealed class AgentBuilderTool : IAgentTool
             })
             .Cast<object>()
             .ToArray();
+    }
+
+    private async Task<(AgentRegistryEntry? value, string? error)> RequireSkillRunnerAsync(
+        BuilderArgs args,
+        IAgentRegistryQueryPort queryPort,
+        string actionName,
+        CancellationToken ct)
+    {
+        var agentId = args.Str("agent_id");
+        if (string.IsNullOrWhiteSpace(agentId))
+            return (null, $$"""{"error":"agent_id is required for {{actionName}}"}""");
+
+        var entry = await queryPort.GetAsync(agentId.Trim(), ct);
+        if (entry is null)
+            return (null, JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" }));
+
+        if (!string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
+            return (null, JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support {actionName}" }));
+
+        return (entry, null);
+    }
+
+    private async Task<AgentRegistryEntry?> WaitForAgentStatusAsync(
+        IAgentRegistryQueryPort queryPort,
+        string agentId,
+        string expectedStatus,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(500, ct);
+
+            var entry = await queryPort.GetAsync(agentId, ct);
+            if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
+                return entry;
+        }
+
+        return await queryPort.GetAsync(agentId, ct);
     }
 
     private async Task<string?> ResolveCurrentUserIdAsync(NyxIdApiClient client, string token, CancellationToken ct)

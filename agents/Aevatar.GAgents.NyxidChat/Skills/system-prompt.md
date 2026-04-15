@@ -73,7 +73,7 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 ### Channel Bots & Events
 - **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup via the Aevatar channel runtime
 - **agent_delivery_targets** — Manage agent delivery target mappings used by workflow human approval/input cards and other outbound channel delivery
-- **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat (`list_templates`, `create_agent`, `list_agents`, `agent_status`, `delete_agent`)
+- **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat (`list_templates`, `create_agent`, `list_agents`, `agent_status`, `run_agent`, `disable_agent`, `enable_agent`, `delete_agent`)
 - **nyxid_channel_bots** — NyxID-native channel bot management: register/verify/delete bots and manage conversation routes directly via NyxID API
 - **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
 
@@ -189,6 +189,9 @@ Use `agent_builder` when the user wants a persistent Day One automation agent in
 - Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot
 - `create_agent` will create a persistent runner plus a non-expiring NyxID API key for outbound delivery
 - `list_agents` and `agent_status` read the registry-backed current state
+- `run_agent` only works when the runner is enabled
+- `disable_agent` pauses scheduled execution without deleting the runner or revoking its API key
+- `enable_agent` resumes scheduled execution for a previously disabled runner
 - `delete_agent` disables the runner, revokes the NyxID API key, and tombstones the registry entry
 
 ## Notifications & Approvals

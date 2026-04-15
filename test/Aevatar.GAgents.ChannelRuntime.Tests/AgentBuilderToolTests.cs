@@ -99,6 +99,7 @@ public sealed class AgentBuilderToolTests
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
                 TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
             }));
 
         var skillRunnerActor = Substitute.For<IActor>();
@@ -317,6 +318,202 @@ public sealed class AgentBuilderToolTests
                     e.Payload != null &&
                     e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
                     e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "run_agent"),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RunAgent_RejectsDisabledAgent()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusDisabled,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler())
+            {
+                BaseAddress = new Uri("https://nyx.example.com"),
+            }));
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "run_agent",
+                  "agent_id": "skill-runner-1"
+                }
+                """);
+
+            result.Should().Contain("is disabled");
+            await skillRunnerActor.DidNotReceive().HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DisableAgent_DispatchesDisableAndReturnsStatus()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "skill-runner-1",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    Status = SkillRunnerDefaults.StatusRunning,
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "UTC",
+                }),
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "skill-runner-1",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    Status = SkillRunnerDefaults.StatusDisabled,
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "UTC",
+                }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler())
+            {
+                BaseAddress = new Uri("https://nyx.example.com"),
+            }));
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "disable_agent",
+                  "agent_id": "skill-runner-1"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
+            doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling paused");
+
+            await skillRunnerActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(DisableSkillRunnerCommand.Descriptor) &&
+                    e.Payload.Unpack<DisableSkillRunnerCommand>().Reason == "disable_agent"),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_EnableAgent_DispatchesEnableAndReturnsStatus()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "skill-runner-1",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    Status = SkillRunnerDefaults.StatusDisabled,
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "UTC",
+                }),
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "skill-runner-1",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    Status = SkillRunnerDefaults.StatusRunning,
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "UTC",
+                }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler())
+            {
+                BaseAddress = new Uri("https://nyx.example.com"),
+            }));
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "enable_agent",
+                  "agent_id": "skill-runner-1"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling resumed");
+
+            await skillRunnerActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(EnableSkillRunnerCommand.Descriptor) &&
+                    e.Payload.Unpack<EnableSkillRunnerCommand>().Reason == "enable_agent"),
                 Arg.Any<CancellationToken>());
         }
         finally

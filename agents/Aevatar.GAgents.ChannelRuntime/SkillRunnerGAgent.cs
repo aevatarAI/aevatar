@@ -76,6 +76,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerExecutionCompletedEvent>(ApplyCompleted)
             .On<SkillRunnerExecutionFailedEvent>(ApplyFailed)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
+            .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
 
     [EventHandler]
@@ -171,6 +172,27 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         });
 
         await UpdateRegistryExecutionAsync(SkillRunnerDefaults.StatusDisabled, State.LastRunAt, null, State.ErrorCount, State.LastError, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleEnableAsync(EnableSkillRunnerCommand command)
+    {
+        if (!State.Enabled)
+        {
+            await PersistDomainEventAsync(new SkillRunnerEnabledEvent
+            {
+                Reason = command.Reason?.Trim() ?? string.Empty,
+            });
+        }
+
+        await ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        await UpdateRegistryExecutionAsync(
+            SkillRunnerDefaults.StatusRunning,
+            State.LastRunAt,
+            State.NextRunAt,
+            State.ErrorCount,
+            State.LastError,
+            CancellationToken.None);
     }
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
@@ -424,6 +446,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var next = current.Clone();
         next.Enabled = false;
         next.NextRunAt = null;
+        return next;
+    }
+
+    private static SkillRunnerState ApplyEnabled(SkillRunnerState current, SkillRunnerEnabledEvent _)
+    {
+        var next = current.Clone();
+        next.Enabled = true;
         return next;
     }
 

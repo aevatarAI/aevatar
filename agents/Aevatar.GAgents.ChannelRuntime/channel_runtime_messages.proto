@@ -363,7 +363,15 @@ message DisableSkillRunnerCommand {
   string reason = 1;
 }
 
+message EnableSkillRunnerCommand {
+  string reason = 1;
+}
+
 message SkillRunnerDisabledEvent {
+  string reason = 1;
+}
+
+message SkillRunnerEnabledEvent {
   string reason = 1;
 }
 
