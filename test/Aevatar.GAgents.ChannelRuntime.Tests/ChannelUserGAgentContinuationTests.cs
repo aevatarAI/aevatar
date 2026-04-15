@@ -501,6 +501,8 @@ public class ChannelUserGAgentContinuationTests
         adapter.Replies.Should().ContainSingle();
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
         adapter.Replies[0].ReplyText.Should().Contain("Create Daily Report");
+        adapter.Replies[0].ReplyText.Should().Contain("Refresh List");
+        adapter.Replies[0].ReplyText.Should().Contain("View Templates");
         adapter.Replies[0].ReplyText.Should().Contain("agent_status");
         adapter.Replies[0].ReplyText.Should().Contain("run_agent");
         adapter.Replies[0].ReplyText.Should().Contain("confirm_delete_agent");
@@ -766,6 +768,7 @@ public class ChannelUserGAgentContinuationTests
         adapter.Replies.Should().ContainSingle();
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
         adapter.Replies[0].ReplyText.Should().Contain("Delete Agent");
+        adapter.Replies[0].ReplyText.Should().Contain("Refresh Status");
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
@@ -849,6 +852,7 @@ public class ChannelUserGAgentContinuationTests
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
         adapter.Replies[0].ReplyText.Should().Contain("Deleted agent");
         adapter.Replies[0].ReplyText.Should().Contain("No agents found yet");
+        adapter.Replies[0].ReplyText.Should().Contain("View Templates");
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
@@ -927,6 +931,7 @@ public class ChannelUserGAgentContinuationTests
 
         adapter.Replies.Should().ContainSingle();
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Refresh Status");
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()

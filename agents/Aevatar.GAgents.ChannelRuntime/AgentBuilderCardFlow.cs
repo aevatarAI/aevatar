@@ -648,6 +648,11 @@ internal static class AgentBuilderCardFlow
             "green",
             new object[]
             {
+                BuildButton("Refresh Status", "default", new
+                {
+                    agent_builder_action = AgentStatusAction,
+                    agent_id = agentId,
+                }),
                 BuildButton("Run Now", "primary", new
                 {
                     agent_builder_action = RunAgentAction,
@@ -685,7 +690,7 @@ internal static class AgentBuilderCardFlow
                 {
                     agent_builder_action = ListAgentsAction,
                 }),
-                BuildButton("Status", "primary", new
+                BuildButton("Refresh Status", "primary", new
                 {
                     agent_builder_action = AgentStatusAction,
                     agent_id = agentId,
@@ -774,6 +779,11 @@ internal static class AgentBuilderCardFlow
                 tag = "markdown",
                 content = $"You currently have **{agents.Count}** agent(s).",
             },
+            new
+            {
+                tag = "markdown",
+                content = "Quick commands: `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/delete-agent <agent_id>`",
+            },
         };
 
         if (!string.IsNullOrWhiteSpace(noticeMarkdown))
@@ -822,9 +832,17 @@ internal static class AgentBuilderCardFlow
             tag = "action",
             actions = new object[]
             {
+                BuildButton("Refresh List", "default", new
+                {
+                    agent_builder_action = ListAgentsAction,
+                }),
                 BuildButton("Create Daily Report", "default", new
                 {
                     agent_builder_action = OpenDailyReportFormAction,
+                }),
+                BuildButton("View Templates", "default", new
+                {
+                    agent_builder_action = ListTemplatesAction,
                 }),
             },
         });
@@ -872,12 +890,21 @@ internal static class AgentBuilderCardFlow
         });
         elements.Add(new
         {
+            tag = "markdown",
+            content = "Quick commands: `/templates`, `/daily-report`",
+        });
+        elements.Add(new
+        {
             tag = "action",
             actions = new object[]
             {
                 BuildButton("Create Daily Report", "primary", new
                 {
                     agent_builder_action = OpenDailyReportFormAction,
+                }),
+                BuildButton("View Templates", "default", new
+                {
+                    agent_builder_action = ListTemplatesAction,
                 }),
             },
         });
