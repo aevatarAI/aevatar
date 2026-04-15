@@ -32,14 +32,16 @@ jobs:
       - name: Check for new commits since last tag
         id: check
         run: |
-          LAST_TAG=$(git tag --sort=-creatordate | head -1)
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" HEAD 2>/dev/null || true)
           if [ -z "$LAST_TAG" ]; then
             echo "No previous tags found. Will create baseline."
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "previous_tag=" >> "$GITHUB_OUTPUT"
             echo "version=v0.1.0" >> "$GITHUB_OUTPUT"
           else
             COMMITS_SINCE=$(git rev-list --count "${LAST_TAG}..HEAD")
             echo "Commits since ${LAST_TAG}: ${COMMITS_SINCE}"
+            echo "previous_tag=${LAST_TAG}" >> "$GITHUB_OUTPUT"
             if [ "$COMMITS_SINCE" -eq 0 ]; then
               echo "No new commits. Skipping."
               echo "has_changes=false" >> "$GITHUB_OUTPUT"
@@ -59,8 +61,13 @@ jobs:
         if: steps.check.outputs.has_changes == 'true' && !inputs.skip_ci_check
         run: |
           # Check the latest commit on dev has passing status
-          STATUS=$(gh api repos/${{ github.repository }}/commits/dev/status --jq '.state' 2>/dev/null || echo "unknown")
-          if [ "$STATUS" != "success" ] && [ "$STATUS" != "unknown" ]; then
+          DEV_SHA=$(git rev-parse HEAD)
+          if ! STATUS=$(gh api "repos/${{ github.repository }}/commits/${DEV_SHA}/status" --jq '.state'); then
+            echo "::error::Unable to read CI status for dev at ${DEV_SHA}."
+            echo "::error::Use workflow_dispatch with skip_ci_check=true for emergency releases."
+            exit 1
+          fi
+          if [ "$STATUS" != "success" ]; then
             echo "::error::CI is not green on dev (status: ${STATUS}). Fix CI before releasing."
             echo "::error::Use workflow_dispatch with skip_ci_check=true for emergency releases."
             exit 1
@@ -91,7 +98,7 @@ jobs:
         if: steps.check.outputs.has_changes == 'true'
         run: |
           VERSION="${{ steps.check.outputs.version }}"
-          LAST_TAG=$(git tag --sort=-creatordate | sed -n '2p')
+          LAST_TAG="${{ steps.check.outputs.previous_tag }}"
 
           if [ -n "$LAST_TAG" ]; then
             BODY=$(git log --oneline "${LAST_TAG}..${VERSION}" | head -30)

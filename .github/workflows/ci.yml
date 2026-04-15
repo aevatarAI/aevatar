@@ -117,6 +117,8 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash tools/ci/pr_size_guard.sh
 
       - name: Test Stability Guards

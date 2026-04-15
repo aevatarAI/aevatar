@@ -14,12 +14,28 @@ set -euo pipefail
 FILES_THRESHOLD="${PR_SIZE_FILES_THRESHOLD:-30}"
 LOC_THRESHOLD="${PR_SIZE_LOC_THRESHOLD:-800}"
 
+resolve_diff_target_from_shas() {
+  local base_sha="$1"
+  local head_sha="$2"
+
+  if ! git cat-file -e "${base_sha}^{commit}" >/dev/null 2>&1; then
+    echo "::warning::PR Size Guard could not resolve base commit ${base_sha}; falling back to ref-based diff." >&2
+    return 1
+  fi
+
+  if ! git cat-file -e "${head_sha}^{commit}" >/dev/null 2>&1; then
+    echo "::warning::PR Size Guard could not resolve head commit ${head_sha}; falling back to ref-based diff." >&2
+    return 1
+  fi
+
+  echo "${base_sha}...${head_sha}"
+}
+
 resolve_diff_target() {
   local base_ref="$1"
   local triple_dot="origin/${base_ref}...HEAD"
-  local double_dot="origin/${base_ref}..HEAD"
 
-  git fetch --no-tags --depth=1 origin \
+  git fetch --no-tags origin \
     "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" \
     2>/dev/null || true
 
@@ -29,17 +45,19 @@ resolve_diff_target() {
     return
   fi
 
-  if git merge-base "origin/${base_ref}" HEAD >/dev/null 2>&1; then
-    echo "${triple_dot}"
+  if ! git merge-base "origin/${base_ref}" HEAD >/dev/null 2>&1; then
+    echo "::warning::PR Size Guard could not find a merge base for ${triple_dot}; falling back to HEAD only." >&2
+    echo "HEAD"
     return
   fi
 
-  echo "::warning::PR Size Guard could not find a merge base for ${triple_dot}; falling back to ${double_dot}." >&2
-  echo "${double_dot}"
+  echo "${triple_dot}"
 }
 
 # Determine diff target
-if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
+if [[ -n "${GITHUB_BASE_SHA:-}" && -n "${GITHUB_HEAD_SHA:-}" ]]; then
+  DIFF_TARGET=$(resolve_diff_target_from_shas "${GITHUB_BASE_SHA}" "${GITHUB_HEAD_SHA}") || DIFF_TARGET=$(resolve_diff_target "${GITHUB_BASE_REF:-dev}")
+elif [[ -n "${GITHUB_BASE_REF:-}" ]]; then
   DIFF_TARGET=$(resolve_diff_target "${GITHUB_BASE_REF}")
 elif [[ -n "${1:-}" ]]; then
   DIFF_TARGET="$1"
@@ -51,13 +69,6 @@ echo "PR Size Guard: comparing ${DIFF_TARGET}"
 echo "Thresholds: files=${FILES_THRESHOLD}, LOC=${LOC_THRESHOLD}"
 
 DIFF_NUMSTAT=$(git diff --numstat "${DIFF_TARGET}" 2>/dev/null || true)
-if [[ -z "${DIFF_NUMSTAT}" && "${DIFF_TARGET}" == *"...HEAD" ]]; then
-  FALLBACK_TARGET="${DIFF_TARGET/...HEAD/..HEAD}"
-  echo "::warning::PR Size Guard could not evaluate ${DIFF_TARGET}; retrying with ${FALLBACK_TARGET}." >&2
-  DIFF_TARGET="${FALLBACK_TARGET}"
-  DIFF_NUMSTAT=$(git diff --numstat "${DIFF_TARGET}" 2>/dev/null || true)
-fi
-
 if [[ -z "${DIFF_NUMSTAT}" && "${DIFF_TARGET}" != "HEAD" ]]; then
   echo "::warning::PR Size Guard could not evaluate ${DIFF_TARGET}; defaulting to zero diff so the advisory check does not fail CI." >&2
 fi
