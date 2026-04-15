@@ -784,8 +784,11 @@ public class ChannelUserGAgentContinuationTests
                     AgentType = SkillRunnerDefaults.AgentType,
                     TemplateName = "daily_report",
                     ApiKeyId = "key-1",
+                    OwnerNyxUserId = "user-1",
                 }),
                 Task.FromResult<AgentRegistryEntry?>(null));
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(Array.Empty<AgentRegistryEntry>()));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
@@ -844,10 +847,12 @@ public class ChannelUserGAgentContinuationTests
 
         adapter.Replies.Should().ContainSingle();
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Deleted agent");
+        adapter.Replies[0].ReplyText.Should().Contain("No agents found yet");
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
-            .Should().Be("Agent Deleted");
+            .Should().Be("Current Agents");
 
         await skillRunnerActor.Received(1).HandleEventAsync(
             Arg.Is<EventEnvelope>(e =>

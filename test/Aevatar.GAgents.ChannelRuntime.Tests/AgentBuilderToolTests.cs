@@ -194,8 +194,11 @@ public sealed class AgentBuilderToolTests
                     AgentType = SkillRunnerDefaults.AgentType,
                     TemplateName = "daily_report",
                     ApiKeyId = "key-1",
+                    OwnerNyxUserId = "user-1",
                 }),
                 Task.FromResult<AgentRegistryEntry?>(null));
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(Array.Empty<AgentRegistryEntry>()));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
@@ -236,6 +239,8 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-1");
+            doc.RootElement.GetProperty("agents").GetArrayLength().Should().Be(0);
+            doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Deleted agent");
 
             await skillRunnerActor.Received(1).HandleEventAsync(
                 Arg.Is<EventEnvelope>(e =>

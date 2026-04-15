@@ -249,22 +249,7 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct)
     {
         var ownerFilter = args.Str("owner_nyx_user_id") ?? await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-        var entries = await queryPort.QueryAllAsync(ct);
-        var agents = entries
-            .Where(x => string.IsNullOrWhiteSpace(ownerFilter) || string.Equals(x.OwnerNyxUserId, ownerFilter, StringComparison.Ordinal))
-            .Select(static x => new
-            {
-                agent_id = x.AgentId,
-                agent_type = x.AgentType,
-                template = x.TemplateName,
-                status = x.Status,
-                schedule_cron = x.ScheduleCron,
-                schedule_timezone = x.ScheduleTimezone,
-                last_run_at = x.LastRunAt,
-                next_scheduled_run = x.NextRunAt,
-                error_count = x.ErrorCount,
-            })
-            .ToArray();
+        var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
 
         return JsonSerializer.Serialize(new { agents, total = agents.Length });
     }
@@ -351,20 +336,34 @@ public sealed class AgentBuilderTool : IAgentTool
 
             if (await queryPort.GetAsync(entry.AgentId, ct) == null)
             {
+                var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
+                    ? entry.OwnerNyxUserId
+                    : await ResolveCurrentUserIdAsync(nyxClient, token, ct);
+                var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
                 return JsonSerializer.Serialize(new
                 {
                     status = "deleted",
                     agent_id = entry.AgentId,
                     revoked_api_key_id = entry.ApiKeyId,
+                    delete_notice = $"Deleted agent `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
+                    agents,
+                    total = agents.Length,
                 });
             }
         }
 
+        var acceptedOwnerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
+            ? entry.OwnerNyxUserId
+            : await ResolveCurrentUserIdAsync(nyxClient, token, ct);
+        var acceptedAgents = await QueryAgentsForOwnerAsync(queryPort, acceptedOwnerFilter, ct);
         return JsonSerializer.Serialize(new
         {
             status = "accepted",
             agent_id = entry.AgentId,
             revoked_api_key_id = entry.ApiKeyId,
+            delete_notice = $"Delete submitted for `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
+            agents = acceptedAgents,
+            total = acceptedAgents.Length,
             note = "Delete was submitted but registry tombstone is not yet reflected.",
         });
     }
@@ -434,6 +433,30 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         return JsonSerializer.Serialize(payload);
+    }
+
+    private async Task<object[]> QueryAgentsForOwnerAsync(
+        IAgentRegistryQueryPort queryPort,
+        string? ownerFilter,
+        CancellationToken ct)
+    {
+        var entries = await queryPort.QueryAllAsync(ct);
+        return entries
+            .Where(x => string.IsNullOrWhiteSpace(ownerFilter) || string.Equals(x.OwnerNyxUserId, ownerFilter, StringComparison.Ordinal))
+            .Select(static x => new
+            {
+                agent_id = x.AgentId,
+                agent_type = x.AgentType,
+                template = x.TemplateName,
+                status = x.Status,
+                schedule_cron = x.ScheduleCron,
+                schedule_timezone = x.ScheduleTimezone,
+                last_run_at = x.LastRunAt,
+                next_scheduled_run = x.NextRunAt,
+                error_count = x.ErrorCount,
+            })
+            .Cast<object>()
+            .ToArray();
     }
 
     private async Task<string?> ResolveCurrentUserIdAsync(NyxIdApiClient client, string token, CancellationToken ct)

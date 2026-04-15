@@ -701,30 +701,26 @@ internal static class AgentBuilderCardFlow
         var status = ReadString(root, "status") ?? "accepted";
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
         var revokedApiKeyId = ReadString(root, "revoked_api_key_id") ?? "n/a";
+        var deleteNotice = ReadString(root, "delete_notice");
         var note = ReadString(root, "note");
+        var lines = new List<string>();
 
-        var lines = new List<string>
-        {
-            string.Equals(status, "deleted", StringComparison.OrdinalIgnoreCase)
-                ? $"Agent deleted: `{agentId}`"
-                : $"Delete accepted: `{agentId}`",
-            $"Revoked API key: `{revokedApiKeyId}`",
-        };
+        if (!string.IsNullOrWhiteSpace(deleteNotice))
+            lines.Add(deleteNotice!);
+        else
+            lines.Add(
+                string.Equals(status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    ? $"Deleted agent `{agentId}`. Revoked API key: `{revokedApiKeyId}`."
+                    : $"Delete accepted for `{agentId}`. Revoked API key: `{revokedApiKeyId}`.");
 
         if (!string.IsNullOrWhiteSpace(note))
             lines.Add(note!);
 
-        return BuildInfoCard(
-            "Agent Deleted",
-            string.Join("\n", lines),
-            "red",
-            new object[]
-            {
-                BuildButton("Back to Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-            });
+        var noticeMarkdown = string.Join("\n", lines);
+        var agents = ReadAgentList(root);
+        return agents.Count == 0
+            ? BuildEmptyAgentListCard(noticeMarkdown)
+            : BuildAgentListCard(agents, noticeMarkdown);
     }
 
     private static bool TryReadError(JsonElement root, out string error)
@@ -769,7 +765,7 @@ internal static class AgentBuilderCardFlow
             ? "`None`"
             : string.Join(", ", fields.Select(static field => $"`{field}`"));
 
-    private static string BuildAgentListCard(IReadOnlyList<AgentListCardItem> agents)
+    private static string BuildAgentListCard(IReadOnlyList<AgentListCardItem> agents, string? noticeMarkdown = null)
     {
         var elements = new List<object>
         {
@@ -779,6 +775,15 @@ internal static class AgentBuilderCardFlow
                 content = $"You currently have **{agents.Count}** agent(s).",
             },
         };
+
+        if (!string.IsNullOrWhiteSpace(noticeMarkdown))
+        {
+            elements.Insert(0, new
+            {
+                tag = "markdown",
+                content = noticeMarkdown,
+            });
+        }
 
         foreach (var agent in agents)
         {
@@ -845,6 +850,38 @@ internal static class AgentBuilderCardFlow
 
     private static string BuildEmptyAgentListCard()
     {
+        return BuildEmptyAgentListCard(null);
+    }
+
+    private static string BuildEmptyAgentListCard(string? noticeMarkdown)
+    {
+        var elements = new List<object>();
+        if (!string.IsNullOrWhiteSpace(noticeMarkdown))
+        {
+            elements.Add(new
+            {
+                tag = "markdown",
+                content = noticeMarkdown,
+            });
+        }
+
+        elements.Add(new
+        {
+            tag = "markdown",
+            content = "No agents found yet. Create your first daily report agent from here.",
+        });
+        elements.Add(new
+        {
+            tag = "action",
+            actions = new object[]
+            {
+                BuildButton("Create Daily Report", "primary", new
+                {
+                    agent_builder_action = OpenDailyReportFormAction,
+                }),
+            },
+        });
+
         return JsonSerializer.Serialize(new
         {
             config = new
@@ -860,25 +897,7 @@ internal static class AgentBuilderCardFlow
                 },
                 template = "wathet",
             },
-            elements = new object[]
-            {
-                new
-                {
-                    tag = "markdown",
-                    content = "No agents found yet. Create your first daily report agent from here.",
-                },
-                new
-                {
-                    tag = "action",
-                    actions = new object[]
-                    {
-                        BuildButton("Create Daily Report", "primary", new
-                        {
-                            agent_builder_action = OpenDailyReportFormAction,
-                        }),
-                    },
-                },
-            },
+            elements,
         });
     }
 
@@ -957,6 +976,25 @@ internal static class AgentBuilderCardFlow
         value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("`", "\\`", StringComparison.Ordinal);
+
+    private static IReadOnlyList<AgentListCardItem> ReadAgentList(JsonElement root)
+    {
+        if (!root.TryGetProperty("agents", out var agentsElement) ||
+            agentsElement.ValueKind != JsonValueKind.Array)
+            return Array.Empty<AgentListCardItem>();
+
+        var agents = new List<AgentListCardItem>();
+        foreach (var item in agentsElement.EnumerateArray())
+        {
+            var agentId = ReadString(item, "agent_id") ?? "unknown-agent";
+            var template = ReadString(item, "template") ?? "unknown-template";
+            var status = ReadString(item, "status") ?? "unknown";
+            var nextRun = ReadString(item, "next_scheduled_run") ?? "pending";
+            agents.Add(new AgentListCardItem(agentId, template, status, nextRun));
+        }
+
+        return agents;
+    }
 }
 
 internal sealed record AgentListCardItem(
