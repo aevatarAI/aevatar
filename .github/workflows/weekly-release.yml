@@ -11,6 +11,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 concurrency:
   group: weekly-release
   cancel-in-progress: false

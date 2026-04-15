@@ -29,12 +29,14 @@ echo "Thresholds: files=${FILES_THRESHOLD}, LOC=${LOC_THRESHOLD}"
 
 # Count changed files (excluding auto-generated)
 CHANGED_FILES=$(git diff --name-only "${DIFF_TARGET}" 2>/dev/null \
-  | grep -v '\.Designer\.cs$' \
-  | grep -v '\.g\.cs$' \
-  | grep -v '\.pb\.cs$' \
-  | grep -v '/obj/' \
-  | grep -v '/bin/' \
-  | wc -l | tr -d ' ')
+  | awk '
+      $0 !~ /\.Designer\.cs$/ &&
+      $0 !~ /\.g\.cs$/ &&
+      $0 !~ /\.pb\.cs$/ &&
+      $0 !~ /\/obj\// &&
+      $0 !~ /\/bin\// { count++ }
+      END { print count + 0 }
+    ')
 
 # Count net LOC changed
 STAT_LINE=$(git diff --stat "${DIFF_TARGET}" 2>/dev/null | tail -1)
