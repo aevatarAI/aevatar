@@ -135,7 +135,9 @@ public sealed class WorkflowRunControlCommandTests
                 new Dictionary<string, string>
                 {
                     ["source"] = "tests",
-                }),
+                },
+                "edited draft",
+                "minor note"),
             new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
@@ -147,6 +149,8 @@ public sealed class WorkflowRunControlCommandTests
         resumed.StepId.Should().Be("step-1");
         resumed.Approved.Should().BeTrue();
         resumed.UserInput.Should().Be("approved");
+        resumed.EditedContent.Should().Be("edited draft");
+        resumed.Feedback.Should().Be("minor note");
         resumed.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
     }
 

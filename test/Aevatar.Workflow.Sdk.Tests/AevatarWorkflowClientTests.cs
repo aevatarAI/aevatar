@@ -55,6 +55,8 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
             using var doc = JsonDocument.Parse(body);
             doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
             doc.RootElement.GetProperty("stepId").GetString().Should().Be("approval-1");
+            doc.RootElement.GetProperty("editedContent").GetString().Should().Be("Final draft");
+            doc.RootElement.GetProperty("feedback").GetString().Should().Be("Looks good");
             doc.RootElement.GetProperty("metadata").GetProperty("source").GetString().Should().Be("sdk");
 
             return new HttpResponseMessage(HttpStatusCode.OK)
@@ -75,6 +77,8 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
             StepId = "approval-1",
             Approved = true,
             CommandId = "cmd-1",
+            EditedContent = "Final draft",
+            Feedback = "Looks good",
             Metadata = new Dictionary<string, string>
             {
                 ["source"] = "sdk",

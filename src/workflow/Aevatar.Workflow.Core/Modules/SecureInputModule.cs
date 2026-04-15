@@ -100,6 +100,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 TimeoutSeconds = timeoutSeconds,
                 VariableName = requestVariableName,
             };
+            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
             suspended.Metadata["variable"] = requestVariableName;
             suspended.Metadata["secure"] = "true";
             suspended.Metadata["input_mode"] = "password";

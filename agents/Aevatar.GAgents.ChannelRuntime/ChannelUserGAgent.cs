@@ -1,6 +1,7 @@
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -57,6 +58,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             .On<ChannelUserBoundEvent>(ApplyBound)
             .On<ChannelChatRequestedEvent>(ApplyRequested)
             .On<ChannelInboundDispatchedEvent>(ApplyInboundDispatched)
+            .On<ChannelInboundHandledEvent>(ApplyInboundHandled)
             .On<ChannelChatCompletedEvent>(ApplyCompleted)
             .OrCurrent();
 
@@ -136,6 +138,9 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             var effectiveToken = !string.IsNullOrEmpty(State.NyxidAccessToken)
                 ? State.NyxidAccessToken
                 : orgToken;
+
+            if (await TryHandleAgentBuilderAsync(evt, effectiveToken, CancellationToken.None))
+                return;
 
             // 3. Create/get chat actor
             var chatActorId = $"channel-{evt.Platform}-{evt.RegistrationId}-{evt.SenderId}";
@@ -417,6 +422,101 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
     }
 
+    private async Task<bool> TryHandleAgentBuilderAsync(
+        ChannelInboundEvent evt,
+        string effectiveToken,
+        CancellationToken ct)
+    {
+        if (!AgentBuilderCardFlow.TryResolve(evt, out var decision) || decision is null)
+            return false;
+
+        RecordDiagnostic("AgentBuilder:start", evt.Platform, evt.RegistrationId, decision.ToolAction ?? "card");
+
+        var replyPayload = decision.ReplyPayload;
+        if (decision.RequiresToolExecution)
+        {
+            var metadata = BuildAgentBuilderMetadata(evt, effectiveToken);
+            var previousMetadata = AgentToolRequestContext.CurrentMetadata;
+            try
+            {
+                AgentToolRequestContext.CurrentMetadata = metadata;
+                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(Services);
+                var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
+                replyPayload = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
+            }
+            finally
+            {
+                AgentToolRequestContext.CurrentMetadata = previousMetadata;
+            }
+        }
+
+        var delivery = await SendDirectPlatformReplyAsync(evt, replyPayload, ct);
+        if (!delivery.Succeeded)
+            throw new InvalidOperationException($"Agent builder reply rejected: {delivery.Detail}");
+
+        await PersistHandledMessageIdAsync(evt.MessageId, ct);
+        RecordDiagnostic("AgentBuilder:done", evt.Platform, evt.RegistrationId, decision.ToolAction ?? "card");
+        return true;
+    }
+
+    private IReadOnlyDictionary<string, string> BuildAgentBuilderMetadata(
+        ChannelInboundEvent evt,
+        string effectiveToken)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = effectiveToken,
+            [LLMRequestMetadataKeys.NyxIdOrgToken] = evt.RegistrationToken,
+            ["scope_id"] = evt.RegistrationScopeId,
+            [ChannelMetadataKeys.Platform] = evt.Platform,
+            [ChannelMetadataKeys.SenderId] = evt.SenderId,
+            [ChannelMetadataKeys.SenderName] = evt.SenderName,
+            [ChannelMetadataKeys.ConversationId] = evt.ConversationId,
+            [ChannelMetadataKeys.MessageId] = evt.MessageId,
+            [ChannelMetadataKeys.ChatType] = AgentBuilderCardFlow.ResolveToolChatType(evt),
+        };
+        return metadata;
+    }
+
+    private async Task<PlatformReplyDeliveryResult> SendDirectPlatformReplyAsync(
+        ChannelInboundEvent evt,
+        string replyText,
+        CancellationToken ct)
+    {
+        var adapters = Services.GetRequiredService<IEnumerable<IPlatformAdapter>>();
+        var adapter = adapters.FirstOrDefault(a =>
+            string.Equals(a.Platform, evt.Platform, StringComparison.OrdinalIgnoreCase));
+
+        if (adapter is null)
+            return new PlatformReplyDeliveryResult(false, $"No adapter for platform: {evt.Platform}");
+
+        var nyxClient = Services.GetRequiredService<NyxIdApiClient>();
+        var inbound = new InboundMessage
+        {
+            Platform = evt.Platform,
+            ConversationId = evt.ConversationId,
+            SenderId = evt.SenderId,
+            SenderName = evt.SenderName,
+            Text = evt.Text,
+            MessageId = evt.MessageId,
+            ChatType = evt.ChatType,
+            Extra = evt.Extra,
+        };
+
+        var registration = new ChannelBotRegistrationEntry
+        {
+            Id = evt.RegistrationId,
+            Platform = evt.Platform,
+            NyxProviderSlug = evt.NyxProviderSlug,
+            NyxUserToken = evt.RegistrationToken,
+            ScopeId = evt.RegistrationScopeId,
+        };
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
+    }
+
     private async Task RecoverPendingSessionAsync(
         ChannelPendingChatSession session,
         CancellationToken ct)
@@ -475,6 +575,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         chatRequest.Metadata[ChannelMetadataKeys.Platform] = session.Platform;
         chatRequest.Metadata[ChannelMetadataKeys.SenderId] = session.SenderId;
         chatRequest.Metadata[ChannelMetadataKeys.SenderName] = session.SenderName;
+        chatRequest.Metadata[ChannelMetadataKeys.ConversationId] = session.ConversationId;
         chatRequest.Metadata[ChannelMetadataKeys.MessageId] = session.MessageId;
         chatRequest.Metadata[ChannelMetadataKeys.ChatType] = session.ChatType;
 
@@ -577,6 +678,21 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         TrackProcessedMessageId(session.MessageId);
     }
 
+    private async Task PersistHandledMessageIdAsync(
+        string? messageId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(messageId) || _processedMessageIds.Contains(messageId))
+            return;
+
+        await PersistDomainEventAsync(new ChannelInboundHandledEvent
+        {
+            MessageId = messageId,
+        }, ct);
+
+        TrackProcessedMessageId(messageId);
+    }
+
     /// <summary>
     /// Derives a deterministic GUID-format sessionId from a messageId.
     /// Same messageId always produces the same sessionId, so Orleans stream
@@ -604,7 +720,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             next.FirstSeen = now;
         }
 
-        next.DisplayName = evt.DisplayName;
+        if (!string.IsNullOrWhiteSpace(evt.DisplayName))
+            next.DisplayName = evt.DisplayName;
         next.LastSeen = now;
         return next;
     }
@@ -628,14 +745,20 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     }
 
     private static ChannelUserState ApplyInboundDispatched(ChannelUserState current, ChannelInboundDispatchedEvent evt)
+        => ApplyProcessedMessageId(current, evt.MessageId);
+
+    private static ChannelUserState ApplyInboundHandled(ChannelUserState current, ChannelInboundHandledEvent evt)
+        => ApplyProcessedMessageId(current, evt.MessageId);
+
+    private static ChannelUserState ApplyProcessedMessageId(ChannelUserState current, string? messageId)
     {
-        if (string.IsNullOrWhiteSpace(evt.MessageId))
+        if (string.IsNullOrWhiteSpace(messageId))
             return current;
 
         var next = current.Clone();
-        if (!next.ProcessedMessageIds.Contains(evt.MessageId))
+        if (!next.ProcessedMessageIds.Contains(messageId))
         {
-            next.ProcessedMessageIds.Add(evt.MessageId);
+            next.ProcessedMessageIds.Add(messageId);
             while (next.ProcessedMessageIds.Count > MaxProcessedMessageIds)
                 next.ProcessedMessageIds.RemoveAt(0);
         }
