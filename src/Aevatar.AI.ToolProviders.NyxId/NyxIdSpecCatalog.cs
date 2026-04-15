@@ -1,5 +1,4 @@
 using System.Net.Http.Headers;
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -118,60 +117,16 @@ public sealed class NyxIdSpecCatalog : IDisposable
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(json);
+        var cards = OpenApiSpecParser.ParseSpec(json, "nyxid");
 
-        if (!doc.RootElement.TryGetProperty("paths", out var paths) ||
-            paths.ValueKind != JsonValueKind.Object)
+        if (cards.Length == 0)
         {
-            _logger.LogWarning("NyxIdSpecCatalog: spec has no 'paths' key, skipping update");
+            _logger.LogWarning("NyxIdSpecCatalog: spec yielded no operations, skipping update");
             return;
         }
 
-        var cards = new List<OperationCard>();
-        foreach (var pathEntry in paths.EnumerateObject())
-        {
-            var pathStr = pathEntry.Name;
-            if (pathEntry.Value.ValueKind != JsonValueKind.Object) continue;
-
-            foreach (var methodEntry in pathEntry.Value.EnumerateObject())
-            {
-                var method = methodEntry.Name.ToUpperInvariant();
-                if (method is "PARAMETERS" or "SERVERS" or "SUMMARY" or "DESCRIPTION")
-                    continue;
-
-                var op = methodEntry.Value;
-                var operationId = op.TryGetProperty("operationId", out var oid)
-                    ? oid.GetString() ?? $"{method}_{pathStr}"
-                    : $"{method}_{pathStr}";
-
-                var summary = op.TryGetProperty("summary", out var s)
-                    ? s.GetString() ?? ""
-                    : op.TryGetProperty("description", out var d)
-                        ? (d.GetString() ?? "").Split('\n')[0]
-                        : "";
-
-                string? parameters = null;
-                if (op.TryGetProperty("parameters", out var paramEl) &&
-                    paramEl.ValueKind == JsonValueKind.Array)
-                    parameters = paramEl.GetRawText();
-
-                string? requestBody = null;
-                if (op.TryGetProperty("requestBody", out var bodyEl))
-                    requestBody = bodyEl.GetRawText();
-
-                cards.Add(new OperationCard(
-                    Service: "nyxid",
-                    OperationId: operationId,
-                    Method: method,
-                    Path: pathStr,
-                    Summary: summary,
-                    Parameters: parameters,
-                    RequestBodySchema: requestBody));
-            }
-        }
-
-        Volatile.Write(ref _catalog, cards.ToArray());
-        _logger.LogInformation("NyxIdSpecCatalog updated: {Count} operations", cards.Count);
+        Volatile.Write(ref _catalog, cards);
+        _logger.LogInformation("NyxIdSpecCatalog updated: {Count} operations", cards.Length);
     }
 
     public void Dispose() => _refreshTimer?.Dispose();
