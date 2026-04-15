@@ -1233,7 +1233,12 @@ const GovernanceWorkbench: React.FC = () => {
     if (!hasSelectedServiceContext) {
       return (
         <GovernanceSelectionNotice
-          title="选择服务"
+          description="先在顶部选择一个服务，再查看策略、绑定、入口和变更记录。"
+          highlights={[
+            { label: "团队", value: activeDraft.tenantId || "待选择" },
+            { label: "命名空间", value: activeDraft.namespace || "待选择" },
+          ]}
+          title="还没有选中服务"
         />
       );
     }
@@ -1241,7 +1246,12 @@ const GovernanceWorkbench: React.FC = () => {
     if (targetView === "activation" && !activeDraft.revisionId.trim()) {
       return (
         <GovernanceSelectionNotice
-          title="选择版本"
+          description="先选择一个版本，再查看激活能力、缺失策略和入口约束。"
+          highlights={[
+            { label: "服务", value: activeDraft.serviceId || "待选择" },
+            { label: "版本", value: "待选择" },
+          ]}
+          title="还没有选中版本"
         />
       );
     }
@@ -1274,9 +1284,17 @@ const GovernanceWorkbench: React.FC = () => {
             },
           }}
           locale={{
-            emptyText: policiesQuery.isLoading
-              ? "加载中..."
-              : "暂无策略",
+            emptyText: policiesQuery.isLoading ? (
+              "加载中..."
+            ) : (
+              <GovernanceSelectionNotice
+                description="当前服务还没有治理策略。"
+                highlights={[
+                  { label: "服务", value: activeDraft.serviceId || "待选择" },
+                ]}
+                title="还没有策略"
+              />
+            ),
           }}
           metas={policyListMetas}
           pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -1303,9 +1321,17 @@ const GovernanceWorkbench: React.FC = () => {
             },
           }}
           locale={{
-            emptyText: bindingsQuery.isLoading
-              ? "加载中..."
-              : "暂无绑定",
+            emptyText: bindingsQuery.isLoading ? (
+              "加载中..."
+            ) : (
+              <GovernanceSelectionNotice
+                description="当前服务还没有治理绑定。"
+                highlights={[
+                  { label: "服务", value: activeDraft.serviceId || "待选择" },
+                ]}
+                title="还没有绑定"
+              />
+            ),
           }}
           metas={bindingListMetas}
           pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -1332,9 +1358,17 @@ const GovernanceWorkbench: React.FC = () => {
             },
           }}
           locale={{
-            emptyText: endpointsQuery.isLoading
-              ? "加载中..."
-              : "暂无入口",
+            emptyText: endpointsQuery.isLoading ? (
+              "加载中..."
+            ) : (
+              <GovernanceSelectionNotice
+                description="当前服务还没有暴露入口。"
+                highlights={[
+                  { label: "服务", value: activeDraft.serviceId || "待选择" },
+                ]}
+                title="还没有入口"
+              />
+            ),
           }}
           metas={endpointListMetas}
           pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -1647,13 +1681,20 @@ const GovernanceWorkbench: React.FC = () => {
               <div
                 style={{
                   ...buildAevatarPanelStyle(surfaceToken, {
-                background: surfaceToken.colorFillAlter,
-                padding: 16,
-              }),
-              boxShadow: "none",
-            }}
-          >
-                <Typography.Text strong>选择服务</Typography.Text>
+                    background: surfaceToken.colorFillAlter,
+                    padding: 16,
+                  }),
+                  boxShadow: "none",
+                }}
+              >
+                <GovernanceSelectionNotice
+                  description="先在顶部确认团队和服务，再进入策略、绑定和入口视图。"
+                  highlights={[
+                    { label: "团队", value: activeDraft.tenantId || "待选择" },
+                    { label: "命名空间", value: activeDraft.namespace || "待选择" },
+                  ]}
+                  title="当前还没有服务上下文"
+                />
               </div>
             )}
           </div>

@@ -16,7 +16,7 @@ type GovernanceContextPanelProps = {
 
 function renderValue(value: string): string {
   const normalized = value.trim();
-  return normalized || '暂无';
+  return normalized || '待选择';
 }
 
 const GovernanceContextPanel: React.FC<GovernanceContextPanelProps> = ({

@@ -257,6 +257,47 @@ const MetricCard: React.FC<{
   );
 };
 
+const DeploymentEmptyStateCard: React.FC<{
+  title: string;
+  description: string;
+  highlights?: Array<{ label: string; value: string }>;
+}> = ({ title, description, highlights = [] }) => {
+  const { token } = theme.useToken();
+  const surfaceToken = token as AevatarThemeSurfaceToken;
+
+  return (
+    <div
+      style={{
+        ...buildAevatarPanelStyle(surfaceToken, {
+          background: surfaceToken.colorFillAlter,
+          padding: 20,
+        }),
+        boxShadow: "none",
+      }}
+    >
+      <Space direction="vertical" size={14} style={{ display: "flex" }}>
+        <Space direction="vertical" size={4} style={{ display: "flex" }}>
+          <Typography.Text strong>{title}</Typography.Text>
+          <Typography.Text type="secondary">{description}</Typography.Text>
+        </Space>
+        {highlights.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+            }}
+          >
+            {highlights.map((item) => (
+              <MetricCard key={item.label} label={item.label} value={item.value} />
+            ))}
+          </div>
+        ) : null}
+      </Space>
+    </div>
+  );
+};
+
 const DeploymentsPage: React.FC = () => {
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
@@ -797,9 +838,18 @@ const DeploymentsPage: React.FC = () => {
                 style: { borderRadius: 12 },
               }}
               locale={{
-                emptyText: servicesQuery.isLoading
-                  ? "加载中..."
-                  : "暂无部署",
+                emptyText: servicesQuery.isLoading ? (
+                  "加载中..."
+                ) : (
+                  <DeploymentEmptyStateCard
+                    description="先选择一个团队上下文，或等第一个版本开始部署。"
+                    highlights={[
+                      { label: "服务数", value: "0" },
+                      { label: "活跃部署", value: "0" },
+                    ]}
+                    title="当前还没有部署"
+                  />
+                ),
               }}
               metas={listMetas}
               pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -971,9 +1021,19 @@ const DeploymentsPage: React.FC = () => {
                         </Button>
                       </>
                     ) : (
-                      <Empty
-                        description="请选择部署"
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      <DeploymentEmptyStateCard
+                        description="当前服务还没有已启用部署，发布第一个版本后会在这里看到状态、阶段和停用入口。"
+                        highlights={[
+                          {
+                            label: "当前版本",
+                            value: activeRevisionId || "待发布",
+                          },
+                          {
+                            label: "发布阶段",
+                            value: rolloutQuery.data?.rolloutId ? "进行中" : "未开始",
+                          },
+                        ]}
+                        title="当前还没有已启用部署"
                       />
                     )}
                   </ProCard>
@@ -981,9 +1041,14 @@ const DeploymentsPage: React.FC = () => {
               </>
             ) : (
               <ProCard style={buildAevatarPanelStyle(surfaceToken)}>
-                <Empty
-                  description="请选择部署"
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                <DeploymentEmptyStateCard
+                  description="先从左侧部署清单选择一个服务，再查看版本、权重、发布和回滚。"
+                  highlights={[
+                    { label: "版本对比", value: "待选择" },
+                    { label: "流量权重", value: "待选择" },
+                    { label: "回滚操作", value: "待选择" },
+                  ]}
+                  title="还没有选中部署"
                 />
               </ProCard>
             )}

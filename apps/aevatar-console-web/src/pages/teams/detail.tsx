@@ -413,12 +413,12 @@ function formatCompactTimestamp(value: string | null | undefined): string {
 function formatDetailedTimestamp(value: string | null | undefined): string {
   const normalized = trimText(value);
   if (!normalized) {
-    return "--";
+    return "待更新";
   }
 
   const parsed = new Date(normalized);
   if (Number.isNaN(parsed.getTime())) {
-    return "--";
+    return "待更新";
   }
 
   return parsed.toLocaleString("zh-CN", {
@@ -499,7 +499,7 @@ function deriveTeamCompositionRows(input: {
         summaryParts.push([provider, model].filter(Boolean).join(" / "));
       }
       if (summaryParts.length === 0) {
-        summaryParts.push("--");
+        summaryParts.push("等待补充角色说明");
       }
 
       rows.push({
@@ -519,7 +519,7 @@ function deriveTeamCompositionRows(input: {
     key: `member:${member.actorId}`,
     kind: trimText(input.implementationKind) || "runtime",
     name: trimText(member.actorType) || compactId(member.actorId),
-    summary: trimText(member.actorId) || "--",
+    summary: trimText(member.actorId) || "等待成员信号",
   }));
 }
 
@@ -1273,7 +1273,7 @@ const TeamDetailPage: React.FC = () => {
     "";
   const activeRunId =
     lens.currentRun?.runId || focusedOperationalUnit?.latestRun?.runId || "";
-  const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "--";
+  const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "待发布";
   const currentRevisionStatus =
     trimText(lens.activeRevision?.servingState) ||
     trimText(lens.activeRevision?.status) ||
@@ -1299,31 +1299,28 @@ const TeamDetailPage: React.FC = () => {
   const currentDeploymentId =
     trimText(lens.activeRevision?.deploymentId) ||
     trimText(lens.currentService?.deploymentId) ||
-    "--";
+    "待配置";
   const currentServiceKey =
     trimText(lens.currentService?.serviceKey) ||
     trimText(activeWorkflowSummary?.serviceKey) ||
-    "--";
-  const currentServiceDisplayName =
-    trimText(lens.currentService?.displayName) || "--";
-  const currentRunStatus = trimText(lens.currentRun?.completionStatus) || "--";
+    "等待服务绑定";
+  const currentServiceDisplayName = trimText(lens.currentService?.displayName);
+  const currentRunStatus = trimText(lens.currentRun?.completionStatus) || "待运行";
   const currentRunFriendly = activeRunId
     ? formatFriendlyStatus(currentRunStatus)
     : "暂无运行";
   const currentServiceFriendly =
-    currentServiceDisplayName !== "--"
-      ? currentServiceDisplayName
-      : runtimeServiceId || "待配置";
+    currentServiceDisplayName || runtimeServiceId || "待配置";
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
       : currentDeploymentFriendly;
   const currentServicePillText =
-    currentServiceFriendly !== "--"
+    trimText(currentServiceFriendly)
       ? `服务 · ${currentServiceFriendly}`
       : "服务待配置";
   const currentDeploymentPillText =
-    currentVersionFriendly !== "--"
+    trimText(currentVersionFriendly)
       ? `版本 · ${currentVersionFriendly}`
       : "版本待确认";
   const currentRunPillText = activeRunId
@@ -1332,14 +1329,14 @@ const TeamDetailPage: React.FC = () => {
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
-    "--";
+    "等待定义";
   const currentActorId =
     trimText(lens.currentRun?.actorId) ||
     trimText(lens.activeRevision?.primaryActorId) ||
-    "--";
+    "待分配";
   const currentStateVersion =
-    lens.currentRun?.stateVersion != null ? String(lens.currentRun.stateVersion) : "--";
-  const currentLastEventId = trimText(lens.currentRun?.lastEventId) || "--";
+    lens.currentRun?.stateVersion != null ? String(lens.currentRun.stateVersion) : "待同步";
+  const currentLastEventId = trimText(lens.currentRun?.lastEventId) || "待同步";
   const currentEndpointCount = lens.currentService?.endpoints.length ?? 0;
   const currentPolicyCount = lens.currentService?.policyIds.length ?? 0;
   const enabledConnectorCount = integrations.items.filter((item) => item.enabled).length;
@@ -1361,7 +1358,7 @@ const TeamDetailPage: React.FC = () => {
         key: "fallback-workflow",
         kind: "workflow",
         name: "团队流程",
-        summary: workflowNameValue !== "--" ? workflowNameValue : activeWorkflowId || "--",
+        summary: trimText(workflowNameValue) || activeWorkflowId || "等待定义",
       },
       {
         key: "fallback-actor",
@@ -1397,27 +1394,27 @@ const TeamDetailPage: React.FC = () => {
       value: currentRevisionFriendly,
     },
     {
-      badge: runtimeServiceId || "--",
+      badge: runtimeServiceId || "待绑定",
       badgeColor: runtimeServiceId ? "success" : undefined,
       key: "serviceKey",
       label: "主服务",
-      note: `serviceId: ${runtimeServiceId || "--"}`,
+      note: `serviceId: ${runtimeServiceId || "待绑定"}`,
       value: currentServiceFriendly,
     },
     {
       badge: currentRunStatus,
-      badgeColor: currentRunStatus !== "--" ? "success" : undefined,
+      badgeColor: currentRunStatus !== "待运行" ? "success" : undefined,
       key: "runId",
       label: "最近状态",
       note: activeRunId ? `runId: ${activeRunId}` : `actorId: ${currentActorId}`,
       value: currentRunFriendly,
     },
     {
-      badge: currentStateVersion !== "--" ? `v${currentStateVersion}` : "--",
+      badge: currentStateVersion !== "待同步" ? `v${currentStateVersion}` : "待同步",
       key: "lastUpdatedAt",
       label: "最近更新时间",
       note: `lastEventId: ${currentLastEventId}`,
-      value: latestVisibleUpdate ? formatCompactTimestamp(latestVisibleUpdate) : "--",
+      value: latestVisibleUpdate ? formatCompactTimestamp(latestVisibleUpdate) : "待更新",
     },
     {
       badge: `${integrations.linkedConnectorCount}`,
@@ -1468,7 +1465,7 @@ const TeamDetailPage: React.FC = () => {
       return {
         actionsLabel: member.actorId,
         actorId: member.actorId,
-        governanceService: runtimeServiceId || "--",
+        governanceService: runtimeServiceId || "待绑定",
         implementationType,
         key: member.actorId,
         messageCount: actorEventCount,
@@ -1524,7 +1521,7 @@ const TeamDetailPage: React.FC = () => {
         ? "等待处理"
         : lens.healthStatus === "attention"
           ? "可见"
-          : "--";
+          : "待更新";
     }
 
     const average =
@@ -2515,7 +2512,7 @@ const TeamDetailPage: React.FC = () => {
               label="这支团队对外提供"
               value={currentServiceFriendly}
               captionMonospace
-              caption={runtimeServiceId || "--"}
+              caption={runtimeServiceId || "待绑定"}
             />
             <SignalCard
               icon={<BranchesOutlined />}

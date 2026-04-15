@@ -41,6 +41,7 @@ type GovernanceSummaryPanelProps = {
 type GovernanceSelectionNoticeProps = {
   title: string;
   description?: string;
+  highlights?: Array<{ label: string; value: React.ReactNode }>;
 };
 
 const governanceSurfaceStyle: React.CSSProperties = {
@@ -109,7 +110,7 @@ export function formatGovernanceTimestamp(value: string | undefined): string {
 
 export const GovernanceSelectionNotice: React.FC<
   GovernanceSelectionNoticeProps
-> = ({ title, description }) => (
+> = ({ title, description, highlights = [] }) => (
   <div style={governanceSurfaceStyle}>
     <div style={cardStackStyle}>
       <Typography.Text strong>{title}</Typography.Text>
@@ -117,6 +118,18 @@ export const GovernanceSelectionNotice: React.FC<
         <Typography.Paragraph style={{ margin: 0 }} type="secondary">
           {description}
         </Typography.Paragraph>
+      ) : null}
+      {highlights.length > 0 ? (
+        <div style={summaryFieldGridStyle}>
+          {highlights.map((item) => (
+            <div key={item.label} style={summaryFieldStyle}>
+              <Typography.Text style={summaryFieldLabelStyle}>
+                {item.label}
+              </Typography.Text>
+              <Typography.Text strong>{renderFieldValue(item.value)}</Typography.Text>
+            </div>
+          ))}
+        </div>
       ) : null}
     </div>
   </div>

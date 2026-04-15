@@ -300,7 +300,10 @@ describe("DeploymentsPage", () => {
 
     expect(await screen.findByText("Aevatar / Platform")).toBeInTheDocument();
     expect(await screen.findAllByText("Deployments")).toHaveLength(1);
-    expect(await screen.findByText("请选择部署")).toBeInTheDocument();
+    expect(await screen.findByText("还没有选中部署")).toBeInTheDocument();
+    expect(
+      screen.getByText("先从左侧部署清单选择一个服务，再查看版本、权重、发布和回滚。"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Deployment Inventory")).toBeNull();
   });
 
