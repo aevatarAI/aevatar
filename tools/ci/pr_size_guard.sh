@@ -14,34 +14,89 @@ set -euo pipefail
 FILES_THRESHOLD="${PR_SIZE_FILES_THRESHOLD:-30}"
 LOC_THRESHOLD="${PR_SIZE_LOC_THRESHOLD:-800}"
 
+resolve_diff_target() {
+  local base_ref="$1"
+  local triple_dot="origin/${base_ref}...HEAD"
+  local double_dot="origin/${base_ref}..HEAD"
+
+  git fetch --no-tags --depth=1 origin \
+    "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" \
+    2>/dev/null || true
+
+  if ! git rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1; then
+    echo "::warning::PR Size Guard could not resolve origin/${base_ref}; falling back to HEAD only." >&2
+    echo "HEAD"
+    return
+  fi
+
+  if git merge-base "origin/${base_ref}" HEAD >/dev/null 2>&1; then
+    echo "${triple_dot}"
+    return
+  fi
+
+  echo "::warning::PR Size Guard could not find a merge base for ${triple_dot}; falling back to ${double_dot}." >&2
+  echo "${double_dot}"
+}
+
 # Determine diff target
 if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
-  git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}" 2>/dev/null || true
-  DIFF_TARGET="origin/${GITHUB_BASE_REF}...HEAD"
+  DIFF_TARGET=$(resolve_diff_target "${GITHUB_BASE_REF}")
 elif [[ -n "${1:-}" ]]; then
   DIFF_TARGET="$1"
 else
-  DIFF_TARGET="origin/dev...HEAD"
+  DIFF_TARGET=$(resolve_diff_target "dev")
 fi
 
 echo "PR Size Guard: comparing ${DIFF_TARGET}"
 echo "Thresholds: files=${FILES_THRESHOLD}, LOC=${LOC_THRESHOLD}"
 
-# Count changed files (excluding auto-generated)
-CHANGED_FILES=$(git diff --name-only "${DIFF_TARGET}" 2>/dev/null \
+DIFF_NUMSTAT=$(git diff --numstat "${DIFF_TARGET}" 2>/dev/null || true)
+if [[ -z "${DIFF_NUMSTAT}" && "${DIFF_TARGET}" == *"...HEAD" ]]; then
+  FALLBACK_TARGET="${DIFF_TARGET/...HEAD/..HEAD}"
+  echo "::warning::PR Size Guard could not evaluate ${DIFF_TARGET}; retrying with ${FALLBACK_TARGET}." >&2
+  DIFF_TARGET="${FALLBACK_TARGET}"
+  DIFF_NUMSTAT=$(git diff --numstat "${DIFF_TARGET}" 2>/dev/null || true)
+fi
+
+if [[ -z "${DIFF_NUMSTAT}" && "${DIFF_TARGET}" != "HEAD" ]]; then
+  echo "::warning::PR Size Guard could not evaluate ${DIFF_TARGET}; defaulting to zero diff so the advisory check does not fail CI." >&2
+fi
+
+CHANGED_FILES=$(printf '%s\n' "${DIFF_NUMSTAT}" \
   | awk '
-      $0 !~ /\.Designer\.cs$/ &&
-      $0 !~ /\.g\.cs$/ &&
-      $0 !~ /\.pb\.cs$/ &&
-      $0 !~ /\/obj\// &&
-      $0 !~ /\/bin\// { count++ }
+      NF == 3 &&
+      $3 !~ /\.Designer\.cs$/ &&
+      $3 !~ /\.g\.cs$/ &&
+      $3 !~ /\.pb\.cs$/ &&
+      $3 !~ /\/obj\// &&
+      $3 !~ /\/bin\// { count++ }
       END { print count + 0 }
     ')
 
-# Count net LOC changed
-STAT_LINE=$(git diff --stat "${DIFF_TARGET}" 2>/dev/null | tail -1)
-INSERTIONS=$(echo "${STAT_LINE}" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo "0")
-DELETIONS=$(echo "${STAT_LINE}" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo "0")
+INSERTIONS=$(printf '%s\n' "${DIFF_NUMSTAT}" \
+  | awk '
+      NF == 3 &&
+      $3 !~ /\.Designer\.cs$/ &&
+      $3 !~ /\.g\.cs$/ &&
+      $3 !~ /\.pb\.cs$/ &&
+      $3 !~ /\/obj\// &&
+      $3 !~ /\/bin\// &&
+      $1 ~ /^[0-9]+$/ { sum += $1 }
+      END { print sum + 0 }
+    ')
+
+DELETIONS=$(printf '%s\n' "${DIFF_NUMSTAT}" \
+  | awk '
+      NF == 3 &&
+      $3 !~ /\.Designer\.cs$/ &&
+      $3 !~ /\.g\.cs$/ &&
+      $3 !~ /\.pb\.cs$/ &&
+      $3 !~ /\/obj\// &&
+      $3 !~ /\/bin\// &&
+      $2 ~ /^[0-9]+$/ { sum += $2 }
+      END { print sum + 0 }
+    ')
+
 NET_LOC=$(( INSERTIONS - DELETIONS ))
 # Use absolute value for comparison
 ABS_LOC=${NET_LOC#-}

@@ -95,6 +95,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Prepare Runner
         uses: ./.github/actions/prepare-runner
