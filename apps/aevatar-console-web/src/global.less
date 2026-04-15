@@ -87,6 +87,38 @@ body,
   width: 100%;
 }
 
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed {
+  padding-inline: 8px;
+}
+
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item,
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-submenu-title {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  margin-inline: 0;
+  padding-inline: 0 !important;
+  width: 100%;
+}
+
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item .ant-menu-item-icon,
+.ant-pro-sider
+  .ant-menu-inline.ant-menu-inline-collapsed
+  .ant-menu-submenu-title
+  .ant-menu-item-icon,
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item .anticon,
+.ant-pro-sider
+  .ant-menu-inline.ant-menu-inline-collapsed
+  .ant-menu-submenu-title
+  .anticon {
+  margin-inline-end: 0 !important;
+}
+
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-title-content,
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item-group-title {
+  display: none !important;
+}
+
 .ant-pro-sider .ant-menu-inline .ant-menu-item-group {
   margin: 0;
 }
@@ -108,6 +140,40 @@ body,
 .ant-pro-sider .ant-menu-inline .ant-pro-base-menu-inline-divider {
   margin: 10px 10px 12px !important;
   border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed {
+  flex: 0 0 0 !important;
+  max-width: 0 !important;
+  min-width: 0 !important;
+  overflow: visible !important;
+  width: 0 !important;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+  .ant-layout-sider-children {
+  overflow: hidden;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+  + .ant-pro-layout-container {
+  margin-inline-start: -64px;
+  width: calc(100% + 64px);
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+  .ant-pro-sider-collapsed-button {
+  border-radius: 0 12px 12px 0;
+  bottom: 24px;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.14);
+  min-width: 36px;
+  position: fixed;
+  inset-inline-start: 0;
+  width: 36px !important;
 }
 
 .aevatar-console-shell .ant-pro-page-container,
