@@ -240,7 +240,7 @@ const ServicesPage: React.FC = () => {
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
-      title="Services"
+      title="服务"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <ServiceQueryCard
@@ -498,7 +498,7 @@ const ServicesPage: React.FC = () => {
         title={selectedService?.displayName || selectedServiceId || "服务"}
       >
         {!selectedService ? (
-          <AevatarInspectorEmpty description="请选择服务" />
+          <AevatarInspectorEmpty description="先从服务清单选择一个服务" />
         ) : (
           <>
             <AevatarPanel title="当前信息">

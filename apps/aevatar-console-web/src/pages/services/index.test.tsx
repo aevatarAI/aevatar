@@ -122,12 +122,12 @@ describe('ServicesPage', () => {
     renderWithQueryClient(React.createElement(ServicesPage));
 
     expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
-    expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('服务').length).toBeGreaterThan(0);
     expect(await screen.findByText('服务数')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
     expect(screen.getByRole('button', { name: /详\s*情/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /治\s*理/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '应用筛选' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '筛选服务' })).toBeTruthy();
     expect(screen.queryByText('Next Actions')).toBeNull();
     expect(screen.queryByText('No services matched the current scope.')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Inspect' })).toBeNull();

@@ -15,7 +15,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
   onChange,
   onLoad,
   onReset,
-  loadLabel = '应用筛选',
+  loadLabel = '筛选服务',
 }) => {
   return (
     <div

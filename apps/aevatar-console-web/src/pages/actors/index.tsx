@@ -166,15 +166,15 @@ const ActorsPage: React.FC = () => {
   const graphNodeCount = graphQuery.data?.subgraph.nodes.length ?? 0;
   const timelineItemCount = timelineQuery.data?.length ?? 0;
   const selectedActorSummary =
-    selectedSnapshotQuery.data?.workflowName || selectedActorId || '--';
+    selectedSnapshotQuery.data?.workflowName || selectedActorId || '待选择';
 
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
-      title="Topology"
+      title="事件拓扑"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <AevatarPanel layoutMode="document" padding={20} title="筛选">
+        <AevatarPanel layoutMode="document" padding={20} title="筛选条件">
           <Space wrap size={[12, 12]} style={{ width: '100%' }}>
             <Input
               onChange={(event) => setSelectedActorId(event.target.value.trim())}
@@ -200,12 +200,12 @@ const ActorsPage: React.FC = () => {
           }}
         >
           <ConsoleMetricCard label="可见成员" tone="purple" value={filteredActors.length} />
-          <ConsoleMetricCard label="当前焦点" value={selectedActorSummary} />
+          <ConsoleMetricCard label="当前焦点成员" value={selectedActorSummary} />
           <ConsoleMetricCard label="时间线事件" value={timelineItemCount} />
           <ConsoleMetricCard label="图谱节点" tone="green" value={graphNodeCount} />
         </div>
 
-        <AevatarPanel layoutMode="document" padding={20} title="成员">
+        <AevatarPanel layoutMode="document" padding={20} title="团队成员">
           {actorsQuery.error ? (
             <Alert
               description="请稍后刷新，或先切换到其他团队上下文。"
@@ -228,7 +228,7 @@ const ActorsPage: React.FC = () => {
             locale={{
               emptyText: (
                 <Empty
-                  description="暂无成员"
+                  description="当前还没有可见成员"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               ),
@@ -245,10 +245,10 @@ const ActorsPage: React.FC = () => {
         onClose={() => setSelectedActorId("")}
         open={Boolean(selectedActorId)}
         subtitle="事件拓扑"
-        title={selectedSnapshotQuery.data?.actorId || selectedActorId || "成员"}
+        title={selectedSnapshotQuery.data?.actorId || selectedActorId || "成员详情"}
       >
         {!selectedActorId ? (
-          <AevatarInspectorEmpty description="选择成员查看详情" />
+          <AevatarInspectorEmpty description="先选择一位成员，再查看当前状态和事件流" />
         ) : selectedSnapshotQuery.error ? (
           <Alert
             description="请稍后再试，或先查看其他成员。"
@@ -257,7 +257,7 @@ const ActorsPage: React.FC = () => {
             type="warning"
           />
         ) : !selectedSnapshotQuery.data ? (
-          <AevatarInspectorEmpty description="暂无数据" />
+          <AevatarInspectorEmpty description="当前成员还没有可见快照" />
         ) : (
           <>
             <AevatarPanel title="当前状态">
@@ -268,7 +268,10 @@ const ActorsPage: React.FC = () => {
                   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 }}
               >
-                <MetricCard label="流程" value={selectedSnapshotQuery.data.workflowName || "n/a"} />
+                <MetricCard
+                  label="流程"
+                  value={selectedSnapshotQuery.data.workflowName || "待同步"}
+                />
                 <MetricCard label="状态版本" value={selectedSnapshotQuery.data.stateVersion} />
                 <MetricCard label="已完成步骤" value={selectedSnapshotQuery.data.completedSteps} />
                 <MetricCard

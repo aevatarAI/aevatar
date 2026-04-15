@@ -6778,9 +6778,6 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
             <div style={sectionPanelStyle}>
               <div style={cardStackStyle}>
                 <Typography.Text strong>运行时</Typography.Text>
-                <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-                  配置 Studio 使用的运行时地址。
-                </Typography.Paragraph>
               </div>
               {workspaceSettings.isError ? (
                 <StudioNoticeCard
@@ -6854,13 +6851,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                       }
                       description={`${runtimeTestResult.message} · ${runtimeTestResult.checkedUrl}`}
                     />
-                  ) : (
-                    <StudioNoticeCard
-                      type="info"
-                      title="运行时检测"
-                      description="需要时可在这里做一次连通性检测。"
-                    />
-                  )}
+                  ) : null}
                 </>
               ) : (
                 <Empty
@@ -7200,7 +7191,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                               />
                             </div>
                             <div style={cardStackStyle}>
-                              <Typography.Text strong>Model</Typography.Text>
+                              <Typography.Text strong>模型</Typography.Text>
                               <Input
                                 aria-label="Studio provider model"
                                 value={selectedProvider.model}
@@ -7230,10 +7221,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                       </div>
                     ) : (
                       <div style={sectionPanelStyle}>
-                        <Typography.Text strong>Provider detail</Typography.Text>
+                        <Typography.Text strong>提供方详情</Typography.Text>
                         <Empty
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="Select a provider to edit or add a new one."
+                          description="先选择一个提供方，再查看和编辑详情。"
                         />
                       </div>
                     )}
@@ -7243,7 +7234,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
             ) : (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="Provider settings are unavailable right now."
+                description="当前还没有可用的提供方设置。"
               />
             )}
           </div>
@@ -7270,12 +7261,6 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
               >
                 <div style={cardStackStyle}>
                   <Typography.Text strong>工作流来源</Typography.Text>
-                  <Typography.Paragraph
-                    style={{ margin: 0 }}
-                    type="secondary"
-                  >
-                    查看当前可见的工作流目录。
-                  </Typography.Paragraph>
                 </div>
                 <Button onClick={openAdvancedSection}>打开高级配置</Button>
               </div>
@@ -7379,12 +7364,6 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
               <div style={sectionPanelStyle}>
                 <div style={cardStackStyle}>
                   <Typography.Text strong>高级配置</Typography.Text>
-                  <Typography.Paragraph
-                    style={{ margin: 0 }}
-                    type="secondary"
-                  >
-                    维护目录、端点和密钥。
-                  </Typography.Paragraph>
                 </div>
                 <div style={summaryFieldGridStyle}>
                   <StudioSummaryField label="宿主模式" value={hostModeLabel} />
@@ -7726,9 +7705,6 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
       <div style={studioSurfaceHeaderStyle}>
         <div style={cardStackStyle}>
           <Typography.Text strong>工作区设置</Typography.Text>
-          <Typography.Text type="secondary">
-            管理运行时、AI 提供方和工作流来源。
-          </Typography.Text>
         </div>
         <Button
           type="primary"
@@ -7742,25 +7718,8 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
       <div style={studioSurfaceBodyStyle}>
         {settingsDraft ? (
           <>
-            <div style={studioNoticeStripStyle}>
-              <StudioNoticeCard
-                type={settingsDirty ? 'warning' : 'success'}
-                title="工作区设置"
-                description={
-                  settingsDirty
-                    ? '当前有未保存改动。'
-                    : '工作区设置已同步。'
-                }
-              />
-              <StudioNoticeCard
-                title="默认 AI 提供方"
-                description={
-                  settingsDraft.defaultProviderName
-                    ? `${settingsDraft.defaultProviderName} 将用于新的 AI 辅助任务。`
-                    : '请先选择默认提供方。'
-                }
-              />
-              {settingsNotice ? (
+            {settingsNotice ? (
+              <div style={studioNoticeStripStyle}>
                 <StudioNoticeCard
                   type={settingsNotice.type}
                   title={
@@ -7770,8 +7729,8 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                   }
                   description={settingsNotice.message}
                 />
-              ) : null}
-            </div>
+              </div>
+            ) : null}
             <div style={sectionPanelStyle}>
               <div style={summaryMetricGridStyle}>
                 <StudioSummaryMetric label="提供方" value={providers.length} />

@@ -39,15 +39,15 @@ describe('ActorsPage', () => {
     );
 
     expect(container.textContent).toContain('Aevatar / Platform');
-    expect(container.textContent).toContain('Topology');
-    expect(container.textContent).toContain('筛选');
-    expect(container.textContent).toContain('成员');
+    expect(container.textContent).toContain('事件拓扑');
+    expect(container.textContent).toContain('筛选条件');
+    expect(container.textContent).toContain('团队成员');
     expect(container.textContent).toContain('可见成员');
-    expect(container.textContent).toContain('当前焦点');
+    expect(container.textContent).toContain('当前焦点成员');
     expect(screen.getByPlaceholderText('成员 ID')).toBeTruthy();
     expect(screen.getByPlaceholderText('过滤成员')).toBeTruthy();
     expect(screen.getByRole('button', { name: /重\s*置/ })).toBeTruthy();
-    expect(container.textContent).toContain('暂无成员');
+    expect(container.textContent).toContain('当前还没有可见成员');
     expect(container.textContent).not.toContain('Actor Focus');
     expect(container.textContent).not.toContain('Observed Actors');
   });
