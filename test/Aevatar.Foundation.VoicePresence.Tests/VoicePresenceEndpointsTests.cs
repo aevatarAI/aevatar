@@ -181,7 +181,59 @@ public class VoicePresenceEndpointsTests
         socket.CloseCalls.ShouldBe(0);
     }
 
+    [Fact]
+    public async Task Request_should_close_websocket_when_attach_fails_after_upgrade()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => false,
+            attachTransportAsync: static (_, _) => throw new InvalidOperationException("already attached"),
+            detachTransportAsync: static (_, _) => Task.CompletedTask,
+            pcmSampleRateHz: 24000);
+        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        socket.CloseCalls.ShouldBe(1);
+        socket.State.ShouldBe(WebSocketState.Closed);
+    }
+
+    [Fact]
+    public async Task Request_should_prefer_route_module_name_over_query()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        await module.InitializeAsync(CancellationToken.None);
+
+        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
+        using var app = CreateApp("/voice/{actorId}/{moduleName}", resolver);
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+        context.Request.RouteValues["moduleName"] = "voice_presence_openai";
+        context.Request.QueryString = new QueryString("?module=voice_presence_minicpm");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+        context.RequestAborted = cts.Token;
+
+        await GetVoiceEndpoint(app, "/voice/{actorId}/{moduleName}").RequestDelegate!(context);
+
+        resolver.Requests.ShouldContain(request =>
+            string.Equals(request.ModuleName, "voice_presence_openai", StringComparison.Ordinal));
+    }
+
     private static WebApplication CreateApp(
+        Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
+    {
+        return CreateApp("/voice/{actorId}", resolveSession);
+    }
+
+    private static WebApplication CreateApp(
+        string pattern,
         Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -189,11 +241,16 @@ public class VoicePresenceEndpointsTests
             EnvironmentName = Environments.Development,
         });
         var app = builder.Build();
-        app.MapVoicePresenceWebSocket("/voice/{actorId}", resolveSession);
+        app.MapVoicePresenceWebSocket(pattern, resolveSession);
         return app;
     }
 
     private static WebApplication CreateApp(IVoicePresenceSessionResolver resolver)
+    {
+        return CreateApp("/voice/{actorId}", resolver);
+    }
+
+    private static WebApplication CreateApp(string pattern, IVoicePresenceSessionResolver resolver)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -201,15 +258,15 @@ public class VoicePresenceEndpointsTests
         });
         builder.Services.AddSingleton(resolver);
         var app = builder.Build();
-        app.MapVoicePresenceWebSocket("/voice/{actorId}");
+        app.MapVoicePresenceWebSocket(pattern);
         return app;
     }
 
-    private static RouteEndpoint GetVoiceEndpoint(WebApplication app) =>
+    private static RouteEndpoint GetVoiceEndpoint(WebApplication app, string pattern = "/voice/{actorId}") =>
         ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
             .OfType<RouteEndpoint>()
-            .Single(x => string.Equals(x.RoutePattern.RawText, "/voice/{actorId}", StringComparison.Ordinal));
+            .Single(x => string.Equals(x.RoutePattern.RawText, pattern, StringComparison.Ordinal));
 
     private static DefaultHttpContext CreateHttpContext(WebApplication app)
     {

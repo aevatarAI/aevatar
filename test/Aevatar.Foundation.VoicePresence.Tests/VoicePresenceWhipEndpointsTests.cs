@@ -98,6 +98,52 @@ public class VoicePresenceWhipEndpointsTests
     }
 
     [Fact]
+    public async Task Post_should_return_not_found_when_session_missing()
+    {
+        using var app = CreateApp(static (_, _) => Task.FromResult<VoicePresenceSession?>(null));
+        var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status404NotFound);
+        (await ReadBodyAsync(context)).ShouldContain("Voice session not found");
+    }
+
+    [Fact]
+    public async Task Post_should_return_service_unavailable_when_module_not_initialized()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask);
+        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).ShouldContain("Voice module not initialized.");
+    }
+
+    [Fact]
+    public async Task Post_should_return_conflict_when_transport_already_attached()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        await module.InitializeAsync(CancellationToken.None);
+        module.AttachTransport(new StubVoiceTransport(), static (_, _) => Task.CompletedTask);
+
+        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask);
+        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status409Conflict);
+        (await ReadBodyAsync(context)).ShouldContain("Voice transport already attached.");
+    }
+
+    [Fact]
     public async Task Post_should_attach_transport_and_return_answer_sdp()
     {
         var module = CreateModule(new RecordingVoiceProvider());
@@ -154,6 +200,52 @@ public class VoicePresenceWhipEndpointsTests
         context.Response.StatusCode.ShouldBe(StatusCodes.Status204NoContent);
         module.IsTransportAttached.ShouldBeFalse();
         transport.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Post_should_dispose_transport_when_attach_fails()
+    {
+        var transport = new StubVoiceTransport();
+        var factory = new FakeWebRtcVoiceTransportFactory(new WebRtcVoiceTransportSession(transport, "answer", Task.CompletedTask));
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => false,
+            attachTransportAsync: static (_, _) => throw new InvalidOperationException("attach failed"),
+            detachTransportAsync: static (_, _) => Task.CompletedTask,
+            pcmSampleRateHz: 24000);
+        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
+        var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context));
+
+        transport.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Delete_should_reject_missing_actor_id()
+    {
+        using var app = CreateApp(static (_, _) => Task.FromResult<VoicePresenceSession?>(null));
+        var context = CreateContext(app, HttpMethods.Delete, string.Empty);
+
+        await GetWhipEndpoint(app, HttpMethods.Delete).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status400BadRequest);
+        (await ReadBodyAsync(context)).ShouldContain("actorId is required.");
+    }
+
+    [Fact]
+    public async Task Delete_should_return_not_found_when_session_missing()
+    {
+        using var app = CreateApp(static (_, _) => Task.FromResult<VoicePresenceSession?>(null));
+        var context = CreateContext(app, HttpMethods.Delete, string.Empty);
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Delete).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status404NotFound);
+        (await ReadBodyAsync(context)).ShouldContain("Voice session not found");
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.MiniCPM.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -50,6 +51,33 @@ public class MiniCPMRealtimeProviderTests
         var decoded = MiniCPMWaveCodec.DecodePcm16Mono(wavBytes);
         decoded.SampleRateHz.ShouldBe(MiniCPMRealtimeProviderOptions.DefaultInputSampleRateHz);
         decoded.Pcm16.ShouldBe([1, 2, 3, 4]);
+    }
+
+    [Fact]
+    public async Task SendAudio_should_ignore_empty_payload()
+    {
+        var streamCalls = 0;
+        var handler = new StubHttpMessageHandler((request, ct) =>
+        {
+            _ = ct;
+            if (request.RequestUri!.AbsolutePath.EndsWith("/api/v1/completions", StringComparison.Ordinal))
+                return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/api/v1/stream", StringComparison.Ordinal))
+            {
+                streamCalls++;
+                return Task.FromResult(CreateJsonResponse("{}"));
+            }
+
+            throw new InvalidOperationException($"Unexpected path: {request.RequestUri.AbsolutePath}");
+        });
+
+        await using var provider = CreateProvider(handler);
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await provider.SendAudioAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None);
+
+        streamCalls.ShouldBe(0);
     }
 
     [Fact]
@@ -158,6 +186,57 @@ public class MiniCPMRealtimeProviderTests
     }
 
     [Fact]
+    public async Task UpdateSession_should_apply_supported_sample_rate_and_ignore_optional_fields()
+    {
+        string? requestBody = null;
+        var handler = new StubHttpMessageHandler(async (request, ct) =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/api/v1/completions", StringComparison.Ordinal))
+                return CreateSseResponse(blockAfterPayload: true);
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/api/v1/stream", StringComparison.Ordinal))
+            {
+                requestBody = await request.Content!.ReadAsStringAsync(ct);
+                return CreateJsonResponse("{}");
+            }
+
+            throw new InvalidOperationException($"Unexpected path: {request.RequestUri.AbsolutePath}");
+        });
+
+        await using var provider = CreateProvider(handler);
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        await provider.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            SampleRateHz = 16000,
+            Voice = "friendly",
+            Instructions = "be helpful",
+            ToolNames = { "lookup" },
+            ToolDefinitions =
+            {
+                new VoiceToolDefinition
+                {
+                    Name = "lookup",
+                    Description = "Lookup a fact",
+                },
+            },
+        }, CancellationToken.None);
+
+        await provider.SendAudioAsync(new byte[] { 5, 6, 7, 8 }, CancellationToken.None);
+
+        requestBody.ShouldNotBeNullOrWhiteSpace();
+        using var document = JsonDocument.Parse(requestBody);
+        var wavBytes = Convert.FromBase64String(document.RootElement
+            .GetProperty("messages")[0]
+            .GetProperty("content")[0]
+            .GetProperty("input_audio")
+            .GetProperty("data")
+            .GetString()!);
+        var decoded = MiniCPMWaveCodec.DecodePcm16Mono(wavBytes);
+        decoded.SampleRateHz.ShouldBe(16000);
+        decoded.Pcm16.ShouldBe([5, 6, 7, 8]);
+    }
+
+    [Fact]
     public async Task Completions_http_failure_should_emit_error_and_disconnected()
     {
         var events = new List<VoiceProviderEvent>();
@@ -191,6 +270,72 @@ public class MiniCPMRealtimeProviderTests
         ]);
         events[0].Error.ErrorCode.ShouldBe("http_500");
         events[0].Error.ErrorMessage.ShouldContain("boom");
+    }
+
+    [Fact]
+    public async Task Receive_loop_should_emit_error_events_for_invalid_payloads_and_disconnect_on_incomplete_response()
+    {
+        await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(CreateJsonResponse("{}"));
+        }));
+        var channel = Channel.CreateUnbounded<VoiceProviderEvent>();
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":null,"text":"\n<end>","finish_reason":"processing"}]}
+
+            data: not-json
+
+            data: {"id":"u1","error":"provider boom"}
+
+            data: {"id":"u1","choices":[]}
+
+            data: {"id":"u1","response_id":3,"choices":[{"role":"assistant","audio":"%%%","text":"speak","finish_reason":"processing"}]}
+
+            """));
+
+        var readCompletionStreamAsync = typeof(MiniCPMRealtimeProvider)
+            .GetMethod("ReadCompletionStreamAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await ((Task)readCompletionStreamAsync.Invoke(provider, [stream, channel.Writer, CancellationToken.None])!);
+        channel.Writer.TryComplete();
+
+        var events = new List<VoiceProviderEvent>();
+        await foreach (var evt in channel.Reader.ReadAllAsync())
+            events.Add(evt);
+
+        events.Select(static x => x.EventCase).ShouldBe(
+        [
+            VoiceProviderEvent.EventOneofCase.Error,
+            VoiceProviderEvent.EventOneofCase.Error,
+            VoiceProviderEvent.EventOneofCase.ResponseStarted,
+            VoiceProviderEvent.EventOneofCase.Error,
+            VoiceProviderEvent.EventOneofCase.Disconnected,
+        ]);
+        events[0].Error.ErrorCode.ShouldBe("invalid_payload");
+        events[1].Error.ErrorCode.ShouldBe("provider_error");
+        events[2].ResponseStarted.ResponseId.ShouldBe(1);
+        events[3].Error.ErrorCode.ShouldBe("invalid_audio");
+        events[4].Disconnected.Reason.ShouldContain("before response completion");
+    }
+
+    [Fact]
+    public async Task DisposeAsync_should_allow_repeat_calls_and_block_reconnect()
+    {
+        await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
+        }));
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await provider.DisposeAsync();
+        await provider.DisposeAsync();
+
+        await Should.ThrowAsync<ObjectDisposedException>(() =>
+            provider.ConnectAsync(CreateConfig(), CancellationToken.None));
     }
 
     [Fact]
