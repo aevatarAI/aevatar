@@ -19,7 +19,11 @@ import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
-import { history } from "@/shared/navigation/history";
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
@@ -51,7 +55,6 @@ import {
   type WorkflowOperationalUnit,
 } from "../teams/workflowOperationalUnits";
 
-const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
@@ -585,9 +588,23 @@ const WorkflowTeamRow: React.FC<{
 };
 
 const ScopeOverviewPage: React.FC = () => {
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => "",
+  );
+  const routeDraft = React.useMemo(() => {
+    if (typeof window === "undefined") {
+      return readScopeQueryDraft("", "");
+    }
+
+    return readScopeQueryDraft(window.location.search, window.location.pathname);
+  }, [locationSnapshot]);
   const { token } = theme.useToken();
-  const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
-  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [draft, setDraft] = React.useState<ScopeQueryDraft>(() => readScopeQueryDraft());
+  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(() =>
+    readScopeQueryDraft(),
+  );
   const [manualRosterView, setManualRosterView] = React.useState<
     "cards" | "list" | null
   >(null);
@@ -603,6 +620,21 @@ const ScopeOverviewPage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data],
   );
+
+  React.useEffect(() => {
+    const nextRouteDraft = normalizeScopeDraft(routeDraft);
+
+    setDraft((currentDraft) =>
+      normalizeScopeDraft(currentDraft).scopeId === nextRouteDraft.scopeId
+        ? currentDraft
+        : nextRouteDraft,
+    );
+    setActiveDraft((currentDraft) =>
+      normalizeScopeDraft(currentDraft).scopeId === nextRouteDraft.scopeId
+        ? currentDraft
+        : nextRouteDraft,
+    );
+  }, [routeDraft]);
 
   React.useEffect(() => {
     if (!resolvedScope?.scopeId) {

@@ -1,5 +1,6 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
+import { history } from '@/shared/navigation/history';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import ProjectFilesPage from './files';
 
@@ -109,14 +110,32 @@ describe('ProjectFilesPage', () => {
     });
   });
 
+  it('resyncs the files workspace when the URL scope changes after mount', async () => {
+    renderWithQueryClient(React.createElement(ProjectFilesPage));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('scope-a').length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      window.history.replaceState({}, '', '/scopes/files?scopeId=scope-b');
+      window.dispatchEvent(
+        new PopStateEvent('popstate', { state: window.history.state }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText('scope-b').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText('scope-a')).not.toBeInTheDocument();
+  });
+
   it('opens workflow editing from the top-level Files route', async () => {
+    const pushSpy = jest.spyOn(history, 'push');
     renderWithQueryClient(React.createElement(ProjectFilesPage));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open workflow' }));
 
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/studio');
-      expect(window.location.search).toBe('?workflow=workflow-alpha&tab=studio');
-    });
+    expect(pushSpy).toHaveBeenCalledWith('/studio?workflow=workflow-alpha&tab=studio');
   });
 });

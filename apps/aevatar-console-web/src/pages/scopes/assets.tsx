@@ -21,7 +21,11 @@ import {
   theme,
 } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
-import { history } from "@/shared/navigation/history";
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
 import { buildTeamWorkspaceRoute } from "@/shared/navigation/scopeRoutes";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
@@ -170,33 +174,23 @@ const StatusTag: React.FC<{
   );
 };
 
-function readAssetTab(): AssetTab {
-  if (typeof window === "undefined") {
-    return "workflows";
-  }
-
-  const tab = new URLSearchParams(window.location.search).get("tab")?.trim();
+function readAssetTab(
+  search = typeof window === "undefined" ? "" : window.location.search,
+): AssetTab {
+  const tab = new URLSearchParams(search).get("tab")?.trim();
   return tab === "scripts" ? "scripts" : "workflows";
 }
 
-function readWorkflowId(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  return (
-    new URLSearchParams(window.location.search).get("workflowId")?.trim() ?? ""
-  );
+function readWorkflowId(
+  search = typeof window === "undefined" ? "" : window.location.search,
+): string {
+  return new URLSearchParams(search).get("workflowId")?.trim() ?? "";
 }
 
-function readScriptId(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  return (
-    new URLSearchParams(window.location.search).get("scriptId")?.trim() ?? ""
-  );
+function readScriptId(
+  search = typeof window === "undefined" ? "" : window.location.search,
+): string {
+  return new URLSearchParams(search).get("scriptId")?.trim() ?? "";
 }
 
 function resolveWorkflowCapabilityStatus(
@@ -273,6 +267,22 @@ function buildScriptWorkspaceItems(
 }
 
 const TeamAssetsPage: React.FC = () => {
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => "",
+  );
+  const routeState = useMemo(() => {
+    const search = typeof window === "undefined" ? "" : window.location.search;
+    const pathname = typeof window === "undefined" ? "" : window.location.pathname;
+
+    return {
+      draft: readScopeQueryDraft(search, pathname),
+      scriptId: readScriptId(search),
+      tab: readAssetTab(search),
+      workflowId: readWorkflowId(search),
+    };
+  }, [locationSnapshot]);
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
 
@@ -293,6 +303,34 @@ const TeamAssetsPage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data],
   );
+
+  useEffect(() => {
+    const nextRouteDraft = normalizeScopeDraft(routeState.draft);
+
+    setDraft((currentDraft) =>
+      normalizeScopeDraft(currentDraft).scopeId === nextRouteDraft.scopeId
+        ? currentDraft
+        : nextRouteDraft,
+    );
+    setActiveDraft((currentDraft) =>
+      normalizeScopeDraft(currentDraft).scopeId === nextRouteDraft.scopeId
+        ? currentDraft
+        : nextRouteDraft,
+    );
+    setActiveTab((currentTab) =>
+      currentTab === routeState.tab ? currentTab : routeState.tab,
+    );
+    setSelectedWorkflowId((currentWorkflowId) =>
+      currentWorkflowId === routeState.workflowId
+        ? currentWorkflowId
+        : routeState.workflowId,
+    );
+    setSelectedScriptId((currentScriptId) =>
+      currentScriptId === routeState.scriptId
+        ? currentScriptId
+        : routeState.scriptId,
+    );
+  }, [routeState]);
 
   useEffect(() => {
     history.replace(

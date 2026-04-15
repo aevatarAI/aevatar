@@ -14,7 +14,11 @@ import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import { buildActorGraphElements } from "@/shared/graphs/buildGraphElements";
-import { history } from "@/shared/navigation/history";
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
 import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
@@ -1027,7 +1031,18 @@ const TopologyNodeCard: React.FC<{
 };
 
 const TeamDetailPage: React.FC = () => {
-  const routeState = React.useMemo(() => readTeamDetailRouteState(), []);
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => "",
+  );
+  const routeState = React.useMemo(() => {
+    if (typeof window === "undefined") {
+      return readTeamDetailRouteState("", "");
+    }
+
+    return readTeamDetailRouteState(window.location.search, window.location.pathname);
+  }, [locationSnapshot]);
   const scopeId = routeState.scopeId.trim();
   const teamsListHref = React.useMemo(
     () => buildScopeHref("/teams", { scopeId }),
@@ -1043,6 +1058,21 @@ const TeamDetailPage: React.FC = () => {
   const [selectedConnectorKey, setSelectedConnectorKey] = React.useState("");
   const [selectedTopologyNodeId, setSelectedTopologyNodeId] = React.useState("");
   const { token } = theme.useToken();
+
+  React.useEffect(() => {
+    const nextServiceId = trimText(routeState.serviceId);
+    const nextRunId = trimText(routeState.runId);
+
+    setPreferredServiceId((currentServiceId) =>
+      trimText(currentServiceId) === nextServiceId ? currentServiceId : nextServiceId,
+    );
+    setPreferredRunId((currentRunId) =>
+      trimText(currentRunId) === nextRunId ? currentRunId : nextRunId,
+    );
+    setActiveTab((currentTab) =>
+      currentTab === routeState.tab ? currentTab : routeState.tab,
+    );
+  }, [routeState.runId, routeState.serviceId, routeState.tab]);
 
   const {
     actorGraphQuery,
