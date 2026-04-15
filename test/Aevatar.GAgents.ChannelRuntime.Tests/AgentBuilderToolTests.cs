@@ -193,6 +193,83 @@ public sealed class AgentBuilderToolTests
                     e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
                     e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "create_agent"),
                 Arg.Any<CancellationToken>());
+
+            var apiKeyRequest = handler.Requests.Should()
+                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
+                .Subject;
+            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
+            apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should()
+                .BeEquivalentTo(["svc-github", "svc-lark"]);
+            apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredProxyServices_AreMissing()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            result.Should().Contain("Missing required Nyx proxy services");
+            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
+            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -400,6 +477,11 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
 
         var nyxClient = new NyxIdApiClient(
@@ -475,6 +557,16 @@ public sealed class AgentBuilderToolTests
                     request.RootActorId == AgentRegistryGAgent.WellKnownId &&
                     request.ProjectionKind == "agent-registry"),
                 Arg.Any<CancellationToken>());
+
+            var apiKeyRequest = handler.Requests.Should()
+                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
+                .Subject;
+            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
+            apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should()
+                .BeEquivalentTo(["svc-lark"]);
+            apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
         }
         finally
         {

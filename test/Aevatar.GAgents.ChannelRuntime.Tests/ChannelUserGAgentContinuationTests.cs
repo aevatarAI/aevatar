@@ -616,6 +616,11 @@ public class ChannelUserGAgentContinuationTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
 
         var nyxClient = new NyxIdApiClient(

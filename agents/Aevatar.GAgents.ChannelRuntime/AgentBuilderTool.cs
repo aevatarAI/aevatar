@@ -195,13 +195,16 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
         var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
+        if (requiredServiceIds.error != null)
+            return JsonSerializer.Serialize(new { error = requiredServiceIds.error });
+
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? SkillRunnerDefaults.GenerateActorId()
             : args.Str("agent_id")!.Trim();
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
             token,
-            BuildCreateApiKeyPayload(agentId, requiredServiceIds),
+            BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!),
             ct);
 
         if (IsErrorPayload(createKeyResponse))
@@ -301,6 +304,10 @@ public sealed class AgentBuilderTool : IAgentTool
             return """{"error":"Could not resolve current NyxID user id"}""";
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
+        var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, [providerSlug], ct);
+        if (requiredServiceIds.error != null)
+            return JsonSerializer.Serialize(new { error = requiredServiceIds.error });
+
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? WorkflowAgentDefaults.GenerateActorId()
             : args.Str("agent_id")!.Trim();
@@ -318,7 +325,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
             token,
-            BuildCreateApiKeyPayload(agentId, []),
+            BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!),
             ct);
 
         if (IsErrorPayload(createKeyResponse))
@@ -600,21 +607,16 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private static string BuildCreateApiKeyPayload(string agentId, IReadOnlyList<string> requiredServiceIds)
     {
+        if (requiredServiceIds.Count == 0)
+            throw new InvalidOperationException("requiredServiceIds must not be empty.");
+
         var payload = new Dictionary<string, object?>
         {
             ["name"] = $"aevatar-agent-{agentId}",
             ["scopes"] = "proxy",
             ["platform"] = "generic",
+            ["allowed_service_ids"] = requiredServiceIds,
         };
-
-        if (requiredServiceIds.Count > 0)
-        {
-            payload["allowed_service_ids"] = requiredServiceIds;
-        }
-        else
-        {
-            payload["allow_all_services"] = true;
-        }
 
         return JsonSerializer.Serialize(payload);
     }
@@ -810,45 +812,56 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
-    private async Task<IReadOnlyList<string>> ResolveProxyServiceIdsAsync(
+    private async Task<(IReadOnlyList<string>? value, string? error)> ResolveProxyServiceIdsAsync(
         NyxIdApiClient client,
         string token,
         IReadOnlyList<string> requiredSlugs,
         CancellationToken ct)
     {
         if (requiredSlugs.Count == 0)
-            return [];
+            return (null, "At least one required Nyx proxy service slug must be provided.");
 
         var response = await client.DiscoverProxyServicesAsync(token, ct);
         if (IsErrorPayload(response))
-            return [];
+            return (null, "Could not discover required Nyx proxy services.");
 
         try
         {
             using var doc = JsonDocument.Parse(response);
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                return [];
+                return (null, "Nyx proxy service discovery did not return an array.");
 
-            var ids = new List<string>();
+            var serviceIdsBySlug = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var svc in doc.RootElement.EnumerateArray())
             {
                 var slug = ReadString(svc, "slug");
-                if (string.IsNullOrWhiteSpace(slug) ||
-                    !requiredSlugs.Contains(slug, StringComparer.OrdinalIgnoreCase))
-                {
+                if (string.IsNullOrWhiteSpace(slug))
                     continue;
-                }
 
                 var id = ReadString(svc, "id", "service_id");
                 if (!string.IsNullOrWhiteSpace(id))
-                    ids.Add(id);
+                    serviceIdsBySlug[slug] = id;
             }
 
-            return ids.Distinct(StringComparer.Ordinal).ToArray();
+            var missingSlugs = requiredSlugs
+                .Where(slug => !serviceIdsBySlug.ContainsKey(slug))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (missingSlugs.Length > 0)
+            {
+                return (null,
+                    $"Missing required Nyx proxy services: {string.Join(", ", missingSlugs)}. API key creation was rejected to avoid broad proxy access.");
+            }
+
+            var ids = requiredSlugs
+                .Select(slug => serviceIdsBySlug[slug])
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return (ids, null);
         }
         catch (JsonException)
         {
-            return [];
+            return (null, "Could not parse Nyx proxy service discovery response.");
         }
     }
 

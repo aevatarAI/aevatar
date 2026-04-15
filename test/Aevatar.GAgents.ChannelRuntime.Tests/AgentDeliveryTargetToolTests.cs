@@ -77,12 +77,27 @@ public sealed class AgentDeliveryTargetToolTests
                     NyxApiKey = "secret-1234",
                     OwnerNyxUserId = "user-1",
                 },
+                new AgentRegistryEntry
+                {
+                    AgentId = "agent-2",
+                    Platform = "lark",
+                    ConversationId = "oc_chat_2",
+                    NyxProviderSlug = "api-lark-bot",
+                    NyxApiKey = "secret-9999",
+                    OwnerNyxUserId = "user-2",
+                },
             ]));
 
         var actorRuntime = Substitute.For<IActorRuntime>();
+        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -99,6 +114,8 @@ public sealed class AgentDeliveryTargetToolTests
             var item = doc.RootElement.GetProperty("delivery_targets")[0];
             item.GetProperty("delivery_target_id").GetString().Should().Be("agent-1");
             item.GetProperty("nyx_api_key_hint").GetString().Should().Be("***1234");
+            result.Should().NotContain("agent-2");
+            result.Should().NotContain("secret-9999");
         }
         finally
         {
@@ -214,11 +231,18 @@ public sealed class AgentDeliveryTargetToolTests
                 Platform = "lark",
                 ConversationId = "oc_chat_2",
                 NyxProviderSlug = "api-lark-bot",
+                OwnerNyxUserId = "user-1",
             }));
 
+        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(Substitute.For<IActorRuntime>());
+        services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -238,6 +262,50 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_Delete_Rejects_NonOwner()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("agent-2", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "agent-2",
+                Platform = "lark",
+                ConversationId = "oc_chat_2",
+                NyxProviderSlug = "api-lark-bot",
+                OwnerNyxUserId = "user-2",
+            }));
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-2","confirm":true}""");
+
+            result.Should().Contain("not found");
+            await actorRuntime.DidNotReceive().GetAsync(AgentRegistryGAgent.WellKnownId);
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Delete_Dispatches_Tombstone_Command()
     {
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();
@@ -249,6 +317,7 @@ public sealed class AgentDeliveryTargetToolTests
                     Platform = "lark",
                     ConversationId = "oc_chat_3",
                     NyxProviderSlug = "api-lark-bot",
+                    OwnerNyxUserId = "user-1",
                 }),
                 Task.FromResult<AgentRegistryEntry?>(null));
         queryPort.GetStateVersionAsync("agent-3", Arg.Any<CancellationToken>())
@@ -260,9 +329,15 @@ public sealed class AgentDeliveryTargetToolTests
         actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(actor));
 
+        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>

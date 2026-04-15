@@ -85,10 +85,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         return action switch
         {
-            "list" => await ListAsync(queryPort, ct),
+            "list" => await ListAsync(queryPort, token, ct),
             "upsert" => await UpsertAsync(queryPort, actorRuntime, token, root, ct),
-            "delete" => await DeleteAsync(queryPort, actorRuntime, root, ct),
-            _ => await ListAsync(queryPort, ct),
+            "delete" => await DeleteAsync(queryPort, actorRuntime, token, root, ct),
+            _ => await ListAsync(queryPort, token, ct),
         };
     }
 
@@ -124,21 +124,28 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         return false;
     }
 
-    private async Task<string> ListAsync(IAgentRegistryQueryPort queryPort, CancellationToken ct)
+    private async Task<string> ListAsync(IAgentRegistryQueryPort queryPort, string token, CancellationToken ct)
     {
+        var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
+        if (currentOwner.error != null)
+            return currentOwner.error;
+
         var entries = await queryPort.QueryAllAsync(ct);
-        var result = entries.Select(static entry => new
-        {
-            agent_id = entry.AgentId,
-            delivery_target_id = entry.AgentId,
-            platform = entry.Platform,
-            conversation_id = entry.ConversationId,
-            nyx_provider_slug = entry.NyxProviderSlug,
-            nyx_api_key_hint = MaskSecret(entry.NyxApiKey),
-            owner_nyx_user_id = entry.OwnerNyxUserId,
-            created_at = entry.CreatedAt,
-            updated_at = entry.UpdatedAt,
-        }).ToArray();
+        var result = entries
+            .Where(entry => string.Equals(entry.OwnerNyxUserId, currentOwner.value, StringComparison.Ordinal))
+            .Select(static entry => new
+            {
+                agent_id = entry.AgentId,
+                delivery_target_id = entry.AgentId,
+                platform = entry.Platform,
+                conversation_id = entry.ConversationId,
+                nyx_provider_slug = entry.NyxProviderSlug,
+                nyx_api_key_hint = MaskSecret(entry.NyxApiKey),
+                owner_nyx_user_id = entry.OwnerNyxUserId,
+                created_at = entry.CreatedAt,
+                updated_at = entry.UpdatedAt,
+            })
+            .ToArray();
 
         return JsonSerializer.Serialize(new { delivery_targets = result, total = result.Length });
     }
@@ -168,6 +175,13 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         var platform = (GetStr(args, "platform") ?? "lark").Trim().ToLowerInvariant();
         var ownerNyxUserId = await ResolveOwnerNyxUserIdAsync(token, args, ct);
+        if (string.IsNullOrWhiteSpace(ownerNyxUserId))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Could not resolve current NyxID user id for delivery target ownership.",
+            });
+        }
 
         var projectionPort = _serviceProvider.GetService<AgentRegistryProjectionPort>();
         if (projectionPort != null)
@@ -242,6 +256,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private async Task<string> DeleteAsync(
         IAgentRegistryQueryPort queryPort,
         IActorRuntime actorRuntime,
+        string token,
         JsonElement args,
         CancellationToken ct)
     {
@@ -251,6 +266,13 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         var exists = await queryPort.GetAsync(agentId, ct);
         if (exists is null)
+            return JsonSerializer.Serialize(new { error = $"Delivery target '{agentId}' not found" });
+
+        var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
+        if (currentOwner.error != null)
+            return currentOwner.error;
+
+        if (!string.Equals(exists.OwnerNyxUserId, currentOwner.value, StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { error = $"Delivery target '{agentId}' not found" });
 
         if (!GetBool(args, "confirm"))
@@ -319,18 +341,39 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (!string.IsNullOrWhiteSpace(explicitOwner))
             return explicitOwner.Trim();
 
+        var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
+        return currentOwner.value ?? string.Empty;
+    }
+
+    private async Task<(string? value, string? error)> ResolveCurrentOwnerNyxUserIdAsync(string token, CancellationToken ct)
+    {
         var client = _serviceProvider.GetService<NyxIdApiClient>();
         if (client == null)
-            return string.Empty;
+        {
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "Agent delivery target runtime not available. NyxIdApiClient not registered in DI.",
+            }));
+        }
 
         try
         {
             using var doc = JsonDocument.Parse(await client.GetCurrentUserAsync(token, ct));
-            return TryReadOwnerNyxUserId(doc.RootElement) ?? string.Empty;
+            var ownerNyxUserId = TryReadOwnerNyxUserId(doc.RootElement);
+            if (!string.IsNullOrWhiteSpace(ownerNyxUserId))
+                return (ownerNyxUserId, null);
+
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "Could not resolve current NyxID user id.",
+            }));
         }
         catch
         {
-            return string.Empty;
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "Could not resolve current NyxID user id.",
+            }));
         }
     }
 
