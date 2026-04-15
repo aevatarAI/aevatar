@@ -33,9 +33,31 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task InitializeAsync_should_be_idempotent_and_expose_priority()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(
+            provider,
+            options: new VoicePresenceModuleOptions
+            {
+                Priority = 42,
+            });
+
+        module.Priority.ShouldBe(42);
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.InitializeAsync(CancellationToken.None);
+
+        provider.ConnectCalls.ShouldBe(1);
+        provider.UpdateSessionCalls.ShouldBe(1);
+    }
+
+    [Fact]
     public void CanHandle_should_accept_voice_frames_and_external_publications()
     {
         var module = CreateModule(new RecordingVoiceProvider());
+
+        module.CanHandle(new EventEnvelope()).ShouldBeFalse();
 
         module.CanHandle(CreateEnvelope(new VoiceProviderEvent
         {
@@ -420,6 +442,347 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task DisposeAsync_should_detach_and_dispose_attached_transport()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var transport = new PassiveVoiceTransport();
+
+        await module.InitializeAsync(CancellationToken.None);
+        module.AttachTransport(transport, static (_, _) => Task.CompletedTask);
+
+        await module.DisposeAsync();
+
+        transport.Disposed.ShouldBeTrue();
+        module.IsTransportAttached.ShouldBeFalse();
+        provider.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AttachTransport_should_reject_when_transport_or_remote_session_is_already_attached()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var firstTransport = new PassiveVoiceTransport();
+
+        module.AttachTransport(firstTransport, static (_, _) => Task.CompletedTask);
+        Should.Throw<InvalidOperationException>(() =>
+            module.AttachTransport(new PassiveVoiceTransport(), static (_, _) => Task.CompletedTask));
+
+        await module.DetachTransportAsync(firstTransport);
+
+        var ctx = new StubEventHandlerContext();
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
+            {
+                SessionId = "remote-1",
+            },
+        }), ctx, CancellationToken.None);
+
+        Should.Throw<InvalidOperationException>(() =>
+            module.AttachTransport(new PassiveVoiceTransport(), static (_, _) => Task.CompletedTask));
+    }
+
+    [Fact]
+    public async Task Relay_and_provider_audio_send_failures_should_be_swallowed()
+    {
+        var provider = new RecordingVoiceProvider();
+        var receiveThrowTransport = new ThrowingReceiveVoiceTransport();
+        var module = CreateModule(provider);
+
+        module.AttachTransport(receiveThrowTransport, static (_, _) => Task.CompletedTask);
+        await receiveThrowTransport.ReceiveAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await module.DetachTransportAsync(receiveThrowTransport);
+
+        var sendThrowTransport = new ThrowingSendVoiceTransport();
+        module.AttachTransport(sendThrowTransport, static (_, _) => Task.CompletedTask);
+        await provider.RaiseEventAsync(new VoiceProviderEvent
+        {
+            AudioReceived = new VoiceAudioReceived
+            {
+                Pcm16 = ByteString.CopyFrom([7, 8]),
+                SampleRateHz = 24000,
+            },
+        }, CancellationToken.None);
+
+        sendThrowTransport.SendAttempts.ShouldBe(1);
+        await module.DetachTransportAsync(sendThrowTransport);
+    }
+
+    [Fact]
+    public async Task EnsureSelfEventDispatcher_should_use_context_dispatch_port_and_tolerate_dispatch_failures()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var services = new ServiceCollection()
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .BuildServiceProvider();
+        var ctx = new StubEventHandlerContext(services);
+        var module = CreateModule(new RecordingVoiceProvider());
+        var dispatchMethod = typeof(VoicePresenceModule).GetMethod(
+            "DispatchSelfEventAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+        await ((Task)dispatchMethod.Invoke(module, new object[] { new VoiceControlFrame
+        {
+            DrainAcknowledged = new VoiceDrainAcknowledged
+            {
+                ResponseId = 1,
+                PlayoutSequence = 9,
+            },
+        }, CancellationToken.None })!);
+
+        dispatchPort.Dispatches.ShouldHaveSingleItem();
+
+        var throwingServices = new ServiceCollection()
+            .AddSingleton<IActorDispatchPort>(new ThrowingDispatchPort())
+            .BuildServiceProvider();
+        var throwingCtx = new StubEventHandlerContext(throwingServices);
+        var throwingModule = CreateModule(new RecordingVoiceProvider());
+        await throwingModule.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ResponseId = 2 },
+        }), throwingCtx, CancellationToken.None);
+        await ((Task)dispatchMethod.Invoke(throwingModule, new object[] { new VoiceControlFrame(), CancellationToken.None })!);
+    }
+
+    [Fact]
+    public async Task Remote_session_open_should_publish_closed_when_module_not_initialized_or_transport_is_busy()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
+            {
+                SessionId = "remote-1",
+            },
+        }), ctx, CancellationToken.None);
+
+        var notInitializedClose = ctx.PublishedEvents.ShouldHaveSingleItem().ShouldBeOfType<VoiceRemoteTransportOutput>();
+        notInitializedClose.SessionClosed.Reason.ShouldBe("module_not_initialized");
+
+        ctx.PublishedEvents.Clear();
+        await module.InitializeAsync(CancellationToken.None);
+        module.AttachTransport(new PassiveVoiceTransport(), static (_, _) => Task.CompletedTask);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
+            {
+                SessionId = "remote-2",
+            },
+        }), ctx, CancellationToken.None);
+
+        var busyClose = ctx.PublishedEvents.ShouldHaveSingleItem().ShouldBeOfType<VoiceRemoteTransportOutput>();
+        busyClose.SessionClosed.Reason.ShouldBe("transport_already_attached");
+    }
+
+    [Fact]
+    public async Task Remote_session_inputs_and_close_should_ignore_mismatches_and_handle_matches()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext();
+        await module.InitializeAsync(CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
+            {
+                SessionId = "remote-1",
+            },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteAudioInputReceived = new VoiceRemoteAudioInputReceived
+            {
+                SessionId = "other",
+                Pcm16 = ByteString.CopyFrom([1, 2]),
+            },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteControlInputReceived = new VoiceRemoteControlInputReceived
+            {
+                SessionId = "other",
+                ControlFrame = new VoiceControlFrame
+                {
+                    DrainAcknowledged = new VoiceDrainAcknowledged { ResponseId = 1, PlayoutSequence = 2 },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.AudioFrames.ShouldBeEmpty();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteAudioInputReceived = new VoiceRemoteAudioInputReceived
+            {
+                SessionId = "remote-1",
+                Pcm16 = ByteString.CopyFrom([3, 4]),
+            },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteControlInputReceived = new VoiceRemoteControlInputReceived
+            {
+                SessionId = "remote-1",
+                ControlFrame = new VoiceControlFrame(),
+            },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionCloseRequested = new VoiceRemoteSessionCloseRequested
+            {
+                SessionId = "other",
+                Reason = "ignored",
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.AudioFrames.ShouldHaveSingleItem();
+        ctx.PublishedEvents.ShouldBeEmpty();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionCloseRequested = new VoiceRemoteSessionCloseRequested
+            {
+                SessionId = "remote-1",
+                Reason = string.Empty,
+            },
+        }), ctx, CancellationToken.None);
+
+        var closed = ctx.PublishedEvents.ShouldHaveSingleItem().ShouldBeOfType<VoiceRemoteTransportOutput>();
+        closed.SessionClosed.Reason.ShouldBe("remote_session_closed");
+    }
+
+    [Fact]
+    public async Task Function_call_should_return_error_when_tool_is_missing_or_throws()
+    {
+        var provider = new RecordingVoiceProvider();
+        var ctx = new StubEventHandlerContext();
+        var moduleWithoutInvoker = CreateModule(provider);
+
+        await moduleWithoutInvoker.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "missing",
+                ToolName = "doorbell.open",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.ToolResults[0].ResultJson.ShouldContain("not available");
+
+        provider.ToolResults.Clear();
+        var throwingModule = CreateModule(provider, toolInvoker: new ThrowingVoiceToolInvoker("boom"));
+        await throwingModule.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "broken",
+                ToolName = "doorbell.open",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.ToolResults[0].ResultJson.ShouldContain("execution failed: boom");
+    }
+
+    [Fact]
+    public async Task Tool_catalog_failure_and_control_none_should_be_tolerated()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider, toolCatalog: new ThrowingVoiceToolCatalog());
+        var ctx = new StubEventHandlerContext();
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceControlFrame()), ctx, CancellationToken.None);
+
+        provider.LastSession.ShouldNotBeNull();
+        provider.LastSession.ToolDefinitions.ShouldBeEmpty();
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+    }
+
+    [Fact]
+    public async Task External_event_injection_should_support_opaque_payload_fallback_and_zero_capacity_buffers()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(
+            provider,
+            options: new VoicePresenceModuleOptions
+            {
+                PendingInjectionCapacity = 0,
+            });
+        var ctx = new StubEventHandlerContext();
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = new Any
+            {
+                TypeUrl = "type.googleapis.com/custom.Unknown",
+                Value = ByteString.CopyFrom([1, 2, 3]),
+            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("external-agent", TopologyAudience.Children),
+        }, ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseCancelled = new VoiceResponseCancelled { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+
+        provider.InjectedEvents.ShouldBeEmpty();
+
+        var failureProvider = new RecordingVoiceProvider
+        {
+            ThrowOnInjectEvent = true,
+        };
+        var failureModule = CreateModule(failureProvider);
+        await failureModule.InitializeAsync(CancellationToken.None);
+
+        await failureModule.HandleAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = new Any
+            {
+                TypeUrl = "type.googleapis.com/google.protobuf.StringValue",
+                Value = ByteString.CopyFrom([0x0A, 0xFF]),
+            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("external-agent", TopologyAudience.Children),
+        }, ctx, CancellationToken.None);
+
+        failureProvider.InjectEventCalls.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task InitializeAsync_should_merge_discovered_tool_definitions_into_session()
     {
         var provider = new RecordingVoiceProvider();
@@ -494,6 +857,8 @@ public class VoicePresenceModuleTests
 
         public bool Disposed { get; private set; }
         public VoiceSessionConfig? LastSession { get; private set; }
+        public bool ThrowOnInjectEvent { get; set; }
+        public int InjectEventCalls { get; private set; }
 
         public List<byte[]> AudioFrames { get; } = [];
         public List<(string CallId, string ResultJson)> ToolResults { get; } = [];
@@ -526,6 +891,10 @@ public class VoicePresenceModuleTests
         public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
         {
             _ = ct;
+            InjectEventCalls++;
+            if (ThrowOnInjectEvent)
+                throw new InvalidOperationException("inject failed");
+
             InjectedEvents.Add(injection.Clone());
             return Task.CompletedTask;
         }
@@ -550,6 +919,9 @@ public class VoicePresenceModuleTests
             Disposed = true;
             return ValueTask.CompletedTask;
         }
+
+        public Task RaiseEventAsync(VoiceProviderEvent evt, CancellationToken ct) =>
+            OnEvent?.Invoke(evt, ct) ?? Task.CompletedTask;
     }
 
     private sealed class StaticVoiceToolCatalog(IReadOnlyList<VoiceToolDefinition> tools) : IVoiceToolCatalog
@@ -666,6 +1038,144 @@ public class VoicePresenceModuleTests
             var gate = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = ct.Register(() => gate.TrySetCanceled(ct));
             return await gate.Task;
+        }
+    }
+
+    private sealed class ThrowingVoiceToolInvoker(string message) : IVoiceToolInvoker
+    {
+        public Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        {
+            _ = toolName;
+            _ = argumentsJson;
+            _ = ct;
+            throw new InvalidOperationException(message);
+        }
+    }
+
+    private sealed class ThrowingVoiceToolCatalog : IVoiceToolCatalog
+    {
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default)
+        {
+            _ = ct;
+            throw new InvalidOperationException("catalog failed");
+        }
+    }
+
+    private sealed class PassiveVoiceTransport : IVoiceTransport
+    {
+        public bool Disposed { get; private set; }
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            _ = pcm16;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
+        {
+            _ = frame;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            _ = ct;
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingReceiveVoiceTransport : IVoiceTransport
+    {
+        public TaskCompletionSource ReceiveAttempted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            _ = pcm16;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
+        {
+            _ = frame;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            ReceiveAttempted.TrySetResult();
+            await Task.Yield();
+            throw new InvalidOperationException("receive failed");
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ThrowingSendVoiceTransport : IVoiceTransport
+    {
+        public int SendAttempts { get; private set; }
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            _ = pcm16;
+            _ = ct;
+            SendAttempts++;
+            throw new InvalidOperationException("send failed");
+        }
+
+        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
+        {
+            _ = frame;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            _ = ct;
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = ct;
+            Dispatches.Add((actorId, envelope.Clone()));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingDispatchPort : IActorDispatchPort
+    {
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = envelope;
+            _ = ct;
+            throw new InvalidOperationException("dispatch failed");
         }
     }
 }
