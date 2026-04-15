@@ -47,13 +47,13 @@ if rg -n "docs[\\\\/]agents-working-space[\\\\/]" aevatar.slnx; then
   exit 1
 fi
 
-if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
+if rg -n "GetAwaiter\(\)\.GetResult\(\)" src agents; then
   echo "Found sync-over-async usage."
   exit 1
 fi
 
 if rg -n "CommandContext\.Metadata|AgentRunContext\.Metadata|LLMCallContext\.Metadata|ToolCallContext\.Metadata|GAgentExecutionHookContext\.Metadata" \
-  src test
+  src agents test
 then
   echo "Legacy internal metadata bags are forbidden in core contexts. Use Headers / Items / typed fields where semantics are explicit."
   exit 1
@@ -77,7 +77,7 @@ bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
 
-if rg -n "ExecuteDeclaredQueryAsync|ExecuteReadModelQueryAsync" src; then
+if rg -n "ExecuteDeclaredQueryAsync|ExecuteReadModelQueryAsync" src agents; then
   echo "Declared readmodel query execution is forbidden. Query must read persisted snapshots/documents only."
   exit 1
 fi
