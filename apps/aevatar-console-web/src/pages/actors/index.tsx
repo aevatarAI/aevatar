@@ -26,6 +26,7 @@ import {
 } from '@/shared/ui/aevatarPageShells';
 import ConsoleMetricCard from '@/shared/ui/ConsoleMetricCard';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
+import { describeError } from '@/shared/ui/errorText';
 
 type ExplorerRouteSelection = {
   actorId: string;
@@ -124,7 +125,7 @@ const ActorsPage: React.FC = () => {
             onClick={() => setSelectedActorId(actor.id)}
             type="link"
           >
-            Inspect
+            查看详情
           </Button>,
           <Button
             icon={<RadarChartOutlined />}
@@ -138,7 +139,7 @@ const ActorsPage: React.FC = () => {
             }
             type="link"
           >
-            Runs
+            运行记录
           </Button>,
         ],
       },
@@ -165,29 +166,29 @@ const ActorsPage: React.FC = () => {
   const graphNodeCount = graphQuery.data?.subgraph.nodes.length ?? 0;
   const timelineItemCount = timelineQuery.data?.length ?? 0;
   const selectedActorSummary =
-    selectedSnapshotQuery.data?.workflowName || selectedActorId || '--';
+    selectedSnapshotQuery.data?.workflowName || selectedActorId || '待选择';
 
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
-      title="Topology"
+      title="事件拓扑"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <AevatarPanel layoutMode="document" padding={20} title="Search">
+        <AevatarPanel layoutMode="document" padding={20} title="筛选条件">
           <Space wrap size={[12, 12]} style={{ width: '100%' }}>
             <Input
               onChange={(event) => setSelectedActorId(event.target.value.trim())}
-              placeholder="Actor ID"
+              placeholder="成员 ID"
               style={{ width: 260 }}
               value={selectedActorId}
             />
             <Input
               onChange={(event) => setActorKeyword(event.target.value)}
-              placeholder="Filter actors"
+              placeholder="过滤成员"
               style={{ width: 260 }}
               value={actorKeyword}
             />
-            <Button onClick={() => setSelectedActorId('')}>Reset</Button>
+            <Button onClick={() => setSelectedActorId('')}>重置</Button>
           </Space>
         </AevatarPanel>
 
@@ -198,22 +199,19 @@ const ActorsPage: React.FC = () => {
             gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
           }}
         >
-          <ConsoleMetricCard label="可见 Actor" tone="purple" value={filteredActors.length} />
-          <ConsoleMetricCard label="当前焦点" value={selectedActorSummary} />
+          <ConsoleMetricCard label="可见成员" tone="purple" value={filteredActors.length} />
+          <ConsoleMetricCard label="当前焦点成员" value={selectedActorSummary} />
           <ConsoleMetricCard label="时间线事件" value={timelineItemCount} />
           <ConsoleMetricCard label="图谱节点" tone="green" value={graphNodeCount} />
         </div>
 
-        <AevatarPanel layoutMode="document" padding={20} title="Actors">
+        <AevatarPanel layoutMode="document" padding={20} title="团队成员">
           {actorsQuery.error ? (
             <Alert
-              title={
-                actorsQuery.error instanceof Error
-                  ? actorsQuery.error.message
-                  : 'Failed to load actors.'
-              }
+              description="请稍后刷新，或先切换到其他团队上下文。"
               showIcon
-              type="error"
+              title={describeError(actorsQuery.error, '成员列表暂时不可用。')}
+              type="warning"
             />
           ) : null}
 
@@ -230,7 +228,7 @@ const ActorsPage: React.FC = () => {
             locale={{
               emptyText: (
                 <Empty
-                  description="No actors"
+                  description="当前还没有可见成员"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               ),
@@ -246,26 +244,23 @@ const ActorsPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setSelectedActorId("")}
         open={Boolean(selectedActorId)}
-        subtitle="Topology"
-        title={selectedSnapshotQuery.data?.actorId || selectedActorId || "Actor"}
+        subtitle="事件拓扑"
+        title={selectedSnapshotQuery.data?.actorId || selectedActorId || "成员详情"}
       >
         {!selectedActorId ? (
-          <AevatarInspectorEmpty description="Select an actor" />
+          <AevatarInspectorEmpty description="先选择一位成员，再查看当前状态和事件流" />
         ) : selectedSnapshotQuery.error ? (
           <Alert
-            title={
-              selectedSnapshotQuery.error instanceof Error
-                ? selectedSnapshotQuery.error.message
-                : "Failed to load actor snapshot."
-            }
+            description="请稍后再试，或先查看其他成员。"
             showIcon
-            type="error"
+            title={describeError(selectedSnapshotQuery.error, "成员快照暂时不可用。")}
+            type="warning"
           />
         ) : !selectedSnapshotQuery.data ? (
-          <AevatarInspectorEmpty description="No data" />
+          <AevatarInspectorEmpty description="当前成员还没有可见快照" />
         ) : (
           <>
-            <AevatarPanel title="Summary">
+            <AevatarPanel title="当前状态">
               <div
                 style={{
                   display: "grid",
@@ -273,21 +268,24 @@ const ActorsPage: React.FC = () => {
                   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 }}
               >
-                <MetricCard label="Workflow" value={selectedSnapshotQuery.data.workflowName || "n/a"} />
-                <MetricCard label="State version" value={selectedSnapshotQuery.data.stateVersion} />
-                <MetricCard label="Completed steps" value={selectedSnapshotQuery.data.completedSteps} />
                 <MetricCard
-                  label="Last update"
+                  label="流程"
+                  value={selectedSnapshotQuery.data.workflowName || "待同步"}
+                />
+                <MetricCard label="状态版本" value={selectedSnapshotQuery.data.stateVersion} />
+                <MetricCard label="已完成步骤" value={selectedSnapshotQuery.data.completedSteps} />
+                <MetricCard
+                  label="最近更新"
                   value={formatDateTime(selectedSnapshotQuery.data.lastUpdatedAt)}
                 />
               </div>
               <MetricCard
-                label="Last output"
-                value={selectedSnapshotQuery.data.lastOutput || "No output"}
+                label="最近输出"
+                value={selectedSnapshotQuery.data.lastOutput || "暂无输出"}
               />
             </AevatarPanel>
 
-            <AevatarPanel title="Timeline">
+            <AevatarPanel title="事件流">
               {timelineQuery.data?.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {timelineQuery.data.map((item) => (
@@ -308,20 +306,20 @@ const ActorsPage: React.FC = () => {
                       </Space>
                       <Typography.Text>{item.message}</Typography.Text>
                       <Typography.Text type="secondary">
-                        {formatDateTime(item.timestamp)} · {item.stepType || "n/a"}
+                        {formatDateTime(item.timestamp)} · {item.stepType || "未知类型"}
                       </Typography.Text>
                     </div>
                   ))}
                 </div>
               ) : (
                 <Empty
-                  description="No timeline"
+                  description="暂无事件"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}
             </AevatarPanel>
 
-            <AevatarPanel title="Topology">
+            <AevatarPanel title="拓扑概览">
               <div
                 style={{
                   display: "grid",
@@ -330,19 +328,19 @@ const ActorsPage: React.FC = () => {
                 }}
               >
                 <MetricCard
-                  label="Nodes"
+                  label="节点"
                   value={graphQuery.data?.subgraph.nodes.length ?? 0}
                 />
                 <MetricCard
-                  label="Edges"
+                  label="连线"
                   value={graphQuery.data?.subgraph.edges.length ?? 0}
                 />
                 <MetricCard
-                  label="Role replies"
+                  label="角色回复"
                   value={selectedSnapshotQuery.data.roleReplyCount}
                 />
                 <MetricCard
-                  label="Completion"
+                  label="完成度"
                   value={`${selectedSnapshotQuery.data.completionStatusValue}%`}
                 />
               </div>

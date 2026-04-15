@@ -41,6 +41,7 @@ type GovernanceSummaryPanelProps = {
 type GovernanceSelectionNoticeProps = {
   title: string;
   description?: string;
+  highlights?: Array<{ label: string; value: React.ReactNode }>;
 };
 
 const governanceSurfaceStyle: React.CSSProperties = {
@@ -68,11 +69,11 @@ const governanceMetricToneMap: Record<
 
 function renderFieldValue(value: React.ReactNode): React.ReactNode {
   if (typeof value === 'string') {
-    return value.trim() || 'n/a';
+    return value.trim() || '暂无';
   }
 
   if (value === null || value === undefined || value === false) {
-    return 'n/a';
+    return '暂无';
   }
 
   return value;
@@ -101,7 +102,7 @@ function GovernanceMetric({
 export function formatGovernanceTimestamp(value: string | undefined): string {
   const normalized = value?.trim() ?? '';
   if (!normalized) {
-    return 'Pending';
+    return '待更新';
   }
 
   return normalized.replace('T', ' ').replace('Z', ' UTC');
@@ -109,7 +110,7 @@ export function formatGovernanceTimestamp(value: string | undefined): string {
 
 export const GovernanceSelectionNotice: React.FC<
   GovernanceSelectionNoticeProps
-> = ({ title, description }) => (
+> = ({ title, description, highlights = [] }) => (
   <div style={governanceSurfaceStyle}>
     <div style={cardStackStyle}>
       <Typography.Text strong>{title}</Typography.Text>
@@ -117,6 +118,18 @@ export const GovernanceSelectionNotice: React.FC<
         <Typography.Paragraph style={{ margin: 0 }} type="secondary">
           {description}
         </Typography.Paragraph>
+      ) : null}
+      {highlights.length > 0 ? (
+        <div style={summaryFieldGridStyle}>
+          {highlights.map((item) => (
+            <div key={item.label} style={summaryFieldStyle}>
+              <Typography.Text style={summaryFieldLabelStyle}>
+                {item.label}
+              </Typography.Text>
+              <Typography.Text strong>{renderFieldValue(item.value)}</Typography.Text>
+            </div>
+          ))}
+        </div>
       ) : null}
     </div>
   </div>
@@ -132,11 +145,11 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
   status = null,
 }) => {
   const fields: GovernanceSummaryField[] = [
-    { label: 'Service', value: draft.serviceId },
-    { label: 'Tenant', value: draft.tenantId },
-    { label: 'App', value: draft.appId },
-    { label: 'Namespace', value: draft.namespace },
-    revisionId ? { label: 'Revision', value: revisionId } : null,
+    { label: '服务', value: draft.serviceId },
+    { label: '团队', value: draft.tenantId },
+    { label: '应用', value: draft.appId },
+    { label: '命名空间', value: draft.namespace },
+    revisionId ? { label: '版本', value: revisionId } : null,
     ...extraFields,
   ].filter(Boolean) as GovernanceSummaryField[];
 

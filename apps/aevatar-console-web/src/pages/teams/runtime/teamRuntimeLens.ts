@@ -817,7 +817,7 @@ function derivePlaybackSummary(
       launchPrompt: "",
       rootActorId: null,
       title: "Human Escalation Playback",
-      summary: "No run audit is available for the current team activity.",
+      summary: "当前团队最近还没有可见事件。",
       interactionLabel: "",
       prompt: "",
       timeoutLabel: "",

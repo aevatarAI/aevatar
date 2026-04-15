@@ -129,7 +129,7 @@ function renderMetric(
 
 function renderList(values: string[]) {
   if (values.length === 0) {
-    return <Typography.Text type="secondary">n/a</Typography.Text>;
+    return <Typography.Text type="secondary">暂无</Typography.Text>;
   }
 
   return (
@@ -227,23 +227,23 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
       title={
         target?.kind === "policy"
           ? target.mode === "create"
-            ? "New Policy"
+            ? "新建策略"
             : target.record.policyId
           : target?.kind === "binding"
             ? target.record.bindingId
-            : target?.kind === "endpoint"
+          : target?.kind === "endpoint"
               ? target.record.endpointId
               : target?.kind === "activation"
-                ? "Activation"
+                ? "激活校验"
                 : target?.kind === "audit"
-                  ? "Activity"
-                  : "Governance"
+                  ? "变更记录"
+                  : "治理详情"
       }
     >
       <div style={aevatarDrawerScrollStyle}>
         {!canManage ? (
           <Alert
-            message="Select a service"
+            message="请先选择服务"
             type="info"
           />
         ) : null}
@@ -263,7 +263,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <SafetyCertificateOutlined />
                 <Typography.Text strong>
                   {target.mode === "create"
-                    ? "Promote a new governance rule"
+                    ? "新建一条治理策略"
                     : target.record.displayName || target.record.policyId}
                 </Typography.Text>
                 {target.mode === "edit" ? (
@@ -285,41 +285,39 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 disabled={!canManage}
               >
                 <Form.Item
-                  label="Policy Id"
+                  label="策略 ID"
                   name="policyId"
-                  rules={[{ required: true, message: "Policy id is required." }]}
+                  rules={[{ required: true, message: "请填写策略 ID。" }]}
                 >
                   <Input disabled={target.mode === "edit"} />
                 </Form.Item>
                 <Form.Item
-                  label="Display Name"
+                  label="显示名称"
                   name="displayName"
-                  rules={[
-                    { required: true, message: "Display name is required." },
-                  ]}
+                  rules={[{ required: true, message: "请填写显示名称。" }]}
                 >
                   <Input />
                 </Form.Item>
                 <Form.Item
-                  label="Activation Required Bindings"
+                  label="激活依赖绑定"
                   name="activationRequiredBindingIds"
                 >
                   <Input.TextArea
                     autoSize={{ minRows: 3, maxRows: 6 }}
-                    placeholder="One binding id per line"
+                    placeholder="每行一个绑定 ID"
                   />
                 </Form.Item>
                 <Form.Item
-                  label="Allowed Caller Service Keys"
+                  label="允许调用的服务 Key"
                   name="invokeAllowedCallerServiceKeys"
                 >
                   <Input.TextArea
                     autoSize={{ minRows: 3, maxRows: 6 }}
-                    placeholder="tenant/app/ns/service"
+                    placeholder="团队/应用/命名空间/服务"
                   />
                 </Form.Item>
                 <Form.Item
-                  label="Requires Active Deployment"
+                  label="要求已激活部署"
                   name="invokeRequiresActiveDeployment"
                   valuePropName="checked"
                 >
@@ -333,7 +331,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   onClick={() => void submitPolicy()}
                   type="primary"
                 >
-                  {target.mode === "create" ? "Create policy" : "Save policy"}
+                  {target.mode === "create" ? "创建策略" : "保存策略"}
                 </Button>
                 {target.mode === "edit" ? (
                   <Button
@@ -341,7 +339,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     loading={busyAction === "retire-policy"}
                     onClick={() => void onRetirePolicy(target.record.policyId)}
                   >
-                    Retire policy
+                    下线策略
                   </Button>
                 ) : null}
               </Space>
@@ -385,30 +383,30 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               >
                 {renderMetric(
                   surfaceToken,
-                  "Binding Id",
+                  "绑定 ID",
                   target.record.bindingId,
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Kind",
+                  "类型",
                   formatAevatarStatusLabel(target.record.bindingKind),
                   "info",
                 )}
               </div>
 
               <div>
-                <Typography.Text type="secondary">Policies</Typography.Text>
+                <Typography.Text type="secondary">策略</Typography.Text>
                 <div style={{ marginTop: 8 }}>{renderList(target.record.policyIds)}</div>
               </div>
 
               <div>
-                <Typography.Text type="secondary">Target</Typography.Text>
+                <Typography.Text type="secondary">目标</Typography.Text>
                 <Typography.Paragraph style={{ margin: "8px 0 0" }}>
                   {target.record.serviceRef
                     ? `${target.record.serviceRef.identity.serviceId}:${target.record.serviceRef.endpointId || "*"}`
                     : target.record.connectorRef
                       ? `${target.record.connectorRef.connectorType}:${target.record.connectorRef.connectorId}`
-                      : target.record.secretRef?.secretName || "n/a"}
+                      : target.record.secretRef?.secretName || "暂无"}
                 </Typography.Paragraph>
               </div>
 
@@ -418,7 +416,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   loading={busyAction === "retire-binding"}
                   onClick={() => void onRetireBinding(target.record.bindingId)}
                 >
-                  Retire binding
+                  下线绑定
                 </Button>
               </Space>
             </Space>
@@ -461,32 +459,32 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               >
                 {renderMetric(
                   surfaceToken,
-                  "Endpoint",
+                  "入口",
                   target.record.endpointId,
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Kind",
+                  "类型",
                   formatAevatarStatusLabel(target.record.kind),
                   "info",
                 )}
               </div>
 
               <div>
-                <Typography.Text type="secondary">Request Type</Typography.Text>
+                <Typography.Text type="secondary">请求类型</Typography.Text>
                 <Typography.Paragraph style={{ margin: "8px 0 0" }}>
-                  {target.record.requestTypeUrl || "n/a"}
+                  {target.record.requestTypeUrl || "暂无"}
                 </Typography.Paragraph>
               </div>
 
               <div>
-                <Typography.Text type="secondary">Policies</Typography.Text>
+                <Typography.Text type="secondary">策略</Typography.Text>
                 <div style={{ marginTop: 8 }}>{renderList(target.record.policyIds)}</div>
               </div>
 
               {!endpointCatalog ? (
                 <Alert
-                  message="The endpoint catalog is unavailable, so exposure changes are temporarily blocked."
+                  message="当前无法读取入口目录，暂时不能修改暴露状态。"
                   type="warning"
                 />
               ) : null}
@@ -499,7 +497,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   }
                   type="primary"
                 >
-                  Make public
+                  公开入口
                 </Button>
                 <Button
                   loading={busyAction === "set-endpoint-exposure:internal"}
@@ -507,7 +505,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     void onSetEndpointExposure(target.record.endpointId, "internal")
                   }
                 >
-                  Set internal
+                  设为内部
                 </Button>
                 <Button
                   danger
@@ -516,7 +514,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     void onSetEndpointExposure(target.record.endpointId, "disabled")
                   }
                 >
-                  Disable endpoint
+                  停用入口
                 </Button>
               </Space>
             </Space>
@@ -535,7 +533,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
           >
             <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Typography.Text strong>
-                Revision {target.record.revisionId || "unresolved"} activation
+                版本 {target.record.revisionId || "未解析"} 的激活校验
               </Typography.Text>
               <div
                 style={{
@@ -546,22 +544,22 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               >
                 {renderMetric(
                   surfaceToken,
-                  "Bindings",
+                  "绑定",
                   String(target.record.bindings.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Policies",
+                  "策略",
                   String(target.record.policies.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Endpoints",
+                  "入口",
                   String(target.record.endpoints.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Missing policies",
+                  "缺失策略",
                   String(target.record.missingPolicyIds.length),
                   target.record.missingPolicyIds.length > 0
                     ? "warning"
@@ -570,7 +568,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               </div>
 
               <div>
-                <Typography.Text type="secondary">Missing policies</Typography.Text>
+                <Typography.Text type="secondary">缺失策略</Typography.Text>
                 <div style={{ marginTop: 8 }}>
                   {renderList(target.record.missingPolicyIds)}
                 </div>
@@ -611,13 +609,13 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
               <Space orientation="vertical" size={8} style={{ display: "flex" }}>
                 <Typography.Text type="secondary">
-                  Actor: {target.event.actor}
+                  来源: {target.event.actor}
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  Target: {target.event.targetLabel}
+                  对象: {target.event.targetLabel}
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  Timestamp: {target.event.at}
+                  时间: {target.event.at}
                 </Typography.Text>
               </Space>
             </Space>

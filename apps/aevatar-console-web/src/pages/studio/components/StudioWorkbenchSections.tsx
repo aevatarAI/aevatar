@@ -1733,8 +1733,8 @@ export type StudioWorkspaceAlertsProps = {
 
 export const StudioWorkspaceAlerts: React.FC<StudioWorkspaceAlertsProps> = ({
   authSession,
-  draftMode,
-  legacySource,
+  draftMode: _draftMode,
+  legacySource: _legacySource,
 }) => {
   const notices: React.ReactNode[] = [];
 
@@ -1743,11 +1743,10 @@ export const StudioWorkspaceAlerts: React.FC<StudioWorkspaceAlertsProps> = ({
       <StudioNoticeCard
         key="auth"
         type="warning"
-        title="Studio sign-in required"
+        title="需要登录"
         description={
           <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-            {authSession.errorMessage ||
-              'Sign in to access protected Studio APIs.'}
+            {authSession.errorMessage || "登录后可继续访问团队构建器。"}
           </Typography.Paragraph>
         }
         action={
@@ -1757,32 +1756,10 @@ export const StudioWorkspaceAlerts: React.FC<StudioWorkspaceAlertsProps> = ({
               href={authSession.loginUrl}
               style={{ paddingInline: 0, alignSelf: 'flex-start' }}
             >
-              Sign in
+              去登录
             </Button>
           ) : undefined
         }
-      />,
-    );
-  }
-
-  if (draftMode === 'new') {
-    notices.push(
-      <StudioNoticeCard
-        key="blank-draft"
-        type="info"
-        title="Blank Studio draft"
-        description="You are editing a new unsaved workflow draft inside Studio. Save it to workspace once the YAML and metadata are ready."
-      />,
-    );
-  }
-
-  if (draftMode === 'new' && legacySource === 'playground') {
-    notices.push(
-      <StudioNoticeCard
-        key="imported-draft"
-        type="warning"
-        title="Imported local draft"
-        description="This Studio draft was loaded from your browser-stored draft so you can keep editing it in Studio."
       />,
     );
   }
@@ -1899,12 +1876,11 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
     : workflowResultsBodyStyle;
 
   const scopeSummaryDescription = workspaceSettings.isLoading
-    ? 'Resolving the current scope.'
+    ? '正在解析团队上下文。'
     : workspaceSettings.isError
       ? describeError(workspaceSettings.error)
-      : 'Platform-managed scope for workspace workflows.';
-  const draftSummaryDescription =
-    activeWorkflowDescription || 'Open the selected workflow or start a blank draft.';
+      : '';
+  const draftSummaryDescription = activeWorkflowDescription || '';
 
   return (
     <Row gutter={[16, 16]} align="stretch" style={resolvedWorkspaceRowStyle}>
@@ -1920,29 +1896,26 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
               <div style={workflowSectionHeaderStyle}>
                 <div style={cardStackStyle}>
                   <Typography.Text style={workflowSectionHeadingStyle}>
-                    Directories
-                  </Typography.Text>
-                  <Typography.Text style={workflowSectionCopyStyle}>
-                    New workflows are created in the selected directory.
+                    工作区目录
                   </Typography.Text>
                 </div>
                 <Button
                   type="text"
                   icon={<FolderAddOutlined />}
                   onClick={onToggleDirectoryForm}
-                  aria-label="Toggle workflow directory form"
+                  aria-label="切换目录表单"
                   style={workflowPanelIconButtonStyle}
                 />
               </div>
 
               {workspaceSettings.isLoading ? (
                 <Typography.Text type="secondary">
-                  Loading workflow directories...
+                  正在加载目录...
                 </Typography.Text>
               ) : workspaceSettings.isError ? (
                 <StudioNoticeCard
                   type="error"
-                  title="Failed to load workspace settings"
+                  title="读取工作区设置失败"
                   description={describeError(workspaceSettings.error)}
                 />
               ) : (
@@ -1958,12 +1931,12 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                         />
                         <Input
                           aria-label="Studio directory label"
-                          placeholder="Directory label"
+                          placeholder="目录名称"
                           value={directoryLabel}
                           onChange={(event) => onSetDirectoryLabel(event.target.value)}
                         />
                         <Button type="primary" onClick={onAddDirectory}>
-                          Add directory
+                          添加目录
                         </Button>
                       </div>
                     </div>
@@ -2039,7 +2012,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                       <div style={workflowEmptyStateInnerStyle}>
                         <Empty
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="No workflow directories are configured yet."
+                          description="还没有可用目录。"
                         />
                       </div>
                     </div>
@@ -2052,10 +2025,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
               <div style={workflowSectionHeaderStyle}>
                 <div style={cardStackStyle}>
                   <Typography.Text style={workflowSectionHeadingStyle}>
-                    Current draft
-                  </Typography.Text>
-                  <Typography.Text style={workflowSectionCopyStyle}>
-                    Keep the active draft in view while browsing the workspace library.
+                    当前定义
                   </Typography.Text>
                 </div>
               </div>
@@ -2064,20 +2034,21 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                 <div style={cardStackStyle}>
                   <Space wrap size={[8, 8]}>
                     {selectedWorkflowId ? (
-                      <Tag color="processing">Workspace workflow</Tag>
+                      <Tag color="processing">工作区定义</Tag>
                     ) : null}
                     {templateWorkflow ? (
-                      <Tag color="success">Published template</Tag>
+                      <Tag color="success">模板定义</Tag>
                     ) : null}
-                    {draftMode === 'new' ? <Tag color="gold">Blank draft</Tag> : null}
+                    {draftMode === 'new' ? <Tag color="gold">新建草稿</Tag> : null}
                   </Space>
                   <Typography.Text strong>
-                    {activeWorkflowName || 'No draft selected'}
+                    {activeWorkflowName || '尚未选择定义'}
                   </Typography.Text>
-                  <Typography.Text style={workflowSectionCopyStyle}>
-                    {activeWorkflowDescription ||
-                      'Pick a workflow or start a blank draft to open the Studio editor.'}
-                  </Typography.Text>
+                  {activeWorkflowDescription ? (
+                    <Typography.Text style={workflowSectionCopyStyle}>
+                      {activeWorkflowDescription}
+                    </Typography.Text>
+                  ) : null}
                   <Space wrap size={[8, 8]}>
                     <Button
                       type="primary"
@@ -2085,10 +2056,10 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                       onClick={onOpenCurrentDraft}
                       style={activeWorkflowSourceKey ? workflowSolidActionStyle : undefined}
                     >
-                      Open editor
+                      进入编辑
                     </Button>
                     <Button onClick={onStartBlankDraft} style={workflowGhostActionStyle}>
-                      New workflow
+                      新建定义
                     </Button>
                   </Space>
                 </div>
@@ -2126,14 +2097,16 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     <div style={workflowSummaryCardRowStyle}>
                       <div style={workflowSummaryCardBodyStyle}>
                         <Typography.Text style={workflowSectionHeadingStyle}>
-                          Current scope
+                          当前团队
                         </Typography.Text>
                         <Typography.Text strong style={workflowCardTitleStyle}>
-                          {activeDirectory?.label || 'Resolved by Studio'}
+                          {activeDirectory?.label || '当前团队'}
                         </Typography.Text>
-                        <Typography.Text style={workflowSummaryHintStyle}>
-                          {scopeSummaryDescription}
-                        </Typography.Text>
+                        {scopeSummaryDescription ? (
+                          <Typography.Text style={workflowSummaryHintStyle}>
+                            {scopeSummaryDescription}
+                          </Typography.Text>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -2143,24 +2116,26 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                       <div style={workflowSummaryCardBodyStyle}>
                         <Space wrap size={[8, 8]}>
                           {selectedWorkflowId ? (
-                            <Tag color="processing">Workspace workflow</Tag>
+                            <Tag color="processing">工作区定义</Tag>
                           ) : null}
                           {templateWorkflow ? (
-                            <Tag color="success">Published template</Tag>
+                            <Tag color="success">模板定义</Tag>
                           ) : null}
                           {draftMode === 'new' ? (
-                            <Tag color="gold">Blank draft</Tag>
+                            <Tag color="gold">新建草稿</Tag>
                           ) : null}
                         </Space>
                         <Typography.Text style={workflowSectionHeadingStyle}>
-                          Current draft
+                          当前定义
                         </Typography.Text>
                         <Typography.Text strong style={workflowCardTitleStyle}>
-                          {activeWorkflowName || 'No draft selected'}
+                          {activeWorkflowName || '尚未选择定义'}
                         </Typography.Text>
-                        <Typography.Text style={workflowSummaryHintStyle}>
-                          {draftSummaryDescription}
-                        </Typography.Text>
+                        {draftSummaryDescription ? (
+                          <Typography.Text style={workflowSummaryHintStyle}>
+                            {draftSummaryDescription}
+                          </Typography.Text>
+                        ) : null}
                       </div>
                       <div style={workflowSummaryActionsStyle}>
                         <Button
@@ -2172,14 +2147,14 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                             activeWorkflowSourceKey ? workflowSolidActionStyle : undefined
                           }
                         >
-                          Open editor
+                          进入编辑
                         </Button>
                         <Button
                           size="small"
                           onClick={onStartBlankDraft}
                           style={workflowGhostActionStyle}
                         >
-                          New workflow
+                          新建定义
                         </Button>
                       </div>
                     </div>
@@ -2193,8 +2168,8 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     style={{ color: 'var(--ant-color-text-tertiary)' }}
                   />
                   <input
-                    aria-label="Search workflows"
-                    placeholder="Search workflows"
+                    aria-label="搜索定义"
+                    placeholder="搜索定义"
                     style={workflowSearchInputStyle}
                     value={workflowSearch}
                     onChange={(event) => onSetWorkflowSearch(event.target.value)}
@@ -2208,7 +2183,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     onClick={onWorkflowImportClick}
                     style={workflowGhostActionStyle}
                   >
-                    Import
+                    导入
                   </Button>
                   <Button
                     type="primary"
@@ -2216,7 +2191,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     onClick={onStartBlankDraft}
                     style={workflowSolidActionStyle}
                   >
-                    New workflow
+                    新建定义
                   </Button>
                 </div>
               </div>
@@ -2226,12 +2201,12 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
           <div style={resolvedWorkflowResultsBodyStyle}>
             {workflows.isLoading ? (
               <Typography.Text type="secondary">
-                Loading workflows...
+                正在加载定义...
               </Typography.Text>
             ) : workflows.isError ? (
               <StudioNoticeCard
                 type="error"
-                title="Failed to load workspace workflows"
+                title="读取行为定义失败"
                 description={describeError(workflows.error)}
               />
             ) : filteredWorkflows.length > 0 ? (
@@ -2284,13 +2259,13 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                             </Typography.Text>
                             <div style={workflowCardMetaLineStyle}>
                               <span>{workflow.directoryLabel}</span>
-                              <span>{workflow.stepCount} steps</span>
+                              <span>{workflow.stepCount} 步骤</span>
                               <span>{formatDateTime(workflow.updatedAtUtc)}</span>
                             </div>
                             <Typography.Paragraph
                               style={workflowCardDescriptionCompactStyle}
                             >
-                              {workflow.description || 'No description provided.'}
+                              {workflow.description || '暂未填写说明'}
                             </Typography.Paragraph>
                           </div>
                         </div>
@@ -2300,7 +2275,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                             display: 'block',
                           }}
                         >
-                          Open
+                          打开
                         </span>
                       </div>
                     </button>
@@ -2314,8 +2289,8 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                     description={
                       workflowSearch.trim()
-                        ? 'No workflows match the current search.'
-                        : 'Create a workflow with the New workflow button above.'
+                        ? '没有匹配的定义。'
+                        : '还没有定义'
                     }
                   />
                 </div>
@@ -3659,6 +3634,8 @@ export type StudioEditorPageProps = {
   readonly askAiNotice: StudioNoticeLike | null;
   readonly askAiReasoning: string;
   readonly askAiAnswer: string;
+  readonly canAskAiGenerate: boolean;
+  readonly askAiUnavailableMessage: string;
   readonly runPrompt: string;
   readonly recentPromptHistory: readonly PlaygroundPromptHistoryEntry[];
   readonly promptHistoryCount: number;
@@ -3776,6 +3753,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   askAiNotice,
   askAiReasoning,
   askAiAnswer,
+  canAskAiGenerate,
+  askAiUnavailableMessage,
   runPrompt,
   runPending,
   canOpenRunWorkflow,
@@ -4087,11 +4066,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     setToolDrawerMode(null);
   };
 
-  const askAiStatusText = askAiPending
-    ? '正在生成并校验 YAML...'
-    : askAiAnswer.trim()
-      ? '校验通过的 YAML 已写回当前草稿。'
-      : '返回格式仅限 workflow YAML。';
+  const askAiStatusText = !canAskAiGenerate
+    ? askAiUnavailableMessage || '当前环境暂不支持 AI 辅助。'
+    : askAiPending
+      ? '正在生成并校验 YAML...'
+      : askAiAnswer.trim()
+        ? '校验通过的 YAML 已写回当前草稿。'
+        : '返回格式仅限 workflow YAML。';
   const toolDrawerVisible = Boolean(draftYaml) && toolDrawerMode !== null;
   const toolDrawerTitle =
     toolDrawerMode === 'palette' ? '添加步骤' : 'AI 辅助';
@@ -4261,7 +4242,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       ) : null}
     </div>
   );
-  const askAiDrawerContent = (
+  const askAiDrawerContent = !canAskAiGenerate ? (
+    <StudioNoticeCard
+      type="error"
+      title="AI 辅助暂不可用"
+      description={askAiUnavailableMessage || '当前环境暂不支持 AI 辅助。'}
+    />
+  ) : (
     <div style={cardStackStyle}>
       <div style={studioToolDrawerSectionStyle}>
         <Typography.Text strong>行为描述</Typography.Text>
@@ -4338,120 +4325,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
   const editorStatusItems: React.ReactNode[] = [];
 
-  if (!hasResolvedProject) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-project-step"
-        type="warning"
-        title="下一步：确认当前团队"
-        description="Studio 需要先绑定到当前团队，后续的保存、测试运行和发布入口才会真正落到这个团队里。"
-        compact
-      />,
-    );
-  } else if (!hasNamedDraft) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-draft-step"
-        type="warning"
-        title="下一步：完成行为定义"
-        description="先补齐名称和有效 YAML，再继续保存、测试运行或发布团队入口。"
-        compact
-      />,
-    );
-  } else if (isDraftDirty && canSaveWorkflow) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-save-step"
-        type="info"
-        title="下一步：保存定义"
-        description="先把当前行为定义保存下来，再继续测试运行或发布团队入口。"
-        compact
-        action={
-          <Space wrap>
-            <Button type="primary" onClick={onSaveDraft} loading={savePending}>
-              保存定义
-            </Button>
-          </Space>
-        }
-      />,
-    );
-  } else if (saveNotice?.type === 'success') {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-run-step"
-        type="success"
-        title="下一步：测试运行"
-        description="先验证当前草稿的运行结果，确认无误后再把它发布成团队默认入口。"
-        compact
-        action={
-          <Space wrap>
-            <Button
-              type="primary"
-              onClick={onRunInConsole}
-              disabled={!canOpenRunWorkflow}
-            >
-              测试运行
-            </Button>
-            <Button
-              onClick={onPublishWorkflow}
-              loading={publishPending}
-              disabled={!canPublishWorkflow}
-            >
-              发布团队入口
-            </Button>
-          </Space>
-        }
-      />,
-    );
-  } else if (!scopeBinding?.available) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-bind-step"
-        type="warning"
-        title="下一步：发布团队入口"
-        description="当前行为定义已经就绪，但团队还没有生效的默认入口。发布后，团队会从这个入口对外提供能力。"
-        compact
-        action={
-          <Space wrap>
-            <Button
-              type="primary"
-              onClick={onPublishWorkflow}
-              loading={publishPending}
-              disabled={!canPublishWorkflow}
-            >
-              发布团队入口
-            </Button>
-            <Button onClick={onOpenProjectOverview}>返回团队详情</Button>
-          </Space>
-        }
-      />,
-    );
-  } else {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-invoke-step"
-        type="success"
-        title="下一步：打开测试台"
-        description="当前团队默认入口已经生效，可以前往测试台验证对外入口，再回到测试运行查看完整执行轨迹。"
-        compact
-        action={
-          <Space wrap>
-            <Button type="primary" onClick={onOpenProjectInvoke}>
-              打开测试台
-            </Button>
-            <Button onClick={onOpenProjectOverview}>返回团队详情</Button>
-            <Button
-              onClick={onRunInConsole}
-              disabled={!canOpenRunWorkflow}
-            >
-              测试运行
-            </Button>
-          </Space>
-        }
-      />,
-    );
-  }
-
   if (saveNotice) {
     editorStatusItems.push(
       <StudioNoticeCard
@@ -4520,7 +4393,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     <StudioNoticeCard
       key="selected-workflow-error"
       type="error"
-      title="Failed to load Studio workflow"
+      title="读取行为定义失败"
       description={describeError(selectedWorkflow.error)}
       compact
     />
@@ -4528,13 +4401,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     <StudioNoticeCard
       key="template-workflow-error"
       type="error"
-      title="Failed to load published workflow template"
+      title="读取模板定义失败"
       description={describeError(templateWorkflow.error)}
       compact
     />
   ) : null;
   const inspectorPanelBody = (
     <div
+      data-testid="studio-inspector-scroll"
       style={{
         display: 'flex',
         flex: 1,
@@ -4574,6 +4448,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           />
 
           <div
+            data-testid="studio-editor-shell"
             style={{
               background: '#F2F1EE',
               border: '1px solid #E6E3DE',
@@ -4581,7 +4456,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
               display: 'flex',
               flexDirection: 'column',
-              minHeight: 'calc(100vh - 176px)',
+              height: 'calc(100vh - 176px)',
               overflow: 'hidden',
             }}
           >
@@ -4616,7 +4491,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     />
                     <StudioInfoPopover
                       open={descriptionEditorOpen}
-                      ariaLabel="Edit workflow description"
+                      ariaLabel="编辑定义说明"
                       onOpenChange={(open) => {
                         setDescriptionEditorOpen(open);
                         if (open) {
@@ -4626,7 +4501,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     >
                       <textarea
                         aria-label="Studio workflow description"
-                        placeholder="Workflow description"
+                        placeholder="定义说明"
                         value={descriptionDraft}
                         onChange={(event) =>
                           setDescriptionDraft(event.target.value)
@@ -4642,7 +4517,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                             setDescriptionEditorOpen(false);
                           }}
                         >
-                          Cancel
+                          取消
                         </Button>
                         <Button
                           type="primary"
@@ -4653,7 +4528,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                             setDescriptionEditorOpen(false);
                           }}
                         >
-                          Save
+                          保存
                         </Button>
                       </div>
                     </StudioInfoPopover>
@@ -4681,7 +4556,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   size="small"
                   icon={<RobotOutlined />}
                   type={toolDrawerMode === 'ask-ai' ? 'primary' : 'default'}
+                  disabled={!canAskAiGenerate}
                   onClick={() => setToolDrawerMode('ask-ai')}
+                  title={!canAskAiGenerate ? askAiUnavailableMessage : undefined}
                 >
                   AI 辅助
                 </Button>
@@ -4691,7 +4568,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   onClick={openGAgentModal}
                   disabled={!resolvedScopeId}
                 >
-                  绑定 GAgent
+                  绑定团队入口
                 </Button>
               </div>
             </div>
@@ -4841,7 +4718,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                           }}
                         >
                           <div style={cardStackStyle}>
-                            <Typography.Text strong>Connection selected</Typography.Text>
+                            <Typography.Text strong>已选连接</Typography.Text>
                             <Typography.Text type="secondary">
                               {selectedGraphEdge.branchLabel
                                 ? `${selectedGraphEdge.sourceStepId} -> ${selectedGraphEdge.targetStepId} (${selectedGraphEdge.branchLabel})`
@@ -4849,16 +4726,16 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                             </Typography.Text>
                             <Space wrap size={[8, 8]}>
                               <Tag color={selectedGraphEdge.kind === 'branch' ? 'purple' : 'processing'}>
-                                {selectedGraphEdge.kind === 'branch' ? 'branch' : 'next'}
+                                {selectedGraphEdge.kind === 'branch' ? '分支' : '下一步'}
                               </Tag>
-                              {selectedGraphEdge.implicit ? <Tag>auto-flow</Tag> : null}
+                              {selectedGraphEdge.implicit ? <Tag>自动流转</Tag> : null}
                               <Button
                                 danger
                                 size="small"
                                 disabled={selectedGraphEdge.implicit}
                                 onClick={onDeleteSelectedGraphEdge}
                               >
-                                Remove connection
+                                移除连接
                               </Button>
                             </Space>
                           </div>
@@ -4883,10 +4760,10 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     >
                       <div>
                         <Typography.Text strong style={{ display: 'block' }}>
-                          This workflow has no steps yet.
+                          当前定义还没有步骤。
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          Right click the canvas to place the first workflow step.
+                          在画布中添加第一个处理步骤。
                         </Typography.Text>
                       </div>
                     </div>
@@ -4978,7 +4855,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                           ? `选中: ${selectedGraphNodeId}`
                           : '选择一个步骤后可在这里编辑属性'
                         : inspectorTab === 'roles'
-                          ? '管理当前 workflow 的 Agent 角色'
+                          ? '管理当前定义的 Agent 角色'
                           : '查看和校验当前 YAML'}
                     </Typography.Text>
                   </div>
@@ -5007,7 +4884,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
           <Modal
             open={gAgentModalOpen}
-            title="绑定 GAgent 服务"
+            title="绑定团队入口"
             onCancel={() => setGAgentModalOpen(false)}
             footer={[
               <Button
@@ -5037,11 +4914,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             ]}
           >
             <div style={cardStackStyle}>
-              <Typography.Text type="secondary">
-                把当前团队默认入口直接绑定到静态 GAgent，并在需要时为选中的服务入口打开测试运行页面。
-              </Typography.Text>
               <Input
-                aria-label="GAgent 展示名称"
+                aria-label="入口展示名称"
                 placeholder="展示名称"
                 value={gAgentDraft.displayName}
                 onChange={(event) =>
@@ -5052,15 +4926,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 }
               />
               <Select
-                aria-label="已发现 GAgent 类型"
+                aria-label="已发现入口类型"
                 showSearch
                 style={{ width: '100%' }}
                 placeholder={
                   gAgentTypesLoading
-                    ? '正在读取可绑定的 GAgent 类型'
+                    ? '正在读取可绑定的入口类型'
                     : gAgentTypes.length > 0
-                      ? '选择一个已发现的 GAgent 类型'
-                      : '当前没有可绑定的 GAgent 类型'
+                      ? '选择一个已发现的入口类型'
+                      : '当前没有可绑定的入口类型'
                 }
                 value={
                   selectedDiscoveredGAgentType
@@ -5073,7 +4947,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   label: buildRuntimeGAgentTypeLabel(descriptor),
                 }))}
                 notFoundContent={
-                  gAgentTypesLoading ? '正在读取 GAgent 类型...' : '没有找到 GAgent 类型。'
+                  gAgentTypesLoading ? '正在读取入口类型...' : '没有找到入口类型。'
                 }
                 onChange={(value) =>
                   setGAgentDraft((current) => ({
@@ -5086,13 +4960,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 <Typography.Text type="danger">
                   {describeError(gAgentTypesError)}
                 </Typography.Text>
-              ) : (
-                <Typography.Text type="secondary">
-                  Studio 会从运行时能力接口中发现可绑定的 GAgent 类型，并自动填充 Actor 类型契约。
-                </Typography.Text>
-              )}
+              ) : null}
               <Input
-                aria-label="GAgent Actor 类型"
+                aria-label="入口 Actor 类型"
                 placeholder="程序集限定 Actor 类型名"
                 value={gAgentDraft.actorTypeName}
                 onChange={(event) =>
@@ -5116,9 +4986,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     justifyContent: 'space-between',
                   }}
                 >
-                  <Typography.Text type="secondary">
-                    添加一个或多个 GAgent 服务入口，然后选择绑定后默认打开哪个测试运行入口。
-                  </Typography.Text>
                   <Button
                     icon={<PlusOutlined />}
                     onClick={() => addGAgentEndpointDraft()}
@@ -5160,7 +5027,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       </Button>
                     </div>
                     <Input
-                      aria-label={`GAgent 入口 ID ${endpointIndex + 1}`}
+                      aria-label={`入口 ID ${endpointIndex + 1}`}
                       placeholder="入口 ID"
                       value={endpoint.endpointId}
                       onChange={(event) =>
@@ -5170,7 +5037,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input
-                      aria-label={`GAgent 入口展示名 ${endpointIndex + 1}`}
+                      aria-label={`入口展示名称 ${endpointIndex + 1}`}
                       placeholder="入口展示名称"
                       value={endpoint.displayName}
                       onChange={(event) =>
@@ -5180,7 +5047,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Select
-                      aria-label={`GAgent 入口类型 ${endpointIndex + 1}`}
+                      aria-label={`入口类型 ${endpointIndex + 1}`}
                       options={[
                         {
                           label: '命令入口',
@@ -5199,7 +5066,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input
-                      aria-label={`GAgent 请求类型 URL ${endpointIndex + 1}`}
+                      aria-label={`请求类型 URL ${endpointIndex + 1}`}
                       placeholder="请求类型 URL"
                       value={endpoint.requestTypeUrl}
                       onChange={(event) =>
@@ -5209,7 +5076,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input
-                      aria-label={`GAgent 响应类型 URL ${endpointIndex + 1}`}
+                      aria-label={`响应类型 URL ${endpointIndex + 1}`}
                       placeholder="响应类型 URL（可选）"
                       value={endpoint.responseTypeUrl}
                       onChange={(event) =>
@@ -5219,7 +5086,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input.TextArea
-                      aria-label={`GAgent 入口说明 ${endpointIndex + 1}`}
+                      aria-label={`入口说明 ${endpointIndex + 1}`}
                       autoSize={{ minRows: 2, maxRows: 4 }}
                       placeholder="入口说明"
                       value={endpoint.description}
@@ -6824,11 +6691,11 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
   const runtimeBaseUrl =
     settingsDraft?.runtimeBaseUrl ?? workspaceSettings.data?.runtimeBaseUrl ?? '';
   const runtimeFieldLabel = canEditRuntime
-    ? 'Runtime endpoint'
-    : 'Host-managed runtime endpoint';
+    ? '运行时地址'
+    : '宿主管理运行时地址';
   const runtimeActionLabel = canEditRuntime
-    ? 'Test runtime'
-    : 'Check host runtime';
+    ? '测试运行时'
+    : '检测宿主运行时';
   const [activeSection, setActiveSection] =
     React.useState<StudioSettingsSectionKey>('runtime');
   const providerFormGridStyle: React.CSSProperties = {
@@ -6868,22 +6735,22 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
   );
   const selectedProviderTypeLabel = selectedProvider
     ? resolveProviderTypeLabel(selectedProvider.providerType)
-    : 'n/a';
+    : '暂无';
   const selectedProviderConnectionValue = selectedProvider?.endpoint
-    ? 'Configured'
-    : 'Needs setup';
+    ? '已配置'
+    : '待配置';
   const selectedProviderConnectionTone = selectedProvider?.endpoint
     ? 'success'
     : 'warning';
   const selectedProviderCredentialValue = selectedProvider
     ? selectedProvider.clearApiKeyRequested
-      ? 'Will clear'
+      ? '待清除'
       : selectedProvider.apiKeyConfigured
-        ? 'Stored'
+        ? '已保存'
         : selectedProvider.apiKey
-          ? 'Pending save'
-          : 'Not stored'
-    : 'n/a';
+          ? '待保存'
+          : '未保存'
+    : '暂无';
   const selectedProviderCredentialTone = selectedProvider
     ? selectedProvider.clearApiKeyRequested
       ? 'warning'
@@ -6891,21 +6758,21 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
         ? 'success'
         : 'default'
     : 'default';
-  const runtimeModeLabel = canEditRuntime ? 'Editable' : 'Host managed';
-  const hostModeLabel = hostMode === 'proxy' ? 'Remote proxy' : 'Embedded host';
+  const runtimeModeLabel = canEditRuntime ? '可编辑' : '宿主管理';
+  const hostModeLabel = hostMode === 'proxy' ? '远程代理' : '内嵌宿主';
   const runtimeHealthValue = runtimeTestResult
     ? runtimeTestResult.reachable
-      ? 'Reachable'
-      : 'Needs attention'
-    : 'Not checked';
+      ? '可连接'
+      : '需关注'
+    : '未检测';
   const runtimeHealthTone = runtimeTestResult
     ? runtimeTestResult.reachable
       ? 'success'
       : 'warning'
     : 'default';
   const workflowSourcesLabel = canManageDirectories
-    ? 'Workspace directories'
-    : 'Scope bound';
+    ? '工作区目录'
+    : '当前团队绑定';
   const workflowDirectories = workspaceSettings.data?.directories ?? [];
   const openAdvancedSection = React.useCallback(() => {
     setActiveSection('advanced');
@@ -6917,29 +6784,25 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
         label: (
           <span style={studioSettingsTabLabelStyle}>
             <ApiOutlined />
-            <span>Runtime</span>
+            <span>运行时</span>
           </span>
         ),
         children: (
           <div style={studioSettingsTabContentStyle}>
             <div style={sectionPanelStyle}>
               <div style={cardStackStyle}>
-                <Typography.Text strong>Runtime</Typography.Text>
-                <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-                  Configure the runtime endpoint Studio uses for authoring and
-                  health checks.
-                </Typography.Paragraph>
+                <Typography.Text strong>运行时</Typography.Text>
               </div>
               {workspaceSettings.isError ? (
                 <StudioNoticeCard
                   type="error"
-                  title="Failed to load workspace settings"
+                  title="读取工作区设置失败"
                   description={describeError(workspaceSettings.error)}
                 />
               ) : settings.isError ? (
                 <StudioNoticeCard
                   type="error"
-                  title="Failed to load workbench config"
+                  title="读取工作台配置失败"
                   description={describeError(settings.error)}
                 />
               ) : settingsDraft ? (
@@ -6947,28 +6810,28 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                   {!canEditRuntime ? (
                     <StudioNoticeCard
                       type="info"
-                      title="Runtime is host-managed in embedded mode"
-                      description="Studio runs against the local runtime hosted by aevatar app. The endpoint is shown for reference and health checks only."
+                      title="当前运行时由宿主管理"
+                      description="这里只做查看和连通性检测。"
                     />
                   ) : null}
                   <div style={summaryMetricGridStyle}>
                     <StudioSummaryMetric
-                      label="Connection"
+                      label="连接"
                       tone={runtimeHealthTone}
                       value={runtimeHealthValue}
                     />
-                    <StudioSummaryMetric label="Mode" value={runtimeModeLabel} />
+                    <StudioSummaryMetric label="模式" value={runtimeModeLabel} />
                   </div>
                   <div style={summaryFieldGridStyle}>
                     <StudioSummaryField
-                      label="Current endpoint"
-                      value={runtimeBaseUrl || 'n/a'}
+                      label="当前地址"
+                      value={runtimeBaseUrl || '暂无'}
                       copyable={Boolean(runtimeBaseUrl)}
                     />
                     <StudioSummaryField
-                      label="Last check"
+                      label="最近检测"
                       value={
-                        runtimeTestResult?.checkedUrl || 'Run a health check'
+                        runtimeTestResult?.checkedUrl || '尚未检测'
                       }
                     />
                   </div>
@@ -6997,23 +6860,17 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                       type={runtimeTestResult.reachable ? 'success' : 'warning'}
                       title={
                         runtimeTestResult.reachable
-                          ? 'Runtime is reachable'
-                          : 'Runtime check failed'
+                          ? '运行时可连接'
+                          : '运行时检测失败'
                       }
                       description={`${runtimeTestResult.message} · ${runtimeTestResult.checkedUrl}`}
                     />
-                  ) : (
-                    <StudioNoticeCard
-                      type="info"
-                      title="Runtime health check"
-                      description="Run a connectivity test from this section when you need to validate the current runtime."
-                    />
-                  )}
+                  ) : null}
                 </>
               ) : (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="Runtime settings are unavailable right now."
+                  description="当前没有可用的运行时设置。"
                 />
               )}
             </div>
@@ -7025,7 +6882,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
         label: (
           <span style={studioSettingsTabLabelStyle}>
             <RobotOutlined />
-            <span>AI Providers</span>
+            <span>AI 提供方</span>
           </span>
         ),
         children: (
@@ -7033,7 +6890,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
             {settings.isError ? (
               <StudioNoticeCard
                 type="error"
-                title="Failed to load workbench config"
+                title="读取工作台配置失败"
                 description={describeError(settings.error)}
               />
             ) : settingsDraft ? (
@@ -7048,37 +6905,35 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                     }}
                   >
                     <div style={cardStackStyle}>
-                      <Typography.Text strong>AI providers</Typography.Text>
+                      <Typography.Text strong>AI 提供方</Typography.Text>
                       <Typography.Paragraph
                         style={{ margin: 0 }}
                         type="secondary"
                       >
-                        Manage the provider catalog Studio can use for authoring.
-                        Endpoint and credential changes stay in Advanced.
+                        管理默认提供方和基础信息。
                       </Typography.Paragraph>
                     </div>
                     <Button type="primary" onClick={onAddProvider}>
-                      Add provider
+                      新增提供方
                     </Button>
                   </div>
                   <StudioNoticeCard
                     type="info"
-                    title="Connection settings stay in Advanced"
-                    description="Keep this section focused on provider selection, defaults, and basic metadata. Use Advanced when you need to edit endpoints or secrets."
-                    action={<Button onClick={openAdvancedSection}>Open Advanced</Button>}
+                    title="连接设置在高级配置中"
+                    description="端点和密钥统一在高级配置里维护。"
+                    action={<Button onClick={openAdvancedSection}>打开高级配置</Button>}
                   />
                 </div>
                 <div style={providersGridStyle}>
                   <div style={providerColumnStyle}>
                     <div style={sectionPanelStyle}>
                       <div style={cardStackStyle}>
-                        <Typography.Text strong>Provider catalog</Typography.Text>
+                        <Typography.Text strong>提供方列表</Typography.Text>
                         <Typography.Paragraph
                           style={{ margin: 0 }}
                           type="secondary"
                         >
-                          Pick a provider to edit, or create a new one before
-                          wiring it into Studio.
+                          选择一个提供方继续编辑。
                         </Typography.Paragraph>
                       </div>
                       {providers.length > 0 ? (
@@ -7121,7 +6976,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                                       </Tag>
                                       {settingsDraft.defaultProviderName ===
                                       provider.providerName ? (
-                                        <Tag color="success">default</Tag>
+                                        <Tag color="success">默认</Tag>
                                       ) : null}
                                       <Tag
                                         color={
@@ -7131,8 +6986,8 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                                         }
                                       >
                                         {provider.endpoint
-                                          ? 'configured'
-                                          : 'needs setup'}
+                                          ? '已配置'
+                                          : '待配置'}
                                       </Tag>
                                     </Space>
                                   </div>
@@ -7146,7 +7001,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                                         )
                                       }
                                     >
-                                      {isSelected ? 'Selected' : 'Edit'}
+                                      {isSelected ? '当前选中' : '编辑'}
                                     </Button>
                                   </div>
                                 </div>
@@ -7157,7 +7012,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                       ) : (
                         <Empty
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="No providers are configured in workbench config."
+                          description="当前没有可用的提供方。"
                         />
                       )}
                     </div>
@@ -7176,70 +7031,69 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                           >
                             <div style={cardStackStyle}>
                               <Typography.Text strong>
-                                Provider detail
+                                提供方详情
                               </Typography.Text>
                               <Typography.Paragraph
                                 style={{ margin: 0 }}
                                 type="secondary"
                               >
-                                Editing {selectedProvider.providerName} inside the
-                                current Studio workbench config.
+                                正在编辑 {selectedProvider.providerName}。
                               </Typography.Paragraph>
                             </div>
                             <div style={cardListActionStyle}>
                               <Button danger onClick={onDeleteSelectedProvider}>
-                                Delete provider
+                                删除提供方
                               </Button>
                               <Button
                                 disabled={selectedProviderIsDefault}
                                 onClick={onSetDefaultProvider}
                               >
                                 {selectedProviderIsDefault
-                                  ? 'Default provider'
-                                  : 'Set as default'}
+                                  ? '默认提供方'
+                                  : '设为默认'}
                               </Button>
                             </div>
                           </div>
                           <div style={summaryMetricGridStyle}>
                             <StudioSummaryMetric
-                              label="Provider type"
+                              label="提供方类型"
                               tone="info"
                               value={selectedProviderTypeLabel}
                             />
                             <StudioSummaryMetric
-                              label="Default"
+                              label="默认"
                               tone={
                                 selectedProviderIsDefault
                                   ? 'success'
                                   : 'default'
                               }
-                              value={selectedProviderIsDefault ? 'Yes' : 'No'}
+                              value={selectedProviderIsDefault ? '是' : '否'}
                             />
                             <StudioSummaryMetric
-                              label="Connection"
+                              label="连接"
                               value={selectedProviderConnectionValue}
                               tone={selectedProviderConnectionTone}
                             />
                             <StudioSummaryMetric
-                              label="Credentials"
+                              label="凭证"
                               value={selectedProviderCredentialValue}
                               tone={selectedProviderCredentialTone}
                             />
                           </div>
                           <div style={summaryFieldGridStyle}>
                             <StudioSummaryField
-                              label="Display name"
-                              value={selectedProvider.displayName || 'n/a'}
+                              label="显示名称"
+                              value={selectedProvider.displayName || '暂无'}
                             />
                             <StudioSummaryField
-                              label="Model"
-                              value={selectedProvider.model || 'n/a'}
+                              label="模型"
+                              value={selectedProvider.model || '暂无'}
                             />
                           </div>
                           {selectedProvider.description ? (
                             <div>
                               <Typography.Text style={summaryFieldLabelStyle}>
-                                Description
+                                说明
                               </Typography.Text>
                               <Typography.Paragraph
                                 style={{ margin: '8px 0 0' }}
@@ -7251,11 +7105,11 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                           ) : null}
                           <StudioNoticeCard
                             type="info"
-                            title="Advanced connection settings"
-                            description="Connection endpoints, credentials, and workflow source wiring are kept in Advanced settings to keep the main workspace focused on daily authoring."
+                            title="连接配置"
+                            description="端点、密钥和工作流来源都在高级配置里维护。"
                             action={
                               <Button onClick={openAdvancedSection}>
-                                Connection settings
+                                连接设置
                               </Button>
                             }
                           />
@@ -7263,11 +7117,11 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
 
                         <div style={sectionPanelStyle}>
                           <Typography.Text strong>
-                            Basic provider details
+                            基础信息
                           </Typography.Text>
                           <div style={providerFormGridStyle}>
                             <div style={cardStackStyle}>
-                              <Typography.Text strong>Provider name</Typography.Text>
+                              <Typography.Text strong>提供方名称</Typography.Text>
                               <Input
                                 aria-label="Studio provider name"
                                 value={selectedProvider.providerName}
@@ -7300,7 +7154,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                               />
                             </div>
                             <div style={cardStackStyle}>
-                              <Typography.Text strong>Provider type</Typography.Text>
+                              <Typography.Text strong>提供方类型</Typography.Text>
                               <Select
                                 aria-label="Studio provider type"
                                 value={selectedProvider.providerType}
@@ -7351,7 +7205,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                               />
                             </div>
                             <div style={cardStackStyle}>
-                              <Typography.Text strong>Model</Typography.Text>
+                              <Typography.Text strong>模型</Typography.Text>
                               <Input
                                 aria-label="Studio provider model"
                                 value={selectedProvider.model}
@@ -7381,10 +7235,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                       </div>
                     ) : (
                       <div style={sectionPanelStyle}>
-                        <Typography.Text strong>Provider detail</Typography.Text>
+                        <Typography.Text strong>提供方详情</Typography.Text>
                         <Empty
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="Select a provider to edit or add a new one."
+                          description="先选择一个提供方，再查看和编辑详情。"
                         />
                       </div>
                     )}
@@ -7394,7 +7248,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
             ) : (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="Provider settings are unavailable right now."
+                description="当前还没有可用的提供方设置。"
               />
             )}
           </div>
@@ -7405,7 +7259,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
         label: (
           <span style={studioSettingsTabLabelStyle}>
             <FolderAddOutlined />
-            <span>Workflow Sources</span>
+            <span>工作流来源</span>
           </span>
         ),
         children: (
@@ -7420,21 +7274,14 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                 }}
               >
                 <div style={cardStackStyle}>
-                  <Typography.Text strong>Workflow sources</Typography.Text>
-                  <Typography.Paragraph
-                    style={{ margin: 0 }}
-                    type="secondary"
-                  >
-                    Review which workflow locations are available to this Studio
-                    workspace. Add and remove directory bindings from Advanced.
-                  </Typography.Paragraph>
+                  <Typography.Text strong>工作流来源</Typography.Text>
                 </div>
-                <Button onClick={openAdvancedSection}>Open Advanced</Button>
+                <Button onClick={openAdvancedSection}>打开高级配置</Button>
               </div>
               {workspaceSettings.isError ? (
                 <StudioNoticeCard
                   type="error"
-                  title="Failed to load workflow sources"
+                  title="读取工作流来源失败"
                   description={describeError(workspaceSettings.error)}
                 />
               ) : workspaceSettings.data ? (
@@ -7442,23 +7289,23 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                   {!canManageDirectories ? (
                     <StudioNoticeCard
                       type="info"
-                      title="Workflow source is bound to the current scope"
-                      description="Studio hides directory management when workflows are resolved from the active login scope."
+                      title="工作流来源绑定到当前团队"
+                      description="这里仅展示当前可见目录。"
                     />
                   ) : (
                     <StudioNoticeCard
                       type="info"
-                      title="Directory management stays in Advanced"
-                      description="This section shows what Studio can see today. Use Advanced to add or remove workspace directories."
+                      title="目录管理在高级配置中"
+                      description="这里只展示当前可见目录。"
                     />
                   )}
                   <div style={summaryMetricGridStyle}>
                     <StudioSummaryMetric
-                      label="Sources"
+                      label="来源数"
                       value={workflowDirectories.length}
                     />
                     <StudioSummaryMetric
-                      label="Mode"
+                      label="模式"
                       tone="info"
                       value={workflowSourcesLabel}
                     />
@@ -7479,11 +7326,11 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                                 </Typography.Text>
                                 <Typography.Text type="secondary">
                                   {directory.isBuiltIn
-                                    ? 'Built into this workspace'
-                                    : 'Added to this workspace'}
+                                    ? '内置目录'
+                                    : '工作区目录'}
                                 </Typography.Text>
                                 <Space wrap size={[6, 6]}>
-                                  {directory.isBuiltIn ? <Tag>built-in</Tag> : null}
+                                  {directory.isBuiltIn ? <Tag>内置</Tag> : null}
                                 </Space>
                               </div>
                             </div>
@@ -7503,14 +7350,14 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                   ) : (
                     <Empty
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="No workflow sources are configured."
+                      description="当前没有配置工作流来源。"
                     />
                   )}
                 </>
               ) : (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="Workflow sources are unavailable right now."
+                  description="当前无法读取工作流来源。"
                 />
               )}
             </div>
@@ -7522,7 +7369,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
         label: (
           <span style={studioSettingsTabLabelStyle}>
             <SafetyCertificateOutlined />
-            <span>Advanced</span>
+            <span>高级配置</span>
           </span>
         ),
         children: (
@@ -7530,29 +7377,22 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
             <div style={cardStackStyle}>
               <div style={sectionPanelStyle}>
                 <div style={cardStackStyle}>
-                  <Typography.Text strong>Advanced</Typography.Text>
-                  <Typography.Paragraph
-                    style={{ margin: 0 }}
-                    type="secondary"
-                  >
-                    Low-level controls for workflow directory bindings, provider
-                    endpoints, and stored secrets.
-                  </Typography.Paragraph>
+                  <Typography.Text strong>高级配置</Typography.Text>
                 </div>
                 <div style={summaryFieldGridStyle}>
-                  <StudioSummaryField label="Host mode" value={hostModeLabel} />
+                  <StudioSummaryField label="宿主模式" value={hostModeLabel} />
                   <StudioSummaryField
-                    label="Workflow mode"
+                    label="工作流模式"
                     value={workflowSourcesLabel}
                   />
                 </div>
               </div>
               <div style={sectionPanelStyle}>
-                <Typography.Text strong>Workflow source management</Typography.Text>
+                <Typography.Text strong>工作流来源管理</Typography.Text>
                 {workspaceSettings.isError ? (
                   <StudioNoticeCard
                     type="error"
-                    title="Failed to load workflow sources"
+                    title="读取工作流来源失败"
                     description={describeError(workspaceSettings.error)}
                   />
                 ) : workspaceSettings.data ? (
@@ -7560,17 +7400,17 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                     {!canManageDirectories ? (
                       <StudioNoticeCard
                         type="info"
-                        title="Workflow source is bound to the current scope"
-                        description="Studio hides directory management when workflows are resolved from the active login scope."
+                        title="工作流来源绑定到当前团队"
+                        description="当前不允许在这里直接维护目录。"
                       />
                     ) : null}
                     <div style={summaryMetricGridStyle}>
                       <StudioSummaryMetric
-                        label="Sources"
+                        label="来源数"
                         value={workspaceSettings.data.directories.length}
                       />
                       <StudioSummaryMetric
-                        label="Mode"
+                        label="模式"
                         tone="info"
                         value={workflowSourcesLabel}
                       />
@@ -7594,7 +7434,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                                   </Typography.Text>
                                   <Space wrap size={[6, 6]}>
                                     {directory.isBuiltIn ? (
-                                      <Tag>built-in</Tag>
+                                      <Tag>内置</Tag>
                                     ) : null}
                                   </Space>
                                 </div>
@@ -7608,7 +7448,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                                         onRemoveDirectory(directory.directoryId)
                                       }
                                     >
-                                      Remove
+                                      移除
                                     </Button>
                                   </div>
                                 ) : null}
@@ -7629,13 +7469,13 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                     ) : (
                       <Empty
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description="No workflow sources are configured."
+                        description="当前没有配置工作流来源。"
                       />
                     )}
                     {canManageDirectories ? (
                       <>
                         <Divider style={{ margin: 0 }}>
-                          Add workflow directory
+                          新增工作流目录
                         </Divider>
                         <div style={sectionPanelStyle}>
                           <Input
@@ -7648,7 +7488,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                           />
                           <Input
                             aria-label="Studio directory label"
-                            placeholder="optional label"
+                            placeholder="可选标签"
                             value={directoryLabel}
                             onChange={(event) =>
                               onSetDirectoryLabel(event.target.value)
@@ -7659,7 +7499,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                             loading={settingsPending}
                             onClick={onAddDirectory}
                           >
-                            Add directory
+                            新增目录
                           </Button>
                         </div>
                       </>
@@ -7668,38 +7508,38 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                 ) : (
                   <Empty
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="Workflow source management is unavailable right now."
+                    description="当前无法管理工作流来源。"
                   />
                 )}
               </div>
               <div style={sectionPanelStyle}>
-                <Typography.Text strong>Provider connection</Typography.Text>
+                <Typography.Text strong>提供方连接</Typography.Text>
                 {settings.isError ? (
                   <StudioNoticeCard
                     type="error"
-                    title="Failed to load provider settings"
+                    title="读取提供方配置失败"
                     description={describeError(settings.error)}
                   />
                 ) : selectedProvider ? (
                   <>
                     <StudioNoticeCard
                       type="info"
-                      title="Connection details are advanced-only"
-                      description={`Editing endpoint details for ${selectedProvider.providerName} is intentionally separated from the main workspace to reduce accidental changes.`}
+                      title="连接信息仅在高级配置里维护"
+                      description={`${selectedProvider.providerName} 的端点和密钥统一在这里维护。`}
                     />
                     <div style={summaryFieldGridStyle}>
                       <StudioSummaryField
-                        label="Provider"
+                        label="提供方"
                         value={selectedProvider.providerName}
                       />
                       <StudioSummaryField
-                        label="Provider type"
+                        label="提供方类型"
                         value={selectedProviderTypeLabel}
                       />
                     </div>
                     <div style={providerFormGridStyle}>
                       <div style={cardStackStyle}>
-                        <Typography.Text strong>Endpoint</Typography.Text>
+                        <Typography.Text strong>地址</Typography.Text>
                         <Input
                           aria-label="Studio provider endpoint"
                           value={selectedProvider.endpoint}
@@ -7728,26 +7568,26 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                 ) : (
                   <Empty
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="Select a provider in AI Providers to edit its connection details."
+                    description="先在 AI 提供方里选择一个提供方。"
                   />
                 )}
               </div>
               <div style={sectionPanelStyle}>
-                <Typography.Text strong>Provider secrets</Typography.Text>
+                <Typography.Text strong>提供方密钥</Typography.Text>
                 {settings.isError ? (
                   <StudioNoticeCard
                     type="error"
-                    title="Failed to load provider secrets"
+                    title="读取提供方密钥失败"
                     description={describeError(settings.error)}
                   />
                 ) : selectedProvider ? (
                   <>
                     <Space wrap size={[8, 8]}>
                       {selectedProvider.apiKeyConfigured ? (
-                        <Tag color="success">saved key configured</Tag>
+                        <Tag color="success">已保存密钥</Tag>
                       ) : null}
                       {selectedProvider.clearApiKeyRequested ? (
-                        <Tag color="warning">key will be cleared on save</Tag>
+                        <Tag color="warning">保存后将清除</Tag>
                       ) : null}
                       {selectedProvider.apiKeyConfigured ||
                       selectedProvider.clearApiKeyRequested ? (
@@ -7775,8 +7615,8 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                           }
                         >
                           {selectedProvider.clearApiKeyRequested
-                            ? 'Keep saved key'
-                            : 'Clear saved key'}
+                            ? '保留已保存密钥'
+                            : '清除已保存密钥'}
                         </Button>
                       ) : null}
                     </Space>
@@ -7785,10 +7625,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                       value={selectedProvider.apiKey}
                       placeholder={
                         selectedProvider.clearApiKeyRequested
-                          ? 'Saved key will be removed when you save'
+                          ? '保存时会移除当前密钥'
                           : selectedProvider.apiKeyConfigured
-                            ? 'Configured. Enter a new key to replace it'
-                            : 'optional'
+                            ? '当前已配置，输入新密钥后会替换'
+                            : '可选'
                       }
                       onChange={(event) =>
                         onSetSettingsDraft((current) =>
@@ -7811,14 +7651,13 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                       }
                     />
                     <Typography.Text type="secondary">
-                      Leave this blank to keep the saved secret. Enter a new
-                      value only when you want to replace it.
+                      留空表示保留当前已保存密钥。
                     </Typography.Text>
                   </>
                 ) : (
                   <Empty
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="Select a provider in AI Providers to manage its secrets."
+                    description="先在 AI 提供方里选择一个提供方。"
                   />
                 )}
               </div>
@@ -7879,10 +7718,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
     <div style={studioSurfaceStyle}>
       <div style={studioSurfaceHeaderStyle}>
         <div style={cardStackStyle}>
-          <Typography.Text strong>Workspace settings</Typography.Text>
-          <Typography.Text type="secondary">
-            Manage AI providers and review runtime and workflow setup.
-          </Typography.Text>
+          <Typography.Text strong>工作区设置</Typography.Text>
         </div>
         <Button
           type="primary"
@@ -7890,68 +7726,51 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           disabled={!settingsDirty || !settingsDraft}
           onClick={onSaveSettings}
         >
-          Save workspace settings
+          保存工作区设置
         </Button>
       </div>
       <div style={studioSurfaceBodyStyle}>
         {settingsDraft ? (
           <>
-            <div style={studioNoticeStripStyle}>
-              <StudioNoticeCard
-                type={settingsDirty ? 'warning' : 'success'}
-                title="Workspace settings"
-                description={
-                  settingsDirty
-                    ? 'You have unsaved workspace changes.'
-                    : 'Workspace settings are in sync.'
-                }
-              />
-              <StudioNoticeCard
-                title="Default AI provider"
-                description={
-                  settingsDraft.defaultProviderName
-                    ? `${settingsDraft.defaultProviderName} handles new authoring tasks by default.`
-                    : 'Choose a default provider before running AI-assisted authoring.'
-                }
-              />
-              {settingsNotice ? (
+            {settingsNotice ? (
+              <div style={studioNoticeStripStyle}>
                 <StudioNoticeCard
                   type={settingsNotice.type}
                   title={
                     settingsNotice.type === 'error'
-                      ? 'Config action failed'
-                      : 'Config updated'
+                      ? '配置操作失败'
+                      : '配置已更新'
                   }
                   description={settingsNotice.message}
                 />
-              ) : null}
-            </div>
+              </div>
+            ) : null}
             <div style={sectionPanelStyle}>
               <div style={summaryMetricGridStyle}>
-                <StudioSummaryMetric label="Providers" value={providers.length} />
+                <StudioSummaryMetric label="提供方" value={providers.length} />
                 <StudioSummaryMetric
-                  label="Default"
+                  label="默认"
                   tone="info"
-                  value={settingsDraft.defaultProviderName || 'n/a'}
+                  value={settingsDraft.defaultProviderName || '暂无'}
                 />
                 <StudioSummaryMetric
-                  label="Runtime"
+                  label="运行时"
                   tone={runtimeHealthTone}
                   value={runtimeHealthValue}
                 />
                 <StudioSummaryMetric
-                  label="Workflow sources"
+                  label="工作流来源"
                   value={workflowDirectories.length}
                 />
               </div>
               <div style={summaryFieldGridStyle}>
                 <StudioSummaryField
-                  label="Selected provider"
-                  value={selectedProvider?.providerName || 'None selected'}
+                  label="当前提供方"
+                  value={selectedProvider?.providerName || '未选择'}
                 />
-                <StudioSummaryField label="Host mode" value={hostModeLabel} />
+                <StudioSummaryField label="宿主模式" value={hostModeLabel} />
                 <StudioSummaryField
-                  label="Workflow mode"
+                  label="工作流模式"
                   value={workflowSourcesLabel}
                 />
               </div>

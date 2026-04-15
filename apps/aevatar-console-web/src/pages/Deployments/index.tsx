@@ -61,6 +61,7 @@ import {
 } from "@/shared/ui/aevatarWorkbench";
 import ConsoleMetricCard from "@/shared/ui/ConsoleMetricCard";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import { describeError } from "@/shared/ui/errorText";
 
 type DeploymentDrawerTab = "compare" | "rollback" | "weights";
 
@@ -158,12 +159,12 @@ function buildDeploymentItems(
       subtitle: `${service.namespace}/${service.serviceId}`,
       summary:
         service.deploymentId.trim().length > 0
-          ? `Deployment ${service.deploymentId} is serving revision ${
+          ? `部署 ${service.deploymentId} 正在提供版本 ${
               service.activeServingRevisionId ||
               service.defaultServingRevisionId ||
-              "n/a"
-            }.`
-          : "No active deployment has been assigned yet.",
+              "暂无"
+            }。`
+          : "暂无已启用部署。",
       title: service.displayName || service.serviceId,
       updatedAt: formatDateTime(service.updatedAt),
     }))
@@ -176,35 +177,35 @@ function buildRevisionSummary(
   if (!revision) {
     return [
       {
-        label: "Revision",
-        value: "Unavailable",
+        label: "版本",
+        value: "暂无",
       },
     ];
   }
 
   return [
     {
-      label: "Revision",
+      label: "版本",
       value: revision.revisionId,
     },
     {
-      label: "Status",
+      label: "状态",
       value: formatAevatarStatusLabel(revision.status || "unknown"),
     },
     {
-      label: "Endpoints",
+      label: "入口数",
       value: String(revision.endpoints.length),
     },
     {
-      label: "Artifact",
-      value: revision.artifactHash || "n/a",
+      label: "制品",
+      value: revision.artifactHash || "暂无",
     },
     {
-      label: "Prepared",
+      label: "准备时间",
       value: formatDateTime(revision.preparedAt),
     },
     {
-      label: "Published",
+      label: "发布时间",
       value: formatDateTime(revision.publishedAt),
     },
   ];
@@ -252,6 +253,47 @@ const MetricCard: React.FC<{
       <Typography.Text strong style={{ color: visual.valueColor }}>
         {value}
       </Typography.Text>
+    </div>
+  );
+};
+
+const DeploymentEmptyStateCard: React.FC<{
+  title: string;
+  description: string;
+  highlights?: Array<{ label: string; value: string }>;
+}> = ({ title, description, highlights = [] }) => {
+  const { token } = theme.useToken();
+  const surfaceToken = token as AevatarThemeSurfaceToken;
+
+  return (
+    <div
+      style={{
+        ...buildAevatarPanelStyle(surfaceToken, {
+          background: surfaceToken.colorFillAlter,
+          padding: 20,
+        }),
+        boxShadow: "none",
+      }}
+    >
+      <Space direction="vertical" size={14} style={{ display: "flex" }}>
+        <Space direction="vertical" size={4} style={{ display: "flex" }}>
+          <Typography.Text strong>{title}</Typography.Text>
+          <Typography.Text type="secondary">{description}</Typography.Text>
+        </Space>
+        {highlights.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+            }}
+          >
+            {highlights.map((item) => (
+              <MetricCard key={item.label} label={item.label} value={item.value} />
+            ))}
+          </div>
+        ) : null}
+      </Space>
     </div>
   );
 };
@@ -526,7 +568,7 @@ const DeploymentsPage: React.FC = () => {
   const deployMutation = useMutation({
     mutationFn: () => {
       if (!candidateRevisionId.trim()) {
-        throw new Error("Choose a candidate revision before starting a rollout.");
+        throw new Error("请先选择候选版本。");
       }
 
       return servicesApi.deployRevision(selectedServiceId, {
@@ -536,13 +578,13 @@ const DeploymentsPage: React.FC = () => {
     },
     onError: (error: Error) => {
       setNotice({
-        message: error.message || "Failed to dispatch the candidate revision.",
+        message: describeError(error, "发布候选版本失败。"),
         tone: "error",
       });
     },
     onSuccess: async () => {
       setNotice({
-        message: "Candidate revision accepted by the deployment control plane.",
+        message: "候选版本已进入部署流程。",
         tone: "success",
       });
       await invalidateDetailQueries();
@@ -559,13 +601,13 @@ const DeploymentsPage: React.FC = () => {
       }),
     onError: (error: Error) => {
       setNotice({
-        message: error.message || "Failed to update serving targets.",
+        message: describeError(error, "更新流量目标失败。"),
         tone: "error",
       });
     },
     onSuccess: async () => {
       setNotice({
-        message: "Serving targets accepted by the deployment control plane.",
+        message: "流量目标已更新。",
         tone: "success",
       });
       await invalidateDetailQueries();
@@ -576,7 +618,7 @@ const DeploymentsPage: React.FC = () => {
     mutationFn: async (kind: "advance" | "pause" | "resume" | "rollback") => {
       const rolloutId = rolloutQuery.data?.rolloutId;
       if (!rolloutId) {
-        throw new Error("No active rollout is available for this service.");
+        throw new Error("当前服务没有进行中的发布。");
       }
 
       if (kind === "advance") {
@@ -601,13 +643,13 @@ const DeploymentsPage: React.FC = () => {
     },
     onError: (error: Error) => {
       setNotice({
-        message: error.message || "Failed to dispatch rollout action.",
+        message: describeError(error, "发布操作失败。"),
         tone: "error",
       });
     },
     onSuccess: async () => {
       setNotice({
-        message: "Rollout action accepted by the serving control plane.",
+        message: "发布操作已生效。",
         tone: "success",
       });
       await invalidateDetailQueries();
@@ -617,7 +659,7 @@ const DeploymentsPage: React.FC = () => {
   const deactivateMutation = useMutation({
     mutationFn: () => {
       if (!selectedDeployment?.deploymentId.trim()) {
-        throw new Error("Select a deployment before deactivating it.");
+        throw new Error("请先选择部署。");
       }
 
       return servicesApi.deactivateDeployment(
@@ -628,13 +670,13 @@ const DeploymentsPage: React.FC = () => {
     },
     onError: (error: Error) => {
       setNotice({
-        message: error.message || "Failed to deactivate the selected deployment.",
+        message: describeError(error, "停用部署失败。"),
         tone: "error",
       });
     },
     onSuccess: async () => {
       setNotice({
-        message: "Deployment deactivation was accepted.",
+        message: "部署已停用。",
         tone: "warning",
       });
       await invalidateDetailQueries();
@@ -653,7 +695,7 @@ const DeploymentsPage: React.FC = () => {
               setSelectedDeploymentId(record.deploymentId);
             }}
           >
-            Details
+            详情
           </Button>,
         ],
       },
@@ -684,7 +726,7 @@ const DeploymentsPage: React.FC = () => {
             </Typography.Text>
             <Space wrap size={[8, 8]}>
               <Tag>{record.serviceKey}</Tag>
-              <Tag>{record.deploymentId || "Unassigned"}</Tag>
+              <Tag>{record.deploymentId || "未分配"}</Tag>
               <Tag>{record.activeRevisionId}</Tag>
             </Space>
           </div>
@@ -701,7 +743,7 @@ const DeploymentsPage: React.FC = () => {
         render: (_, record) => (
           <Space wrap size={[8, 8]}>
             <WorkbenchStatusTag domain="governance" status={record.status} />
-            {record.rolloutId ? <Tag color="blue">Rollout {record.rolloutId}</Tag> : null}
+            {record.rolloutId ? <Tag color="blue">发布 {record.rolloutId}</Tag> : null}
           </Space>
         ),
       },
@@ -710,7 +752,7 @@ const DeploymentsPage: React.FC = () => {
           <Space orientation="vertical" size={2}>
             <Typography.Text strong>{record.title}</Typography.Text>
             <Typography.Text type="secondary">
-              Last synced {record.updatedAt}
+              最近同步 {record.updatedAt}
             </Typography.Text>
           </Space>
         ),
@@ -737,7 +779,7 @@ const DeploymentsPage: React.FC = () => {
 
         <ServiceQueryCard
           draft={draft}
-          loadLabel="Load deployments"
+          loadLabel="加载部署"
           onChange={setDraft}
           onLoad={() => setQuery(trimServiceQuery(draft))}
           onReset={() => {
@@ -786,7 +828,7 @@ const DeploymentsPage: React.FC = () => {
               padding: 16,
             }}
             style={buildAevatarPanelStyle(surfaceToken)}
-            title="Deployments"
+            title="部署清单"
           >
             <ProList<DeploymentWorkbenchItem>
               dataSource={items}
@@ -796,9 +838,18 @@ const DeploymentsPage: React.FC = () => {
                 style: { borderRadius: 12 },
               }}
               locale={{
-                emptyText: servicesQuery.isLoading
-                  ? "Loading..."
-                  : "No deployments",
+                emptyText: servicesQuery.isLoading ? (
+                  "加载中..."
+                ) : (
+                  <DeploymentEmptyStateCard
+                    description="先选择一个团队上下文，或等第一个版本开始部署。"
+                    highlights={[
+                      { label: "服务数", value: "0" },
+                      { label: "活跃部署", value: "0" },
+                    ]}
+                    title="当前还没有部署"
+                  />
+                ),
               }}
               metas={listMetas}
               pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -823,20 +874,20 @@ const DeploymentsPage: React.FC = () => {
                         icon={<PercentageOutlined />}
                         onClick={() => openDrawer("weights")}
                       >
-                        Weights
+                        权重
                       </Button>
                       <Button
                         icon={<SendOutlined />}
                         onClick={() => openDrawer("compare")}
                       >
-                        Rollout
+                        发布
                       </Button>
                       <Button
                         danger
                         icon={<RollbackOutlined />}
                         onClick={() => openDrawer("rollback")}
                       >
-                        Rollback
+                        回滚
                       </Button>
                     </Space>
                   }
@@ -849,21 +900,21 @@ const DeploymentsPage: React.FC = () => {
                     }}
                   >
                     <MetricCard
-                      label="Active revision"
+                      label="当前版本"
                       tone="success"
-                      value={activeRevisionId || "n/a"}
+                      value={activeRevisionId || "暂无"}
                     />
                     <MetricCard
-                      label="Deployment status"
+                      label="部署状态"
                       tone="info"
-                      value={serviceDetailQuery.data.deploymentStatus || "n/a"}
+                      value={serviceDetailQuery.data.deploymentStatus || "暂无"}
                     />
                     <MetricCard
-                      label="Current rollout"
-                      value={rolloutQuery.data?.rolloutId || "No rollout"}
+                      label="当前发布"
+                      value={rolloutQuery.data?.rolloutId || "暂无发布"}
                     />
                     <MetricCard
-                      label="Endpoints"
+                      label="入口数"
                       value={String(serviceDetailQuery.data.endpoints.length)}
                     />
                   </div>
@@ -880,14 +931,14 @@ const DeploymentsPage: React.FC = () => {
                   <ProCard
                     bodyStyle={{ display: "flex", flexDirection: "column", gap: 16 }}
                     style={buildAevatarPanelStyle(surfaceToken)}
-                    title="Compare"
+                    title="版本对比"
                     extra={
                       <Select
                         options={(revisionsQuery.data?.revisions ?? []).map((revision) => ({
                           label: revision.revisionId,
                           value: revision.revisionId,
                         }))}
-                        placeholder="Choose candidate revision"
+                        placeholder="选择候选版本"
                         style={{ minWidth: 220 }}
                         value={candidateRevisionId || undefined}
                         onChange={setCandidateRevisionId}
@@ -902,11 +953,11 @@ const DeploymentsPage: React.FC = () => {
                       }}
                     >
                       <RevisionSummaryCard
-                        label="Current Serving Revision"
+                        label="当前版本"
                         revision={activeRevision}
                       />
                       <RevisionSummaryCard
-                        label="Candidate Revision"
+                        label="候选版本"
                         revision={candidateRevision}
                       />
                     </div>
@@ -921,14 +972,14 @@ const DeploymentsPage: React.FC = () => {
                               )
                               .join(", ")}`,
                         )
-                        .join(" | ") || "No traffic"}
+                        .join(" | ") || "暂无流量信息"}
                     </Typography.Text>
                   </ProCard>
 
                   <ProCard
                     bodyStyle={{ display: "flex", flexDirection: "column", gap: 12 }}
                     style={buildAevatarPanelStyle(surfaceToken)}
-                    title="Summary"
+                    title="当前部署"
                   >
                     {selectedDeployment ? (
                       <>
@@ -941,23 +992,23 @@ const DeploymentsPage: React.FC = () => {
                           <Tag>{selectedDeployment.revisionId}</Tag>
                         </Space>
                         <Typography.Text>
-                          Actor {selectedDeployment.primaryActorId}
+                          主成员 {selectedDeployment.primaryActorId}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          Activated {formatDateTime(selectedDeployment.activatedAt)}
+                          启用时间 {formatDateTime(selectedDeployment.activatedAt)}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          Updated {formatDateTime(selectedDeployment.updatedAt)}
+                          最近更新 {formatDateTime(selectedDeployment.updatedAt)}
                         </Typography.Text>
                         <MetricCard
-                          label="Current stage"
+                          label="当前阶段"
                           tone="warning"
                           value={
                             currentStage
                               ? `${currentStage.stageIndex + 1} / ${
                                   rolloutQuery.data?.stages.length || 1
                                 }`
-                              : "No stage"
+                              : "暂无阶段"
                           }
                         />
                         <Button
@@ -966,13 +1017,23 @@ const DeploymentsPage: React.FC = () => {
                           loading={deactivateMutation.isPending}
                           onClick={() => deactivateMutation.mutate()}
                         >
-                          Deactivate deployment
+                          停用部署
                         </Button>
                       </>
                     ) : (
-                      <Empty
-                        description="Select a deployment"
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      <DeploymentEmptyStateCard
+                        description="当前服务还没有已启用部署，发布第一个版本后会在这里看到状态、阶段和停用入口。"
+                        highlights={[
+                          {
+                            label: "当前版本",
+                            value: activeRevisionId || "待发布",
+                          },
+                          {
+                            label: "发布阶段",
+                            value: rolloutQuery.data?.rolloutId ? "进行中" : "未开始",
+                          },
+                        ]}
+                        title="当前还没有已启用部署"
                       />
                     )}
                   </ProCard>
@@ -980,9 +1041,14 @@ const DeploymentsPage: React.FC = () => {
               </>
             ) : (
               <ProCard style={buildAevatarPanelStyle(surfaceToken)}>
-                <Empty
-                  description="Select a deployment"
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                <DeploymentEmptyStateCard
+                  description="先从左侧部署清单选择一个服务，再查看版本、权重、发布和回滚。"
+                  highlights={[
+                    { label: "版本对比", value: "待选择" },
+                    { label: "流量权重", value: "待选择" },
+                    { label: "回滚操作", value: "待选择" },
+                  ]}
+                  title="还没有选中部署"
                 />
               </ProCard>
             )}
@@ -993,7 +1059,7 @@ const DeploymentsPage: React.FC = () => {
       <Drawer
         open={drawerState.open}
         size="large"
-        title="Deployment Controls"
+        title="部署操作"
         styles={{
           body: aevatarDrawerBodyStyle,
           wrapper: {
@@ -1053,7 +1119,7 @@ const DeploymentsPage: React.FC = () => {
                       <ProCard
                         bodyStyle={{ display: "flex", flexDirection: "column", gap: 12 }}
                         style={buildAevatarPanelStyle(surfaceToken)}
-                        title="Candidate"
+                        title="候选版本"
                       >
                         <Select
                           options={(revisionsQuery.data?.revisions ?? []).map((revision) => ({
@@ -1062,7 +1128,7 @@ const DeploymentsPage: React.FC = () => {
                             )}`,
                             value: revision.revisionId,
                           }))}
-                          placeholder="Choose candidate revision"
+                          placeholder="选择候选版本"
                           value={candidateRevisionId || undefined}
                           onChange={setCandidateRevisionId}
                         />
@@ -1076,15 +1142,15 @@ const DeploymentsPage: React.FC = () => {
                           onClick={() => deployMutation.mutate()}
                           type="primary"
                         >
-                          Deploy candidate revision
+                          发布候选版本
                         </Button>
                       </ProCard>
                       <RevisionSummaryCard
-                        label="Current Serving Revision"
+                        label="当前版本"
                         revision={activeRevision}
                       />
                       <RevisionSummaryCard
-                        label="Candidate Revision"
+                        label="候选版本"
                         revision={candidateRevision}
                       />
                     </div>
@@ -1096,18 +1162,18 @@ const DeploymentsPage: React.FC = () => {
                       }}
                     >
                       <TargetGroupCard
-                        label="Baseline"
+                        label="基线"
                         targets={rolloutQuery.data?.baselineTargets ?? []}
                       />
                       <TargetGroupCard
-                        label="Canary / Active Stage"
+                        label="灰度 / 当前阶段"
                         targets={currentStage?.targets ?? servingQuery.data?.targets ?? []}
                       />
                     </div>
                   </div>
                 ),
                 key: "compare",
-                        label: "Compare",
+                label: "对比",
               },
               {
                 children: (
@@ -1142,7 +1208,7 @@ const DeploymentsPage: React.FC = () => {
                               }}
                             >
                               {target.enabledEndpointIds?.join(", ") ||
-                                "All endpoints enabled"}
+                                "已开启全部入口"}
                             </Typography.Paragraph>
                           </div>
                           <InputNumber
@@ -1181,12 +1247,12 @@ const DeploymentsPage: React.FC = () => {
                       ))
                     ) : (
                       <Empty
-                        description="No targets"
+                        description="暂无目标"
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     )}
                     <Input.TextArea
-                      placeholder="Reason for this canary or weight change"
+                      placeholder="填写本次权重调整原因"
                       rows={3}
                       value={drawerReason}
                       onChange={(event) => setDrawerReason(event.target.value)}
@@ -1197,12 +1263,12 @@ const DeploymentsPage: React.FC = () => {
                       onClick={() => weightsMutation.mutate()}
                       type="primary"
                     >
-                      Apply weights
+                      应用权重
                     </Button>
                   </div>
                 ),
                 key: "weights",
-                label: "Weights",
+                label: "权重",
               },
               {
                 children: (
@@ -1214,12 +1280,12 @@ const DeploymentsPage: React.FC = () => {
                     }}
                   >
                     <MetricCard
-                      label="Rollout"
+                      label="发布单"
                       tone="warning"
-                      value={rolloutQuery.data?.rolloutId || "No active rollout"}
+                      value={rolloutQuery.data?.rolloutId || "暂无进行中的发布"}
                     />
                     <Input.TextArea
-                      placeholder="Reason for pause or rollback"
+                      placeholder="填写暂停或回滚原因"
                       rows={3}
                       value={drawerReason}
                       onChange={(event) => setDrawerReason(event.target.value)}
@@ -1231,21 +1297,21 @@ const DeploymentsPage: React.FC = () => {
                         onClick={() => rolloutMutation.mutate("advance")}
                         type="primary"
                       >
-                        Advance rollout
+                        推进发布
                       </Button>
                       <Button
                         icon={<PauseCircleOutlined />}
                         loading={rolloutMutation.isPending}
                         onClick={() => rolloutMutation.mutate("pause")}
                       >
-                        Pause
+                        暂停
                       </Button>
                       <Button
                         icon={<ReloadOutlined />}
                         loading={rolloutMutation.isPending}
                         onClick={() => rolloutMutation.mutate("resume")}
                       >
-                        Resume
+                        继续
                       </Button>
                       <Button
                         danger
@@ -1253,13 +1319,13 @@ const DeploymentsPage: React.FC = () => {
                         loading={rolloutMutation.isPending}
                         onClick={() => rolloutMutation.mutate("rollback")}
                       >
-                        Rollback rollout
+                        回滚发布
                       </Button>
                     </Space>
                   </div>
                 ),
                 key: "rollback",
-                label: "Rollback",
+                label: "回滚",
               },
             ]}
             onChange={(key) =>
@@ -1317,7 +1383,7 @@ const RevisionSummaryCard: React.FC<{
         </>
       ) : (
         <Typography.Text type="secondary">
-          No revision selected for this side of the compare view.
+          当前侧还没有可对比的版本。
         </Typography.Text>
       )}
     </div>
@@ -1366,7 +1432,7 @@ const TargetGroupCard: React.FC<{
           </div>
         ))
       ) : (
-        <Typography.Text type="secondary">No targets materialized.</Typography.Text>
+        <Typography.Text type="secondary">暂无可见目标。</Typography.Text>
       )}
     </div>
   );

@@ -54,25 +54,25 @@ function getStudioStatusBannerAccent(
       return {
         background: 'rgba(246, 255, 237, 0.96)',
         borderColor: 'rgba(82, 196, 26, 0.28)',
-        label: 'Success',
+        label: '完成',
       };
     case 'warning':
       return {
         background: 'rgba(255, 251, 230, 0.96)',
         borderColor: 'rgba(250, 173, 20, 0.28)',
-        label: 'Warning',
+        label: '提醒',
       };
     case 'error':
       return {
         background: 'rgba(255, 241, 240, 0.96)',
         borderColor: 'rgba(255, 77, 79, 0.28)',
-        label: 'Error',
+        label: '异常',
       };
     default:
       return {
         background: 'rgba(240, 245, 255, 0.96)',
         borderColor: 'rgba(22, 119, 255, 0.24)',
-        label: 'Info',
+        label: '信息',
       };
   }
 }

@@ -39,15 +39,15 @@ describe('ActorsPage', () => {
     );
 
     expect(container.textContent).toContain('Aevatar / Platform');
-    expect(container.textContent).toContain('Topology');
-    expect(container.textContent).toContain('Search');
-    expect(container.textContent).toContain('Actors');
-    expect(container.textContent).toContain('可见 Actor');
-    expect(container.textContent).toContain('当前焦点');
-    expect(screen.getByPlaceholderText('Actor ID')).toBeTruthy();
-    expect(screen.getByPlaceholderText('Filter actors')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Reset' })).toBeTruthy();
-    expect(container.textContent).toContain('No actors');
+    expect(container.textContent).toContain('事件拓扑');
+    expect(container.textContent).toContain('筛选条件');
+    expect(container.textContent).toContain('团队成员');
+    expect(container.textContent).toContain('可见成员');
+    expect(container.textContent).toContain('当前焦点成员');
+    expect(screen.getByPlaceholderText('成员 ID')).toBeTruthy();
+    expect(screen.getByPlaceholderText('过滤成员')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /重\s*置/ })).toBeTruthy();
+    expect(container.textContent).toContain('当前还没有可见成员');
     expect(container.textContent).not.toContain('Actor Focus');
     expect(container.textContent).not.toContain('Observed Actors');
   });
@@ -95,7 +95,7 @@ describe('ActorsPage', () => {
 
     renderWithQueryClient(React.createElement(ActorsPage));
 
-    fireEvent.change(screen.getByPlaceholderText('Actor ID'), {
+    fireEvent.change(screen.getByPlaceholderText('成员 ID'), {
       target: { value: 'actor://selected' },
     });
 
@@ -104,11 +104,11 @@ describe('ActorsPage', () => {
         'actor://selected',
       );
     });
-    expect(await screen.findByText('Summary')).toBeTruthy();
-    expect(screen.getByText('Timeline')).toBeTruthy();
-    expect(screen.getAllByText('Topology').length).toBeGreaterThan(0);
+    expect(await screen.findByText('当前状态')).toBeTruthy();
+    expect(screen.getByText('事件流')).toBeTruthy();
+    expect(screen.getByText('拓扑概览')).toBeTruthy();
     expect(screen.getAllByText('SupportWorkflow').length).toBeGreaterThan(0);
-    expect(screen.getByText('Last output')).toBeTruthy();
+    expect(screen.getByText('最近输出')).toBeTruthy();
     expect(screen.getByText('Completed successfully.')).toBeTruthy();
   });
 

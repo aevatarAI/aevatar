@@ -37,6 +37,7 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import ConsoleMetricCard from "@/shared/ui/ConsoleMetricCard";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import { describeError } from "@/shared/ui/errorText";
 import {
   codeBlockStyle,
   embeddedPanelStyle,
@@ -134,6 +135,9 @@ const EndpointRow: React.FC<{
       }}
     >
       {endpoint.requestTypeUrl || endpoint.endpointId}
+    </Typography.Text>
+    <Typography.Text type="secondary">
+      {endpoint.responseTypeUrl || "暂无响应契约"}
     </Typography.Text>
   </div>
 );
@@ -236,7 +240,7 @@ const ServicesPage: React.FC = () => {
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
-      title="Services"
+      title="服务"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <ServiceQueryCard
@@ -281,17 +285,14 @@ const ServicesPage: React.FC = () => {
         <AevatarPanel
           layoutMode="document"
           padding={0}
-          title="Services"
+          title="服务清单"
         >
           {servicesQuery.error ? (
             <Alert
-              title={
-                servicesQuery.error instanceof Error
-                  ? servicesQuery.error.message
-                  : "Failed to load services."
-              }
+              description="请稍后刷新，或先切换到其他团队上下文。"
               showIcon
-              type="error"
+              title={describeError(servicesQuery.error, "服务目录暂时不可用。")}
+              type="warning"
             />
           ) : null}
 
@@ -307,7 +308,7 @@ const ServicesPage: React.FC = () => {
               >
                 <thead>
                   <tr>
-                    {["Status", "Name", "Identity", "Deployment", "Endpoints", "Updated", "Actions"].map(
+                    {["状态", "名称", "标识", "部署", "入口", "更新时间", "操作"].map(
                       (label) => (
                         <th
                           key={label}
@@ -380,9 +381,9 @@ const ServicesPage: React.FC = () => {
                           padding: "12px 14px",
                           verticalAlign: "top",
                         }}
-                      >
-                        {service.deploymentId || "n/a"}
-                      </td>
+                        >
+                          {service.deploymentId || "暂无"}
+                        </td>
                       <td
                         style={{
                           borderBottom: "1px solid #f5f5f5",
@@ -416,7 +417,7 @@ const ServicesPage: React.FC = () => {
                             onClick={() => setSelectedServiceId(service.serviceId)}
                             size="small"
                           >
-                            Details
+                            详情
                           </Button>
                           <Button
                             onClick={() =>
@@ -432,7 +433,7 @@ const ServicesPage: React.FC = () => {
                             }
                             size="small"
                           >
-                            Governance
+                            治理
                           </Button>
                         </Space>
                       </td>
@@ -443,7 +444,7 @@ const ServicesPage: React.FC = () => {
             </div>
           ) : (
             <Empty
-              description="No services"
+              description="暂无服务"
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               style={{ padding: 24 }}
             />
@@ -468,7 +469,7 @@ const ServicesPage: React.FC = () => {
                   )
                 }
               >
-                Rollout
+                发布管理
               </Button>
               {selectedService.primaryActorId ? (
                 <Button
@@ -480,7 +481,7 @@ const ServicesPage: React.FC = () => {
                     )
                   }
                 >
-                  Runtime
+                  运行记录
                 </Button>
               ) : null}
             </Space>
@@ -492,19 +493,19 @@ const ServicesPage: React.FC = () => {
         subtitle={
           selectedService
             ? `${selectedService.namespace}/${selectedService.serviceId}`
-            : "Services"
+            : "服务"
         }
-        title={selectedService?.displayName || selectedServiceId || "Service"}
+        title={selectedService?.displayName || selectedServiceId || "服务"}
       >
         {!selectedService ? (
-          <AevatarInspectorEmpty description="Select a service" />
+          <AevatarInspectorEmpty description="先从服务清单选择一个服务" />
         ) : (
           <>
-            <AevatarPanel title="Summary">
+            <AevatarPanel title="当前信息">
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
                   <Typography.Text style={summaryFieldLabelStyle}>
-                    Service key
+                    服务 Key
                   </Typography.Text>
                   <div
                     style={{
@@ -520,30 +521,30 @@ const ServicesPage: React.FC = () => {
 
                 <div style={summaryFieldGridStyle}>
                   <SummaryField
-                    label="Serving revision"
+                    label="服务版本"
                     value={
                       selectedService.activeServingRevisionId ||
                       selectedService.defaultServingRevisionId ||
-                      "n/a"
+                      "暂无"
                     }
                   />
                   <SummaryField
-                    label="Deployment"
-                    value={selectedService.deploymentId || "n/a"}
+                    label="当前部署"
+                    value={selectedService.deploymentId || "暂无"}
                   />
                   <SummaryField
-                    label="Primary actor"
-                    value={selectedService.primaryActorId || "n/a"}
+                    label="主成员"
+                    value={selectedService.primaryActorId || "暂无"}
                   />
                   <SummaryField
-                    label="Updated"
+                    label="最近更新"
                     value={formatDateTime(selectedService.updatedAt)}
                   />
                 </div>
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Endpoints">
+            <AevatarPanel title="入口">
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {selectedService.endpoints.length > 0 ? (
                   selectedService.endpoints.map((endpoint) => (
@@ -551,14 +552,14 @@ const ServicesPage: React.FC = () => {
                   ))
                 ) : (
                   <Empty
-                    description="No endpoints"
+                    description="暂无入口"
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 )}
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Deployments">
+            <AevatarPanel title="部署与版本">
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <RolloutDigestSection
                   activeDeployment={activeDeployment}
@@ -592,7 +593,7 @@ const RevisionDigestCard: React.FC<{
       <AevatarStatusTag domain="governance" status={revision.status || "draft"} />
     </Space>
     <Typography.Text style={summaryFieldLabelStyle}>
-      {revision.implementationKind || "workflow"}
+      {revision.implementationKind || "工作流"}
     </Typography.Text>
     <Typography.Text
       style={{
@@ -602,10 +603,10 @@ const RevisionDigestCard: React.FC<{
         overflowWrap: "anywhere",
       }}
     >
-      {revision.artifactHash || "n/a"}
+      {revision.artifactHash || "暂无"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Published {formatDateTime(revision.publishedAt)}
+      发布时间 {formatDateTime(revision.publishedAt)}
     </Typography.Text>
   </div>
 );
@@ -620,13 +621,13 @@ const DeploymentDigestCard: React.FC<{
       <AevatarStatusTag domain="governance" status={deployment.status || "pending"} />
     </Space>
     <Typography.Text type="secondary">
-      Revision {deployment.revisionId || "n/a"}
+      版本 {deployment.revisionId || "暂无"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Actor {deployment.primaryActorId || "n/a"}
+      主成员 {deployment.primaryActorId || "暂无"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Activated {formatDateTime(deployment.activatedAt)}
+      启用时间 {formatDateTime(deployment.activatedAt)}
     </Typography.Text>
   </div>
 );
@@ -653,15 +654,15 @@ const RolloutDigestSection: React.FC<{
       }}
     >
       <DrawerMetric
-        label="Active deployment"
-        value={activeDeployment?.deploymentId || "n/a"}
+        label="当前部署"
+        value={activeDeployment?.deploymentId || "暂无"}
       />
       <DrawerMetric
-        label="Latest revision"
-        value={latestRevision?.revisionId || "n/a"}
+        label="最新版本"
+        value={latestRevision?.revisionId || "暂无"}
       />
-      <DrawerMetric label="Traffic" value={traffic.length} />
-      <DrawerMetric label="Weights" value={`${dominantTrafficWeight}%`} />
+      <DrawerMetric label="入口数" value={traffic.length} />
+      <DrawerMetric label="最大流量权重" value={`${dominantTrafficWeight}%`} />
     </div>
   );
 };
