@@ -578,7 +578,7 @@ describe("TeamDetailPage", () => {
   it("returns to the teams list when clicking the breadcrumb teams link", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("link", { name: "Teams" }));
 
     await waitFor(() => {
@@ -590,7 +590,7 @@ describe("TeamDetailPage", () => {
   it("returns to the teams list when clicking the breadcrumb aevatar link", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
 
     await waitFor(() => {
@@ -602,7 +602,7 @@ describe("TeamDetailPage", () => {
   it("switches tabs inside the detail page", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "连接器" }));
 
     expect(await screen.findByText("当前连接方式")).toBeTruthy();
@@ -615,7 +615,7 @@ describe("TeamDetailPage", () => {
   it("shows a team-first configuration view", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "配置" }));
 
     expect(await screen.findByText("当前配置主线")).toBeTruthy();
@@ -629,7 +629,7 @@ describe("TeamDetailPage", () => {
   it("shows a readable team members view", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
     expect(await screen.findByText("团队结构")).toBeTruthy();
@@ -641,7 +641,7 @@ describe("TeamDetailPage", () => {
   it("shows a team-first event stream with member mapping", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
 
     expect(await screen.findByText("当前任务事件流")).toBeTruthy();
@@ -654,7 +654,7 @@ describe("TeamDetailPage", () => {
   it("switches runs inside the event stream", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
     await screen.findByText("当前任务事件流");
 
@@ -673,7 +673,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("运行摘要")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "服务映射" })).toBeTruthy();
     expect(screen.queryByText("部分团队信号暂不可用")).toBeNull();
     expect(screen.queryByText("最近团队运行信号暂时无法加载。")).toBeNull();
     expect(
@@ -684,7 +684,7 @@ describe("TeamDetailPage", () => {
   it("opens a playback run replay with observed session context", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
     await screen.findAllByText(/risk_review/);
     fireEvent.click(screen.getAllByRole("button", { name: "本次对话" })[0]);
@@ -708,7 +708,7 @@ describe("TeamDetailPage", () => {
   it("opens runtime explorer from the service mapping action", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
     await screen.findByText("团队事件路径");
     fireEvent.click(screen.getAllByRole("button", { name: "服务映射" })[0]);
@@ -726,7 +726,7 @@ describe("TeamDetailPage", () => {
   it("opens Team Builder in the current team context from the top actions", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "Team Builder" }));
 
     await waitFor(() => {
