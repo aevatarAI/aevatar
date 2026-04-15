@@ -395,7 +395,7 @@ public static class ScopeGAgentEndpoints
                 chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
 
             // Forward the user's preferred model from their config.
-            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
             if (userConfigStore != null)
             {
                 try

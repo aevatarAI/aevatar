@@ -19,6 +19,7 @@ using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
@@ -131,6 +132,11 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserConfigCurrentStateDocument>>().Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
         }
         else
         {
@@ -155,6 +161,10 @@ public static class ServiceCollectionExtensions
                 keyFormatter: key => key,
                 defaultSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                defaultSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
                 defaultSortSelector: readModel => readModel.UpdatedAt);
