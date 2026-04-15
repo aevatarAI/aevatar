@@ -189,6 +189,10 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(ownerNyxUserId))
             return """{"error":"Could not resolve current NyxID user id"}""";
 
+        var gitHubAuthorizationResponse = await BuildGitHubAuthorizationResponseAsync(nyxClient, token, ct);
+        if (!string.IsNullOrWhiteSpace(gitHubAuthorizationResponse))
+            return gitHubAuthorizationResponse;
+
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
         var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
@@ -240,13 +244,15 @@ public sealed class AgentBuilderTool : IAgentTool
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
 
+        await EnsureAgentRegistryProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
             versionBefore,
             entry => string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
                      string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
-            ct);
+            ct,
+            maxAttempts: args.Bool("run_immediately") == true ? 20 : 10);
 
         return JsonSerializer.Serialize(new
         {
@@ -353,13 +359,15 @@ public sealed class AgentBuilderTool : IAgentTool
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
 
+        await EnsureAgentRegistryProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
             versionBefore,
             entry => string.Equals(entry.AgentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal) &&
                      string.Equals(entry.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.Ordinal),
-            ct);
+            ct,
+            maxAttempts: args.Bool("run_immediately") == true ? 20 : 10);
 
         if (args.Bool("run_immediately") == true && confirmed)
         {
@@ -381,7 +389,9 @@ public sealed class AgentBuilderTool : IAgentTool
             api_key_id = apiKeyId,
             note = confirmed
                 ? string.Empty
-                : "Agent initialization accepted but registry projection is not yet confirmed. Immediate approval delivery is deferred until the registry projection becomes visible.",
+                : args.Bool("run_immediately") == true
+                    ? "Agent initialization accepted but registry projection is not yet confirmed, so the immediate run was not triggered. Use Run Now after the agent appears."
+                    : "Agent initialization accepted but registry projection is not yet confirmed.",
         });
     }
 
@@ -678,12 +688,14 @@ public sealed class AgentBuilderTool : IAgentTool
         string agentId,
         long versionBefore,
         Func<AgentRegistryEntry, bool> predicate,
-        CancellationToken ct)
+        CancellationToken ct,
+        int maxAttempts = 10,
+        int delayMilliseconds = 500)
     {
-        for (var attempt = 0; attempt < 10; attempt++)
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(500, ct);
+                await Task.Delay(delayMilliseconds, ct);
 
             var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
             if (versionAfter <= versionBefore)
@@ -695,6 +707,15 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         return false;
+    }
+
+    private async Task EnsureAgentRegistryProjectionAsync(CancellationToken ct)
+    {
+        var projectionPort = _serviceProvider.GetService<AgentRegistryProjectionPort>();
+        if (projectionPort is null)
+            return;
+
+        await projectionPort.EnsureProjectionForActorAsync(AgentRegistryGAgent.WellKnownId, ct);
     }
 
     private async Task<AgentRegistryEntry?> WaitForAgentStatusAsync(
@@ -831,6 +852,69 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
+    private async Task<string?> BuildGitHubAuthorizationResponseAsync(
+        NyxIdApiClient client,
+        string token,
+        CancellationToken ct)
+    {
+        var providerTokensResponse = await client.ListProviderTokensAsync(token, ct);
+        if (IsErrorPayload(providerTokensResponse))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Could not verify GitHub authorization status from NyxID providers.",
+            });
+        }
+
+        if (HasConnectedGitHubProvider(providerTokensResponse))
+            return null;
+
+        var catalogResponse = await client.GetCatalogEntryAsync(token, "api-github", ct);
+        if (IsErrorPayload(catalogResponse))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "GitHub provider configuration is not available in the NyxID catalog.",
+            });
+        }
+
+        if (!TryParseGitHubCatalogEntry(catalogResponse, out var providerId, out var providerType, out var credentialMode, out var catalogError))
+            return JsonSerializer.Serialize(new { error = catalogError });
+
+        if (!string.Equals(providerType, "oauth2", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = $"GitHub provider requires unsupported connection mode '{providerType ?? "unknown"}'.",
+            });
+        }
+
+        if (string.Equals(credentialMode, "user", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "GitHub provider requires user-managed credentials and is not yet supported by the Day One card flow.",
+            });
+        }
+
+        var connectResponse = await client.InitiateOAuthConnectAsync(token, providerId!, ct);
+        if (IsErrorPayload(connectResponse))
+            return connectResponse;
+
+        if (!TryParseAuthorizationUrl(connectResponse, out var authorizationUrl, out var authError))
+            return JsonSerializer.Serialize(new { error = authError });
+
+        return JsonSerializer.Serialize(new
+        {
+            status = "oauth_required",
+            template = "daily_report",
+            provider = "GitHub",
+            provider_id = providerId,
+            authorization_url = authorizationUrl,
+            note = "Connect GitHub in NyxID, then return to Feishu and submit the daily report form again.",
+        });
+    }
+
     private static bool TryParseApiKeyCreateResponse(
         string response,
         out string? apiKeyId,
@@ -887,8 +971,109 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
+    private static bool HasConnectedGitHubProvider(string response)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+            foreach (var element in EnumerateObjects(doc.RootElement))
+            {
+                if (!LooksLikeGitHubProvider(element))
+                    continue;
+
+                if (TryReadBoolean(element, "connected", "is_connected", "authorized", "has_token") == false)
+                    return false;
+
+                var status = NormalizeOptional(ReadStringDeep(element, 2, "status", "token_status", "connection_status"));
+                if (IsDisconnectedProviderStatus(status))
+                    return false;
+
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return false;
+    }
+
+    private static bool IsDisconnectedProviderStatus(string? status) =>
+        status != null &&
+        (
+            status.Equals("disconnected", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("missing", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("expired", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("pending", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("not_connected", StringComparison.OrdinalIgnoreCase)
+        );
+
+    private static bool TryParseGitHubCatalogEntry(
+        string response,
+        out string? providerId,
+        out string? providerType,
+        out string? credentialMode,
+        out string? error)
+    {
+        providerId = null;
+        providerType = null;
+        credentialMode = null;
+        error = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+            providerId = ReadStringDeep(doc.RootElement, 3, "provider_config_id", "provider_id");
+            providerType = ReadStringDeep(doc.RootElement, 3, "provider_type");
+            credentialMode = ReadStringDeep(doc.RootElement, 3, "credential_mode");
+
+            if (string.IsNullOrWhiteSpace(providerId))
+            {
+                error = "GitHub catalog entry did not include provider_config_id.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static bool TryParseAuthorizationUrl(
+        string response,
+        out string? authorizationUrl,
+        out string? error)
+    {
+        authorizationUrl = null;
+        error = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+            authorizationUrl = ReadStringDeep(doc.RootElement, 3, "authorization_url", "auth_url", "url");
+            if (string.IsNullOrWhiteSpace(authorizationUrl))
+            {
+                error = "NyxID OAuth connect response did not include an authorization URL.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     private static string? ReadString(JsonElement element, params string[] names)
     {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
         foreach (var name in names)
         {
             if (!element.TryGetProperty(name, out var property))
@@ -902,6 +1087,100 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         return null;
+    }
+
+    private static string? ReadStringDeep(JsonElement element, int maxDepth, params string[] names)
+    {
+        var direct = ReadString(element, names);
+        if (!string.IsNullOrWhiteSpace(direct) || maxDepth <= 0)
+            return direct;
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                var nested = ReadStringDeep(property.Value, maxDepth - 1, names);
+                if (!string.IsNullOrWhiteSpace(nested))
+                    return nested;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = ReadStringDeep(item, maxDepth - 1, names);
+                if (!string.IsNullOrWhiteSpace(nested))
+                    return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool LooksLikeGitHubProvider(JsonElement element)
+    {
+        foreach (var value in EnumerateStrings(
+                     ReadStringDeep(element, 2, "provider_name", "name", "display_name", "slug", "provider", "service_slug")))
+        {
+            if (value.Contains("github", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool? TryReadBoolean(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var property))
+                continue;
+
+            if (property.ValueKind == JsonValueKind.True)
+                return true;
+
+            if (property.ValueKind == JsonValueKind.False)
+                return false;
+
+            if (property.ValueKind == JsonValueKind.String &&
+                bool.TryParse(property.GetString(), out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<JsonElement> EnumerateObjects(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            yield return element;
+
+            foreach (var property in element.EnumerateObject())
+            {
+                foreach (var nested in EnumerateObjects(property.Value))
+                    yield return nested;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                foreach (var nested in EnumerateObjects(item))
+                    yield return nested;
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateStrings(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                yield return value;
+        }
     }
 
     private static string? NormalizeOptional(string? value)

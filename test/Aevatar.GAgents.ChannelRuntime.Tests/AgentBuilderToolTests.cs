@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -114,6 +115,7 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[{"provider_name":"GitHub","connected":true}]""");
         handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
             [
               {"id":"svc-github","slug":"api-github"},
@@ -186,6 +188,75 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsOAuthRequirementBeforeCreatingAgent()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[]""");
+        handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
+            {
+              "slug":"api-github",
+              "provider_config_id":"provider-github",
+              "provider_type":"oauth2",
+              "credential_mode":"admin"
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/connect/oauth", """
+            {
+              "authorization_url":"https://github.example.com/oauth/start"
+            }
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "github_username": "alice",
+                  "repositories": "aevatarAI/aevatar",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "run_immediately": true
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("oauth_required");
+            doc.RootElement.GetProperty("provider").GetString().Should().Be("GitHub");
+            doc.RootElement.GetProperty("provider_id").GetString().Should().Be("provider-github");
+            doc.RootElement.GetProperty("authorization_url").GetString().Should().Be("https://github.example.com/oauth/start");
+
+            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CreateAgent_SocialMedia_UpsertsWorkflowAndInitializesWorkflowAgent()
     {
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();
@@ -223,8 +294,17 @@ public sealed class AgentBuilderToolTests
                     "active",
                     DateTimeOffset.UtcNow),
                 "rev-1",
-                "workflow-actor-prefix",
-                "workflow-actor-1")));
+                    "workflow-actor-prefix",
+                    "workflow-actor-1")));
+
+        var activationService = Substitute.For<IProjectionScopeActivationService<AgentRegistryMaterializationRuntimeLease>>();
+        activationService.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new AgentRegistryMaterializationRuntimeLease(new AgentRegistryMaterializationContext
+            {
+                RootActorId = AgentRegistryGAgent.WellKnownId,
+                ProjectionKind = "agent-registry",
+            })));
+        var projectionPort = new AgentRegistryProjectionPort(activationService);
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -239,6 +319,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(actorRuntime);
         services.AddSingleton(workflowCommandPort);
         services.AddSingleton(nyxClient);
+        services.AddSingleton(projectionPort);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -295,6 +376,12 @@ public sealed class AgentBuilderToolTests
                     e.Payload != null &&
                     e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
                     e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "create_agent"),
+                Arg.Any<CancellationToken>());
+
+            await activationService.Received(1).EnsureAsync(
+                Arg.Is<ProjectionScopeStartRequest>(request =>
+                    request.RootActorId == AgentRegistryGAgent.WellKnownId &&
+                    request.ProjectionKind == "agent-registry"),
                 Arg.Any<CancellationToken>());
         }
         finally

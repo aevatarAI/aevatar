@@ -401,6 +401,7 @@ public class ChannelUserGAgentContinuationTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[{"provider_name":"GitHub","connected":true}]""");
         handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
             [
               {"id":"svc-github","slug":"api-github"},
@@ -476,6 +477,85 @@ public class ChannelUserGAgentContinuationTests
                 e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
                 e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "create_agent"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleInbound_CreateDailyReportCardAction_ShouldReturnGitHubOAuthCard_WhenAuthorizationMissing()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[]""");
+        handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
+            {
+              "slug":"api-github",
+              "provider_config_id":"provider-github",
+              "provider_type":"oauth2",
+              "credential_mode":"admin"
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/connect/oauth", """
+            {
+              "authorization_url":"https://github.example.com/oauth/start"
+            }
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+                serviceCollection.AddSingleton(nyxClient);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"create_daily_report"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_card_oauth_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "create_daily_report" },
+                { "github_username", "alice" },
+                { "repositories", "aevatarAI/aevatar" },
+                { "schedule_time", "09:00" },
+                { "schedule_timezone", "UTC" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("GitHub Authorization Required");
+        adapter.Replies[0].ReplyText.Should().Contain("Connect GitHub");
+        adapter.Replies[0].ReplyText.Should().Contain("https://github.example.com/oauth/start");
+        agent.State.ProcessedMessageIds.Should().Contain("evt_card_oauth_1");
+
+        await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

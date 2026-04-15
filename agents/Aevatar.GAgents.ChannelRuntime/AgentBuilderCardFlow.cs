@@ -693,6 +693,37 @@ internal static class AgentBuilderCardFlow
             return $"Create daily report agent failed: {error}";
 
         var status = ReadString(root, "status") ?? "accepted";
+        if (string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase))
+        {
+            var providerId = ReadString(root, "provider_id") ?? "unknown-provider";
+            var authorizationUrl = ReadString(root, "authorization_url")
+                                   ?? ReadString(root, "auth_url")
+                                   ?? ReadString(root, "url");
+            var oauthNote = ReadString(root, "note") ??
+                            "Connect GitHub in NyxID, then return here and submit the daily report form again.";
+
+            var oauthLines = new List<string>
+            {
+                oauthNote,
+                $"Provider ID: `{providerId}`",
+            };
+
+            var actions = new List<object>();
+            if (!string.IsNullOrWhiteSpace(authorizationUrl))
+                actions.Add(BuildLinkButton("Connect GitHub", "primary", authorizationUrl!));
+
+            actions.Add(BuildButton("Back to Form", "default", new
+            {
+                agent_builder_action = OpenDailyReportFormAction,
+            }));
+
+            return BuildInfoCard(
+                "GitHub Authorization Required",
+                string.Join("\n", oauthLines),
+                "orange",
+                actions.ToArray());
+        }
+
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
         var nextRun = ReadString(root, "next_scheduled_run") ?? "pending";
         var note = ReadString(root, "note");
@@ -1274,6 +1305,25 @@ internal static class AgentBuilderCardFlow
                 content = label,
             },
             value,
+        };
+
+    private static object BuildLinkButton(string label, string style, string url) =>
+        new
+        {
+            tag = "button",
+            type = style,
+            text = new
+            {
+                tag = "plain_text",
+                content = label,
+            },
+            multi_url = new
+            {
+                url,
+                pc_url = url,
+                ios_url = url,
+                android_url = url,
+            },
         };
 
     private static string EscapeMarkdown(string value) =>
