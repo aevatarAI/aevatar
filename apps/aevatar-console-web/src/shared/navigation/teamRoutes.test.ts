@@ -43,7 +43,7 @@ describe("teamRoutes", () => {
     });
   });
 
-  it("defaults canonical team routes to the topology tab", () => {
+  it("defaults canonical team routes to the overview tab", () => {
     expect(
       readTeamDetailRouteState(
         "?workflowId=wf-2&tab=not-real",
@@ -53,7 +53,7 @@ describe("teamRoutes", () => {
       runId: "",
       scopeId: "scope-query",
       serviceId: "",
-      tab: "topology",
+      tab: "overview",
       workflowId: "wf-2",
     });
   });
