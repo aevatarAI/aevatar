@@ -401,7 +401,20 @@ public class ChannelUserGAgentContinuationTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[{"provider_name":"GitHub","connected":true}]""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
         handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
             [
               {"id":"svc-github","slug":"api-github"},
@@ -480,25 +493,27 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
-    public async Task HandleInbound_CreateDailyReportCardAction_ShouldReturnGitHubOAuthCard_WhenAuthorizationMissing()
+    public async Task HandleInbound_CreateDailyReportCardAction_ShouldReturnGitHubCredentialsCard_WhenUserCredentialsMissing()
     {
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();
         var actorRuntime = Substitute.For<IActorRuntime>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[]""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """{"tokens":[]}""");
         handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
             {
               "slug":"api-github",
               "provider_config_id":"provider-github",
               "provider_type":"oauth2",
-              "credential_mode":"admin"
+              "credential_mode":"user",
+              "documentation_url":"https://docs.github.com/en/apps/oauth-apps"
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/connect/oauth", """
+        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/credentials", """
             {
-              "authorization_url":"https://github.example.com/oauth/start"
+              "provider_config_id":"provider-github",
+              "has_credentials":false
             }
             """);
 
@@ -550,9 +565,9 @@ public class ChannelUserGAgentContinuationTests
 
         adapter.Replies.Should().ContainSingle();
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
-        adapter.Replies[0].ReplyText.Should().Contain("GitHub Authorization Required");
-        adapter.Replies[0].ReplyText.Should().Contain("Connect GitHub");
-        adapter.Replies[0].ReplyText.Should().Contain("https://github.example.com/oauth/start");
+        adapter.Replies[0].ReplyText.Should().Contain("GitHub Credentials Required");
+        adapter.Replies[0].ReplyText.Should().Contain("OAuth Docs");
+        adapter.Replies[0].ReplyText.Should().Contain("https://docs.github.com/en/apps/oauth-apps");
         agent.State.ProcessedMessageIds.Should().Contain("evt_card_oauth_1");
 
         await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());

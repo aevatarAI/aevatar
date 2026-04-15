@@ -878,7 +878,13 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
-        if (!TryParseGitHubCatalogEntry(catalogResponse, out var providerId, out var providerType, out var credentialMode, out var catalogError))
+        if (!TryParseGitHubCatalogEntry(
+                catalogResponse,
+                out var providerId,
+                out var providerType,
+                out var credentialMode,
+                out var documentationUrl,
+                out var catalogError))
             return JsonSerializer.Serialize(new { error = catalogError });
 
         if (!string.Equals(providerType, "oauth2", StringComparison.OrdinalIgnoreCase))
@@ -891,15 +897,35 @@ public sealed class AgentBuilderTool : IAgentTool
 
         if (string.Equals(credentialMode, "user", StringComparison.OrdinalIgnoreCase))
         {
-            return JsonSerializer.Serialize(new
+            var credentialsResponse = await client.GetUserCredentialsAsync(token, providerId!, ct);
+            if (IsErrorPayload(credentialsResponse))
+                return credentialsResponse;
+
+            if (!TryParseUserCredentialsStatus(credentialsResponse, out var hasCredentials, out var credentialsError))
+                return JsonSerializer.Serialize(new { error = credentialsError });
+
+            if (!hasCredentials)
             {
-                error = "GitHub provider requires user-managed credentials and is not yet supported by the Day One card flow.",
-            });
+                return JsonSerializer.Serialize(new
+                {
+                    status = "credentials_required",
+                    template = "daily_report",
+                    provider = "GitHub",
+                    provider_id = providerId,
+                    documentation_url = documentationUrl,
+                    note = "GitHub in NyxID uses user-managed OAuth app credentials. Set your GitHub OAuth app client_id/client_secret in NyxID first, then submit the daily report form again.",
+                });
+            }
         }
 
         var connectResponse = await client.InitiateOAuthConnectAsync(token, providerId!, ct);
         if (IsErrorPayload(connectResponse))
-            return connectResponse;
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Could not initiate GitHub OAuth connect in NyxID.",
+            });
+        }
 
         if (!TryParseAuthorizationUrl(connectResponse, out var authorizationUrl, out var authError))
             return JsonSerializer.Serialize(new { error = authError });
@@ -911,6 +937,7 @@ public sealed class AgentBuilderTool : IAgentTool
             provider = "GitHub",
             provider_id = providerId,
             authorization_url = authorizationUrl,
+            documentation_url = documentationUrl,
             note = "Connect GitHub in NyxID, then return to Feishu and submit the daily report form again.",
         });
     }
@@ -976,19 +1003,18 @@ public sealed class AgentBuilderTool : IAgentTool
         try
         {
             using var doc = JsonDocument.Parse(response);
-            foreach (var element in EnumerateObjects(doc.RootElement))
+            if (!doc.RootElement.TryGetProperty("tokens", out var tokens) || tokens.ValueKind != JsonValueKind.Array)
+                return false;
+
+            foreach (var element in tokens.EnumerateArray())
             {
                 if (!LooksLikeGitHubProvider(element))
                     continue;
 
-                if (TryReadBoolean(element, "connected", "is_connected", "authorized", "has_token") == false)
-                    return false;
-
-                var status = NormalizeOptional(ReadStringDeep(element, 2, "status", "token_status", "connection_status"));
-                if (IsDisconnectedProviderStatus(status))
-                    return false;
-
-                return true;
+                return string.Equals(
+                    NormalizeOptional(ReadString(element, "status")),
+                    "active",
+                    StringComparison.OrdinalIgnoreCase);
             }
         }
         catch (JsonException)
@@ -998,26 +1024,18 @@ public sealed class AgentBuilderTool : IAgentTool
         return false;
     }
 
-    private static bool IsDisconnectedProviderStatus(string? status) =>
-        status != null &&
-        (
-            status.Equals("disconnected", StringComparison.OrdinalIgnoreCase) ||
-            status.Equals("missing", StringComparison.OrdinalIgnoreCase) ||
-            status.Equals("expired", StringComparison.OrdinalIgnoreCase) ||
-            status.Equals("pending", StringComparison.OrdinalIgnoreCase) ||
-            status.Equals("not_connected", StringComparison.OrdinalIgnoreCase)
-        );
-
     private static bool TryParseGitHubCatalogEntry(
         string response,
         out string? providerId,
         out string? providerType,
         out string? credentialMode,
+        out string? documentationUrl,
         out string? error)
     {
         providerId = null;
         providerType = null;
         credentialMode = null;
+        documentationUrl = null;
         error = null;
 
         try
@@ -1026,6 +1044,7 @@ public sealed class AgentBuilderTool : IAgentTool
             providerId = ReadStringDeep(doc.RootElement, 3, "provider_config_id", "provider_id");
             providerType = ReadStringDeep(doc.RootElement, 3, "provider_type");
             credentialMode = ReadStringDeep(doc.RootElement, 3, "credential_mode");
+            documentationUrl = ReadStringDeep(doc.RootElement, 3, "documentation_url");
 
             if (string.IsNullOrWhiteSpace(providerId))
             {
@@ -1034,6 +1053,42 @@ public sealed class AgentBuilderTool : IAgentTool
             }
 
             return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static bool TryParseUserCredentialsStatus(
+        string response,
+        out bool hasCredentials,
+        out string? error)
+    {
+        hasCredentials = false;
+        error = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+            if (doc.RootElement.TryGetProperty("has_credentials", out var property))
+            {
+                if (property.ValueKind == JsonValueKind.True)
+                {
+                    hasCredentials = true;
+                    return true;
+                }
+
+                if (property.ValueKind == JsonValueKind.False)
+                {
+                    hasCredentials = false;
+                    return true;
+                }
+            }
+
+            error = "NyxID user credentials response did not include has_credentials.";
+            return false;
         }
         catch (JsonException ex)
         {
@@ -1127,51 +1182,6 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         return false;
-    }
-
-    private static bool? TryReadBoolean(JsonElement element, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!element.TryGetProperty(name, out var property))
-                continue;
-
-            if (property.ValueKind == JsonValueKind.True)
-                return true;
-
-            if (property.ValueKind == JsonValueKind.False)
-                return false;
-
-            if (property.ValueKind == JsonValueKind.String &&
-                bool.TryParse(property.GetString(), out var parsed))
-            {
-                return parsed;
-            }
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<JsonElement> EnumerateObjects(JsonElement element)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            yield return element;
-
-            foreach (var property in element.EnumerateObject())
-            {
-                foreach (var nested in EnumerateObjects(property.Value))
-                    yield return nested;
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            {
-                foreach (var nested in EnumerateObjects(item))
-                    yield return nested;
-            }
-        }
     }
 
     private static IEnumerable<string> EnumerateStrings(params string?[] values)

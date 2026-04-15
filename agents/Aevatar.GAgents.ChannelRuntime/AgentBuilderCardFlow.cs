@@ -693,6 +693,35 @@ internal static class AgentBuilderCardFlow
             return $"Create daily report agent failed: {error}";
 
         var status = ReadString(root, "status") ?? "accepted";
+        if (string.Equals(status, "credentials_required", StringComparison.OrdinalIgnoreCase))
+        {
+            var providerId = ReadString(root, "provider_id") ?? "unknown-provider";
+            var documentationUrl = ReadString(root, "documentation_url");
+            var credentialsNote = ReadString(root, "note") ??
+                                  "Set your GitHub OAuth app credentials in NyxID first, then submit the daily report form again.";
+
+            var credentialsLines = new List<string>
+            {
+                credentialsNote,
+                $"Provider ID: `{providerId}`",
+            };
+
+            var actions = new List<object>();
+            if (!string.IsNullOrWhiteSpace(documentationUrl))
+                actions.Add(BuildLinkButton("OAuth Docs", "default", documentationUrl!));
+
+            actions.Add(BuildButton("Back to Form", "primary", new
+            {
+                agent_builder_action = OpenDailyReportFormAction,
+            }));
+
+            return BuildInfoCard(
+                "GitHub Credentials Required",
+                string.Join("\n", credentialsLines),
+                "orange",
+                actions.ToArray());
+        }
+
         if (string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase))
         {
             var providerId = ReadString(root, "provider_id") ?? "unknown-provider";

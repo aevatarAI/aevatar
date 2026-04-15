@@ -115,7 +115,20 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[{"provider_name":"GitHub","connected":true}]""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
         handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
             [
               {"id":"svc-github","slug":"api-github"},
@@ -195,13 +208,20 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """[]""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """{"tokens":[]}""");
         handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
             {
               "slug":"api-github",
               "provider_config_id":"provider-github",
               "provider_type":"oauth2",
-              "credential_mode":"admin"
+              "credential_mode":"user",
+              "documentation_url":"https://docs.github.com/en/apps/oauth-apps"
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/credentials", """
+            {
+              "provider_config_id":"provider-github",
+              "has_credentials":true
             }
             """);
         handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/connect/oauth", """
@@ -249,6 +269,78 @@ public sealed class AgentBuilderToolTests
 
             await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequirementBeforeOAuth()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """{"tokens":[]}""");
+        handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
+            {
+              "slug":"api-github",
+              "provider_config_id":"provider-github",
+              "provider_type":"oauth2",
+              "credential_mode":"user",
+              "documentation_url":"https://docs.github.com/en/apps/oauth-apps"
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/credentials", """
+            {
+              "provider_config_id":"provider-github",
+              "has_credentials":false
+            }
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "github_username": "alice",
+                  "repositories": "aevatarAI/aevatar",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "run_immediately": true
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("credentials_required");
+            doc.RootElement.GetProperty("provider").GetString().Should().Be("GitHub");
+            doc.RootElement.GetProperty("provider_id").GetString().Should().Be("provider-github");
+            doc.RootElement.GetProperty("documentation_url").GetString().Should().Be("https://docs.github.com/en/apps/oauth-apps");
+
+            handler.Requests.Should().NotContain(x => x.Path == "/api/v1/providers/provider-github/connect/oauth");
+            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
+            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
         finally
         {
