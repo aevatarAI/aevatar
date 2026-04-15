@@ -1,5 +1,20 @@
+import {
+  AppstoreOutlined,
+  BarsOutlined,
+  MoreOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Space } from "antd";
+import {
+  Alert,
+  Button,
+  Dropdown,
+  Empty,
+  Space,
+  Tooltip,
+  Typography,
+  theme,
+} from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -9,6 +24,7 @@ import {
   buildTeamCreateHref,
   buildTeamDetailHref,
 } from "@/shared/navigation/teamRoutes";
+import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import {
   buildStudioWorkflowEditorRoute,
@@ -17,33 +33,101 @@ import {
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
+  AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
+import ScopeQueryCard from "./components/ScopeQueryCard";
 import {
+  buildScopeHref,
+  normalizeScopeDraft,
   readScopeQueryDraft,
+  type ScopeQueryDraft,
 } from "./components/scopeQuery";
 import {
   buildWorkflowOperationalUnits,
   collectWorkflowOperationalServiceIds,
   WORKFLOW_RUNTIME_GUARDRAIL,
+  type WorkflowOperationalAttention,
   type WorkflowOperationalUnit,
 } from "../teams/workflowOperationalUnits";
 
+const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
+const compactTeamRosterThreshold = 6;
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
-function compactId(value: string | null | undefined): string {
-  const normalized = trimOptional(value);
-  if (!normalized) {
-    return "n/a";
+function formatRunStatusLabel(status: string | null | undefined): string {
+  switch (trimOptional(status).toLowerCase()) {
+    case "waiting":
+    case "waiting_approval":
+    case "waiting_signal":
+      return "待关注";
+    case "failed":
+    case "error":
+      return "异常";
+    case "completed":
+      return "稳定";
+    default:
+      return trimOptional(status) || "未知";
   }
+}
 
-  const segment = normalized.split("/").pop() || normalized;
-  return segment.split(":").pop() || segment;
+function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
+  switch (attention) {
+    case "failed":
+      return "待处理";
+    case "waiting":
+      return "待关注";
+    case "healthy":
+      return "运行中";
+    case "draft":
+      return "草稿中";
+    case "no-bound-service":
+      return "待绑定";
+    case "no-recent-runs":
+      return "待运行";
+    default:
+      return "待确认";
+  }
+}
+
+function resolveAttentionPillStyle(
+  token: ReturnType<typeof theme.useToken>["token"],
+  attention: WorkflowOperationalAttention,
+): React.CSSProperties {
+  switch (attention) {
+    case "healthy":
+      return {
+        background: "rgba(24, 144, 255, 0.08)",
+        color: token.colorInfo,
+      };
+    case "waiting":
+    case "no-bound-service":
+    case "no-recent-runs":
+      return {
+        background: "rgba(250, 173, 20, 0.12)",
+        color: token.colorWarning,
+      };
+    case "failed":
+      return {
+        background: "rgba(255, 77, 79, 0.12)",
+        color: token.colorError,
+      };
+    case "draft":
+      return {
+        background: token.colorFillQuaternary,
+        color: token.colorTextSecondary,
+      };
+    default:
+      return {
+        background: token.colorFillQuaternary,
+        color: token.colorTextSecondary,
+      };
+  }
 }
 
 function formatCardDescription(unit: WorkflowOperationalUnit): string {
@@ -92,54 +176,108 @@ function stopEvent<T extends (...args: any[]) => void>(handler: T): T {
 }
 
 const SummaryStatCard: React.FC<{
+  readonly accent?: boolean;
   readonly label: string;
-  readonly tone?: "default" | "green" | "purple";
   readonly value: React.ReactNode;
-}> = ({ label, tone = "default", value }) => {
-  const valueColor =
-    tone === "purple" ? "#6c5ce7" : tone === "green" ? "#52c41a" : "#1d2129";
+}> = ({ accent = false, label, value }) => {
+  const { token } = theme.useToken();
 
   return (
     <div
       style={{
-        background: "#ffffff",
-        border: "1px solid #e8e8e8",
-        borderRadius: 10,
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 22,
+        boxShadow: token.boxShadowTertiary,
         display: "flex",
         flexDirection: "column",
-        justifyContent: "center",
-        minHeight: 112,
-        padding: 16,
-        textAlign: "center",
+        gap: 8,
+        minHeight: 104,
+        padding: 18,
       }}
     >
-      <div
+      <Typography.Title
+        level={2}
         style={{
-          color: valueColor,
-          fontSize: 28,
-          fontWeight: 700,
-          lineHeight: 1.1,
+          color: accent ? token.colorPrimary : token.colorText,
+          fontSize: 24,
+          margin: 0,
         }}
       >
         {value}
-      </div>
-      <div
+      </Typography.Title>
+      <Typography.Text
         style={{
-          color: "#8c8c8c",
-          fontSize: 11,
-          marginTop: 2,
+          color: token.colorTextSecondary,
+          fontSize: 14,
         }}
       >
         {label}
-      </div>
+      </Typography.Text>
     </div>
   );
 };
 
-const WorkflowTeamCard: React.FC<{
-  readonly scopeId: string;
-  readonly unit: WorkflowOperationalUnit;
-}> = ({ scopeId, unit }) => {
+const EvidencePill: React.FC<{
+  readonly text: string;
+}> = ({ text }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <span
+      style={{
+        background: token.colorInfoBg,
+        border: `1px solid ${token.colorInfoBorder}`,
+        borderRadius: 999,
+        color: token.colorInfo,
+        display: "inline-flex",
+        fontSize: 12,
+        fontWeight: 500,
+        lineHeight: 1,
+        padding: "7px 10px",
+      }}
+    >
+      {text}
+    </span>
+  );
+};
+
+const TeamFact: React.FC<{
+  readonly label: string;
+  readonly value: React.ReactNode;
+}> = ({ label, value }) => (
+  <div
+    style={{
+      display: "flex",
+      flexDirection: "column",
+      gap: 4,
+      minWidth: 0,
+    }}
+  >
+    <Typography.Text
+      strong
+      style={{
+        fontSize: 16,
+        margin: 0,
+        overflowWrap: "anywhere",
+      }}
+    >
+      {value}
+    </Typography.Text>
+    <Typography.Text style={{ fontSize: 13 }} type="secondary">
+      {label}
+    </Typography.Text>
+  </div>
+);
+
+function buildWorkflowTeamActions(
+  scopeId: string,
+  unit: WorkflowOperationalUnit,
+): {
+  readonly builderHref: string;
+  readonly detailHref: string;
+  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
+} {
   const detailHref = buildTeamDetailHref({
     scopeId,
     workflowId: unit.workflow.workflowId,
@@ -150,41 +288,78 @@ const WorkflowTeamCard: React.FC<{
     scopeId,
     workflowId: unit.workflow.workflowId,
   });
-  const description = formatCardDescription(unit);
-  const topologyHref = buildTeamDetailHref({
-    scopeId,
-    tab: "topology",
-    workflowId: unit.workflow.workflowId,
-    serviceId: unit.matchedService?.serviceId,
-    runId: unit.latestRun?.runId,
+  const runtimeHref = unit.matchedService
+    ? buildRuntimeRunsHref({
+        actorId: unit.latestRun?.actorId || undefined,
+        route: unit.workflow.workflowName || undefined,
+        scopeId,
+        serviceId: unit.matchedService.serviceId,
+      })
+    : "";
+  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
+  if (runtimeHref) {
+    moreActions.push({
+      key: "runtime",
+      label: "查看运行",
+      onClick: () => history.push(runtimeHref),
+    });
+  }
+  moreActions.push({
+    key: "builder",
+    label: "进入 Builder",
+    onClick: () => history.push(builderHref),
   });
-  const memberChips = Array.from(
-    new Set(
-      [
-        unit.matchedService?.displayName || "",
-        unit.workflow.displayName || "",
-        trimOptional(unit.workflow.workflowName),
-      ].filter(Boolean),
-    ),
-  ).slice(0, 4);
-  const statusColor =
-    unit.attention === "healthy"
-      ? "#52c41a"
-      : unit.attention === "waiting" ||
-          unit.attention === "no-bound-service" ||
-          unit.attention === "no-recent-runs"
-        ? "#faad14"
-        : unit.attention === "failed"
-          ? "#ff4d4f"
-          : "#8c8c8c";
-  const statusLabel =
-    unit.attention === "healthy"
-      ? "运行中"
-      : unit.attention === "failed"
-        ? "异常"
-        : unit.attention === "draft"
-          ? "草稿"
-          : "待关注";
+
+  return {
+    builderHref,
+    detailHref,
+    moreActions,
+  };
+}
+
+const MoreActionsButton: React.FC<{
+  readonly actions: Array<{ key: string; label: string; onClick: () => void }>;
+}> = ({ actions }) => (
+  <Dropdown
+    menu={{
+      items: actions.map((action) => ({
+        key: action.key,
+        label: action.label,
+      })),
+      onClick: ({ key, domEvent }) => {
+        domEvent.stopPropagation();
+        const matchedAction = actions.find((action) => action.key === key);
+        if (!matchedAction) {
+          return;
+        }
+
+        matchedAction.onClick();
+      },
+    }}
+    trigger={["click"]}
+  >
+    <Button
+      icon={<MoreOutlined />}
+      onClick={(event) => event.stopPropagation()}
+      size="large"
+    >
+      更多
+    </Button>
+  </Dropdown>
+);
+
+const WorkflowTeamCard: React.FC<{
+  readonly scopeId: string;
+  readonly unit: WorkflowOperationalUnit;
+}> = ({ scopeId, unit }) => {
+  const { token } = theme.useToken();
+  const { detailHref, moreActions } = buildWorkflowTeamActions(scopeId, unit);
+  const description = formatCardDescription(unit);
+  const factChips = [
+    trimOptional(unit.workflow.workflowName),
+    unit.matchedService?.displayName || "",
+    formatRunStatusLabel(unit.latestRun?.completionStatus),
+  ].filter(Boolean);
 
   return (
     <div
@@ -197,17 +372,16 @@ const WorkflowTeamCard: React.FC<{
       }}
       role="button"
       style={{
-        background: "#ffffff",
-        border: "1px solid #e8e8e8",
-        borderRadius: 12,
-        boxShadow: "0 1px 3px rgba(15, 23, 42, 0.04)",
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 24,
+        boxShadow: token.boxShadowTertiary,
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
-        gap: 16,
+        gap: 14,
         minWidth: 0,
-        padding: 20,
-        transition: "all 0.2s ease",
+        padding: 18,
       }}
       tabIndex={0}
     >
@@ -220,196 +394,205 @@ const WorkflowTeamCard: React.FC<{
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <div
+          <Typography.Title
+            level={3}
             style={{
-              color: "#1d2129",
-              fontSize: 17,
-              fontWeight: 600,
+              fontSize: 22,
+              margin: 0,
               overflowWrap: "anywhere",
             }}
           >
             {unit.workflow.displayName || unit.workflow.workflowId}
-          </div>
-          <div
+          </Typography.Title>
+          <Typography.Paragraph
+            ellipsis={{ rows: 1, tooltip: description }}
             style={{
-              color: "#8c8c8c",
-              fontSize: 12,
-              lineHeight: 1.5,
-              marginTop: 3,
+              color: token.colorTextSecondary,
+              fontSize: 14,
+              marginBottom: 0,
+              marginTop: 6,
             }}
           >
             {description}
-          </div>
+          </Typography.Paragraph>
         </div>
-        <div
+        <span
           style={{
-            alignItems: "center",
-            color: statusColor,
+            ...resolveAttentionPillStyle(token, unit.attention),
+            borderRadius: 999,
             display: "inline-flex",
             fontSize: 12,
-            fontWeight: 500,
-            gap: 5,
+            fontWeight: 600,
+            lineHeight: 1,
+            padding: "8px 12px",
             whiteSpace: "nowrap",
           }}
         >
-          <span
-            style={{
-              background: statusColor,
-              borderRadius: "50%",
-              display: "inline-block",
-              height: 8,
-              width: 8,
-            }}
-          />
-          {statusLabel}
-        </div>
+          {formatAttentionLabel(unit.attention)}
+        </span>
       </div>
 
-      {memberChips.length > 0 ? (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 6,
-          }}
-        >
-          {memberChips.map((chip) => (
-            <span
-              key={chip}
-              style={{
-                alignItems: "center",
-                background: "#f6f0ff",
-                borderRadius: 20,
-                color: "#6c5ce7",
-                display: "inline-flex",
-                fontSize: 12,
-                gap: 5,
-                padding: "5px 12px",
-              }}
-            >
-              <span
-                style={{
-                  background: statusColor,
-                  borderRadius: "50%",
-                  display: "inline-block",
-                  height: 6,
-                  width: 6,
-                }}
-              />
-              {chip}
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <Space size={[10, 10]} wrap>
+        {factChips.map((chip) => (
+          <EvidencePill key={chip} text={chip} />
+        ))}
+      </Space>
 
       <div
         style={{
-          borderTop: "1px solid #f5f5f5",
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
           display: "grid",
-          gap: 20,
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          gap: 14,
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
           paddingTop: 14,
         }}
       >
-        {[
-          {
-            label: "今日消息",
-            value: unit.latestRun?.totalSteps ?? "--",
-          },
-          {
-            label: "在线率",
-            value: unit.latestRun ? "99.9%" : "--",
-          },
-          {
-            label: "最近更新",
-            value: formatShortTime(
-              unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt,
-            ),
-          },
-          {
-            label: "主服务",
-            value: compactId(unit.matchedService?.serviceId || "未发布"),
-          },
-        ].map((metric) => (
-          <div key={metric.label}>
-            <div
-              style={{
-                color:
-                  metric.label === "在线率" && metric.value !== "--"
-                    ? "#52c41a"
-                    : "#1d2129",
-                fontSize: 18,
-                fontWeight: 600,
-                lineHeight: 1.2,
-              }}
-            >
-              {metric.value}
-            </div>
-            <div
-              style={{
-                color: "#8c8c8c",
-                fontSize: 10,
-                marginTop: 2,
-              }}
-            >
-              {metric.label}
-            </div>
-          </div>
-        ))}
+        <TeamFact
+          label="当前状态"
+          value={formatRunStatusLabel(unit.latestRun?.completionStatus)}
+        />
+        <TeamFact
+          label="最近更新"
+          value={formatShortTime(unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt)}
+        />
+        <TeamFact
+          label="主服务"
+          value={unit.matchedService?.serviceId || "未发布"}
+        />
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-          marginTop: -2,
-        }}
-      >
+      <Space wrap>
         <Button
           onClick={stopEvent(() => history.push(detailHref))}
+          size="large"
+          type="primary"
+        >
+          查看团队
+        </Button>
+        <MoreActionsButton actions={moreActions} />
+      </Space>
+    </div>
+  );
+};
+
+const WorkflowTeamRow: React.FC<{
+  readonly scopeId: string;
+  readonly unit: WorkflowOperationalUnit;
+}> = ({ scopeId, unit }) => {
+  const { token } = theme.useToken();
+  const { detailHref, moreActions } = buildWorkflowTeamActions(scopeId, unit);
+  const description = formatCardDescription(unit);
+  const factChips = [
+    trimOptional(unit.workflow.workflowName),
+    unit.matchedService?.displayName || "",
+  ].filter(Boolean);
+
+  return (
+    <div
+      onClick={() => history.push(detailHref)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          history.push(detailHref);
+        }
+      }}
+      role="button"
+      style={{
+        alignItems: "center",
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 20,
+        boxShadow: token.boxShadowTertiary,
+        cursor: "pointer",
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "minmax(0, 1.8fr) repeat(3, minmax(88px, 120px)) auto",
+        minWidth: 0,
+        padding: 16,
+      }}
+      tabIndex={0}
+    >
+      <div style={{ minWidth: 0 }}>
+        <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
+          <Typography.Title
+            level={4}
+            style={{
+              margin: 0,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {unit.workflow.displayName || unit.workflow.workflowId}
+          </Typography.Title>
+          <span
+            style={{
+              ...resolveAttentionPillStyle(token, unit.attention),
+              borderRadius: 999,
+              display: "inline-flex",
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1,
+              padding: "7px 10px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {formatAttentionLabel(unit.attention)}
+          </span>
+        </Space>
+        <Typography.Paragraph
+          ellipsis={{ rows: 1, tooltip: description }}
           style={{
-            background: "#6c5ce7",
-            borderColor: "#6c5ce7",
-            borderRadius: 8,
-            color: "#ffffff",
-            fontSize: 12,
-            height: 28,
+            color: token.colorTextSecondary,
+            fontSize: 13,
+            marginBottom: 0,
+            marginTop: 0,
           }}
         >
-          查看详情
-        </Button>
-        <Button
-          onClick={stopEvent(() => history.push(topologyHref))}
-          style={{
-            borderRadius: 8,
-            fontSize: 12,
-            height: 28,
-          }}
-        >
-          事件拓扑
-        </Button>
-        <Button
-          onClick={stopEvent(() => history.push(builderHref))}
-          style={{
-            borderRadius: 8,
-            fontSize: 12,
-            height: 28,
-          }}
-        >
-          编辑
-        </Button>
+          {description}
+        </Typography.Paragraph>
+        {factChips.length > 0 ? (
+          <Space size={[8, 8]} style={{ marginTop: 10 }} wrap>
+            {factChips.map((chip) => (
+              <EvidencePill key={chip} text={chip} />
+            ))}
+          </Space>
+        ) : null}
       </div>
+
+      <TeamFact
+        label="状态"
+        value={formatRunStatusLabel(unit.latestRun?.completionStatus)}
+      />
+      <TeamFact
+        label="更新"
+        value={formatShortTime(unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt)}
+      />
+      <TeamFact
+        label="服务"
+        value={unit.matchedService?.serviceId || "未发布"}
+      />
+
+      <Space wrap>
+        <Button
+          onClick={stopEvent(() => history.push(detailHref))}
+          type="primary"
+        >
+          查看团队
+        </Button>
+        <MoreActionsButton actions={moreActions} />
+      </Space>
     </div>
   );
 };
 
 const ScopeOverviewPage: React.FC = () => {
-  const initialScopeId = React.useMemo(
-    () => readScopeQueryDraft().scopeId.trim(),
-    [],
-  );
+  const { token } = theme.useToken();
+  const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [manualRosterView, setManualRosterView] = React.useState<
+    "cards" | "list" | null
+  >(null);
   const [showDrafts, setShowDrafts] = React.useState(false);
+  const [showScopePicker, setShowScopePicker] = React.useState(false);
 
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
@@ -421,7 +604,28 @@ const ScopeOverviewPage: React.FC = () => {
     [authSessionQuery.data],
   );
 
-  const scopeId = initialScopeId || resolvedScope?.scopeId?.trim() || "";
+  React.useEffect(() => {
+    if (!resolvedScope?.scopeId) {
+      return;
+    }
+
+    setDraft((currentDraft) =>
+      currentDraft.scopeId.trim()
+        ? currentDraft
+        : { scopeId: resolvedScope.scopeId },
+    );
+    setActiveDraft((currentDraft) =>
+      currentDraft.scopeId.trim()
+        ? currentDraft
+        : { scopeId: resolvedScope.scopeId },
+    );
+  }, [resolvedScope?.scopeId]);
+
+  const scopeId = activeDraft.scopeId.trim();
+
+  React.useEffect(() => {
+    history.replace(buildScopeHref("/teams", activeDraft));
+  }, [activeDraft]);
 
   const bindingQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -522,6 +726,10 @@ const ScopeOverviewPage: React.FC = () => {
   const visibleUnits = showDrafts
     ? units
     : units.filter((unit) => !unit.isDraftOnly);
+  const resolvedRosterView =
+    manualRosterView ??
+    (visibleUnits.length >= compactTeamRosterThreshold ? "list" : "cards");
+  const useCompactRoster = resolvedRosterView === "list";
   const activeUnits = units.filter((unit) => !unit.isDraftOnly);
   const healthyUnits = activeUnits.filter((unit) => unit.attention === "healthy");
   const runningMembers = new Set(
@@ -530,11 +738,8 @@ const ScopeOverviewPage: React.FC = () => {
     ),
   );
   runningMembers.delete("");
-  const dailyMessages = activeUnits.reduce(
-    (sum, unit) => sum + (unit.latestRun?.totalSteps ?? 0),
-    0,
-  );
-  const averageOnlineRate =
+  const visibleRuns = activeUnits.filter((unit) => unit.latestRun).length;
+  const healthRate =
     activeUnits.length > 0
       ? `${((healthyUnits.length / activeUnits.length) * 100).toFixed(1)}%`
       : "--";
@@ -551,24 +756,22 @@ const ScopeOverviewPage: React.FC = () => {
 
   const titleNode = (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div
+      <Typography.Text
         style={{
-          color: "#00000073",
-          fontSize: 12,
+          color: token.colorTextSecondary,
+          fontSize: 14,
         }}
       >
         Aevatar / Teams
-      </div>
-      <div
+      </Typography.Text>
+      <Typography.Title
+        level={1}
         style={{
-          color: "#1d2129",
-          fontSize: 18,
-          fontWeight: 600,
           margin: 0,
         }}
       >
         我的 AI 团队
-      </div>
+      </Typography.Title>
     </div>
   );
 
@@ -577,18 +780,12 @@ const ScopeOverviewPage: React.FC = () => {
       extra={
         <Space wrap>
           <Button
+            icon={<PlusOutlined />}
             onClick={() => history.push(buildTeamCreateHref())}
-            style={{
-              background: "#6c5ce7",
-              borderColor: "#6c5ce7",
-              borderRadius: 8,
-              color: "#ffffff",
-              fontSize: 13,
-              height: 34,
-              paddingInline: 18,
-            }}
+            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
+            type="primary"
           >
-            + 组建新团队
+            组建新团队
           </Button>
         </Space>
       }
@@ -597,31 +794,63 @@ const ScopeOverviewPage: React.FC = () => {
     >
       <div
         style={{
-          background: "#f8f9fc",
-          borderRadius: 12,
           display: "flex",
           flexDirection: "column",
-          gap: 16,
-          padding: 16,
+          gap: 20,
         }}
       >
-        {!scopeId ? (
-          <Empty
-            description="当前还没有可见团队，登录后的团队上下文会自动显示在这里。"
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
+        {(showScopePicker || !scopeId) && (
+          <AevatarPanel
+            title="Scope 上下文"
+            titleHelp="这一步只负责锁定你当前要查看的 Scope，不把它抢成首页主角。"
           >
-            <Button
-              onClick={() => history.push(buildTeamCreateHref())}
-              style={{
-                background: "#6c5ce7",
-                borderColor: "#6c5ce7",
-                borderRadius: 8,
-                color: "#ffffff",
+            <ScopeQueryCard
+              activeScopeId={scopeId}
+              draft={draft}
+              loadLabel="导入团队视图"
+              onChange={setDraft}
+              onLoad={() => {
+                const nextDraft = normalizeScopeDraft(draft);
+                setDraft(nextDraft);
+                setActiveDraft(nextDraft);
+                setShowScopePicker(false);
               }}
-            >
-              + 组建新团队
-            </Button>
-          </Empty>
+              onReset={() => {
+                const nextDraft = normalizeScopeDraft({
+                  scopeId: resolvedScope?.scopeId ?? "",
+                });
+                setDraft(nextDraft);
+                setActiveDraft(nextDraft);
+              }}
+              onUseResolvedScope={() => {
+                if (!resolvedScope?.scopeId) {
+                  return;
+                }
+
+                const nextDraft = normalizeScopeDraft({
+                  scopeId: resolvedScope.scopeId,
+                });
+                setDraft(nextDraft);
+                setActiveDraft(nextDraft);
+                setShowScopePicker(false);
+              }}
+              resetDisabled={
+                normalizeScopeDraft(draft).scopeId ===
+                  (resolvedScope?.scopeId?.trim() ?? "") &&
+                scopeId === (resolvedScope?.scopeId?.trim() ?? "")
+              }
+              resolvedScopeId={resolvedScope?.scopeId}
+              resolvedScopeSource={resolvedScope?.scopeSource}
+            />
+          </AevatarPanel>
+        )}
+
+        {!scopeId ? (
+          <Alert
+            showIcon
+            title="先导入一个 Scope，首页才能渲染出这组团队卡片。"
+            type="info"
+          />
         ) : null}
 
         {partialIssues.length > 0 ? (
@@ -638,18 +867,14 @@ const ScopeOverviewPage: React.FC = () => {
             <div
               style={{
                 display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: 16,
+                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
               }}
             >
-              <SummaryStatCard label="活跃团队" tone="purple" value={activeUnits.length} />
+              <SummaryStatCard label="活跃团队" value={activeUnits.length} />
               <SummaryStatCard label="运行中成员" value={runningMembers.size} />
-              <SummaryStatCard label="今日处理消息" value={dailyMessages} />
-              <SummaryStatCard
-                label="平均在线率"
-                tone="green"
-                value={averageOnlineRate}
-              />
+              <SummaryStatCard label="可见运行" value={visibleRuns} />
+              <SummaryStatCard accent label="健康团队率" value={healthRate} />
             </div>
 
             {workflowsQuery.isLoading ? (
@@ -661,21 +886,73 @@ const ScopeOverviewPage: React.FC = () => {
                 type="error"
               />
             ) : visibleUnits.length > 0 ? (
-              <div
-                style={{
-                  display: "grid",
-                  gap: 16,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-                }}
-              >
-                {visibleUnits.map((unit) => (
-                  <WorkflowTeamCard
-                    key={unit.workflow.workflowId}
-                    scopeId={scopeId}
-                    unit={unit}
-                  />
-                ))}
-              </div>
+              <>
+                <div
+                  style={{
+                    alignItems: "center",
+                    display: "flex",
+                    gap: 12,
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <Typography.Text type="secondary">
+                    {visibleUnits.length} 支团队
+                  </Typography.Text>
+                  <Space.Compact>
+                    <Tooltip title="卡片视图">
+                      <Button
+                        aria-label="切换到卡片视图"
+                        icon={<AppstoreOutlined />}
+                        onClick={() => setManualRosterView("cards")}
+                        type={resolvedRosterView === "cards" ? "primary" : "default"}
+                      />
+                    </Tooltip>
+                    <Tooltip title="列表视图">
+                      <Button
+                        aria-label="切换到列表视图"
+                        icon={<BarsOutlined />}
+                        onClick={() => setManualRosterView("list")}
+                        type={resolvedRosterView === "list" ? "primary" : "default"}
+                      />
+                    </Tooltip>
+                  </Space.Compact>
+                </div>
+                {useCompactRoster ? (
+                  <div
+                    aria-label="团队紧凑视图"
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 14,
+                    }}
+                  >
+                    {visibleUnits.map((unit) => (
+                      <WorkflowTeamRow
+                        key={unit.workflow.workflowId}
+                        scopeId={scopeId}
+                        unit={unit}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    aria-label="团队卡片视图"
+                    style={{
+                      display: "grid",
+                      gap: 16,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+                    }}
+                  >
+                    {visibleUnits.map((unit) => (
+                      <WorkflowTeamCard
+                        key={unit.workflow.workflowId}
+                        scopeId={scopeId}
+                        unit={unit}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             ) : (
               <Empty
                 description="当前 Scope 里还没有可展示的团队。"
