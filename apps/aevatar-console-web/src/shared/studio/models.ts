@@ -526,6 +526,7 @@ export interface StudioRuntimeTestResult {
 
 export interface StudioUserConfig {
   readonly defaultModel: string;
+  readonly preferredLlmRoute?: string;
   readonly runtimeBaseUrl: string;
 }
 
@@ -534,11 +535,13 @@ export interface StudioUserConfigProviderStatus {
   readonly providerName: string;
   readonly status: string;
   readonly proxyUrl: string;
+  readonly source?: string;
 }
 
 export interface StudioUserConfigModelsResponse {
   readonly providers: StudioUserConfigProviderStatus[];
   readonly gatewayUrl: string;
+  readonly modelsByProvider?: Record<string, string[]>;
   readonly supportedModels: string[];
 }
 

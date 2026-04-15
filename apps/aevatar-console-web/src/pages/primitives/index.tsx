@@ -1,7 +1,6 @@
 import { BuildOutlined, EyeOutlined } from "@ant-design/icons";
-import { ProList } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Empty, Input, List, Select, Space, Typography } from "antd";
+import { Button, Empty, Input, Pagination, Select, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { history } from "@/shared/navigation/history";
@@ -17,10 +16,13 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import {
   cardListActionStyle,
+  cardListStyle,
   summaryFieldLabelStyle,
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
+
+const primitiveCatalogPageSize = 8;
 
 function readPrimitiveSelection(): string {
   if (typeof window === "undefined") {
@@ -185,6 +187,7 @@ const PrimitivesPage: React.FC = () => {
   const [selectedPrimitiveName, setSelectedPrimitiveName] = useState(
     readPrimitiveSelection(),
   );
+  const [currentPage, setCurrentPage] = useState(1);
 
   const primitivesQuery = useQuery({
     queryKey: ["primitive-library"],
@@ -224,6 +227,11 @@ const PrimitivesPage: React.FC = () => {
         .includes(normalizedKeyword);
     });
   }, [keyword, primitiveRows, selectedCategories]);
+
+  const pagedRows = useMemo(() => {
+    const startIndex = (currentPage - 1) * primitiveCatalogPageSize;
+    return filteredRows.slice(startIndex, startIndex + primitiveCatalogPageSize);
+  }, [currentPage, filteredRows]);
 
   const selectedPrimitive =
     filteredRows.find((item) => item.name === selectedPrimitiveName) ??
@@ -284,7 +292,7 @@ const PrimitivesPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel layoutMode="document" title="目录摘要">
-              <Space direction="vertical" size={6}>
+              <Space orientation="vertical" size={6}>
                 <Typography.Text strong>
                   {filteredRows.length} 个连接器能力
                 </Typography.Text>
@@ -306,36 +314,39 @@ const PrimitivesPage: React.FC = () => {
             title="可用连接器"
             titleHelp="卡片流目录帮助你快速浏览能力分类、参数契约和示例行为定义。"
           >
-            <ProList<WorkflowPrimitiveDescriptor>
-              dataSource={filteredRows}
-              grid={{ gutter: 16, column: 1 }}
-              locale={{
-                emptyText: (
-                  <Empty
-                    description="当前筛选条件下没有匹配的连接器。"
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                ),
-              }}
-              pagination={{ defaultPageSize: 8, showSizeChanger: false }}
-              renderItem={(primitive) => (
-                <List.Item style={{ border: "none", padding: 0 }}>
-                  <PrimitiveCatalogCard
-                    onInspect={() => setSelectedPrimitiveName(primitive.name)}
-                    onOpenExample={() =>
-                      history.push(
-                        buildRuntimeWorkflowsHref({
-                          workflow: primitive.exampleWorkflows[0],
-                        }),
-                      )
-                    }
-                    primitive={primitive}
-                  />
-                </List.Item>
-              )}
-              rowKey="name"
-              split={false}
-            />
+            {filteredRows.length === 0 ? (
+              <Empty
+                description="当前筛选条件下没有匹配的连接器。"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={cardListStyle}>
+                  {pagedRows.map((primitive) => (
+                    <PrimitiveCatalogCard
+                      key={primitive.name}
+                      onInspect={() => setSelectedPrimitiveName(primitive.name)}
+                      onOpenExample={() =>
+                        history.push(
+                          buildRuntimeWorkflowsHref({
+                            workflow: primitive.exampleWorkflows[0],
+                          }),
+                        )
+                      }
+                      primitive={primitive}
+                    />
+                  ))}
+                </div>
+                <Pagination
+                  align="end"
+                  current={currentPage}
+                  onChange={setCurrentPage}
+                  pageSize={primitiveCatalogPageSize}
+                  showSizeChanger={false}
+                  total={filteredRows.length}
+                />
+              </div>
+            )}
           </AevatarPanel>
         }
       />
@@ -354,7 +365,7 @@ const PrimitivesPage: React.FC = () => {
               title="定义"
               titleHelp="连接器描述和别名保持精简，方便快速决策。"
             >
-              <Space direction="vertical" size={8}>
+              <Space orientation="vertical" size={8}>
                 <Space wrap size={[8, 8]}>
                   <AevatarStatusTag domain="governance" status="ready" />
                   <Typography.Text type="secondary">
@@ -424,7 +435,7 @@ const PrimitivesPage: React.FC = () => {
               titleHelp="示例行为定义会把连接器目录和行为设计串起来。"
             >
               {selectedPrimitive.exampleWorkflows.length > 0 ? (
-                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                   {selectedPrimitive.exampleWorkflows.map((workflowName) => (
                     <div
                       key={workflowName}

@@ -3,9 +3,8 @@ import {
   EyeOutlined,
   PlayCircleOutlined,
 } from "@ant-design/icons";
-import { ProList } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Input, List, Select, Space, Typography } from "antd";
+import { Alert, Button, Empty, Input, Pagination, Select, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { history } from "@/shared/navigation/history";
@@ -25,11 +24,14 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import {
   cardListActionStyle,
+  cardListStyle,
   summaryFieldLabelStyle,
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
 import { listVisibleWorkflowCatalogItems } from "@/shared/workflows/catalogVisibility";
+
+const workflowCatalogPageSize = 8;
 
 function readWorkflowSelection(): string {
   if (typeof window === "undefined") {
@@ -186,6 +188,7 @@ const WorkflowsPage: React.FC = () => {
   const [keyword, setKeyword] = useState("");
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState(readWorkflowSelection());
+  const [currentPage, setCurrentPage] = useState(1);
 
   const catalogQuery = useQuery({
     queryKey: ["workflow-catalog"],
@@ -239,6 +242,11 @@ const WorkflowsPage: React.FC = () => {
     });
   }, [keyword, selectedGroups, visibleItems]);
 
+  const pagedItems = useMemo(() => {
+    const startIndex = (currentPage - 1) * workflowCatalogPageSize;
+    return filteredItems.slice(startIndex, startIndex + workflowCatalogPageSize);
+  }, [currentPage, filteredItems]);
+
   const selectedWorkflowDetail = selectedWorkflowQuery.data;
 
   return (
@@ -290,7 +298,7 @@ const WorkflowsPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel layoutMode="document" title="Library Digest">
-              <Space direction="vertical" size={6}>
+              <Space orientation="vertical" size={6}>
                 <Typography.Text strong>
                   {filteredItems.length} workflows in view
                 </Typography.Text>
@@ -320,37 +328,39 @@ const WorkflowsPage: React.FC = () => {
                 type="error"
               />
             ) : null}
-
-            <ProList<WorkflowCatalogItem>
-              dataSource={filteredItems}
-              grid={{ gutter: 16, column: 1 }}
-              locale={{
-                emptyText: (
-                  <Empty
-                    description="No workflows matched the current filter."
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                ),
-              }}
-              pagination={{ defaultPageSize: 8, showSizeChanger: false }}
-              renderItem={(workflow) => (
-                <List.Item style={{ border: "none", padding: 0 }}>
-                  <WorkflowCatalogCard
-                    onInspect={() => setSelectedWorkflow(workflow.name)}
-                    onRun={() =>
-                      history.push(
-                        buildRuntimeRunsHref({
-                          workflow: workflow.name,
-                        }),
-                      )
-                    }
-                    workflow={workflow}
-                  />
-                </List.Item>
-              )}
-              rowKey="name"
-              split={false}
-            />
+            {filteredItems.length === 0 ? (
+              <Empty
+                description="No workflows matched the current filter."
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={cardListStyle}>
+                  {pagedItems.map((workflow) => (
+                    <WorkflowCatalogCard
+                      key={workflow.name}
+                      onInspect={() => setSelectedWorkflow(workflow.name)}
+                      onRun={() =>
+                        history.push(
+                          buildRuntimeRunsHref({
+                            workflow: workflow.name,
+                          }),
+                        )
+                      }
+                      workflow={workflow}
+                    />
+                  ))}
+                </div>
+                <Pagination
+                  align="end"
+                  current={currentPage}
+                  onChange={setCurrentPage}
+                  pageSize={workflowCatalogPageSize}
+                  showSizeChanger={false}
+                  total={filteredItems.length}
+                />
+              </div>
+            )}
           </AevatarPanel>
         }
       />
@@ -399,7 +409,7 @@ const WorkflowsPage: React.FC = () => {
               title="Definition Summary"
               titleHelp="Definition-level signals the operator needs before opening the workflow editor or Runs."
             >
-              <Space direction="vertical" size={8}>
+              <Space orientation="vertical" size={8}>
                 <Space wrap size={[8, 8]}>
                   <AevatarStatusTag
                     domain="governance"

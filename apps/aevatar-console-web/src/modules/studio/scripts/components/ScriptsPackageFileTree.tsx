@@ -44,8 +44,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
             type="button"
             onClick={onToggleCollapsed}
             className="console-scripts-icon-button"
-            title="Expand files"
-            aria-label="Expand files"
+            title="展开文件列表"
+            aria-label="展开文件列表"
           >
             <MenuUnfoldOutlined />
           </button>
@@ -92,16 +92,16 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
     <div className="console-scripts-package-tree">
       <div className="console-scripts-package-tree-head">
         <div>
-          <div className="console-scripts-eyebrow">Package</div>
-          <div className="console-scripts-package-tree-title">Files</div>
+          <div className="console-scripts-eyebrow">文件</div>
+          <div className="console-scripts-package-tree-title">文件列表</div>
         </div>
         <div className="console-scripts-inline-actions">
           <button
             type="button"
             onClick={onToggleCollapsed}
             className="console-scripts-icon-button"
-            title="Collapse files"
-            aria-label="Collapse files"
+            title="收起文件列表"
+            aria-label="收起文件列表"
           >
             <MenuFoldOutlined />
           </button>
@@ -109,8 +109,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
             type="button"
             onClick={() => onAddFile('csharp')}
             className="console-scripts-icon-button"
-            title="Add C# file"
-            aria-label="Add C# file"
+            title="添加 C# 文件"
+            aria-label="添加 C# 文件"
           >
             <PlusOutlined />
           </button>
@@ -118,8 +118,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
             type="button"
             onClick={() => onAddFile('proto')}
             className="console-scripts-icon-button"
-            title="Add proto file"
-            aria-label="Add proto file"
+            title="添加 Proto 文件"
+            aria-label="添加 Proto 文件"
           >
             <FileTextOutlined />
           </button>
@@ -129,7 +129,7 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
       <div className="console-scripts-package-tree-body">
         {entries.length === 0 ? (
           <div className="console-scripts-package-tree-empty">
-            Add a C# or proto file to turn this draft into a script package.
+            先添加一个 C# 或 Proto 文件，再开始编写脚本行为。
           </div>
         ) : (
           entries.map((entry) => {
@@ -160,14 +160,14 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                       {entry.path}
                     </div>
                     <div className="console-scripts-package-file-kind">
-                      {entry.kind === 'csharp' ? 'C# source' : 'Proto schema'}
+                      {entry.kind === 'csharp' ? 'C# 源文件' : 'Proto 定义'}
                     </div>
                   </div>
                 </button>
 
                 <div className="console-scripts-package-file-footer">
                   <div className="console-scripts-package-file-state">
-                    {isEntry ? 'Entry source' : '\u00a0'}
+                    {isEntry ? '入口文件' : '\u00a0'}
                   </div>
                   <div className="console-scripts-inline-actions">
                     {entry.kind === 'csharp' ? (
@@ -175,9 +175,9 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                         type="button"
                         onClick={() => onSetEntry(entry.path)}
                         className={`console-scripts-icon-button ${isEntry ? 'active' : ''}`}
-                        title={isEntry ? 'Entry source' : 'Use as entry source'}
+                        title={isEntry ? '入口文件' : '设为入口文件'}
                         aria-label={
-                          isEntry ? 'Entry source' : `Use ${entry.path} as entry source`
+                          isEntry ? '入口文件' : `将 ${entry.path} 设为入口文件`
                         }
                       >
                         <StarFilled />
@@ -187,8 +187,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                       type="button"
                       onClick={() => onRenameFile(entry.path)}
                       className="console-scripts-icon-button"
-                      title={`Rename ${entry.path}`}
-                      aria-label={`Rename ${entry.path}`}
+                      title={`重命名 ${entry.path}`}
+                      aria-label={`重命名 ${entry.path}`}
                     >
                       <EditOutlined />
                     </button>
@@ -196,8 +196,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                       type="button"
                       onClick={() => onRemoveFile(entry.path)}
                       className="console-scripts-icon-button active"
-                      title={`Remove ${entry.path}`}
-                      aria-label={`Remove ${entry.path}`}
+                      title={`删除 ${entry.path}`}
+                      aria-label={`删除 ${entry.path}`}
                     >
                       <DeleteOutlined />
                     </button>

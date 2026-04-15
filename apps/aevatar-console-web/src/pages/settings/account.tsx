@@ -190,7 +190,7 @@ const AccountSettingsPage: React.FC = () => {
             height: "100%",
           }}
         >
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Space orientation="vertical" size={12} style={{ width: "100%" }}>
             <Typography.Text strong>Access Notes</Typography.Text>
             {accountUsageNotes.map((item) => (
               <Typography.Text key={item}>{item}</Typography.Text>

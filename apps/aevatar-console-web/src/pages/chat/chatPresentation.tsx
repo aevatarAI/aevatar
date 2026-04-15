@@ -1,23 +1,55 @@
-import React, { useCallback, useRef, useState } from "react";
+import {
+  CheckOutlined,
+  DownOutlined,
+  SearchOutlined,
+} from "@ant-design/icons";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { Empty } from "antd";
 import { RuntimeEventPreviewPanel } from "@/shared/agui/runtimeConversationPresentation";
 import { AevatarHeaderSelect } from "@/shared/ui/AevatarHeaderSelect";
+import {
+  CONVERSATION_ROUTE_DEFAULT_VALUE,
+  USER_LLM_ROUTE_GATEWAY,
+  decodeConversationRouteSelectValue,
+  encodeConversationRouteSelectValue,
+  trimConversationValue,
+  type ConversationLlmModelGroup,
+  type ConversationRouteOption,
+} from "./chatConversationConfig";
+import {
+  parseMarkdownBlocks,
+  sanitizeAssistantMessageContent,
+  tokenizeInlineContent,
+  type InlineContentToken,
+  type MarkdownBlock,
+} from "./chatContent";
 import type {
   ChatMessage,
   ConversationMeta,
+  PendingApprovalInfo,
+  PendingRunInterventionInfo,
   RuntimeEvent,
   ServiceOption,
   StepInfo,
   ToolCallInfo,
 } from "./chatTypes";
 
-function renderInline(text: string): React.ReactNode[] {
-  const parts = text.split(/(`[^`]+`)/g);
-  return parts.flatMap((part, index) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
+function renderInlineTokens(
+  tokens: readonly InlineContentToken[],
+  keyPrefix: string
+): React.ReactNode[] {
+  return tokens.map((token, index) => {
+    if (token.kind === "code") {
       return (
         <code
-          key={`code-${index}`}
+          key={`${keyPrefix}-code-${index}`}
           style={{
             background: "#f3f4f6",
             borderRadius: 6,
@@ -28,39 +60,134 @@ function renderInline(text: string): React.ReactNode[] {
             padding: "2px 6px",
           }}
         >
-          {part.slice(1, -1)}
+          {token.text}
         </code>
       );
     }
 
-    return part.split(/(\*\*[^*]+\*\*)/g).map((segment, segmentIndex) => {
-      if (segment.startsWith("**") && segment.endsWith("**")) {
-        return (
-          <strong key={`strong-${index}-${segmentIndex}`}>
-            {segment.slice(2, -2)}
-          </strong>
-        );
-      }
-
-      return (
-        <span key={`span-${index}-${segmentIndex}`}>{segment}</span>
+    const content =
+      token.kind === "link" ? (
+        <a
+          href={token.href}
+          key={`${keyPrefix}-link-${index}`}
+          rel="noreferrer"
+          style={{
+            color: "#2563eb",
+            textDecoration: "underline",
+            textUnderlineOffset: 3,
+          }}
+          target="_blank"
+        >
+          {token.text}
+        </a>
+      ) : (
+        <span key={`${keyPrefix}-text-${index}`}>{token.text}</span>
       );
-    });
+
+    return token.bold ? (
+      <strong key={`${keyPrefix}-strong-${index}`}>{content}</strong>
+    ) : (
+      content
+    );
   });
 }
 
-function renderContent(text: string): React.ReactNode {
-  if (!text) {
-    return null;
-  }
+function renderLineCollection(
+  lines: readonly string[],
+  keyPrefix: string
+): React.ReactNode {
+  return lines.map((line, lineIndex) => (
+    <span key={`${keyPrefix}-line-${lineIndex}`}>
+      {renderInlineTokens(
+        tokenizeInlineContent(line),
+        `${keyPrefix}-inline-${lineIndex}`
+      )}
+      {lineIndex < lines.length - 1 ? <br /> : null}
+    </span>
+  ));
+}
 
-  const blocks = text.split(/(```[\s\S]*?```)/g);
-  return blocks.map((block, blockIndex) => {
-    if (block.startsWith("```") && block.endsWith("```")) {
-      const inner = block.slice(3, -3);
-      const newlineIndex = inner.indexOf("\n");
-      const language = newlineIndex > 0 ? inner.slice(0, newlineIndex).trim() : "";
-      const code = newlineIndex > 0 ? inner.slice(newlineIndex + 1) : inner;
+function renderMarkdownBlock(
+  block: MarkdownBlock,
+  blockIndex: number
+): React.ReactNode {
+  switch (block.kind) {
+    case "heading":
+      return (
+        <div
+          key={`block-${blockIndex}`}
+          style={{
+            color: "#111827",
+            fontSize: Math.max(18 - (block.level - 1) * 2, 14),
+            fontWeight: 700,
+            lineHeight: 1.4,
+            margin: blockIndex === 0 ? "0 0 10px" : "14px 0 10px",
+          }}
+        >
+          {renderInlineTokens(
+            tokenizeInlineContent(block.text),
+            `heading-${blockIndex}`
+          )}
+        </div>
+      );
+    case "paragraph":
+      return (
+        <div key={`block-${blockIndex}`} style={{ margin: "0 0 10px" }}>
+          {renderLineCollection(block.lines, `paragraph-${blockIndex}`)}
+        </div>
+      );
+    case "blockquote":
+      return (
+        <div
+          key={`block-${blockIndex}`}
+          style={{
+            background: "#f8fafc",
+            borderLeft: "3px solid #cbd5e1",
+            borderRadius: 10,
+            color: "#475569",
+            margin: "0 0 12px",
+            padding: "10px 12px",
+          }}
+        >
+          {renderLineCollection(block.lines, `blockquote-${blockIndex}`)}
+        </div>
+      );
+    case "unordered-list":
+    case "ordered-list":
+      return (
+        <div key={`block-${blockIndex}`} style={{ margin: "0 0 10px" }}>
+          {block.items.map((item, itemIndex) => (
+            <div
+              key={`list-${blockIndex}-${itemIndex}`}
+              style={{
+                alignItems: "flex-start",
+                display: "flex",
+                gap: 8,
+                marginTop: itemIndex === 0 ? 0 : 6,
+              }}
+            >
+              <span
+                style={{
+                  color: "#6b7280",
+                  flexShrink: 0,
+                  fontSize: 13,
+                  lineHeight: "24px",
+                  width: 18,
+                }}
+              >
+                {block.kind === "ordered-list" ? `${itemIndex + 1}.` : "•"}
+              </span>
+              <span style={{ minWidth: 0 }}>
+                {renderInlineTokens(
+                  tokenizeInlineContent(item),
+                  `list-${blockIndex}-${itemIndex}`
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    case "code":
       return (
         <div
           key={`block-${blockIndex}`}
@@ -68,11 +195,11 @@ function renderContent(text: string): React.ReactNode {
             background: "#f8fafc",
             border: "1px solid #e5e7eb",
             borderRadius: 14,
-            margin: "8px 0",
+            margin: "8px 0 12px",
             overflow: "hidden",
           }}
         >
-          {language ? (
+          {block.lang ? (
             <div
               style={{
                 background: "#f3f4f6",
@@ -84,7 +211,7 @@ function renderContent(text: string): React.ReactNode {
                 padding: "8px 12px",
               }}
             >
-              {language}
+              {block.lang}
             </div>
           ) : null}
           <pre
@@ -98,23 +225,32 @@ function renderContent(text: string): React.ReactNode {
               whiteSpace: "pre-wrap",
             }}
           >
-            {code}
+            {block.code}
           </pre>
         </div>
       );
-    }
+    case "thematic-break":
+      return (
+        <div
+          key={`block-${blockIndex}`}
+          style={{
+            borderTop: "1px solid #e5e7eb",
+            margin: "14px 0",
+          }}
+        />
+      );
+    default:
+      return null;
+  }
+}
 
-    return (
-      <span key={`text-${blockIndex}`}>
-        {block.split("\n").map((line, lineIndex, lines) => (
-          <span key={`line-${blockIndex}-${lineIndex}`}>
-            {renderInline(line)}
-            {lineIndex < lines.length - 1 ? <br /> : null}
-          </span>
-        ))}
-      </span>
-    );
-  });
+function renderContent(text: string): React.ReactNode {
+  const sanitized = sanitizeAssistantMessageContent(text);
+  if (!sanitized) {
+    return null;
+  }
+
+  return parseMarkdownBlocks(sanitized).map(renderMarkdownBlock);
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -415,15 +551,631 @@ function ThinkingBlock({
   );
 }
 
-export function ChatMessageBubble({
-  message,
+function ApprovalActionButton({
+  busy,
+  label,
+  onClick,
+  tone,
 }: {
+  busy: boolean;
+  label: string;
+  onClick: () => void;
+  tone: "approve" | "reject";
+}): React.ReactElement {
+  const isApprove = tone === "approve";
+  return (
+    <button
+      disabled={busy}
+      onClick={onClick}
+      style={{
+        background: isApprove ? "#111827" : "#ffffff",
+        border: `1px solid ${isApprove ? "#111827" : "#fca5a5"}`,
+        borderRadius: 10,
+        color: isApprove ? "#ffffff" : "#b91c1c",
+        cursor: busy ? "wait" : "pointer",
+        fontSize: 12,
+        fontWeight: 600,
+        opacity: busy ? 0.7 : 1,
+        padding: "8px 12px",
+      }}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+function ApprovalCard({
+  approval,
+  busy,
+  onDecision,
+}: {
+  approval: PendingApprovalInfo;
+  busy: boolean;
+  onDecision?: (requestId: string, approved: boolean) => void;
+}): React.ReactElement {
+  const statusLabel = approval.isDestructive
+    ? "Operator decision required"
+    : "Review before continuing";
+
+  return (
+    <div
+      style={{
+        background: "#fffaf0",
+        border: "1px solid #fdba74",
+        borderRadius: 16,
+        boxShadow: "0 14px 30px rgba(245, 158, 11, 0.08)",
+        color: "#7c2d12",
+        marginBottom: 12,
+        overflow: "hidden",
+        padding: "0",
+      }}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          background: "linear-gradient(180deg, rgba(255,237,213,0.85) 0%, rgba(255,250,240,0.92) 100%)",
+          borderBottom: "1px solid #fed7aa",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 10,
+          justifyContent: "space-between",
+          padding: "14px 14px 12px",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span
+            style={{
+              color: "#9a3412",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+            }}
+          >
+            TOOL APPROVAL
+          </span>
+          <div
+            style={{
+              color: "#111827",
+              fontSize: 15,
+              fontWeight: 700,
+            }}
+          >
+            {approval.toolName || approval.toolCallId || approval.requestId}
+          </div>
+          <span style={{ color: "#9a3412", fontSize: 12, lineHeight: 1.6 }}>
+            {statusLabel}
+          </span>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <span
+            style={{
+              background: "#ffedd5",
+              borderRadius: 999,
+              fontFamily:
+                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 11,
+              padding: "3px 8px",
+            }}
+          >
+            {approval.toolCallId || approval.requestId}
+          </span>
+          {approval.isDestructive ? (
+            <span
+              style={{
+                background: "#fee2e2",
+                borderRadius: 999,
+                color: "#b91c1c",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "3px 8px",
+              }}
+            >
+              Destructive
+            </span>
+          ) : (
+            <span
+              style={{
+                background: "#ecfdf5",
+                borderRadius: 999,
+                color: "#047857",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "3px 8px",
+              }}
+            >
+              Safe to review
+            </span>
+          )}
+          <span
+            style={{
+              background: "#ffffff",
+              border: "1px solid #fed7aa",
+              borderRadius: 999,
+              color: "#9a3412",
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "3px 8px",
+            }}
+          >
+            Timeout {approval.timeoutSeconds}s
+          </span>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px" }}>
+        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+          Review the tool call and decide whether NyxID can continue.
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gap: 10,
+            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          }}
+        >
+          <div
+            style={{
+              background: "rgba(255,255,255,0.78)",
+              border: "1px solid #fed7aa",
+              borderRadius: 12,
+              padding: "10px 12px",
+            }}
+          >
+            <div style={{ color: "#9a3412", fontSize: 11, fontWeight: 700 }}>
+              Tool
+            </div>
+            <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
+              {approval.toolName || "Tool call"}
+            </div>
+          </div>
+          <div
+            style={{
+              background: "rgba(255,255,255,0.78)",
+              border: "1px solid #fed7aa",
+              borderRadius: 12,
+              padding: "10px 12px",
+            }}
+          >
+            <div style={{ color: "#9a3412", fontSize: 11, fontWeight: 700 }}>
+              Impact
+            </div>
+            <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
+              {approval.isDestructive
+                ? "This tool may change runtime state."
+                : "This tool only needs operator confirmation."}
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            color: "#9a3412",
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          Request payload
+        </div>
+
+        {approval.argumentsJson ? (
+          <pre
+            style={{
+              background: "rgba(255,255,255,0.72)",
+              border: "1px solid #fed7aa",
+              borderRadius: 10,
+              color: "#7c2d12",
+              fontFamily:
+                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12,
+              margin: 0,
+              maxHeight: 180,
+              overflow: "auto",
+              padding: "10px 12px",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {approval.argumentsJson}
+          </pre>
+        ) : (
+          <div
+            style={{
+              background: "rgba(255,255,255,0.72)",
+              border: "1px dashed #fdba74",
+              borderRadius: 10,
+              color: "#9a3412",
+              fontSize: 12,
+              padding: "10px 12px",
+            }}
+          >
+            No additional arguments were provided with this request.
+          </div>
+        )}
+
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            justifyContent: "space-between",
+            marginTop: 2,
+          }}
+        >
+          <span style={{ color: "#9a3412", fontSize: 12 }}>
+            Approve to let NyxID continue, or reject to stop this tool call.
+          </span>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <ApprovalActionButton
+              busy={busy}
+              label={busy ? "Applying..." : "Approve"}
+              onClick={() => onDecision?.(approval.requestId, true)}
+              tone="approve"
+            />
+            <ApprovalActionButton
+              busy={busy}
+              label="Reject"
+              onClick={() => onDecision?.(approval.requestId, false)}
+              tone="reject"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type RunInterventionAction =
+  | { kind: "resume"; value?: string }
+  | { kind: "approve"; value?: string }
+  | { kind: "reject"; value?: string }
+  | { kind: "signal"; value?: string };
+
+function RunInterventionCard({
+  busy,
+  intervention,
+  onSubmit,
+}: {
+  busy: boolean;
+  intervention: PendingRunInterventionInfo;
+  onSubmit?: (action: RunInterventionAction) => void;
+}): React.ReactElement {
+  const [value, setValue] = useState("");
+
+  useEffect(() => {
+    setValue("");
+  }, [intervention.key]);
+
+  const isApproval = intervention.kind === "human_approval";
+  const isSignal = intervention.kind === "wait_signal";
+  const requiresInput = intervention.kind === "human_input";
+  const primaryLabel = isSignal
+    ? "Send Signal"
+    : isApproval
+      ? "Approve"
+      : "Resume";
+  const cardTone = isSignal
+    ? {
+        background: "#eff6ff",
+        border: "#93c5fd",
+        text: "#1d4ed8",
+        badge: "#dbeafe",
+      }
+    : {
+        background: "#fff7ed",
+        border: "#fdba74",
+        text: "#9a3412",
+        badge: "#ffedd5",
+      };
+  const helperText = isSignal
+    ? "Add an optional payload before sending the signal."
+    : isApproval
+      ? "Add an optional note before approving or rejecting this gate."
+      : intervention.variableName
+        ? `This value will be available as ${intervention.variableName}.`
+        : "Provide the requested value to resume the run.";
+  const placeholder = isSignal
+    ? "Optional signal payload"
+    : isApproval
+      ? "Optional approval note"
+      : intervention.variableName
+        ? `Provide ${intervention.variableName}`
+        : "Provide the missing input";
+  const trimmedValue = value.trim();
+  const statusLabel = isSignal
+    ? "Waiting on an external signal"
+    : isApproval
+      ? "Operator approval is blocking progress"
+      : "Operator input is required to continue";
+
+  return (
+    <div
+      style={{
+        background: "#ffffff",
+        border: `1px solid ${cardTone.border}`,
+        borderRadius: 16,
+        boxShadow: "0 14px 28px rgba(15, 23, 42, 0.06)",
+        color: cardTone.text,
+        marginBottom: 12,
+        overflow: "hidden",
+        padding: 0,
+      }}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          background: `${cardTone.background}`,
+          borderBottom: `1px solid ${cardTone.border}`,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 10,
+          justifyContent: "space-between",
+          padding: "14px 14px 12px",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+            }}
+          >
+            {isSignal
+              ? "WAIT SIGNAL"
+              : isApproval
+                ? "HUMAN APPROVAL"
+                : "INPUT REQUIRED"}
+          </span>
+          <div
+            style={{
+              color: "#111827",
+              fontSize: 15,
+              fontWeight: 700,
+            }}
+          >
+            {intervention.stepId}
+          </div>
+          <span style={{ fontSize: 12, lineHeight: 1.6 }}>{statusLabel}</span>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <span
+            style={{
+              background: cardTone.badge,
+              borderRadius: 999,
+              fontFamily:
+                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 11,
+              padding: "3px 8px",
+            }}
+          >
+            {intervention.stepId}
+          </span>
+          {intervention.signalName ? (
+            <span
+              style={{
+                background: "rgba(255,255,255,0.72)",
+                borderRadius: 999,
+                fontSize: 11,
+                padding: "3px 8px",
+              }}
+            >
+              Signal: {intervention.signalName}
+            </span>
+          ) : null}
+          {intervention.variableName ? (
+            <span
+              style={{
+                background: "rgba(255,255,255,0.72)",
+                borderRadius: 999,
+                fontSize: 11,
+                padding: "3px 8px",
+              }}
+            >
+              Variable: {intervention.variableName}
+            </span>
+          ) : null}
+          {intervention.timeoutSeconds ? (
+            <span
+              style={{
+                background: "#ffffff",
+                border: `1px solid ${cardTone.border}`,
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 600,
+                padding: "3px 8px",
+              }}
+            >
+              Timeout {intervention.timeoutSeconds}s
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px" }}>
+        <div style={{ color: "#374151", fontSize: 13, lineHeight: 1.7 }}>
+          {intervention.prompt}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gap: 10,
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+          }}
+        >
+          <div
+            style={{
+              background: "#fafaf8",
+              border: "1px solid #ece8e1",
+              borderRadius: 12,
+              padding: "10px 12px",
+            }}
+          >
+            <div style={{ color: "#78716c", fontSize: 11, fontWeight: 700 }}>
+              Next action
+            </div>
+            <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
+              {isSignal
+                ? "Send the signal to unblock the run."
+                : isApproval
+                  ? "Approve or reject this gate."
+                  : "Provide the missing value and resume."}
+            </div>
+          </div>
+          <div
+            style={{
+              background: "#fafaf8",
+              border: "1px solid #ece8e1",
+              borderRadius: 12,
+              padding: "10px 12px",
+            }}
+          >
+            <div style={{ color: "#78716c", fontSize: 11, fontWeight: 700 }}>
+              Context
+            </div>
+            <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
+              {helperText}
+            </div>
+          </div>
+        </div>
+
+        <label
+          style={{
+            color: "#6b7280",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: 12,
+            fontWeight: 700,
+            gap: 8,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          {isSignal
+            ? "Signal payload"
+            : isApproval
+              ? "Operator note"
+              : "Required input"}
+          <textarea
+            aria-label={`Run intervention input ${intervention.key}`}
+            disabled={busy}
+            placeholder={placeholder}
+            style={{
+              background: "#ffffff",
+              border: `1px solid ${cardTone.border}`,
+              borderRadius: 12,
+              color: "#1f2937",
+              fontFamily: "inherit",
+              fontSize: 13,
+              fontWeight: 400,
+              letterSpacing: "normal",
+              lineHeight: 1.6,
+              minHeight: 84,
+              padding: "10px 12px",
+              resize: "vertical",
+              textTransform: "none",
+              width: "100%",
+            }}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        </label>
+
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            justifyContent: "space-between",
+          }}
+        >
+          <span style={{ color: "#6b7280", fontSize: 12 }}>
+            {requiresInput && !trimmedValue
+              ? "A value is required before the run can continue."
+              : isSignal
+                ? "Sending the signal will unblock this wait state."
+                : isApproval
+                  ? "Reject only when the run should stop at this gate."
+                  : "Resume will continue the run with the value above."}
+          </span>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <ApprovalActionButton
+              busy={busy || (requiresInput && !trimmedValue)}
+              label={busy ? "Applying..." : primaryLabel}
+              onClick={() =>
+                onSubmit?.({
+                  kind: isSignal ? "signal" : isApproval ? "approve" : "resume",
+                  value: trimmedValue || undefined,
+                })
+              }
+              tone="approve"
+            />
+            {isApproval ? (
+              <ApprovalActionButton
+                busy={busy}
+                label="Reject"
+                onClick={() =>
+                  onSubmit?.({
+                    kind: "reject",
+                    value: trimmedValue || undefined,
+                  })
+                }
+                tone="reject"
+              />
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ChatMessageBubble({
+  activeApprovalRequestId,
+  activeRunInterventionKey,
+  message,
+  onApprovalDecision,
+  onRunInterventionAction,
+}: {
+  activeApprovalRequestId?: string | null;
+  activeRunInterventionKey?: string | null;
   message: ChatMessage;
+  onApprovalDecision?: (requestId: string, approved: boolean) => void;
+  onRunInterventionAction?: (
+    messageId: string,
+    intervention: PendingRunInterventionInfo,
+    action: RunInterventionAction
+  ) => void;
 }): React.ReactElement {
   const isUser = message.role === "user";
   const [actionsOpen, setActionsOpen] = useState(false);
   const hasSteps = (message.steps?.length ?? 0) > 0;
   const hasTools = (message.toolCalls?.length ?? 0) > 0;
+  const isProcessingApproval =
+    activeApprovalRequestId &&
+    message.pendingApproval?.requestId === activeApprovalRequestId;
+  const isProcessingRunIntervention =
+    activeRunInterventionKey &&
+    message.pendingRunIntervention?.key === activeRunInterventionKey;
 
   if (isUser) {
     return (
@@ -485,6 +1237,28 @@ export function ChatMessageBubble({
           <ThinkingBlock
             isStreaming={message.status === "streaming"}
             text={message.thinking}
+          />
+        ) : null}
+
+        {message.pendingApproval ? (
+          <ApprovalCard
+            approval={message.pendingApproval}
+            busy={Boolean(isProcessingApproval)}
+            onDecision={onApprovalDecision}
+          />
+        ) : null}
+
+        {message.pendingRunIntervention ? (
+          <RunInterventionCard
+            busy={Boolean(isProcessingRunIntervention)}
+            intervention={message.pendingRunIntervention}
+            onSubmit={(action) =>
+              onRunInterventionAction?.(
+                message.id,
+                message.pendingRunIntervention!,
+                action
+              )
+            }
           />
         ) : null}
 
@@ -682,10 +1456,17 @@ export function ServiceSelector({
       minWidth={168}
       onChange={onSelect}
       options={services.map((service) => ({
-        badge: service.kind === "nyxid-chat" ? "Built-in" : "Service",
+        badge:
+          service.kind === "nyxid-chat"
+            ? "Built-in"
+            : service.kind === "onboarding"
+              ? "Setup"
+              : "Service",
         description:
           service.kind === "nyxid-chat"
             ? "Built-in console assistant"
+            : service.kind === "onboarding"
+              ? "Connect an AI provider and save it to Studio Settings"
             : `${service.id}${service.deploymentStatus ? ` · ${service.deploymentStatus}` : ""}`,
         label: service.label,
         value: service.id,
@@ -695,17 +1476,580 @@ export function ServiceSelector({
   );
 }
 
+export function ChatToolsMenu({
+  advancedOpen,
+  eventStreamOpen,
+  onToggleAdvanced,
+  onToggleEventStream,
+}: {
+  advancedOpen: boolean;
+  eventStreamOpen: boolean;
+  onToggleAdvanced: () => void;
+  onToggleEventStream: () => void;
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const activeCount = Number(advancedOpen) + Number(eventStreamOpen);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  const menuItems = [
+    {
+      actionLabel: advancedOpen ? "Hide panel" : "Open panel",
+      description:
+        "Inspect scope state, launch endpoints, and review runtime evidence.",
+      label: "Advanced Console",
+      onClick: onToggleAdvanced,
+      open: advancedOpen,
+    },
+    {
+      actionLabel: eventStreamOpen ? "Hide stream" : "Show stream",
+      description:
+        "Review raw AGUI runtime events when you need protocol-level detail.",
+      label: "Event Stream",
+      onClick: onToggleEventStream,
+      open: eventStreamOpen,
+    },
+  ] as const;
+
+  return (
+    <div ref={rootRef} style={{ position: "relative" }}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Tools"
+        onClick={() => setOpen((current) => !current)}
+        style={{
+          alignItems: "center",
+          background: "#ffffff",
+          border: `1px solid ${open ? "#d9e5fb" : "#e7e5e4"}`,
+          borderRadius: 10,
+          color: "#4b5563",
+          cursor: "pointer",
+          display: "inline-flex",
+          fontSize: 12,
+          fontWeight: 600,
+          gap: 8,
+          padding: "8px 12px",
+        }}
+        type="button"
+      >
+        <span>Tools</span>
+        {activeCount > 0 ? (
+          <span
+            style={{
+              background: "#eff6ff",
+              borderRadius: 999,
+              color: "#2563eb",
+              fontSize: 11,
+              fontWeight: 700,
+              minWidth: 18,
+              padding: "2px 6px",
+              textAlign: "center",
+            }}
+          >
+            {activeCount}
+          </span>
+        ) : null}
+        <DownOutlined
+          style={{
+            color: open ? "#2563eb" : "#9ca3af",
+            fontSize: 11,
+            transform: open ? "rotate(180deg)" : undefined,
+          }}
+        />
+      </button>
+
+      {open ? (
+        <div
+          role="menu"
+          style={{
+            background: "#ffffff",
+            border: "1px solid #e7e5e4",
+            borderRadius: 16,
+            boxShadow: "0 18px 42px rgba(15, 23, 42, 0.12)",
+            minWidth: 320,
+            padding: 10,
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 10px)",
+            zIndex: 12,
+          }}
+        >
+          <div
+            style={{
+              color: "#9ca3af",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: "0.12em",
+              padding: "4px 6px 10px",
+              textTransform: "uppercase",
+            }}
+          >
+            Operator Tools
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {menuItems.map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  background: item.open ? "#f8fafc" : "#ffffff",
+                  border: `1px solid ${item.open ? "#cbd5e1" : "#ece8e1"}`,
+                  borderRadius: 14,
+                  display: "flex",
+                  gap: 12,
+                  justifyContent: "space-between",
+                  padding: "12px 12px 12px 14px",
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      alignItems: "center",
+                      color: "#111827",
+                      display: "flex",
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>
+                      {item.label}
+                    </span>
+                    {item.open ? (
+                      <span
+                        style={{
+                          background: "#ecfdf5",
+                          borderRadius: 999,
+                          color: "#047857",
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: "0.08em",
+                          padding: "2px 8px",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Live
+                      </span>
+                    ) : null}
+                  </div>
+                  <div
+                    style={{
+                      color: "#6b7280",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      marginTop: 4,
+                    }}
+                  >
+                    {item.description}
+                  </div>
+                </div>
+                <button
+                  aria-label={item.label}
+                  onClick={() => {
+                    item.onClick();
+                    setOpen(false);
+                  }}
+                  role="menuitem"
+                  style={{
+                    alignSelf: "center",
+                    background: item.open ? "#eff6ff" : "#111827",
+                    border: `1px solid ${item.open ? "#bfdbfe" : "#111827"}`,
+                    borderRadius: 999,
+                    color: item.open ? "#1d4ed8" : "#ffffff",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "8px 12px",
+                  }}
+                  type="button"
+                >
+                  {item.actionLabel}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function ConversationLlmConfigBar({
+  disabled = false,
+  effectiveModel,
+  effectiveRoute,
+  effectiveRouteLabel,
+  modelGroups,
+  modelValue,
+  modelsLoading,
+  onModelChange,
+  onReset,
+  onRouteChange,
+  routeOptions,
+  routeValue,
+}: {
+  disabled?: boolean;
+  effectiveModel: string;
+  effectiveRoute: string;
+  effectiveRouteLabel: string;
+  modelGroups: readonly ConversationLlmModelGroup[];
+  modelValue?: string;
+  modelsLoading: boolean;
+  onModelChange: (value: string | undefined) => void;
+  onReset: () => void;
+  onRouteChange: (value: string | undefined) => void;
+  routeOptions: readonly ConversationRouteOption[];
+  routeValue?: string;
+}): React.ReactElement {
+  const hasOverride =
+    routeValue !== undefined || Boolean(trimConversationValue(modelValue));
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const [panelPosition, setPanelPosition] = useState<{
+    height: number;
+    left: number;
+    top: number;
+    width: number;
+  } | null>(null);
+  const selectedModel = trimConversationValue(modelValue) || effectiveModel;
+  const routeSelectValue = encodeConversationRouteSelectValue(routeValue);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredGroups = useMemo(
+    () =>
+      modelGroups
+        .map((group) => ({
+          ...group,
+          models: normalizedQuery
+            ? group.models.filter((model) =>
+                model.toLowerCase().includes(normalizedQuery)
+              )
+            : group.models,
+        }))
+        .filter((group) => group.models.length > 0),
+    [modelGroups, normalizedQuery]
+  );
+  const exactModelMatch = useMemo(
+    () =>
+      Boolean(
+        query.trim() &&
+          modelGroups.some((group) =>
+            group.models.some(
+              (model) => model.toLowerCase() === normalizedQuery
+            )
+          )
+      ),
+    [modelGroups, normalizedQuery, query]
+  );
+
+  useEffect(() => {
+    if (!open) {
+      setPanelPosition(null);
+      setQuery("");
+      return undefined;
+    }
+
+    const updatePanelPosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) {
+        return;
+      }
+
+      const triggerRect = trigger.getBoundingClientRect();
+      const viewportPadding = 12;
+      const offset = 12;
+      const preferredHeight = 460;
+      const preferredWidth = 380;
+      const panelWidth = Math.min(
+        preferredWidth,
+        window.innerWidth - viewportPadding * 2
+      );
+      const spaceAbove = Math.max(
+        0,
+        triggerRect.top - viewportPadding - offset
+      );
+      const spaceBelow = Math.max(
+        0,
+        window.innerHeight - triggerRect.bottom - viewportPadding - offset
+      );
+      const panelHeight = Math.min(
+        preferredHeight,
+        window.innerHeight - viewportPadding * 2
+      );
+      const preferAbove = spaceAbove >= panelHeight || spaceAbove >= spaceBelow;
+
+      let left = triggerRect.left;
+      left = Math.max(
+        viewportPadding,
+        Math.min(left, window.innerWidth - panelWidth - viewportPadding)
+      );
+
+      let top = preferAbove
+        ? triggerRect.top - panelHeight - offset
+        : triggerRect.bottom + offset;
+      top = Math.max(
+        viewportPadding,
+        Math.min(top, window.innerHeight - panelHeight - viewportPadding)
+      );
+
+      setPanelPosition({
+        height: panelHeight,
+        left,
+        top,
+        width: panelWidth,
+      });
+    };
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Node)) {
+        return;
+      }
+
+      if (
+        triggerRef.current?.contains(event.target) ||
+        panelRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+
+      setOpen(false);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    const rafId = window.requestAnimationFrame(updatePanelPosition);
+    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("resize", updatePanelPosition);
+    window.addEventListener("scroll", updatePanelPosition, true);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("resize", updatePanelPosition);
+      window.removeEventListener("scroll", updatePanelPosition, true);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  const handleModelSelect = useCallback(
+    (nextModel?: string) => {
+      onModelChange(trimConversationValue(nextModel));
+      setOpen(false);
+      setQuery("");
+    },
+    [onModelChange]
+  );
+
+  const renderPanel = () => {
+    if (!open || typeof document === "undefined") {
+      return null;
+    }
+
+    return createPortal(
+      <div
+        className="scope-chat-llm-panel"
+        ref={panelRef}
+        style={
+          panelPosition
+            ? {
+                height: panelPosition.height,
+                left: panelPosition.left,
+                maxWidth: "min(380px, calc(100vw - 24px))",
+                position: "fixed",
+                top: panelPosition.top,
+                width: panelPosition.width,
+                zIndex: 90,
+              }
+            : {
+                left: 0,
+                position: "fixed",
+                top: 0,
+                visibility: "hidden",
+                width: 380,
+                zIndex: 90,
+              }
+        }
+      >
+        <div className="scope-chat-llm-panel-header">
+          <div className="scope-chat-llm-panel-title">Conversation model</div>
+          {hasOverride ? (
+            <button
+              className="scope-chat-llm-reset"
+              onClick={() => {
+                onReset();
+                setOpen(false);
+              }}
+              type="button"
+            >
+              Reset
+            </button>
+          ) : null}
+        </div>
+
+        <div className="scope-chat-llm-search">
+          <SearchOutlined className="scope-chat-llm-search-icon" />
+          <input
+            aria-label="Search conversation models"
+            className="scope-chat-llm-search-input"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && query.trim()) {
+                event.preventDefault();
+                handleModelSelect(query.trim());
+              }
+            }}
+            placeholder={modelsLoading ? "Loading models..." : "Search models..."}
+            value={query}
+          />
+        </div>
+
+        <div className="scope-chat-llm-route-row">
+          <span className="scope-chat-llm-route-label">Route</span>
+          <select
+            aria-label="Conversation route"
+            className="scope-chat-llm-route-select"
+            onChange={(event) =>
+              onRouteChange(
+                decodeConversationRouteSelectValue(event.target.value)
+              )
+            }
+            value={routeSelectValue}
+          >
+            <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>
+              Config default
+            </option>
+            {routeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="scope-chat-llm-options">
+          {query.trim() && !exactModelMatch ? (
+            <button
+              className="scope-chat-llm-option scope-chat-llm-option--manual"
+              onClick={() => handleModelSelect(query.trim())}
+              type="button"
+            >
+              <div className="scope-chat-llm-option-main">
+                <CheckOutlined style={{ opacity: 0 }} />
+                <span>Use "{query.trim()}"</span>
+              </div>
+              <span className="scope-chat-llm-option-badge">Manual</span>
+            </button>
+          ) : null}
+
+          {!modelsLoading && filteredGroups.length === 0 ? (
+            <div className="scope-chat-llm-empty">
+              No models for {effectiveRouteLabel}
+            </div>
+          ) : null}
+
+          {filteredGroups.map((group) => (
+            <div className="scope-chat-llm-group" key={group.id}>
+              <div className="scope-chat-llm-group-label">{group.label}</div>
+              {group.models.map((model) => {
+                const isActive = selectedModel === model;
+                return (
+                  <button
+                    className={`scope-chat-llm-option${isActive ? " is-active" : ""}`}
+                    key={model}
+                    onClick={() => handleModelSelect(model)}
+                    type="button"
+                  >
+                    <div className="scope-chat-llm-option-main">
+                      <CheckOutlined style={{ opacity: isActive ? 1 : 0 }} />
+                      <span>{model}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>,
+      document.body
+    );
+  };
+
+  return (
+    <div className="scope-chat-llm-bar">
+      <button
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label="Conversation model settings"
+        className="scope-chat-llm-trigger"
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+        ref={triggerRef}
+        type="button"
+      >
+        <span className="scope-chat-llm-trigger-label">
+          {selectedModel || "Provider default"}
+        </span>
+        <DownOutlined
+          className="scope-chat-llm-chevron"
+          style={{
+            fontSize: 15,
+            transform: open ? "rotate(180deg)" : undefined,
+          }}
+        />
+      </button>
+      <span className="scope-chat-llm-inline-route">
+        {effectiveRoute === USER_LLM_ROUTE_GATEWAY
+          ? effectiveRouteLabel
+          : `via ${effectiveRouteLabel}`}
+      </span>
+      {renderPanel()}
+    </div>
+  );
+}
+
 export function ChatInput({
   disabled,
+  footer,
   isStreaming,
   onChange,
+  placeholder,
   onSend,
   onStop,
   value,
 }: {
   disabled: boolean;
+  footer?: React.ReactNode;
   isStreaming: boolean;
   onChange: (value: string) => void;
+  placeholder?: string;
   onSend: () => void;
   onStop: () => void;
   value: string;
@@ -737,104 +2081,124 @@ export function ChatInput({
     <div style={{ position: "relative" }}>
       <div
         style={{
-          alignItems: "flex-end",
           background: "#ffffff",
           border: "1px solid #e7e5e4",
           borderRadius: 18,
           boxShadow: "0 1px 2px rgba(15, 23, 42, 0.06)",
           display: "flex",
+          flexDirection: "column",
           overflow: "hidden",
         }}
       >
-        <textarea
-          disabled={disabled}
-          onChange={(event) => {
-            onChange(event.target.value);
-            resizeTextarea();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder="Describe the task, ask a question, or paste the next operator instruction."
-          ref={textareaRef}
-          rows={1}
+        <div
           style={{
-            background: "transparent",
-            border: "none",
-            color: "#111827",
-            flex: 1,
-            fontSize: 14,
-            minHeight: 48,
-            outline: "none",
-            padding: "14px 16px",
-            resize: "none",
+            alignItems: "flex-end",
+            display: "flex",
           }}
-          value={value}
-        />
-        <div style={{ padding: 8 }}>
-          {isStreaming ? (
-            <button
-              aria-label="Stop"
-              onClick={onStop}
-              style={{
-                alignItems: "center",
-                background: "#ef4444",
-                border: "none",
-                borderRadius: 10,
-                color: "#ffffff",
-                cursor: "pointer",
-                display: "flex",
-                height: 34,
-                justifyContent: "center",
-                width: 34,
-              }}
-              type="button"
-            >
-              <svg fill="currentColor" height="14" viewBox="0 0 24 24" width="14">
-                <rect height="12" rx="1" width="12" x="6" y="6" />
-              </svg>
-            </button>
-          ) : (
-            <button
-              aria-label="Send"
-              disabled={!value.trim() || disabled}
-              onClick={handleSend}
-              style={{
-                alignItems: "center",
-                background: "#18181b",
-                border: "none",
-                borderRadius: 10,
-                color: "#ffffff",
-                cursor:
-                  !value.trim() || disabled ? "not-allowed" : "pointer",
-                display: "flex",
-                height: 34,
-                justifyContent: "center",
-                opacity: !value.trim() || disabled ? 0.28 : 1,
-                width: 34,
-              }}
-              type="button"
-            >
-              <svg
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                height="16"
-                viewBox="0 0 24 24"
-                width="16"
+        >
+          <textarea
+            disabled={disabled}
+            onChange={(event) => {
+              onChange(event.target.value);
+              resizeTextarea();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder={placeholder || "Send a message..."}
+            ref={textareaRef}
+            rows={1}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#111827",
+              flex: 1,
+              fontSize: 14,
+              minHeight: 62,
+              outline: "none",
+              padding: "12px 16px 8px",
+              resize: "none",
+            }}
+            value={value}
+          />
+          <div style={{ padding: "6px 8px 6px 0" }}>
+            {isStreaming ? (
+              <button
+                aria-label="Stop"
+                onClick={onStop}
+                style={{
+                  alignItems: "center",
+                  background: "#ef4444",
+                  border: "none",
+                  borderRadius: 10,
+                  color: "#ffffff",
+                  cursor: "pointer",
+                  display: "flex",
+                  height: 34,
+                  justifyContent: "center",
+                  width: 34,
+                }}
+                type="button"
               >
-                <path
-                  d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-          )}
+                <svg fill="currentColor" height="14" viewBox="0 0 24 24" width="14">
+                  <rect height="12" rx="1" width="12" x="6" y="6" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                aria-label="Send"
+                disabled={!value.trim() || disabled}
+                onClick={handleSend}
+                style={{
+                  alignItems: "center",
+                  background: "#18181b",
+                  border: "none",
+                  borderRadius: 10,
+                  color: "#ffffff",
+                  cursor:
+                    !value.trim() || disabled ? "not-allowed" : "pointer",
+                  display: "flex",
+                  height: 34,
+                  justifyContent: "center",
+                  opacity: !value.trim() || disabled ? 0.28 : 1,
+                  width: 34,
+                }}
+                type="button"
+              >
+                <svg
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  height="16"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <path
+                    d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
+        {footer ? (
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              gap: 12,
+              minHeight: 34,
+              padding: "0 16px 10px",
+            }}
+          >
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1123,43 +2487,128 @@ export function ConversationSidebar({
 export function ChatMetaStrip({
   actorId,
   commandId,
+  modelLabel,
   runId,
+  routeLabel,
   scopeId,
   serviceId,
 }: {
   actorId?: string;
   commandId?: string;
+  modelLabel?: string;
   runId?: string;
+  routeLabel?: string;
   scopeId?: string;
   serviceId?: string;
 }): React.ReactElement {
-  const items = [
-    serviceId ? `Service: ${serviceId}` : null,
-    scopeId ? `Scope: ${scopeId}` : null,
-    runId ? `Run: ${runId}` : null,
-    actorId ? `Actor: ${actorId}` : null,
-    commandId ? `Command: ${commandId}` : null,
-  ].filter(Boolean);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const primaryItems = [
+    serviceId ? { label: "Service", value: serviceId } : null,
+    routeLabel ? { label: "Route", value: routeLabel } : null,
+    modelLabel ? { label: "Model", value: modelLabel } : null,
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
+  const detailItems = [
+    scopeId ? { label: "Scope", value: scopeId } : null,
+    runId ? { label: "Run", value: runId } : null,
+    actorId ? { label: "Actor", value: actorId } : null,
+    commandId ? { label: "Command", value: commandId } : null,
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
+
+  const renderChip = (
+    item: { label: string; value: string },
+    tone: "default" | "muted" = "default"
+  ) => (
+    <span
+      key={`${item.label}:${item.value}`}
+      style={{
+        background: tone === "default" ? "#f5f5f4" : "#fafaf9",
+        border: `1px solid ${tone === "default" ? "#e7e5e4" : "#eceae5"}`,
+        borderRadius: 999,
+        color: tone === "default" ? "#57534e" : "#78716c",
+        display: "inline-flex",
+        fontSize: 11,
+        gap: 6,
+        lineHeight: 1,
+        padding: "6px 10px",
+      }}
+    >
+      <span style={{ fontWeight: 700 }}>{item.label}</span>
+      <span>{item.value}</span>
+    </span>
+  );
+
+  if (primaryItems.length === 0 && detailItems.length === 0) {
+    return <div style={{ marginTop: 8 }} />;
+  }
 
   return (
     <div
       style={{
-        color: "#d1d5db",
-        fontSize: 11,
+        alignItems: "center",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
         marginTop: 8,
-        textAlign: "center",
       }}
     >
-      {items.join(" · ")}
+      <div
+        style={{
+          alignItems: "center",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+          justifyContent: "center",
+        }}
+      >
+        {primaryItems.map((item) => renderChip(item))}
+        {detailItems.length > 0 ? (
+          <button
+            onClick={() => setDetailsOpen((current) => !current)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#9ca3af",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "4px 2px",
+            }}
+            type="button"
+          >
+            {detailsOpen ? "Hide runtime details" : "Runtime details"}
+          </button>
+        ) : null}
+      </div>
+      {detailsOpen ? (
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            justifyContent: "center",
+          }}
+        >
+          {detailItems.map((item) => renderChip(item, "muted"))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export function EmptyChatState({
+  actionLabel,
   description,
+  footnote,
+  highlights,
+  onAction,
   title,
 }: {
+  actionLabel?: string;
   description: string;
+  footnote?: string;
+  highlights?: readonly string[];
+  onAction?: () => void;
   title: string;
 }): React.ReactElement {
   return (
@@ -1170,49 +2619,146 @@ export function EmptyChatState({
         flexDirection: "column",
         justifyContent: "center",
         minHeight: 360,
+        padding: "12px 0 20px",
         textAlign: "center",
       }}
     >
       <div
         style={{
-          borderRadius: 18,
-          boxShadow: "0 18px 36px rgba(15, 23, 42, 0.12)",
-          display: "flex",
-          height: 48,
-          justifyContent: "center",
-          marginBottom: 16,
-          overflow: "hidden",
-          width: 48,
+          background: "#ffffff",
+          border: "1px solid #ece8e1",
+          borderRadius: 24,
+          boxShadow: "0 20px 50px rgba(15, 23, 42, 0.08)",
+          maxWidth: 520,
+          padding: "28px 28px 24px",
+          width: "100%",
         }}
       >
-        <img
-          alt="NyxID"
-          src="/nyxid-logo.png"
+        <div
           style={{
-            display: "block",
-            height: "100%",
-            width: "100%",
+            color: "#9ca3af",
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "0.14em",
+            marginBottom: 14,
+            textTransform: "uppercase",
           }}
-        />
-      </div>
-      <div
-        style={{
-          color: "#374151",
-          fontSize: 16,
-          fontWeight: 600,
-          marginBottom: 8,
-        }}
-      >
-        {title}
-      </div>
-      <div
-        style={{
-          color: "#9ca3af",
-          fontSize: 13,
-          maxWidth: 420,
-        }}
-      >
-        {description}
+        >
+          Ready in Console
+        </div>
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            height: 52,
+            justifyContent: "center",
+            margin: "0 auto 18px",
+            width: 52,
+          }}
+        >
+          <div
+            style={{
+              borderRadius: 18,
+              boxShadow: "0 18px 36px rgba(15, 23, 42, 0.12)",
+              display: "flex",
+              height: 48,
+              justifyContent: "center",
+              overflow: "hidden",
+              width: 48,
+            }}
+          >
+            <img
+              alt="NyxID"
+              src="/nyxid-logo.png"
+              style={{
+                display: "block",
+                height: "100%",
+                width: "100%",
+              }}
+            />
+          </div>
+        </div>
+        <div
+          style={{
+            color: "#111827",
+            fontSize: 20,
+            fontWeight: 700,
+            marginBottom: 10,
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            color: "#6b7280",
+            fontSize: 14,
+            lineHeight: 1.7,
+            margin: "0 auto",
+            maxWidth: 420,
+          }}
+        >
+          {description}
+        </div>
+        {highlights && highlights.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gap: 10,
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+              marginTop: 20,
+              textAlign: "left",
+            }}
+          >
+            {highlights.map((item) => (
+              <div
+                key={item}
+                style={{
+                  background: "#fafaf8",
+                  border: "1px solid #ece8e1",
+                  borderRadius: 16,
+                  color: "#57534e",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  minHeight: 74,
+                  padding: "12px 14px",
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {actionLabel && onAction ? (
+          <button
+            onClick={onAction}
+            style={{
+              background: "#111827",
+              border: "none",
+              borderRadius: 999,
+              color: "#ffffff",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+              marginTop: 22,
+              padding: "11px 18px",
+            }}
+            type="button"
+          >
+            {actionLabel}
+          </button>
+        ) : null}
+        {footnote ? (
+          <div
+            style={{
+              color: "#9ca3af",
+              fontSize: 12,
+              lineHeight: 1.6,
+              marginTop: actionLabel && onAction ? 14 : 18,
+            }}
+          >
+            {footnote}
+          </div>
+        ) : null}
       </div>
     </div>
   );

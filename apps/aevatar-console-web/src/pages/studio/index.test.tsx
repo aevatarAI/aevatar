@@ -969,13 +969,14 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 
 jest.mock("./components/StudioShell", () => ({
   __esModule: true,
-  default: ({ alerts, children, navItems = [], onSelectPage }: any) => {
+  default: ({ alerts, children, contextBar, navItems = [], onSelectPage }: any) => {
     const React = require("react");
     return React.createElement(
       "div",
       null,
       [
         React.createElement("div", { key: "workbench" }, "Workbench"),
+        contextBar ? React.createElement("div", { key: "context-bar" }, contextBar) : null,
         alerts ? React.createElement("div", { key: "alerts" }, alerts) : null,
         ...navItems.map((item: any) =>
           React.createElement(
@@ -1258,7 +1259,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
             type: "button",
             onClick: () => props.onPublishWorkflow?.(),
           },
-          "Bind scope"
+          "Bind team entry"
         ),
         props.scopeBinding?.available &&
         props.projectEntryReadyForCurrentWorkflow
@@ -1271,7 +1272,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
               },
               props.projectEntrySurface === "chat"
                 ? "Open Chat"
-                : "Open Project Invoke"
+                : "Open Legacy Invoke Lab"
             )
           : null,
         React.createElement(
@@ -1628,8 +1629,9 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio"
     );
 
-    expect(await screen.findByText("团队构建器上下文")).toBeTruthy();
-    expect(screen.getByText("团队 A / 成员 Alpha")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "← 团队 A" })).toBeTruthy();
+    expect(screen.getByText(/成员 Alpha/)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "测试运行" }).length).toBeGreaterThan(0);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/studio");
@@ -1643,23 +1645,21 @@ describe("StudioPage", () => {
     expect(searchParams.get("workflow")).toBe("workflow-1");
     expect(searchParams.get("tab")).toBe("studio");
 
-    fireEvent.click(screen.getByRole("button", { name: "查看行为定义" }));
+    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
     });
   });
 
-  it("opens the Files workspace when the route requests the files tab", async () => {
+  it("falls back to behaviors when the removed files tab is requested", async () => {
     renderStudioPage("/studio?tab=files");
 
-    expect(await screen.findByRole("heading", { name: "Files" })).toBeTruthy();
-    expect(screen.getByTestId("studio-files-viewport")).toHaveStyle({
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeTruthy();
+    expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
-      flex: "1",
       flexDirection: "column",
-      minHeight: "0",
-      overflow: "hidden",
+      minWidth: "0",
     });
   });
 
@@ -1973,6 +1973,48 @@ describe("StudioPage", () => {
     );
   });
 
+  it("prefers the active scope binding workflow when Studio opens in a team context", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "workflow-2",
+        name: "other-workflow",
+        description: "Other workflow",
+        fileName: "other-workflow.yaml",
+        filePath: "/tmp/workflows/other-workflow.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+      {
+        workflowId: "workflow-1",
+        name: "workspace-demo",
+        description: "Workspace workflow",
+        fileName: "workspace-demo.yaml",
+        filePath: "/tmp/workflows/workspace-demo.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 2,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+    ]);
+
+    renderStudioPage("/studio?scopeId=scope-1&tab=studio");
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("workflow")).toBe("workflow-1");
+      expect(searchParams.get("tab")).toBe("studio");
+    });
+  });
+
   it("opens the scripts workspace when the route only carries a script id", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -2096,7 +2138,9 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Bind scope" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Bind team entry" })
+    );
 
     await waitFor(() => {
       expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
@@ -2109,7 +2153,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("opens Chat when the published service exposes a chat endpoint", async () => {
+  it("does not expose a direct chat shortcut from Studio even when the published service has a chat endpoint", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -2117,20 +2161,16 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Chat" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/chat");
-    });
-    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
-      "scope-1"
-    );
-    expect(new URLSearchParams(window.location.search).get("serviceId")).toBe(
-      "default"
-    );
+    expect(screen.queryByRole("button", { name: "Open Chat" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Open Legacy Invoke Lab" })
+    ).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "测试运行" }).length
+    ).toBeGreaterThan(0);
   });
 
-  it("falls back to Project Invoke when the published service has no chat endpoint", async () => {
+  it("does not expose the legacy invoke shortcut when the published service has no chat endpoint", async () => {
     mockServicesApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
@@ -2156,16 +2196,13 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Open Project Invoke" })
-    );
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/scopes/invoke");
-    });
-    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
-      "scope-1"
-    );
+    expect(
+      screen.queryByRole("button", { name: "Open Legacy Invoke Lab" })
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Chat" })).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "测试运行" }).length
+    ).toBeGreaterThan(0);
   });
 
   it("does not offer Chat when the selected workflow is not the active binding", async () => {
@@ -2181,11 +2218,11 @@ describe("StudioPage", () => {
       screen.queryByRole("button", { name: "Open Chat" })
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Open Project Invoke" })
+      screen.queryByRole("button", { name: "Open Legacy Invoke Lab" })
     ).not.toBeInTheDocument();
   });
 
-  it("loads discovered GAgent types for the resolved scope context", async () => {
+  it("loads discovered GAgent types and the resolved scope binding", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",

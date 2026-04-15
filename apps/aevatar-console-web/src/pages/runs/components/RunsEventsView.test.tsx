@@ -58,7 +58,7 @@ describe("RunsEventsView", () => {
     expect(secondButton).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByText("Step triage")).toBeInTheDocument();
     expect(screen.getByText("Mode classify")).toBeInTheDocument();
-    expect(screen.getAllByText("Agent actor-1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Agent actor-1")).toHaveLength(2);
     expect(screen.getByText(/"stepId": "triage"/)).toBeInTheDocument();
     expect(screen.getByText('{"message":"boom"}')).toBeInTheDocument();
 

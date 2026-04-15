@@ -425,55 +425,76 @@ describe('ScopeInvokePage', () => {
     });
   });
 
-  it('prepends the built-in NyxID Chat service and maps published services', () => {
-    const result = buildServiceOptions(
-      [
-        {
-          serviceKey: 'scope-a:default:default:hello-chat',
-          tenantId: 'scope-a',
-          appId: 'default',
-          namespace: 'default',
-          serviceId: 'hello-chat',
-          displayName: 'hello-chat',
-          defaultServingRevisionId: 'rev-2',
-          activeServingRevisionId: 'rev-2',
-          deploymentId: 'deploy-2',
-          primaryActorId: 'actor://scope-a/hello-chat/2',
-          deploymentStatus: 'Active',
-          endpoints: [
-            {
-              endpointId: 'chat',
-              displayName: 'chat',
-              kind: 'chat',
-              requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
-              responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
-              description: 'Chat endpoint.',
-            },
-            {
-              endpointId: 'health',
-              displayName: 'health',
-              kind: 'command',
-              requestTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
-              responseTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
-              description: 'Health endpoint.',
-            },
-          ],
-          policyIds: [],
-          updatedAt: '2026-04-09T09:30:00Z',
-        },
-      ],
-      'hello-chat',
-    );
-
-    expect(result).toEqual([
-      expect.objectContaining({
-        serviceId: 'nyxid-chat',
-        kind: 'nyxid-chat',
-      }),
+  it('deduplicates repeated service ids before building picker options', () => {
+    expect(
+      buildServiceOptions(
+        [
+          {
+            serviceKey: 'scope-a:default:default:hello-chat:older',
+            tenantId: 'scope-a',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'hello-chat',
+            displayName: 'hello-chat',
+            defaultServingRevisionId: 'rev-1',
+            activeServingRevisionId: 'rev-1',
+            deploymentId: 'deploy-1',
+            primaryActorId: 'actor://scope-a/hello-chat/1',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'chat',
+                kind: 'chat',
+                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+                description: 'Chat endpoint.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-04-09T09:00:00Z',
+          },
+          {
+            serviceKey: 'scope-a:default:default:hello-chat:newer',
+            tenantId: 'scope-a',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'hello-chat',
+            displayName: 'hello-chat',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'deploy-2',
+            primaryActorId: 'actor://scope-a/hello-chat/2',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'chat',
+                kind: 'chat',
+                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+                description: 'Chat endpoint.',
+              },
+              {
+                endpointId: 'health',
+                displayName: 'health',
+                kind: 'command',
+                requestTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
+                responseTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+                description: 'Health endpoint.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-04-09T09:30:00Z',
+          },
+        ],
+        'hello-chat',
+      ),
+    ).toEqual([
       expect.objectContaining({
         serviceId: 'hello-chat',
-        kind: 'service',
-        primaryActorId: 'actor://scope-a/hello-chat/2',
+        serviceKey: 'scope-a:default:default:hello-chat:newer',
+        activeServingRevisionId: 'rev-2',
       }),
     ]);
   });
@@ -637,9 +658,7 @@ describe('ScopeInvokePage', () => {
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello service' },
     });
@@ -727,9 +746,7 @@ describe('ScopeInvokePage', () => {
       screen.queryByText('No published project service is selected yet.'),
     ).toBeNull();
 
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello nyxid' },
     });
@@ -746,6 +763,8 @@ describe('ScopeInvokePage', () => {
             displayName: 'Chat',
             endpointId: 'chat',
             kind: 'chat',
+            requestTypeUrl: '',
+            responseTypeUrl: '',
           },
         ],
         scopeId: 'scope-a',
@@ -817,9 +836,7 @@ describe('ScopeInvokePage', () => {
       minHeight: '0',
     });
     expect(
-      await screen.findByPlaceholderText(
-        'Describe the task, ask a question, or paste the next operator instruction.',
-      ),
+      await screen.findByPlaceholderText('Send a message...'),
     ).toBeTruthy();
   });
 
@@ -917,9 +934,7 @@ describe('ScopeInvokePage', () => {
         namespace: 'default',
       });
     });
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello service' },
     });
@@ -972,33 +987,19 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    await waitFor(
-      () => {
-        expect(screen.getByText('Prompt / Payload')).toBeTruthy();
-        expect(
-          screen.getByRole('button', { name: 'Invoke endpoint' }),
-        ).not.toBeDisabled();
-      },
-      { timeout: 5000 },
-    );
+    await waitFor(() => {
+      const search = new URLSearchParams(window.location.search);
+      expect(search.get('serviceId')).toBeTruthy();
+      expect(search.get('endpointId')).toBeTruthy();
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 
     await waitFor(() => {
-      expect(
-        screen.getByText('No published team service is selected yet.'),
-      ).toBeTruthy();
+      const search = new URLSearchParams(window.location.search);
+      expect(search.get('serviceId')).toBeNull();
+      expect(search.get('endpointId')).toBeNull();
     });
-
-    expect(
-      screen.getByRole('button', { name: 'Invoke endpoint' }),
-    ).toBeDisabled();
-    expect(
-      new URLSearchParams(window.location.search).get('serviceId'),
-    ).toBeNull();
-    expect(
-      new URLSearchParams(window.location.search).get('endpointId'),
-    ).toBeNull();
   });
 
   it('opens the service runtime workbench with bindings, revisions, and runs', async () => {

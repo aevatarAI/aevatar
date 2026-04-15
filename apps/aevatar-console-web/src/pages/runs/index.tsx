@@ -176,6 +176,10 @@ const runsWorkspaceTabsCss = `
   min-height: 0;
   overflow: hidden;
 }
+
+.${runsWorkspaceTabsClassName} .ant-tabs-tabpane-hidden {
+  display: none !important;
+}
 `;
 
 function resolveRequestedServiceId(
@@ -1562,7 +1566,7 @@ const RunsPage: React.FC = () => {
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
         : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
-  const messageConsoleView = <RunsMessagesView messages={session.messages} />;
+  const messageConsoleView = <RunsMessagesView messages={displayedMessages} />;
 
   const eventConsoleView = (
     <RunsEventsView
@@ -1774,7 +1778,11 @@ const RunsPage: React.FC = () => {
                 animated={false}
                 className={runsWorkspaceTabsClassName}
                 destroyOnHidden
-                style={workbenchTraceTabsStyle}
+                style={{
+                  ...workbenchTraceTabsStyle,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
                 items={[
                   {
                     key: "trace-layout",
@@ -1847,7 +1855,7 @@ const RunsPage: React.FC = () => {
                 {humanInputRecord ? (
                   <div style={embeddedPanelStyle}>
                     <Space
-                      direction="vertical"
+                      orientation="vertical"
                       style={{ width: "100%" }}
                       size={16}
                     >
@@ -1924,7 +1932,7 @@ const RunsPage: React.FC = () => {
                 {waitingSignalRecord ? (
                   <div style={embeddedPanelStyle}>
                     <Space
-                      direction="vertical"
+                      orientation="vertical"
                       style={{ width: "100%" }}
                       size={16}
                     >

@@ -169,11 +169,15 @@ describe('studioApi host-session requests', () => {
           {
             provider_slug: 'openai',
             provider_name: 'OpenAI',
+            source: 'user_service',
             status: 'ready',
             proxy_url: 'https://nyx.example/proxy/openai',
           },
         ],
         gateway_url: 'https://nyx.example/gateway',
+        models_by_provider: {
+          openai: ['gpt-5.4-mini'],
+        },
         supported_models: ['gpt-5.4-mini'],
       }),
     } as Response);
@@ -184,11 +188,15 @@ describe('studioApi host-session requests', () => {
         {
           providerSlug: 'openai',
           providerName: 'OpenAI',
+          source: 'user_service',
           status: 'ready',
           proxyUrl: 'https://nyx.example/proxy/openai',
         },
       ],
       gatewayUrl: 'https://nyx.example/gateway',
+      modelsByProvider: {
+        openai: ['gpt-5.4-mini'],
+      },
       supportedModels: ['gpt-5.4-mini'],
     });
   });
