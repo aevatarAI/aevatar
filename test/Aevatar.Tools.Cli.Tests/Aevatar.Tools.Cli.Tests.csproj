@@ -26,5 +26,6 @@
     <ProjectReference Include="..\..\src\Aevatar.Studio.Domain\Aevatar.Studio.Domain.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Hosting\Aevatar.Studio.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
   </ItemGroup>
 </Project>

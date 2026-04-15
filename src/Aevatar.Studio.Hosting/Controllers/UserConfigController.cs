@@ -71,7 +71,8 @@ public sealed class UserConfigController : ControllerBase
                 PreferredLlmRoute: request.PreferredLlmRoute is null ? current.PreferredLlmRoute : UserConfigLlmRoute.Normalize(request.PreferredLlmRoute),
                 RuntimeMode: request.RuntimeMode is null ? current.RuntimeMode : request.RuntimeMode.Trim(),
                 LocalRuntimeBaseUrl: request.LocalRuntimeBaseUrl is null ? current.LocalRuntimeBaseUrl : request.LocalRuntimeBaseUrl.Trim(),
-                RemoteRuntimeBaseUrl: request.RemoteRuntimeBaseUrl is null ? current.RemoteRuntimeBaseUrl : request.RemoteRuntimeBaseUrl.Trim());
+                RemoteRuntimeBaseUrl: request.RemoteRuntimeBaseUrl is null ? current.RemoteRuntimeBaseUrl : request.RemoteRuntimeBaseUrl.Trim(),
+                MaxToolRounds: request.MaxToolRounds ?? current.MaxToolRounds);
             await _commandService.SaveAsync(merged, cancellationToken);
             return Ok(merged);
         }
@@ -91,7 +92,8 @@ public sealed class UserConfigController : ControllerBase
         [property: JsonPropertyName("preferredLlmRoute")] string? PreferredLlmRoute = null,
         [property: JsonPropertyName("runtimeMode")] string? RuntimeMode = null,
         [property: JsonPropertyName("localRuntimeBaseUrl")] string? LocalRuntimeBaseUrl = null,
-        [property: JsonPropertyName("remoteRuntimeBaseUrl")] string? RemoteRuntimeBaseUrl = null);
+        [property: JsonPropertyName("remoteRuntimeBaseUrl")] string? RemoteRuntimeBaseUrl = null,
+        [property: JsonPropertyName("maxToolRounds")] int? MaxToolRounds = null);
 
     [HttpGet("models")]
     public async Task<ActionResult<NyxIdLlmStatusResponse>> GetModels(CancellationToken cancellationToken)
