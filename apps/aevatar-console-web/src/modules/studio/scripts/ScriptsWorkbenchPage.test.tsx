@@ -420,7 +420,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
   it('adds and removes package files through in-app dialogs', async () => {
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Add C# file' }));
+    fireEvent.click(await screen.findByRole('button', { name: '添加 C# 文件' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'File path' }), {
       target: {
         value: 'Handlers/EmailValidator.cs',
@@ -432,7 +432,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(screen.getAllByText('Handlers/EmailValidator.cs').length).toBeGreaterThan(0);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove Handlers/EmailValidator.cs' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除 Handlers/EmailValidator.cs' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 
     await waitFor(() => {
@@ -465,11 +465,11 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Add proto file' }));
+    fireEvent.click(await screen.findByRole('button', { name: '添加 Proto 文件' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Problems 1')).toBeTruthy();
+      expect(screen.getByText('Message name is required')).toBeTruthy();
     });
 
     fireEvent.click(
@@ -484,7 +484,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       ).toBe('Behavior.cs');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Problems 1/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Problems 1' }));
     fireEvent.click(screen.getByRole('button', { name: /Message name is required/ }));
 
     await waitFor(() => {
@@ -508,19 +508,19 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     const headerScope = within(header as HTMLElement);
     expect(headerScope.getByText(/^draft-/)).toBeTruthy();
-    expect(headerScope.getByText('Embedded')).toBeTruthy();
+    expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
     expect(headerScope.getByText('Scope 1626c177…b0d6')).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'Save' })).toBeTruthy();
-    expect(headerScope.getByRole('button', { name: 'More script actions' })).toBeTruthy();
-
-    fireEvent.click(headerScope.getByRole('button', { name: 'More script actions' }));
-
+    expect(headerScope.getByRole('button', { name: 'Bind scope' })).toBeTruthy();
+    fireEvent.click(
+      headerScope.getByRole('button', { name: 'More script actions' }),
+    );
     expect(await screen.findByText('Validate')).toBeTruthy();
     expect(screen.getByText('Promote')).toBeTruthy();
     expect(screen.getByText('Test Run')).toBeTruthy();
   });
 
-  it('keeps Test Run available in proxy mode while gating Ask AI', async () => {
+  it('keeps proxy mode gated for testing and AI actions', async () => {
     renderPage({
       mode: 'proxy',
     });
@@ -531,12 +531,12 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       name: 'Ask AI to generate script code.',
     });
     expect(askAiTrigger.hasAttribute('disabled')).toBe(true);
-
     fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
-
     expect(await screen.findByText('Validate')).toBeTruthy();
     expect(screen.getByText('Promote')).toBeTruthy();
-    expect(screen.getByText('Test Run')).toBeTruthy();
+    expect(
+      screen.getByText('Test Run').closest('.ant-dropdown-menu-item-disabled'),
+    ).toBeTruthy();
   });
 
   it('cancels Ask AI generation from the floating panel', async () => {
@@ -617,7 +617,11 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
         'Review the active binding, revision rollout, and saved script assets from the team views.',
       ),
     ).toBeTruthy();
-    expect(screen.getByText('rev-1')).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Updated scope scope-1 to serve script script-1 on revision rev-1\./,
+      ),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Team Assets' }));
 
@@ -638,13 +642,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
-    const testRunItem = await screen.findByRole('menuitem', {
-      name: /Test Run/,
-    });
-    await waitFor(() => {
-      expect(testRunItem).toHaveAttribute('aria-disabled', 'false');
-    });
-    fireEvent.click(testRunItem);
+    fireEvent.click(await screen.findByText('Test Run'));
     fireEvent.change(await screen.findByLabelText('Script test run input'), {
       target: {
         value: 'hello from draft run',
@@ -669,6 +667,8 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedStudioApi.bindScopeScript).not.toHaveBeenCalled();
       expect(mockedHistory.push).not.toHaveBeenCalled();
     });
-    expect(await screen.findByText(/Started draft run run-1 on runtime runtime-1/)).toBeTruthy();
+    expect(
+      await screen.findByText(/Started draft run run-1 on runtime runtime-1\./),
+    ).toBeTruthy();
   });
 });

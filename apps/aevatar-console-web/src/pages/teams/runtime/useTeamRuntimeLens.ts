@@ -12,7 +12,9 @@ const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 
 type UseTeamRuntimeLensOptions = {
+  graphDepth?: number;
   includeCatalogSignals?: boolean;
+  preferredActorId?: string;
   preferredRunId?: string;
   preferredServiceId?: string;
 };
@@ -22,7 +24,9 @@ export function useTeamRuntimeLens(
   options?: UseTeamRuntimeLensOptions,
 ) {
   const normalizedScopeId = scopeId.trim();
+  const graphDepth = Math.max(1, Math.min(options?.graphDepth ?? 2, 4));
   const includeCatalogSignals = options?.includeCatalogSignals ?? true;
+  const preferredActorId = options?.preferredActorId?.trim() ?? "";
   const preferredServiceId = options?.preferredServiceId?.trim() ?? "";
   const preferredRunId = options?.preferredRunId?.trim() ?? "";
 
@@ -91,6 +95,7 @@ export function useTeamRuntimeLens(
   const baselineRunId = compareRuns.baselineRun?.runId?.trim() || "";
 
   const focusActorId =
+    preferredActorId ||
     compareRuns.currentRun?.actorId?.trim() ||
     bindingQuery.data?.primaryActorId?.trim() ||
     actorsQuery.data?.flatMap((group) => group.actorIds)[0] ||
@@ -146,10 +151,10 @@ export function useTeamRuntimeLens(
   });
   const actorGraphQuery = useQuery({
     enabled: focusActorId.length > 0,
-    queryKey: ["teams", "actor-graph", focusActorId],
+    queryKey: ["teams", "actor-graph", focusActorId, graphDepth],
     queryFn: () =>
       runtimeActorsApi.getActorGraphEnriched(focusActorId, {
-        depth: 2,
+        depth: graphDepth,
         direction: "Both",
         take: 24,
       }),
@@ -174,11 +179,13 @@ export function useTeamRuntimeLens(
       actorGraphQuery.data,
       actorsQuery.data,
       baselineRunAuditQuery.data,
-      bindingQuery.data,
       baselineRunId,
+      bindingQuery.data,
       currentRunAuditQuery.data,
       currentRunId,
+      graphDepth,
       normalizedScopeId,
+      preferredActorId,
       runsQuery.data?.runs,
       scriptsQuery.data?.length,
       servicesQuery.data,

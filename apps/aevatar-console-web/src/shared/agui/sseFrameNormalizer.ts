@@ -1,28 +1,106 @@
-import { AGUIEventType, type AGUIEvent } from '@aevatar-react-sdk/types';
+import { AGUIEventType, type AGUIEvent } from "@aevatar-react-sdk/types";
 
 type JsonRecord = Record<string, unknown>;
 
+type RuntimeEventType =
+  | AGUIEventType
+  | "RUN_STOPPED"
+  | "TOOL_APPROVAL_REQUEST";
+
+const ONEOF_KEY_MAP: Record<string, RuntimeEventType> = {
+  custom: AGUIEventType.CUSTOM,
+  humanInputRequest: AGUIEventType.HUMAN_INPUT_REQUEST,
+  runError: AGUIEventType.RUN_ERROR,
+  runFinished: AGUIEventType.RUN_FINISHED,
+  runStarted: AGUIEventType.RUN_STARTED,
+  runStopped: "RUN_STOPPED",
+  stateSnapshot: AGUIEventType.STATE_SNAPSHOT,
+  stepFinished: AGUIEventType.STEP_FINISHED,
+  stepStarted: AGUIEventType.STEP_STARTED,
+  textMessageContent: AGUIEventType.TEXT_MESSAGE_CONTENT,
+  textMessageEnd: AGUIEventType.TEXT_MESSAGE_END,
+  textMessageStart: AGUIEventType.TEXT_MESSAGE_START,
+  toolApprovalRequest: "TOOL_APPROVAL_REQUEST",
+  toolCallEnd: AGUIEventType.TOOL_CALL_END,
+  toolCallStart: AGUIEventType.TOOL_CALL_START,
+};
+
 function asRecord(value: unknown): JsonRecord | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
+
   return value as JsonRecord;
 }
 
-function readString(record: JsonRecord, key: string): string {
-  const value = record[key];
-  return typeof value === 'string' ? value : '';
+function readString(record: JsonRecord | undefined, ...keys: string[]): string {
+  if (!record) {
+    return "";
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function readBoolean(record: JsonRecord | undefined, ...keys: string[]): boolean {
+  if (!record) {
+    return false;
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+
+  return false;
+}
+
+function readNumber(
+  record: JsonRecord | undefined,
+  fallback: number,
+  ...keys: string[]
+): number {
+  if (!record) {
+    return fallback;
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return fallback;
+}
+
+function createTypedEvent(
+  type: RuntimeEventType,
+  timestamp: number,
+  payload: JsonRecord
+): AGUIEvent {
+  return {
+    ...payload,
+    timestamp,
+    type,
+  } as unknown as AGUIEvent;
 }
 
 /**
- * Convert a backend protobuf-JSON SSE frame into the AGUIEvent format
- * expected by @aevatar-react-sdk/agui.
+ * Convert backend SSE frames into the flat AGUI-style shape expected by the UI.
  *
- * Backend sends oneof-style frames:
- *   { "timestamp": "...", "runStarted": { "threadId": "...", "runId": "..." } }
- *
- * SDK expects typed frames:
- *   { "type": "RUN_STARTED", "timestamp": "...", "threadId": "...", "runId": "..." }
+ * Backend may send either:
+ * 1. oneof-style frames: { runError: { message: "..." }, timestamp: 1 }
+ * 2. typed+nested frames: { type: "RUN_ERROR", runError: { message: "..." } }
+ * 3. already-flat frames: { type: "RUN_ERROR", message: "..." }
  */
 export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
   const frame = asRecord(raw);
@@ -30,145 +108,124 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
     return null;
   }
 
-  // If the frame already has a `type` field, it's already in SDK format.
-  if (typeof frame.type === 'string') {
-    return frame as unknown as AGUIEvent;
-  }
-
   const rawTimestamp = frame.timestamp;
-  const timestamp = typeof rawTimestamp === 'number'
-    ? rawTimestamp
-    : Number(rawTimestamp) || Date.now();
+  const timestamp =
+    typeof rawTimestamp === "number"
+      ? rawTimestamp
+      : Number(rawTimestamp) || Date.now();
 
-  if (frame.runStarted) {
-    const data = asRecord(frame.runStarted);
-    return {
-      type: AGUIEventType.RUN_STARTED,
-      timestamp,
-      threadId: data ? readString(data, 'threadId') : '',
-      runId: data ? readString(data, 'runId') : '',
-    };
+  for (const [oneofKey, eventType] of Object.entries(ONEOF_KEY_MAP)) {
+    if (!(oneofKey in frame)) {
+      continue;
+    }
+
+    const nested = asRecord(frame[oneofKey]);
+    switch (eventType) {
+      case AGUIEventType.RUN_STARTED:
+        return createTypedEvent(eventType, timestamp, {
+          actorId:
+            readString(nested, "actorId") ||
+            readString(frame, "actorId", "threadId"),
+          runId: readString(nested, "runId") || readString(frame, "runId"),
+          threadId:
+            readString(nested, "threadId", "actorId") ||
+            readString(frame, "threadId", "actorId"),
+        });
+      case AGUIEventType.RUN_FINISHED:
+        return createTypedEvent(eventType, timestamp, {
+          result: nested?.result,
+          runId: readString(nested, "runId") || readString(frame, "runId"),
+          threadId:
+            readString(nested, "threadId", "actorId") ||
+            readString(frame, "threadId", "actorId"),
+        });
+      case AGUIEventType.RUN_ERROR:
+        return createTypedEvent(eventType, timestamp, {
+          code: readString(nested, "code") || undefined,
+          message: readString(nested, "message"),
+          runId: readString(nested, "runId") || undefined,
+        });
+      case "RUN_STOPPED":
+        return createTypedEvent(eventType, timestamp, {
+          reason: readString(nested, "reason"),
+          runId: readString(nested, "runId"),
+        });
+      case AGUIEventType.TEXT_MESSAGE_START:
+        return createTypedEvent(eventType, timestamp, {
+          messageId: readString(nested, "messageId"),
+          role: readString(nested, "role"),
+        });
+      case AGUIEventType.TEXT_MESSAGE_CONTENT:
+        return createTypedEvent(eventType, timestamp, {
+          delta: readString(nested, "delta"),
+          messageId: readString(nested, "messageId"),
+        });
+      case AGUIEventType.TEXT_MESSAGE_END:
+        return createTypedEvent(eventType, timestamp, {
+          messageId: readString(nested, "messageId"),
+        });
+      case AGUIEventType.STEP_STARTED:
+        return createTypedEvent(eventType, timestamp, {
+          stepName: readString(nested, "stepName"),
+        });
+      case AGUIEventType.STEP_FINISHED:
+        return createTypedEvent(eventType, timestamp, {
+          stepName: readString(nested, "stepName"),
+        });
+      case AGUIEventType.TOOL_CALL_START:
+        return createTypedEvent(eventType, timestamp, {
+          toolCallId: readString(nested, "toolCallId"),
+          toolName: readString(nested, "toolName"),
+        });
+      case AGUIEventType.TOOL_CALL_END:
+        return createTypedEvent(eventType, timestamp, {
+          result: readString(nested, "result"),
+          toolCallId: readString(nested, "toolCallId"),
+        });
+      case "TOOL_APPROVAL_REQUEST":
+        return createTypedEvent(eventType, timestamp, {
+          argumentsJson: readString(nested, "argumentsJson", "arguments_json"),
+          isDestructive: readBoolean(
+            nested,
+            "isDestructive",
+            "is_destructive"
+          ),
+          requestId: readString(nested, "requestId", "request_id"),
+          timeoutSeconds: readNumber(
+            nested,
+            15,
+            "timeoutSeconds",
+            "timeout_seconds"
+          ),
+          toolCallId: readString(nested, "toolCallId", "tool_call_id"),
+          toolName: readString(nested, "toolName", "tool_name"),
+        });
+      case AGUIEventType.HUMAN_INPUT_REQUEST:
+        return createTypedEvent(eventType, timestamp, {
+          metadata: nested?.metadata as Record<string, string> | undefined,
+          prompt: readString(nested, "prompt"),
+          runId: readString(nested, "runId"),
+          stepId: readString(nested, "stepId"),
+          suspensionType: readString(nested, "suspensionType"),
+          timeoutSeconds: readNumber(nested, 0, "timeoutSeconds"),
+        });
+      case AGUIEventType.CUSTOM:
+        return createTypedEvent(eventType, timestamp, {
+          name: readString(nested, "name"),
+          payload: nested?.payload,
+          value: nested?.payload ?? nested?.value,
+        });
+      case AGUIEventType.STATE_SNAPSHOT:
+        return createTypedEvent(eventType, timestamp, {
+          snapshot: frame[oneofKey],
+        });
+      default:
+        return null;
+    }
   }
 
-  if (frame.runFinished) {
-    const data = asRecord(frame.runFinished);
-    return {
-      type: AGUIEventType.RUN_FINISHED,
-      timestamp,
-      threadId: data ? readString(data, 'threadId') : '',
-      runId: data ? readString(data, 'runId') : '',
-      result: data?.result,
-    };
-  }
-
-  if (frame.runError) {
-    const data = asRecord(frame.runError);
-    return {
-      type: AGUIEventType.RUN_ERROR,
-      timestamp,
-      message: data ? readString(data, 'message') : '',
-      code: data ? readString(data, 'code') || undefined : undefined,
-      runId: data ? readString(data, 'runId') || undefined : undefined,
-    };
-  }
-
-  if (frame.stepStarted) {
-    const data = asRecord(frame.stepStarted);
-    return {
-      type: AGUIEventType.STEP_STARTED,
-      timestamp,
-      stepName: data ? readString(data, 'stepName') : '',
-    };
-  }
-
-  if (frame.stepFinished) {
-    const data = asRecord(frame.stepFinished);
-    return {
-      type: AGUIEventType.STEP_FINISHED,
-      timestamp,
-      stepName: data ? readString(data, 'stepName') : '',
-    };
-  }
-
-  if (frame.toolCallStart) {
-    const data = asRecord(frame.toolCallStart);
-    return {
-      type: AGUIEventType.TOOL_CALL_START,
-      timestamp,
-      toolCallId: data ? readString(data, 'toolCallId') : '',
-      toolName: data ? readString(data, 'toolName') : '',
-    };
-  }
-
-  if (frame.toolCallEnd) {
-    const data = asRecord(frame.toolCallEnd);
-    return {
-      type: AGUIEventType.TOOL_CALL_END,
-      timestamp,
-      toolCallId: data ? readString(data, 'toolCallId') : '',
-      result: data ? readString(data, 'result') : '',
-    };
-  }
-
-  if (frame.textMessageStart) {
-    const data = asRecord(frame.textMessageStart);
-    return {
-      type: AGUIEventType.TEXT_MESSAGE_START,
-      timestamp,
-      messageId: data ? readString(data, 'messageId') : '',
-      role: data ? readString(data, 'role') : '',
-    };
-  }
-
-  if (frame.textMessageContent) {
-    const data = asRecord(frame.textMessageContent);
-    return {
-      type: AGUIEventType.TEXT_MESSAGE_CONTENT,
-      timestamp,
-      messageId: data ? readString(data, 'messageId') : '',
-      delta: data ? readString(data, 'delta') : '',
-    };
-  }
-
-  if (frame.textMessageEnd) {
-    const data = asRecord(frame.textMessageEnd);
-    return {
-      type: AGUIEventType.TEXT_MESSAGE_END,
-      timestamp,
-      messageId: data ? readString(data, 'messageId') : '',
-    };
-  }
-
-  if (frame.humanInputRequest) {
-    const data = asRecord(frame.humanInputRequest);
-    return {
-      type: AGUIEventType.HUMAN_INPUT_REQUEST,
-      timestamp,
-      stepId: data ? readString(data, 'stepId') : '',
-      runId: data ? readString(data, 'runId') : '',
-      suspensionType: data ? readString(data, 'suspensionType') : '',
-      prompt: data ? readString(data, 'prompt') : '',
-      timeoutSeconds: typeof data?.timeoutSeconds === 'number' ? data.timeoutSeconds : 0,
-      metadata: data?.metadata as Record<string, string> | undefined,
-    };
-  }
-
-  if (frame.custom) {
-    const data = asRecord(frame.custom);
-    return {
-      type: AGUIEventType.CUSTOM,
-      timestamp,
-      name: data ? readString(data, 'name') : '',
-      value: data?.payload ?? data?.value,
-    };
-  }
-
-  if (frame.stateSnapshot) {
-    return {
-      type: AGUIEventType.STATE_SNAPSHOT,
-      timestamp,
-      snapshot: frame.stateSnapshot,
-    };
+  if (typeof frame.type === "string") {
+    return { ...frame, timestamp } as unknown as AGUIEvent;
   }
 
   return null;
@@ -176,45 +233,46 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
 
 /**
  * Parse a backend SSE response into normalized AGUIEvent objects.
- * Unlike the SDK's parseSSEStream, this handles the protobuf-JSON oneof
- * format where event type is encoded as a field name instead of a `type` string.
+ * Unlike the SDK parser, this understands backend protobuf-JSON oneof frames.
  */
 export async function* parseBackendSSEStream(
   response: Response,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal }
 ): AsyncGenerator<AGUIEvent, void, undefined> {
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`SSE request failed: HTTP ${response.status} — ${text || response.statusText}`);
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `SSE request failed: HTTP ${response.status} — ${text || response.statusText}`
+    );
   }
 
   const body = response.body;
   if (!body) {
-    throw new Error('SSE response has no readable body.');
+    throw new Error("SSE response has no readable body.");
   }
 
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
+  let buffer = "";
   const dataLines: string[] = [];
 
   try {
     while (!options?.signal?.aborted) {
       const { done, value } = await reader.read();
       if (done) {
-        buffer += '\n';
+        buffer += "\n";
       } else {
         buffer += decoder.decode(value, { stream: true });
       }
 
-      const lines = buffer.split('\n');
-      buffer = done ? '' : (lines.pop() ?? '');
+      const lines = buffer.split("\n");
+      buffer = done ? "" : (lines.pop() ?? "");
 
       for (const line of lines) {
-        if (line === '' || line === '\r') {
+        if (line === "" || line === "\r") {
           if (dataLines.length > 0) {
-            const data = dataLines.splice(0, dataLines.length).join('\n').trim();
-            if (data && data !== '[DONE]') {
+            const data = dataLines.splice(0, dataLines.length).join("\n").trim();
+            if (data && data !== "[DONE]") {
               try {
                 const parsed = JSON.parse(data);
                 const event = normalizeBackendSseFrame(parsed);
@@ -229,16 +287,16 @@ export async function* parseBackendSSEStream(
           continue;
         }
 
-        if (line.startsWith('data:')) {
-          const payload = line.length > 5 ? line.slice(5) : '';
-          dataLines.push(payload.startsWith(' ') ? payload.slice(1) : payload);
+        if (line.startsWith("data:")) {
+          const payload = line.length > 5 ? line.slice(5) : "";
+          dataLines.push(payload.startsWith(" ") ? payload.slice(1) : payload);
         }
       }
 
       if (done) {
         if (dataLines.length > 0) {
-          const data = dataLines.splice(0, dataLines.length).join('\n').trim();
-          if (data && data !== '[DONE]') {
+          const data = dataLines.splice(0, dataLines.length).join("\n").trim();
+          if (data && data !== "[DONE]") {
             try {
               const parsed = JSON.parse(data);
               const event = normalizeBackendSseFrame(parsed);

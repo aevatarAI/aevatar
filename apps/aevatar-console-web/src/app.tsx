@@ -128,6 +128,14 @@ const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
 const liveOpsAttentionListeners = new Set<() => void>();
 let liveOpsAttentionSnapshot = LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT;
 
+const navigationGroupLabelStyle: React.CSSProperties = {
+  color: "#667085",
+  display: "inline-flex",
+  fontSize: 14,
+  fontWeight: 700,
+  lineHeight: "22px",
+};
+
 function trimOptional(value?: string | null): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -471,7 +479,13 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
         })),
         key: `menu-group:${group.key}`,
         menuGroupKey: group.key,
-        name: group.label,
+        name: React.createElement(
+          "span",
+          {
+            style: navigationGroupLabelStyle,
+          },
+          group.label,
+        ),
       });
       return result;
     },
