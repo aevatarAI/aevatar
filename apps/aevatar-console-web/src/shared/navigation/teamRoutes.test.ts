@@ -43,6 +43,21 @@ describe("teamRoutes", () => {
     });
   });
 
+  it("maps legacy connectors deep links into the bindings tab", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?workflowId=wf-1&tab=connectors",
+        "/teams/scope-alpha",
+      ),
+    ).toEqual({
+      runId: "",
+      scopeId: "scope-alpha",
+      serviceId: "",
+      tab: "bindings",
+      workflowId: "wf-1",
+    });
+  });
+
   it("defaults canonical team routes to the overview tab", () => {
     expect(
       readTeamDetailRouteState(

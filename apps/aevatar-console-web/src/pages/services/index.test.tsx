@@ -125,8 +125,9 @@ describe('ServicesPage', () => {
     expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
     expect(await screen.findByText('服务数')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Governance' })).toBeTruthy();
+    expect(screen.getByText('Services 是 Platform 的 authority 视图。这里回答当前范围内有哪些服务、它们挂在哪个 deployment 上、暴露了哪些入口，以及应该继续跳到 Governance、Deployments 还是 Topology。')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看服务' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开治理' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Apply' })).toBeTruthy();
     expect(screen.queryByText('Next Actions')).toBeNull();
     expect(screen.queryByText('No services matched the current scope.')).toBeNull();
@@ -136,15 +137,15 @@ describe('ServicesPage', () => {
   it('renders a compact service drawer instead of oversized metric cards', async () => {
     renderWithQueryClient(React.createElement(ServicesPage));
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Details' }));
+    fireEvent.click(await screen.findByRole('button', { name: '查看服务' }));
 
-    expect(await screen.findByText('Summary')).toBeTruthy();
+    expect(await screen.findByText('服务摘要')).toBeTruthy();
     expect(screen.getByText('Service key')).toBeTruthy();
     expect(screen.getByText('tenant-a/app-a/default/service-alpha')).toBeTruthy();
-    expect(screen.getByText('Active deployment')).toBeTruthy();
-    expect(screen.getByText('Latest revision')).toBeTruthy();
-    expect(screen.getByText('Traffic')).toBeTruthy();
-    expect(screen.getByText('Weights')).toBeTruthy();
+    expect(screen.getAllByText('当前部署').length).toBeGreaterThan(0);
+    expect(screen.getByText('最新版本')).toBeTruthy();
+    expect(screen.getByText('流量入口')).toBeTruthy();
+    expect(screen.getByText('最高权重')).toBeTruthy();
     expect(screen.queryByText('Weight ceiling')).toBeNull();
   });
 });

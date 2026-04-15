@@ -18,9 +18,9 @@ describe('TeamCreatePage', () => {
     expect(screen.getByText('完成后')).toBeTruthy();
     expect(screen.getByText('新增后端流')).toBeTruthy();
     expect(screen.getByText('Start Building')).toBeTruthy();
-    expect(screen.getByText('Team Builder')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 3, name: 'Studio' })).toBeTruthy();
     expect(
-      screen.getAllByRole('button', { name: 'Open Team Builder' }).length,
+      screen.getAllByRole('button', { name: 'Open Studio' }).length,
     ).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'View Behaviors' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Back to My Teams' })).toBeTruthy();

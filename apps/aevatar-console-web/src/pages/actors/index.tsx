@@ -124,7 +124,7 @@ const ActorsPage: React.FC = () => {
             onClick={() => setSelectedActorId(actor.id)}
             type="link"
           >
-            Inspect
+            查看 Actor
           </Button>,
           <Button
             icon={<RadarChartOutlined />}
@@ -138,7 +138,7 @@ const ActorsPage: React.FC = () => {
             }
             type="link"
           >
-            Runs
+            查看运行
           </Button>,
         ],
       },
@@ -170,24 +170,28 @@ const ActorsPage: React.FC = () => {
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
+      description="Topology 是 Platform 的专家工具，用于按 Actor、run、service 追查真实运行态。它通常从 Teams 或 Services 深链进入，用来解释究竟是谁在处理请求。"
+      extra={
+        <Typography.Text type="secondary">Expert Tool</Typography.Text>
+      }
       title="Topology"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <AevatarPanel layoutMode="document" padding={20} title="Search">
+        <AevatarPanel layoutMode="document" padding={20} title="定位 Actor">
           <Space wrap size={[12, 12]} style={{ width: '100%' }}>
             <Input
               onChange={(event) => setSelectedActorId(event.target.value.trim())}
-              placeholder="Actor ID"
+              placeholder="输入 Actor ID"
               style={{ width: 260 }}
               value={selectedActorId}
             />
             <Input
               onChange={(event) => setActorKeyword(event.target.value)}
-              placeholder="Filter actors"
+              placeholder="筛选 Actor"
               style={{ width: 260 }}
               value={actorKeyword}
             />
-            <Button onClick={() => setSelectedActorId('')}>Reset</Button>
+            <Button onClick={() => setSelectedActorId('')}>清空</Button>
           </Space>
         </AevatarPanel>
 
@@ -204,7 +208,7 @@ const ActorsPage: React.FC = () => {
           <ConsoleMetricCard label="图谱节点" tone="green" value={graphNodeCount} />
         </div>
 
-        <AevatarPanel layoutMode="document" padding={20} title="Actors">
+        <AevatarPanel layoutMode="document" padding={20} title="可见 Actor">
           {actorsQuery.error ? (
             <Alert
               title={
@@ -230,7 +234,7 @@ const ActorsPage: React.FC = () => {
             locale={{
               emptyText: (
                 <Empty
-                  description="No actors"
+                  description="当前范围没有 Actor"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               ),
@@ -246,11 +250,11 @@ const ActorsPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setSelectedActorId("")}
         open={Boolean(selectedActorId)}
-        subtitle="Topology"
+        subtitle="Runtime Topology"
         title={selectedSnapshotQuery.data?.actorId || selectedActorId || "Actor"}
       >
         {!selectedActorId ? (
-          <AevatarInspectorEmpty description="Select an actor" />
+          <AevatarInspectorEmpty description="选择一个 Actor" />
         ) : selectedSnapshotQuery.error ? (
           <Alert
             title={
@@ -262,10 +266,10 @@ const ActorsPage: React.FC = () => {
             type="error"
           />
         ) : !selectedSnapshotQuery.data ? (
-          <AevatarInspectorEmpty description="No data" />
+          <AevatarInspectorEmpty description="暂无运行态数据" />
         ) : (
           <>
-            <AevatarPanel title="Summary">
+            <AevatarPanel title="运行摘要">
               <div
                 style={{
                   display: "grid",
@@ -274,20 +278,20 @@ const ActorsPage: React.FC = () => {
                 }}
               >
                 <MetricCard label="Workflow" value={selectedSnapshotQuery.data.workflowName || "n/a"} />
-                <MetricCard label="State version" value={selectedSnapshotQuery.data.stateVersion} />
-                <MetricCard label="Completed steps" value={selectedSnapshotQuery.data.completedSteps} />
+                <MetricCard label="状态版本" value={selectedSnapshotQuery.data.stateVersion} />
+                <MetricCard label="已完成步骤" value={selectedSnapshotQuery.data.completedSteps} />
                 <MetricCard
-                  label="Last update"
+                  label="最近更新"
                   value={formatDateTime(selectedSnapshotQuery.data.lastUpdatedAt)}
                 />
               </div>
               <MetricCard
-                label="Last output"
+                label="最近输出"
                 value={selectedSnapshotQuery.data.lastOutput || "No output"}
               />
             </AevatarPanel>
 
-            <AevatarPanel title="Timeline">
+            <AevatarPanel title="事件时间线">
               {timelineQuery.data?.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {timelineQuery.data.map((item) => (
@@ -315,13 +319,13 @@ const ActorsPage: React.FC = () => {
                 </div>
               ) : (
                 <Empty
-                  description="No timeline"
+                  description="暂无时间线"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}
             </AevatarPanel>
 
-            <AevatarPanel title="Topology">
+            <AevatarPanel title="局部拓扑">
               <div
                 style={{
                   display: "grid",

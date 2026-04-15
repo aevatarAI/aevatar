@@ -29,7 +29,7 @@ export default [
   {
     path: "/teams",
     name: "My Teams",
-    component: "./scopes/overview",
+    component: "./teams",
     menuGroupKey: "teams",
     hideInMenu: false,
   },
@@ -42,7 +42,7 @@ export default [
   {
     path: "/teams/:scopeId",
     name: "Team Details",
-    component: "./teams",
+    component: "./teams/detail",
     hideInMenu: true,
     parentKeys: ["/teams"],
   },
@@ -157,7 +157,7 @@ export default [
   },
   {
     path: "/scopes/overview",
-    redirect: "/teams",
+    component: "./scopes/overview",
     hideInMenu: true,
   },
   {
