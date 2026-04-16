@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Registry;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -19,6 +20,7 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
+    private readonly StudioCurrentStateProjectionPort _projectionPort;
     private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedGAgentActorStore> _logger;
 
@@ -26,12 +28,14 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
+        StudioCurrentStateProjectionPort projectionPort,
         IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedGAgentActorStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -40,6 +44,7 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         CancellationToken cancellationToken = default)
     {
         var actorId = ResolveWriteActorId();
+        await _projectionPort.EnsureProjectionForActorAsync(actorId, cancellationToken);
         var document = await _documentReader.GetAsync(actorId, cancellationToken);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(GAgentRegistryState.Descriptor))
@@ -58,6 +63,7 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         string gagentType, string actorId,
         CancellationToken cancellationToken = default)
     {
+        await _projectionPort.EnsureProjectionForActorAsync(ResolveWriteActorId(), cancellationToken);
         var actor = await EnsureWriteActorAsync(cancellationToken);
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorRegisteredEvent
         {
@@ -70,6 +76,7 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         string gagentType, string actorId,
         CancellationToken cancellationToken = default)
     {
+        await _projectionPort.EnsureProjectionForActorAsync(ResolveWriteActorId(), cancellationToken);
         var actor = await EnsureWriteActorAsync(cancellationToken);
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorUnregisteredEvent
         {

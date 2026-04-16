@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -20,17 +21,20 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioCurrentStateProjectionPort _projectionPort;
     private readonly IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedStreamingProxyParticipantStore> _logger;
 
     public ActorBackedStreamingProxyParticipantStore(
         IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
+        StudioCurrentStateProjectionPort projectionPort,
         IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedStreamingProxyParticipantStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -38,6 +42,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     public async Task<IReadOnlyList<StreamingProxyParticipant>> ListAsync(
         string roomId, CancellationToken cancellationToken = default)
     {
+        await _projectionPort.EnsureProjectionForActorAsync(WriteActorId, cancellationToken);
         var document = await _documentReader.GetAsync(WriteActorId, cancellationToken);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(StreamingProxyParticipantGAgentState.Descriptor))
@@ -60,6 +65,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
         string roomId, string agentId, string displayName,
         CancellationToken cancellationToken = default)
     {
+        await _projectionPort.EnsureProjectionForActorAsync(WriteActorId, cancellationToken);
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ParticipantAddedEvent
         {
@@ -74,6 +80,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     public async Task RemoveParticipantAsync(
         string roomId, string agentId, CancellationToken cancellationToken = default)
     {
+        await _projectionPort.EnsureProjectionForActorAsync(WriteActorId, cancellationToken);
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ParticipantRemovedEvent
         {
@@ -86,6 +93,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     public async Task RemoveRoomAsync(
         string roomId, CancellationToken cancellationToken = default)
     {
+        await _projectionPort.EnsureProjectionForActorAsync(WriteActorId, cancellationToken);
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoomParticipantsRemovedEvent
         {
