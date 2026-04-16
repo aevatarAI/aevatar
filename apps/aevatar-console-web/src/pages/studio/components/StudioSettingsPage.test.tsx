@@ -152,17 +152,17 @@ describe('StudioSettingsPage', () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save workspace settings' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存工作区设置' }));
     expect(onSaveSettings).toHaveBeenCalledTimes(1);
   });
 
   it('shows provider catalog controls while keeping connection settings in Advanced', () => {
     render(<StudioSettingsPage {...createBaseProps()} />);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'AI Providers' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'AI 提供方' }));
 
-    expect(screen.getByText('Provider catalog')).toBeInTheDocument();
-    expect(screen.getByText('Provider detail')).toBeInTheDocument();
+    expect(screen.getByText('提供方列表')).toBeInTheDocument();
+    expect(screen.getByText('提供方详情')).toBeInTheDocument();
     expect(
       screen.queryByLabelText('Studio provider endpoint'),
     ).not.toBeInTheDocument();
@@ -182,11 +182,11 @@ describe('StudioSettingsPage', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'AI Providers' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Open Advanced' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'AI 提供方' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开高级配置' }));
 
-    expect(screen.getByText('Workflow source management')).toBeInTheDocument();
-    expect(screen.getByText('Provider connection')).toBeInTheDocument();
+    expect(screen.getByText('工作流来源管理')).toBeInTheDocument();
+    expect(screen.getByText('提供方连接')).toBeInTheDocument();
     expect(screen.getByLabelText('Studio provider endpoint')).toHaveValue(
       'https://aevatar-console-backend-api.aevatar.ai',
     );
@@ -208,11 +208,56 @@ describe('StudioSettingsPage', () => {
     );
 
     expect(
-      screen.getByText('Runtime is host-managed in embedded mode'),
+      screen.getByText('当前运行时由宿主管理'),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Studio runtime base URL')).toBeDisabled();
     expect(
-      screen.getByRole('button', { name: 'Check host runtime' }),
+      screen.getByRole('button', { name: '检测宿主运行时' }),
     ).toBeInTheDocument();
+  });
+
+  it('keeps the settings detail viewport stretchable so the active pane can scroll', () => {
+    const { container } = render(<StudioSettingsPage {...createBaseProps()} />);
+
+    expect(container.firstElementChild).toHaveStyle({
+      height: '100%',
+      minHeight: '0',
+      overflow: 'hidden',
+    });
+
+    const tabs = container.querySelector(`.${'studio-settings-tabs'}`);
+    expect(tabs).not.toBeNull();
+    expect(tabs).toHaveStyle({
+      flex: '1',
+      height: '100%',
+      minHeight: '0',
+      overflow: 'hidden',
+    });
+
+    const contentHolder = container.querySelector(
+      '.studio-settings-tabs .ant-tabs-content-holder',
+    );
+    expect(contentHolder).not.toBeNull();
+    expect(contentHolder).toHaveStyle({
+      flex: '1',
+      minHeight: '0',
+      overflow: 'hidden',
+    });
+
+    const tabContent = container.querySelector(
+      '.studio-settings-tab-content',
+    );
+    expect(tabContent).not.toBeNull();
+    expect(tabContent).toHaveStyle({
+      flex: '1',
+      minHeight: '0',
+      overflowY: 'auto',
+    });
+
+    const styleNode = container.querySelector('style');
+    expect(styleNode?.textContent).toContain('.studio-settings-tabs .ant-tabs-tabpane-active');
+    expect(styleNode?.textContent).toContain('display: flex !important');
+    expect(styleNode?.textContent).toContain('.studio-settings-tab-content');
+    expect(styleNode?.textContent).toContain('overflow-y: auto;');
   });
 });

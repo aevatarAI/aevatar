@@ -3,7 +3,8 @@ type TeamDetailTab =
   | 'topology'
   | 'events'
   | 'members'
-  | 'connectors'
+  | 'bindings'
+  | 'assets'
   | 'advanced';
 
 type QueryValue = string | undefined;
@@ -36,9 +37,12 @@ function parseTeamTab(
     case 'topology':
     case 'events':
     case 'members':
-    case 'connectors':
+    case 'bindings':
+    case 'assets':
     case 'advanced':
       return trimOptional(value).toLowerCase() as TeamDetailTab;
+    case 'connectors':
+      return 'bindings';
     default:
       return fallback;
   }

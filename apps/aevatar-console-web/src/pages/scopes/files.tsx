@@ -1,7 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Alert } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
-import { history } from '@/shared/navigation/history';
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import {
   buildStudioScriptsWorkspaceRoute,
@@ -15,6 +19,7 @@ import StudioFilesPage from '@/pages/studio/components/StudioFilesPage';
 import { resolveStudioScopeContext } from './components/resolvedScope';
 import {
   buildScopeHref,
+  normalizeScopeDraft,
   readScopeQueryDraft,
   type ScopeQueryDraft,
 } from './components/scopeQuery';
@@ -52,6 +57,18 @@ const filesViewportStyle: React.CSSProperties = {
 };
 
 const ProjectFilesPage: React.FC = () => {
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => '',
+  );
+  const routeDraft = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return readScopeQueryDraft('', '');
+    }
+
+    return readScopeQueryDraft(window.location.search, window.location.pathname);
+  }, [locationSnapshot]);
   const [activeDraft, setActiveDraft] = useState<ScopeQueryDraft>(() =>
     readScopeQueryDraft(),
   );
@@ -69,6 +86,16 @@ const ProjectFilesPage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data],
   );
+
+  useEffect(() => {
+    const nextRouteDraft = normalizeScopeDraft(routeDraft);
+
+    setActiveDraft((currentDraft) =>
+      normalizeScopeDraft(currentDraft).scopeId === nextRouteDraft.scopeId
+        ? currentDraft
+        : nextRouteDraft,
+    );
+  }, [routeDraft]);
 
   useEffect(() => {
     history.replace(buildScopeHref('/scopes/files', activeDraft));
