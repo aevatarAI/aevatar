@@ -32,11 +32,11 @@ describe("AccountSettingsPage", () => {
 
     expect(await screen.findByText("Aevatar / Settings")).toBeTruthy();
     expect(await screen.findByText("Settings")).toBeTruthy();
-    expect(screen.getByText("Operator Account")).toBeTruthy();
+    expect(screen.getByText("账号信息")).toBeTruthy();
     expect(screen.getAllByText("Ada Lovelace")).toHaveLength(2);
     expect(screen.getAllByText("ada@example.com")).toHaveLength(2);
-    expect(screen.getByText("Session Summary")).toBeTruthy();
-    expect(screen.getByText("Access Notes")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(screen.getByText("会话摘要")).toBeTruthy();
+    expect(screen.queryByText("Access Notes")).toBeNull();
+    expect(screen.getByRole("button", { name: "退出登录" })).toBeTruthy();
   });
 });

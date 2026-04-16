@@ -15,6 +15,25 @@ function resolveSameOriginTarget(target: string): string | null {
   }
 }
 
+export function subscribeToLocationChanges(listener: () => void): () => void {
+  if (typeof window === "undefined") {
+    return () => undefined;
+  }
+
+  window.addEventListener("popstate", listener);
+  return () => {
+    window.removeEventListener("popstate", listener);
+  };
+}
+
+export function getLocationSnapshot(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+}
+
 function navigate(target: string, replace: boolean): void {
   if (typeof window === "undefined") {
     return;
@@ -31,7 +50,7 @@ function navigate(target: string, replace: boolean): void {
     return;
   }
 
-  const currentTarget = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const currentTarget = getLocationSnapshot();
   if (replace && nextTarget === currentTarget) {
     return;
   }

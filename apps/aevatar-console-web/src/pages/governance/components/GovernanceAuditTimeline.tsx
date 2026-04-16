@@ -106,7 +106,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         }}
       >
         <Empty
-          description="No activity"
+          description="暂无变更记录"
           style={{ margin: "auto" }}
         />
       </div>
@@ -128,11 +128,11 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         size={16}
         style={{ display: "flex", minHeight: 0 }}
       >
-        <Typography.Text strong>Activity</Typography.Text>
+        <Typography.Text strong>变更记录</Typography.Text>
 
         <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
           <Timeline
-            pending={loading ? "Loading..." : null}
+            pending={loading ? "加载中..." : null}
             items={events.map((event) => ({
               color: buildEventDotColor(surfaceToken, event.status),
               dot: (
@@ -208,10 +208,10 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
 
                       <Space size={[8, 8]} wrap>
                         <Typography.Text type="secondary">
-                          Actor: {event.actor}
+                          来源: {event.actor}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          Target: {event.targetLabel}
+                          对象: {event.targetLabel}
                         </Typography.Text>
                       </Space>
                     </Space>

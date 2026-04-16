@@ -70,7 +70,7 @@ const LegacyTeamsHome: React.FC<SharedTeamsHomeProps> = ({
               )
             }
           >
-            Open Team Builder
+            Open Studio
           </Button>
         </Space>
       }

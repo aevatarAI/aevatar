@@ -26,6 +26,18 @@ describe("console routes", () => {
     return routes.some((route) => route.path === path);
   }
 
+  function findRouteIndex(
+    routes: ReturnType<typeof loadRoutes>,
+    path: string,
+  ): number {
+    const matchedIndex = routes.findIndex((route) => route.path === path);
+    if (matchedIndex < 0) {
+      throw new Error(`Expected route ${path} to exist.`);
+    }
+
+    return matchedIndex;
+  }
+
   beforeEach(() => {
     jest.resetModules();
   });
@@ -39,11 +51,13 @@ describe("console routes", () => {
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBe(true);
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
     expect(findRoute(routes, "/teams").name).toBe("My Teams");
+    expect(findRoute(routes, "/teams").component).toBe("./teams");
     expect(findRoute(routes, "/teams/new").name).toBe("Create Team");
+    expect(findRoute(routes, "/teams/:scopeId").component).toBe("./teams/detail");
     expect(findRoute(routes, "/runtime/gagents").name).toBe("Members");
     expect(findRoute(routes, "/scopes/assets").name).toBeUndefined();
     expect(findRoute(routes, "/scopes/invoke").name).toBeUndefined();
-    expect(findRoute(routes, "/scopes/overview").redirect).toBe("/teams");
+    expect(findRoute(routes, "/scopes/overview").component).toBe("./scopes/overview");
     expect(findRoute(routes, "/scopes").redirect).toBe("/teams");
     expect(hasRoute(routes, "/workflows")).toBe(true);
     expect(findRoute(routes, "/workflows").redirect).toBe("/runtime/workflows");
@@ -58,9 +72,25 @@ describe("console routes", () => {
     expect(hasRoute(routes, "/mission-control")).toBe(true);
     expect(findRoute(routes, "/mission-control").redirect).toBe("/runtime/mission-control");
     expect(findRoute(routes, "/runtime/explorer").menuGroupKey).toBe("platform");
+    expect(findRoute(routes, "/runtime/explorer/detail").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/runtime/explorer/detail").parentKeys).toEqual([
+      "/runtime/explorer",
+    ]);
     expect(findRoute(routes, "/services").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/deployments").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/governance").menuGroupKey).toBe("platform");
+    expect(findRoute(routes, "/governance/audit").redirect).toBe(
+      "/governance?view=changes",
+    );
+    expect(findRouteIndex(routes, "/services")).toBeLessThan(
+      findRouteIndex(routes, "/governance"),
+    );
+    expect(findRouteIndex(routes, "/governance")).toBeLessThan(
+      findRouteIndex(routes, "/deployments"),
+    );
+    expect(findRouteIndex(routes, "/deployments")).toBeLessThan(
+      findRouteIndex(routes, "/runtime/explorer"),
+    );
     expect(findRoute(routes, "/settings").name).toBe("Settings");
   });
 });

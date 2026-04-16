@@ -58,7 +58,7 @@ const TeamCreatePage: React.FC = () => {
       breadcrumb="Aevatar / Teams"
       extra={
         <Button onClick={openBuilder} style={primaryActionButtonStyle}>
-          Open Team Builder
+          Open Studio
         </Button>
       }
       title="Create Team"
@@ -101,7 +101,7 @@ const TeamCreatePage: React.FC = () => {
                 margin: 0,
               }}
             >
-              Team Builder
+              Studio
             </Typography.Title>
             <div
               style={{
@@ -122,7 +122,7 @@ const TeamCreatePage: React.FC = () => {
                 onClick={openBuilder}
                 style={primaryActionButtonStyle}
               >
-                Open Team Builder
+                Open Studio
               </Button>
               <Button
                 icon={<RocketOutlined />}

@@ -116,6 +116,19 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?tab=executions&execution=execution-1');
   });
 
+  it('keeps scope context while honoring deep-link tab priority', () => {
+    expect(
+      buildStudioRoute({
+        scopeId: 'scope-1',
+        workflowId: 'workflow-1',
+        scriptId: 'script-1',
+        executionId: 'execution-1',
+      }),
+    ).toBe(
+      '/studio?scopeId=scope-1&workflow=workflow-1&script=script-1&tab=executions&execution=execution-1',
+    );
+  });
+
   it('preserves team context query params when building Studio routes', () => {
     expect(
       buildStudioRoute({
