@@ -47,8 +47,6 @@ public sealed class ExplorerEndpointsTests
                 UseNyxProxy = false,
                 BaseUrl = "http://chrono-storage.test",
                 Bucket = "aevatar-studio",
-                Prefix = "connectors-prefix",
-                RolesPrefix = "roles-prefix",
                 UserConfigPrefix = "user-prefix",
             });
         host.StorageServer.StoreText("aevatar-studio", "user-prefix/scope-a/chat-histories/NyxIdChat:scope-a.jsonl", "{\"id\":\"m1\"}\n");
@@ -59,30 +57,6 @@ public sealed class ExplorerEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Content.Headers.ContentType?.MediaType.Should().Be("application/json");
         content.Should().Contain("\"id\":\"m1\"");
-    }
-
-    [Fact]
-    public async Task GetFileAsync_WhenWorkflowLivesUnderConfiguredPrefixOutsideTypeHeuristic_ShouldStillLoadFile()
-    {
-        await using var host = await ExplorerTestHost.StartAsync(
-            "scope-a",
-            new ConnectorCatalogStorageOptions
-            {
-                Enabled = true,
-                UseNyxProxy = false,
-                BaseUrl = "http://chrono-storage.test",
-                Bucket = "aevatar-studio",
-                Prefix = "shared-prefix",
-                RolesPrefix = "roles-prefix",
-                UserConfigPrefix = "user-prefix",
-            });
-        host.StorageServer.StoreText("aevatar-studio", "shared-prefix/scope-a/workflows/draft.yaml", "name: draft");
-
-        var response = await host.Client.GetAsync("/api/explorer/files/workflows/draft.yaml");
-        var content = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        content.Should().Be("name: draft");
     }
 
     [Fact]
@@ -112,8 +86,6 @@ public sealed class ExplorerEndpointsTests
                 NyxProxyBaseUrl = "http://chrono-storage.test",
                 NyxProxyServiceSlug = "chrono-storage-service",
                 Bucket = "aevatar-studio",
-                Prefix = string.Empty,
-                RolesPrefix = string.Empty,
                 UserConfigPrefix = string.Empty,
             },
             failListWithForbidden: true);
@@ -167,8 +139,6 @@ public sealed class ExplorerEndpointsTests
                 UseNyxProxy = false,
                 BaseUrl = "http://chrono-storage.test",
                 Bucket = "aevatar-studio",
-                Prefix = string.Empty,
-                RolesPrefix = string.Empty,
                 UserConfigPrefix = string.Empty,
             }));
             builder.Services.AddSingleton<ChronoStorageCatalogBlobClient>();

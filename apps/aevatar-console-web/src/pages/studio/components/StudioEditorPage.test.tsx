@@ -32,8 +32,8 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
 }));
 
 const connectorsCatalog = {
-  homeDirectory: '/tmp/.aevatar',
-  filePath: '/tmp/.aevatar/connectors.json',
+  homeDirectory: 'actor://connector-catalog',
+  filePath: 'actor://connector-catalog/connectors',
   fileExists: true,
   connectors: [
     {

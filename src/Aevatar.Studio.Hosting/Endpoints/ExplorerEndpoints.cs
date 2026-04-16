@@ -52,6 +52,8 @@ public static class ExplorerEndpoints
 
             var result = await blobClient.ListObjectsAsync(context, cancellationToken: ct);
 
+            // Role/Connector catalogs live in actor-backed stores now, not chrono-storage.
+            // The Explorer here only surfaces workflow / script / chat-history / media blobs.
             var files = result.Objects
                 .Where(static o => !o.Key.StartsWith("chat-histories/_meta/", StringComparison.Ordinal))
                 .Select(o => new ChronoStorageCatalogBlobClient.ManifestEntry
@@ -62,29 +64,6 @@ public static class ExplorerEndpoints
                     UpdatedAt = o.LastModified,
                 })
                 .ToList();
-
-            // Auto-create connectors.json if it doesn't exist yet.
-            if (!files.Any(f => f.Key == "connectors.json"))
-            {
-                try
-                {
-                    var connectorsContext = blobClient.TryResolveContext(string.Empty, "connectors.json");
-                    if (connectorsContext != null)
-                    {
-                        await blobClient.UploadAsync(connectorsContext, "[]"u8.ToArray(), "application/json", ct);
-                        files.Add(new ChronoStorageCatalogBlobClient.ManifestEntry
-                        {
-                            Key = "connectors.json",
-                            Type = "connectors",
-                            Name = "connectors",
-                        });
-                    }
-                }
-                catch
-                {
-                    // Best-effort; don't fail the manifest if auto-create fails.
-                }
-            }
 
             return Results.Ok(new ChronoStorageCatalogBlobClient.StorageManifest { Files = files });
         }
@@ -430,9 +409,6 @@ public static class ExplorerEndpoints
             "workflows" => "workflow",
             "scripts" => "script",
             "chat-histories" => "chat-history",
-            _ when key == "config.json" => "config",
-            _ when key == "roles.json" => "roles",
-            _ when key == "connectors.json" => "connectors",
             _ => "file",
         };
     }
@@ -456,7 +432,9 @@ public static class ExplorerEndpoints
 
     /// <summary>
     /// Returns the bucket-level prefix that a given key is stored under, matching the prefix
-    /// used by the corresponding storage store.
+    /// used by the corresponding storage store. Only chat-media (legitimately chrono-storage
+    /// backed) and chat-histories (legacy) live under <see cref="ConnectorCatalogStorageOptions.UserConfigPrefix"/>.
+    /// Role, connector, user-config and actor catalogs are all actor-backed and not routed here.
     /// </summary>
     private static string GetPrefixForKey(string key, ConnectorCatalogStorageOptions opts)
     {
@@ -464,14 +442,7 @@ public static class ExplorerEndpoints
             || key.StartsWith("chat-media/", StringComparison.Ordinal))
             return opts.UserConfigPrefix;
 
-        return InferType(key) switch
-        {
-            "connectors" => opts.Prefix,
-            "roles" => opts.RolesPrefix,
-            "config" => opts.UserConfigPrefix,
-            _ when string.Equals(key, "actors.json", StringComparison.Ordinal) => opts.UserConfigPrefix,
-            _ => string.Empty,
-        };
+        return string.Empty;
     }
 
     private static IEnumerable<string> GetCandidatePrefixesForKey(string key, ConnectorCatalogStorageOptions opts)
@@ -481,7 +452,7 @@ public static class ExplorerEndpoints
         if (seen.Add(preferred))
             yield return preferred;
 
-        foreach (var candidate in new[] { string.Empty, opts.Prefix, opts.RolesPrefix, opts.UserConfigPrefix })
+        foreach (var candidate in new[] { string.Empty, opts.UserConfigPrefix })
         {
             if (seen.Add(candidate ?? string.Empty))
                 yield return candidate ?? string.Empty;

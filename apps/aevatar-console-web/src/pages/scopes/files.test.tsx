@@ -57,14 +57,14 @@ jest.mock('@/shared/studio/api', () => ({
     })),
     listWorkflows: jest.fn(async () => []),
     getConnectorCatalog: jest.fn(async () => ({
-      homeDirectory: '/tmp/.aevatar',
-      filePath: '/tmp/.aevatar/connectors.json',
+      homeDirectory: 'actor://connector-catalog',
+      filePath: 'actor://connector-catalog/connectors',
       fileExists: true,
       connectors: [],
     })),
     getRoleCatalog: jest.fn(async () => ({
-      homeDirectory: '/tmp/.aevatar',
-      filePath: '/tmp/.aevatar/roles.json',
+      homeDirectory: 'actor://role-catalog',
+      filePath: 'actor://role-catalog/roles',
       fileExists: true,
       roles: [],
     })),

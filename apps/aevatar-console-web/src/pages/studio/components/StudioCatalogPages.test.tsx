@@ -79,7 +79,7 @@ function createRolesProps(overrides: Partial<RolesProps> = {}): RolesProps {
     colorMode: 'light',
     roleCatalogDraft,
     roleCatalogMeta: {
-      filePath: '/tmp/.aevatar/roles.json',
+      filePath: 'actor://role-catalog/roles',
       fileExists: true,
     },
     roleCatalogIsRemote: false,
@@ -131,7 +131,7 @@ function createConnectorsProps(
     colorMode: 'light',
     connectorCatalogDraft,
     connectorCatalogMeta: {
-      filePath: '/tmp/.aevatar/connectors.json',
+      filePath: 'actor://connector-catalog/connectors',
       fileExists: true,
     },
     connectorCatalogIsRemote: false,
