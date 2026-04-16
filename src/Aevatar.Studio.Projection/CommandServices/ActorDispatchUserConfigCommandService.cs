@@ -7,27 +7,41 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Studio.Projection.CommandServices;
 
 /// <summary>
-/// Dispatches user-config write commands to the <c>UserConfigGAgent</c>
-/// via <see cref="IActorDispatchPort"/>.
+/// Dispatches user-config write commands to the <c>UserConfigGAgent</c>.
+/// For the first save in a scope, the <c>user-config-{scopeId}</c> actor
+/// does not exist yet — we lazily create it via <see cref="IActorRuntime"/>
+/// before dispatching, mirroring the actor-backed catalog stores
+/// (<c>ActorBackedRoleCatalogStore.EnsureWriteActorAsync</c>).
 /// </summary>
 internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommandService
 {
     private const string ActorIdPrefix = "user-config-";
 
+    private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
 
     public ActorDispatchUserConfigCommandService(
+        IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver)
     {
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
     }
 
-    public Task SaveAsync(UserConfig config, CancellationToken ct = default)
+    public async Task SaveAsync(UserConfig config, CancellationToken ct = default)
     {
         var actorId = ActorIdPrefix + (_scopeResolver.Resolve()?.ScopeId ?? "default");
+
+        // Ensure the actor exists before dispatching. Without this, the first
+        // save for a scope fails with "Actor {actorId} is not initialized".
+        var existing = await _runtime.GetAsync(actorId);
+        if (existing is null)
+        {
+            await _runtime.CreateAsync<UserConfigGAgent>(actorId, ct);
+        }
 
         var evt = new UserConfigUpdatedEvent
         {
@@ -52,6 +66,6 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
                 actorId, TopologyAudience.Self),
         };
 
-        return _dispatchPort.DispatchAsync(actorId, envelope, ct);
+        await _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 }
