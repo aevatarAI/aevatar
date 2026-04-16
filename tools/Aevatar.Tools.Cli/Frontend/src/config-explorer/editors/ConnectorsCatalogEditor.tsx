@@ -3,9 +3,12 @@ import { Loader2, Plus, Trash2, ChevronDown } from 'lucide-react';
 import * as api from '../../api';
 import { type ConnectorState, toConnectorState, toConnectorPayload, createEmptyConnector } from '../../studio';
 
-type Props = { flash: (msg: string, type: 'success' | 'error') => void };
+type Props = {
+  flash: (msg: string, type: 'success' | 'error') => void;
+  onSaved?: () => void;
+};
 
-export default function ConnectorsCatalogEditor({ flash }: Props) {
+export default function ConnectorsCatalogEditor({ flash, onSaved }: Props) {
   const [tab, setTab] = useState<'catalog' | 'raw'>('catalog');
   const [connectors, setConnectors] = useState<ConnectorState[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,6 +41,7 @@ export default function ConnectorsCatalogEditor({ flash }: Props) {
       const payload = { ...catalogMeta, connectors: connectors.map(toConnectorPayload) };
       await api.connectors.saveCatalog(payload);
       flash('Connectors saved', 'success');
+      onSaved?.();
     } catch (e: any) {
       flash(e?.message || 'Save failed', 'error');
     } finally {
@@ -52,6 +56,7 @@ export default function ConnectorsCatalogEditor({ flash }: Props) {
       await api.connectors.saveCatalog(parsed);
       flash('Connectors saved (raw)', 'success');
       await loadCatalog();
+      onSaved?.();
     } catch (e: any) {
       flash(e?.message || 'Invalid JSON or save failed', 'error');
     } finally {
