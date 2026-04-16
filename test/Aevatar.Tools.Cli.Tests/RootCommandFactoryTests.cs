@@ -19,6 +19,7 @@ public sealed class RootCommandFactoryTests
     [InlineData("config")]
     [InlineData("app")]
     [InlineData("chat")]
+    [InlineData("voice")]
     public void Create_ShouldRegisterSubcommand(string commandName)
     {
         var root = RootCommandFactory.Create();
@@ -27,10 +28,10 @@ public sealed class RootCommandFactoryTests
     }
 
     [Fact]
-    public void Create_ShouldRegisterExactly6Subcommands()
+    public void Create_ShouldRegisterExactly7Subcommands()
     {
         var root = RootCommandFactory.Create();
 
-        root.Subcommands.Should().HaveCount(6);
+        root.Subcommands.Should().HaveCount(7);
     }
 }

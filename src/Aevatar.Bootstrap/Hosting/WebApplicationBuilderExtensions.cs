@@ -1,4 +1,5 @@
 using Aevatar.Configuration;
+using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -37,6 +38,8 @@ public sealed class AevatarDefaultHostOptions
 
 public static class WebApplicationBuilderExtensions
 {
+    private const string VoicePresenceWebSocketRoute = "/ws/voice/{actorId}";
+
     public static WebApplicationBuilder AddAevatarDefaultHost(
         this WebApplicationBuilder builder,
         Action<AevatarDefaultHostOptions>? configureHost = null)
@@ -99,6 +102,7 @@ public static class WebApplicationBuilderExtensions
         ArgumentNullException.ThrowIfNull(app);
 
         var options = app.Services.GetRequiredService<AevatarDefaultHostOptions>();
+        var hasVoicePresenceResolver = app.Services.GetService<IVoicePresenceSessionResolver>() != null;
         if (options.EnableCors)
             app.UseCors(options.CorsPolicyName);
 
@@ -113,7 +117,7 @@ public static class WebApplicationBuilderExtensions
         // a proper 401/403 instead of an unhandled 500 when no auth scheme is configured.
         app.UseAuthorization();
 
-        if (options.EnableWebSockets)
+        if (options.EnableWebSockets || hasVoicePresenceResolver)
             app.UseWebSockets();
 
         if (options.MapRootHealthEndpoint)
@@ -154,6 +158,9 @@ public static class WebApplicationBuilderExtensions
 
         if (options.AutoMapCapabilities)
             app.MapAevatarCapabilities();
+
+        if (hasVoicePresenceResolver)
+            app.MapVoicePresenceWebSocket(VoicePresenceWebSocketRoute);
 
         return app;
     }

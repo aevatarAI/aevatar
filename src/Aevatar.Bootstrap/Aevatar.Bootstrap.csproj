@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.VoicePresence\Aevatar.Foundation.VoicePresence.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Hosting\Aevatar.Foundation.Runtime.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
   </ItemGroup>
