@@ -35,6 +35,8 @@ type MemberIdentityRow = {
 type TeamMembersTabProps = {
   readonly compositionRows: readonly MemberCompositionRow[];
   readonly identityRows: readonly MemberIdentityRow[];
+  readonly openRuntimeExplorerDisabled?: boolean;
+  readonly openRuntimeExplorerHint?: string;
   readonly onOpenRuntimeExplorer: () => void;
   readonly onOpenServices: () => void;
   readonly onSelectActor: (actorId: string) => void;
@@ -43,6 +45,8 @@ type TeamMembersTabProps = {
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   compositionRows,
   identityRows,
+  openRuntimeExplorerDisabled = false,
+  openRuntimeExplorerHint,
   onOpenRuntimeExplorer,
   onOpenServices,
   onSelectActor,
@@ -173,7 +177,13 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             <Button onClick={onOpenServices} size="small" style={actionButtonStyle}>
               打开 Services
             </Button>
-            <Button onClick={onOpenRuntimeExplorer} size="small" style={actionButtonStyle}>
+            <Button
+              disabled={openRuntimeExplorerDisabled}
+              onClick={onOpenRuntimeExplorer}
+              size="small"
+              style={actionButtonStyle}
+              title={openRuntimeExplorerDisabled ? openRuntimeExplorerHint : undefined}
+            >
               查看拓扑
             </Button>
           </Space>

@@ -118,34 +118,48 @@ describe('ServicesPage', () => {
     window.history.replaceState({}, '', '/services');
   });
 
-  it('renders the unified services workbench with service data', async () => {
+  it('renders the reframed services authority workbench with inventory and empty detail state', async () => {
     renderWithQueryClient(React.createElement(ServicesPage));
 
     expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
     expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
-    expect(await screen.findByText('服务数')).toBeTruthy();
+    expect(await screen.findByText('可见服务')).toBeTruthy();
+    expect((await screen.findAllByText('已挂 Serving')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('缺主 Actor')).toBeTruthy();
+    expect(await screen.findByText('无公开入口')).toBeTruthy();
+    expect(await screen.findByText('查找服务')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
-    expect(screen.getByText('Services 是 Platform 的 authority 视图。这里回答当前范围内有哪些服务、它们挂在哪个 deployment 上、暴露了哪些入口，以及应该继续跳到 Governance、Deployments 还是 Topology。')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '查看服务' })).toBeTruthy();
+    expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、Deployments 或 Topology。')).toBeTruthy();
+    expect(screen.getByText('服务目录')).toBeTruthy();
+    expect(screen.getByText('按行扫描状态、部署和入口，点击行或按钮在抽屉里查看详情。')).toBeTruthy();
+    expect(screen.getByText('状态')).toBeTruthy();
+    expect(screen.getByText('身份')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看详情' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开治理' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '筛选服务' })).toBeTruthy();
-    expect(screen.queryByText('Next Actions')).toBeNull();
-    expect(screen.queryByText('No services matched the current scope.')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Inspect' })).toBeNull();
+    expect(screen.queryByText('对象摘要')).toBeNull();
   });
 
-  it('renders a compact service drawer instead of oversized metric cards', async () => {
+  it('renders authority detail in drawer after selecting a service', async () => {
     renderWithQueryClient(React.createElement(ServicesPage));
 
-    fireEvent.click(await screen.findByRole('button', { name: '查看服务' }));
+    fireEvent.click(await screen.findByRole('button', { name: '查看详情' }));
 
-    expect(await screen.findByText('服务摘要')).toBeTruthy();
-    expect(screen.getByText('Service key')).toBeTruthy();
-    expect(screen.getByText('tenant-a/app-a/default/service-alpha')).toBeTruthy();
-    expect(screen.getAllByText('当前部署').length).toBeGreaterThan(0);
-    expect(screen.getByText('最新版本')).toBeTruthy();
+    expect(await screen.findByText('对象摘要')).toBeTruthy();
+    expect(await screen.findByText('服务工作区')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开 Governance' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开 Deployments' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开 Topology' })).toBeTruthy();
+    expect(screen.getAllByText('tenant-a/app-a/default/service-alpha').length).toBeGreaterThan(0);
+    expect(screen.getByText('当前 serving 版本')).toBeTruthy();
+    expect(screen.getByText('权威对象')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '入口' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '版本与部署' })).toBeTruthy();
+    expect(screen.getAllByText('1 个入口').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('tab', { name: '版本与部署' }));
+
+    expect(await screen.findByText('最新版本')).toBeTruthy();
     expect(screen.getByText('流量入口')).toBeTruthy();
-    expect(screen.getByText('最高权重')).toBeTruthy();
-    expect(screen.queryByText('Weight ceiling')).toBeNull();
   });
 });

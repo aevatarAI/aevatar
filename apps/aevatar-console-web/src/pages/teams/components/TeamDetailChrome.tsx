@@ -17,6 +17,8 @@ type TeamActionRailProps = {
   readonly onOpenConversation: () => void;
   readonly onOpenServiceMapping: () => void;
   readonly onOpenTeamBuilder: () => void;
+  readonly serviceMappingDisabled?: boolean;
+  readonly serviceMappingHint?: string;
   readonly serviceMappingActionLabel: string;
   readonly teamBuilderActionLabel: string;
 };
@@ -60,13 +62,17 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   onOpenConversation,
   onOpenServiceMapping,
   onOpenTeamBuilder,
+  serviceMappingDisabled = false,
+  serviceMappingHint,
   serviceMappingActionLabel,
   teamBuilderActionLabel,
 }) => (
   <Space key="team-detail-actions" wrap>
     <Button
+      disabled={serviceMappingDisabled}
       onClick={onOpenServiceMapping}
       style={topActionButtonStyle}
+      title={serviceMappingDisabled ? serviceMappingHint : undefined}
       type="primary"
     >
       {serviceMappingActionLabel}

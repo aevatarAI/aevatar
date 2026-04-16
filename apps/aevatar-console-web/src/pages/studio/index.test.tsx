@@ -1039,8 +1039,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
   const React = require("react");
 
   const dedupeStudioWorkflowSummaries = (
-    workflows: readonly any[],
-    selectedWorkflowId = ""
+    workflows: readonly any[]
   ) => {
     const deduped = new Map<string, any>();
 
@@ -1050,12 +1049,6 @@ jest.mock("./components/StudioWorkbenchSections", () => {
     };
 
     const comparePriority = (left: any, right: any) => {
-      const leftSelected = left.workflowId === selectedWorkflowId;
-      const rightSelected = right.workflowId === selectedWorkflowId;
-      if (leftSelected !== rightSelected) {
-        return leftSelected ? -1 : 1;
-      }
-
       const updatedDelta =
         readTimestamp(right.updatedAtUtc) - readTimestamp(left.updatedAtUtc);
       if (updatedDelta !== 0) {

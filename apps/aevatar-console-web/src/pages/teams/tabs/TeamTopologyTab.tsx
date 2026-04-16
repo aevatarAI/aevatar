@@ -24,6 +24,8 @@ type TopologyDetailDisplayRow = {
 };
 
 type TeamTopologyTabProps = {
+  readonly depthControlDisabled: boolean;
+  readonly depthControlHint?: string;
   readonly graphDepth: number;
   readonly graphEdgeCount: number;
   readonly graphFocusLabel: string;
@@ -34,6 +36,8 @@ type TeamTopologyTabProps = {
   readonly onNodeSelect: (nodeId: string) => void;
   readonly onOpenPlatformTopology: () => void;
   readonly onSetGraphDepth: (depth: number) => void;
+  readonly platformTopologyDisabled: boolean;
+  readonly platformTopologyHint?: string;
   readonly openPlatformTopologyButtonStyle: React.CSSProperties;
   readonly provenanceLabel: string;
   readonly provenanceStyle: React.CSSProperties;
@@ -47,11 +51,14 @@ type TeamTopologyTabProps = {
   readonly selectedEntityTitle?: string;
   readonly selectedFocusReason: string;
   readonly selectedNodeId: string;
+  readonly topologyEmptyDescription: string;
   readonly topologyEdges: readonly Edge[];
   readonly topologyNodes: readonly Node[];
 };
 
 const TeamTopologyTab: React.FC<TeamTopologyTabProps> = ({
+  depthControlDisabled,
+  depthControlHint,
   graphDepth,
   graphEdgeCount,
   graphFocusLabel,
@@ -62,6 +69,8 @@ const TeamTopologyTab: React.FC<TeamTopologyTabProps> = ({
   onNodeSelect,
   onOpenPlatformTopology,
   onSetGraphDepth,
+  platformTopologyDisabled,
+  platformTopologyHint,
   openPlatformTopologyButtonStyle,
   provenanceLabel,
   provenanceStyle,
@@ -75,10 +84,12 @@ const TeamTopologyTab: React.FC<TeamTopologyTabProps> = ({
   selectedEntityTitle,
   selectedFocusReason,
   selectedNodeId,
+  topologyEmptyDescription,
   topologyEdges,
   topologyNodes,
 }) => {
   const { token } = theme.useToken();
+  const controlsHint = depthControlHint || platformTopologyHint || "";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -125,20 +136,28 @@ const TeamTopologyTab: React.FC<TeamTopologyTabProps> = ({
               const active = graphDepth === depth;
               return (
                 <button
+                  aria-pressed={active}
+                  disabled={depthControlDisabled}
                   key={depth}
                   onClick={() => onSetGraphDepth(depth)}
                   style={{
                     background: active ? token.colorPrimaryBg : "transparent",
                     border: "none",
                     borderRadius: 999,
-                    color: active ? token.colorPrimary : token.colorTextSecondary,
-                    cursor: "pointer",
+                    color: depthControlDisabled
+                      ? token.colorTextQuaternary
+                      : active
+                        ? token.colorPrimary
+                        : token.colorTextSecondary,
+                    cursor: depthControlDisabled ? "not-allowed" : "pointer",
                     fontSize: 13,
                     fontWeight: active ? 700 : 500,
                     height: 32,
+                    opacity: depthControlDisabled ? 0.72 : 1,
                     padding: "0 14px",
                     transition: "all 140ms ease",
                   }}
+                  title={depthControlDisabled ? depthControlHint : undefined}
                   type="button"
                 >
                   {depth === 1 ? "近邻" : depth === 3 ? "全景" : "扩展"}
@@ -147,13 +166,22 @@ const TeamTopologyTab: React.FC<TeamTopologyTabProps> = ({
             })}
           </div>
           <Button
+            disabled={platformTopologyDisabled}
             onClick={onOpenPlatformTopology}
             style={openPlatformTopologyButtonStyle}
+            title={platformTopologyDisabled ? platformTopologyHint : undefined}
             type="primary"
           >
             打开平台拓扑
           </Button>
         </Space>
+        {controlsHint ? (
+          <div style={{ width: "100%" }}>
+            <Typography.Text style={{ fontSize: 12 }} type="secondary">
+              {controlsHint}
+            </Typography.Text>
+          </div>
+        ) : null}
       </div>
       {isLoading ? (
         <AevatarInspectorEmpty description="正在加载团队拓扑。" />
@@ -232,7 +260,7 @@ const TeamTopologyTab: React.FC<TeamTopologyTabProps> = ({
             ) : (
               <AevatarInspectorEmpty
                 title="暂无可见关系"
-                description="当前没有更多可见的事件拓扑关系。"
+                description={topologyEmptyDescription}
               />
             )}
           </AevatarPanel>

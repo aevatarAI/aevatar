@@ -71,7 +71,7 @@ function createProps(overrides = {}) {
 }
 
 describe('StudioWorkflowsPage', () => {
-  it('deduplicates same-name workflows and keeps the selected item visible', () => {
+  it('deduplicates same-name workflows by keeping the highest-priority saved summary', () => {
     const deduped = dedupeStudioWorkflowSummaries(
       [
         createWorkflowSummary({
@@ -85,11 +85,10 @@ describe('StudioWorkflowsPage', () => {
           updatedAtUtc: '2026-04-09T10:00:00Z',
         }),
       ],
-      'legacy-id',
     );
 
     expect(deduped).toHaveLength(1);
-    expect(deduped[0]?.workflowId).toBe('legacy-id');
+    expect(deduped[0]?.workflowId).toBe('hello-chat');
   });
 
   it('keeps the browser panel stretched and centers the empty state', () => {

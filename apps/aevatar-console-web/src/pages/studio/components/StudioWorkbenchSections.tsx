@@ -31,6 +31,7 @@ import {
   ProCard,
 } from '@ant-design/pro-components';
 import {
+  Alert,
   Button,
   Col,
   Divider,
@@ -44,6 +45,7 @@ import {
   Tag,
   Tabs,
   Typography,
+  message,
 } from 'antd';
 import React from 'react';
 import type { Edge, Node } from '@xyflow/react';
@@ -166,14 +168,7 @@ function readWorkflowSortTimestamp(value: string): number {
 function compareWorkflowSummaryPriority(
   left: StudioWorkflowSummary,
   right: StudioWorkflowSummary,
-  selectedWorkflowId = '',
 ): number {
-  const leftSelected = left.workflowId === selectedWorkflowId;
-  const rightSelected = right.workflowId === selectedWorkflowId;
-  if (leftSelected !== rightSelected) {
-    return leftSelected ? -1 : 1;
-  }
-
   const updatedDelta =
     readWorkflowSortTimestamp(right.updatedAtUtc) -
     readWorkflowSortTimestamp(left.updatedAtUtc);
@@ -196,7 +191,6 @@ function compareWorkflowSummaryPriority(
 
 export function dedupeStudioWorkflowSummaries(
   workflows: readonly StudioWorkflowSummary[],
-  selectedWorkflowId = '',
 ): StudioWorkflowSummary[] {
   const dedupedWorkflows = new Map<string, StudioWorkflowSummary>();
 
@@ -210,33 +204,52 @@ export function dedupeStudioWorkflowSummaries(
       continue;
     }
 
-    if (
-      compareWorkflowSummaryPriority(workflow, current, selectedWorkflowId) < 0
-    ) {
+    if (compareWorkflowSummaryPriority(workflow, current) < 0) {
       dedupedWorkflows.set(key, workflow);
     }
   }
 
   return Array.from(dedupedWorkflows.values()).sort((left, right) =>
-    compareWorkflowSummaryPriority(left, right, selectedWorkflowId),
+    compareWorkflowSummaryPriority(left, right),
   );
 }
 
 const DEFAULT_GAGENT_REQUEST_TYPE_URL =
   'type.googleapis.com/google.protobuf.StringValue';
 
-function createStudioGAgentBindingEndpointDraft(
+function createStudioGAgentBindingPresetEndpointDraft(
+  preset: 'command' | 'chat',
   overrides?: Partial<StudioGAgentBindingEndpointDraft>,
 ): StudioGAgentBindingEndpointDraft {
+  if (preset === 'chat') {
+    return {
+      endpointId: overrides?.endpointId ?? 'chat',
+      displayName: overrides?.displayName ?? 'Chat',
+      kind: 'chat',
+      requestTypeUrl: overrides?.requestTypeUrl ?? '',
+      responseTypeUrl: overrides?.responseTypeUrl ?? '',
+      description: overrides?.description ?? 'Open the chat endpoint.',
+    };
+  }
+
   return {
     endpointId: overrides?.endpointId ?? 'run',
     displayName: overrides?.displayName ?? 'Run',
-    kind: overrides?.kind ?? 'command',
+    kind: 'command',
     requestTypeUrl:
       overrides?.requestTypeUrl ?? DEFAULT_GAGENT_REQUEST_TYPE_URL,
     responseTypeUrl: overrides?.responseTypeUrl ?? '',
     description: overrides?.description ?? 'Run the bound GAgent.',
   };
+}
+
+function createStudioGAgentBindingEndpointDraft(
+  overrides?: Partial<StudioGAgentBindingEndpointDraft>,
+): StudioGAgentBindingEndpointDraft {
+  return createStudioGAgentBindingPresetEndpointDraft(
+    overrides?.kind ?? 'command',
+    overrides,
+  );
 }
 
 function createStudioGAgentBindingDraft(
@@ -250,6 +263,86 @@ function createStudioGAgentBindingDraft(
     openRunsEndpointId: defaultEndpoint.endpointId,
     prompt: '',
     payloadBase64: '',
+  };
+}
+
+function inferStudioGAgentEndpointPreset(
+  actorTypeName: string,
+  descriptor?: RuntimeGAgentTypeDescriptor | null,
+): 'command' | 'chat' {
+  const candidates = [
+    actorTypeName,
+    descriptor?.typeName,
+    descriptor?.fullName,
+  ]
+    .map((value) => value?.trim().toLowerCase() ?? '')
+    .filter((value) => value.length > 0);
+
+  return candidates.some((value) => value.includes('chat')) ? 'chat' : 'command';
+}
+
+function isDefaultStudioGAgentEndpointValue(
+  value: string,
+  defaults: readonly string[],
+): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.length === 0 || defaults.includes(normalized);
+}
+
+function applyStudioGAgentEndpointPreset(
+  endpoint: StudioGAgentBindingEndpointDraft,
+  preset: 'command' | 'chat',
+): StudioGAgentBindingEndpointDraft {
+  const previousPreset = endpoint.kind === 'chat' ? 'chat' : 'command';
+  const previousDefaults = previousPreset === 'chat'
+    ? {
+        endpointIds: ['chat'],
+        displayNames: ['chat'],
+        requestTypeUrls: [''],
+        descriptions: ['open the chat endpoint.'],
+      }
+    : {
+        endpointIds: ['run'],
+        displayNames: ['run'],
+        requestTypeUrls: [
+          '',
+          DEFAULT_GAGENT_REQUEST_TYPE_URL.toLowerCase(),
+        ],
+        descriptions: ['run the bound gagent.'],
+      };
+  const nextDefaults = createStudioGAgentBindingPresetEndpointDraft(preset);
+
+  return {
+    ...endpoint,
+    kind: nextDefaults.kind,
+    endpointId: isDefaultStudioGAgentEndpointValue(
+      endpoint.endpointId,
+      previousDefaults.endpointIds,
+    )
+      ? nextDefaults.endpointId
+      : endpoint.endpointId,
+    displayName: isDefaultStudioGAgentEndpointValue(
+      endpoint.displayName,
+      previousDefaults.displayNames,
+    )
+      ? nextDefaults.displayName
+      : endpoint.displayName,
+    requestTypeUrl: isDefaultStudioGAgentEndpointValue(
+      endpoint.requestTypeUrl,
+      previousDefaults.requestTypeUrls,
+    )
+      ? nextDefaults.requestTypeUrl
+      : endpoint.requestTypeUrl,
+    responseTypeUrl:
+      preset === 'chat' && endpoint.responseTypeUrl.trim().length === 0
+        ? ''
+        : endpoint.responseTypeUrl,
+    description: isDefaultStudioGAgentEndpointValue(
+      endpoint.description,
+      previousDefaults.descriptions,
+    )
+      ? nextDefaults.description
+      : endpoint.description,
   };
 }
 
@@ -817,6 +910,7 @@ const studioSurfaceStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   flex: 1,
+  height: '100%',
   minHeight: 0,
   minWidth: 0,
   overflow: 'hidden',
@@ -848,10 +942,65 @@ const studioSurfaceBodyStyle: React.CSSProperties = {
 const studioSettingsTabsStyle: React.CSSProperties = {
   display: 'flex',
   flex: 1,
+  height: '100%',
   minHeight: 0,
   minWidth: 0,
+  overflow: 'hidden',
   width: '100%',
 };
+
+const studioSettingsTabsClassName = 'studio-settings-tabs';
+const studioSettingsTabContentClassName = 'studio-settings-tab-content';
+const studioSettingsTabsCss = `
+.${studioSettingsTabsClassName} {
+  align-items: stretch;
+  display: flex;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-content-holder {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-content {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-tabpane-hidden {
+  display: none !important;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-tabpane-active {
+  display: flex !important;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.${studioSettingsTabContentClassName} {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+`;
 
 const studioSettingsTabLabelStyle: React.CSSProperties = {
   alignItems: 'center',
@@ -862,12 +1011,9 @@ const studioSettingsTabLabelStyle: React.CSSProperties = {
 
 const studioSettingsTabContentStyle: React.CSSProperties = {
   ...cardStackStyle,
-  height: '100%',
+  flex: 1,
   minHeight: 0,
   minWidth: 0,
-  overflowX: 'hidden',
-  overflowY: 'auto',
-  paddingRight: 4,
 };
 
 const studioStatusStripStyle: React.CSSProperties = {
@@ -1835,9 +1981,8 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
   const directories = workspaceSettings.data?.directories ?? [];
   const isScopeMode = workflowStorageMode === 'scope';
   const visibleWorkflows = React.useMemo(
-    () =>
-      dedupeStudioWorkflowSummaries(workflows.data ?? [], selectedWorkflowId),
-    [selectedWorkflowId, workflows.data],
+    () => dedupeStudioWorkflowSummaries(workflows.data ?? []),
+    [workflows.data],
   );
   const activeDirectory =
     directories.find((directory) => directory.directoryId === selectedDirectoryId) ||
@@ -3808,6 +3953,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   const [runModalOpen, setRunModalOpen] = React.useState(false);
   const [gAgentModalOpen, setGAgentModalOpen] = React.useState(false);
   const [gAgentBindingPending, setGAgentBindingPending] = React.useState(false);
+  const [gAgentAdvancedOpen, setGAgentAdvancedOpen] = React.useState(false);
   const [gAgentDraft, setGAgentDraft] = React.useState<StudioGAgentBindingDraft>(
     () => createStudioGAgentBindingDraft(draftWorkflowName || templateWorkflowName || ''),
   );
@@ -3840,6 +3986,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       launchableGAgentEndpoints[0] ||
       null,
     [gAgentDraft.openRunsEndpointId, launchableGAgentEndpoints],
+  );
+  const primaryGAgentEndpoint = gAgentDraft.endpoints[0] ?? null;
+  const inferredPrimaryGAgentPreset = React.useMemo(
+    () =>
+      inferStudioGAgentEndpointPreset(
+        gAgentDraft.actorTypeName,
+        selectedDiscoveredGAgentType,
+      ),
+    [gAgentDraft.actorTypeName, selectedDiscoveredGAgentType],
   );
 
   const updateGAgentEndpointDraft = React.useCallback(
@@ -3976,26 +4131,80 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   };
 
   const openGAgentModal = React.useCallback(() => {
+    const defaultDescriptor = gAgentTypes[0] ?? null;
+    const defaultActorTypeName =
+      buildRuntimeGAgentAssemblyQualifiedName(defaultDescriptor ?? {
+        typeName: '',
+        fullName: '',
+        assemblyName: '',
+      }).trim() || '';
+    const defaultPreset = inferStudioGAgentEndpointPreset(
+      defaultActorTypeName,
+      defaultDescriptor,
+    );
     setGAgentDraft((current) => ({
       ...current,
       displayName: current.displayName || draftWorkflowName || templateWorkflowName || '',
       actorTypeName:
         current.actorTypeName.trim() ||
-        (gAgentTypes[0]
-          ? buildRuntimeGAgentAssemblyQualifiedName(gAgentTypes[0])
-          : '') ||
+        defaultActorTypeName ||
         '',
       endpoints:
         current.endpoints.length > 0
-          ? current.endpoints
-          : [createStudioGAgentBindingEndpointDraft()],
+          ? current.actorTypeName.trim()
+            ? current.endpoints
+            : [
+                applyStudioGAgentEndpointPreset(
+                  current.endpoints[0],
+                  defaultPreset,
+                ),
+                ...current.endpoints.slice(1),
+              ]
+          : [createStudioGAgentBindingPresetEndpointDraft(defaultPreset)],
       openRunsEndpointId:
         current.openRunsEndpointId ||
         current.endpoints[0]?.endpointId ||
-        'run',
+        createStudioGAgentBindingPresetEndpointDraft(defaultPreset).endpointId,
     }));
+    setGAgentAdvancedOpen(false);
     setGAgentModalOpen(true);
   }, [draftWorkflowName, gAgentTypes, templateWorkflowName]);
+
+  const updatePrimaryGAgentEndpointPreset = React.useCallback(
+    (preset: 'command' | 'chat') => {
+      setGAgentDraft((current) => {
+        const primaryEndpoint = current.endpoints[0];
+        if (!primaryEndpoint) {
+          const nextEndpoint = createStudioGAgentBindingPresetEndpointDraft(preset);
+          return {
+            ...current,
+            endpoints: [nextEndpoint],
+            openRunsEndpointId: nextEndpoint.endpointId,
+          };
+        }
+
+        const nextPrimaryEndpoint = applyStudioGAgentEndpointPreset(
+          primaryEndpoint,
+          preset,
+        );
+        const nextEndpoints = [
+          nextPrimaryEndpoint,
+          ...current.endpoints.slice(1),
+        ];
+        const nextOpenRunsEndpointId =
+          current.openRunsEndpointId.trim() === primaryEndpoint.endpointId.trim()
+            ? nextPrimaryEndpoint.endpointId
+            : current.openRunsEndpointId;
+
+        return {
+          ...current,
+          endpoints: nextEndpoints,
+          openRunsEndpointId: nextOpenRunsEndpointId,
+        };
+      });
+    },
+    [],
+  );
 
   const submitGAgentBinding = React.useCallback(async (openRuns: boolean) => {
     setGAgentBindingPending(true);
@@ -4027,7 +4236,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           openRuns,
         },
       );
+      if (!openRuns) {
+        void message.success('团队入口已绑定成功。');
+      }
       setGAgentModalOpen(false);
+    } catch {
+      // The page-level binder already surfaces the error notice. Keep the dialog
+      // open so the user can correct the input or retry.
     } finally {
       setGAgentBindingPending(false);
     }
@@ -4045,8 +4260,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     templateWorkflowName ||
     'draft';
   const visibleWorkflowDefinitions = React.useMemo(
-    () => dedupeStudioWorkflowSummaries(workflows.data ?? [], selectedWorkflowId),
-    [selectedWorkflowId, workflows.data],
+    () => dedupeStudioWorkflowSummaries(workflows.data ?? []),
+    [workflows.data],
   );
 
   React.useEffect(() => {
@@ -4914,17 +5129,35 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             ]}
           >
             <div style={cardStackStyle}>
-              <Input
-                aria-label="入口展示名称"
-                placeholder="展示名称"
-                value={gAgentDraft.displayName}
-                onChange={(event) =>
-                  setGAgentDraft((current) => ({
-                    ...current,
-                    displayName: event.target.value,
-                  }))
-                }
+              <Alert
+                type="info"
+                showIcon
+                message="先填 3 项就能绑定成功"
+                description="团队入口名称、能力类型和默认入口用途是最常用的必填项。程序集名称、类型 URL 和载荷草稿都在高级设置里。"
               />
+              <div style={{ display: 'grid', gap: 8 }}>
+                <Typography.Text strong>团队入口名称</Typography.Text>
+                <Input
+                  aria-label="入口展示名称"
+                  placeholder="例如 NyxID Chat"
+                  value={gAgentDraft.displayName}
+                  onChange={(event) =>
+                    setGAgentDraft((current) => ({
+                      ...current,
+                      displayName: event.target.value,
+                    }))
+                  }
+                />
+                <Typography.Text type="secondary">
+                  这就是首页团队卡和详情页里默认显示的名称。
+                </Typography.Text>
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <Typography.Text strong>能力类型</Typography.Text>
+                <Typography.Text type="secondary">
+                  先选一个可绑定的 GAgent 类型，系统会自动补一套推荐入口模板。
+                </Typography.Text>
+              </div>
               <Select
                 aria-label="已发现入口类型"
                 showSearch
@@ -4949,29 +5182,76 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 notFoundContent={
                   gAgentTypesLoading ? '正在读取入口类型...' : '没有找到入口类型。'
                 }
-                onChange={(value) =>
+                onChange={(value) => {
+                  const descriptor =
+                    gAgentTypes.find(
+                      (item) =>
+                        buildRuntimeGAgentAssemblyQualifiedName(item) === value,
+                    ) || null;
+                  const preset = inferStudioGAgentEndpointPreset(value, descriptor);
                   setGAgentDraft((current) => ({
                     ...current,
                     actorTypeName: value,
-                  }))
-                }
+                  }));
+                  updatePrimaryGAgentEndpointPreset(preset);
+                }}
               />
               {gAgentTypesError ? (
                 <Typography.Text type="danger">
                   {describeError(gAgentTypesError)}
                 </Typography.Text>
               ) : null}
-              <Input
-                aria-label="入口 Actor 类型"
-                placeholder="程序集限定 Actor 类型名"
-                value={gAgentDraft.actorTypeName}
-                onChange={(event) =>
-                  setGAgentDraft((current) => ({
-                    ...current,
-                    actorTypeName: event.target.value,
-                  }))
-                }
-              />
+              <Button
+                type="link"
+                style={{ alignSelf: 'flex-start', paddingInline: 0 }}
+                onClick={() => setGAgentAdvancedOpen((current) => !current)}
+              >
+                {gAgentAdvancedOpen ? '收起高级设置' : '显示高级设置'}
+              </Button>
+              {gAgentAdvancedOpen ? (
+                <>
+                  <Input
+                    aria-label="入口 Actor 类型"
+                    placeholder="程序集限定 Actor 类型名"
+                    value={gAgentDraft.actorTypeName}
+                    onChange={(event) =>
+                      setGAgentDraft((current) => ({
+                        ...current,
+                        actorTypeName: event.target.value,
+                      }))
+                    }
+                  />
+                  <Typography.Text type="secondary">
+                    只有在下拉里找不到目标类型，或者你想手动指定程序集限定名时，才需要修改这一项。
+                  </Typography.Text>
+                </>
+              ) : null}
+              <div style={{ display: 'grid', gap: 8 }}>
+                <Typography.Text strong>默认入口用途</Typography.Text>
+                <Select
+                  aria-label="默认入口用途"
+                  style={{ width: '100%' }}
+                  value={primaryGAgentEndpoint?.kind === 'chat' ? 'chat' : 'command'}
+                  options={[
+                    {
+                      label: '聊天对话',
+                      value: 'chat',
+                    },
+                    {
+                      label: '命令执行',
+                      value: 'command',
+                    },
+                  ]}
+                  onChange={(value) =>
+                    updatePrimaryGAgentEndpointPreset(value as 'command' | 'chat')
+                  }
+                />
+                <Typography.Text type="secondary">
+                  {primaryGAgentEndpoint?.kind === 'chat'
+                    ? '聊天入口会自动推荐入口 ID = chat，适合 NyxID Chat 这类对话型入口。'
+                    : '命令入口会自动推荐入口 ID = run，适合执行一次命令或任务。'}
+                </Typography.Text>
+              </div>
               <Divider style={{ marginBlock: 8 }}>服务入口</Divider>
               <Space
                 direction="vertical"
@@ -4983,7 +5263,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     alignItems: 'center',
                     display: 'flex',
                     gap: 12,
-                    justifyContent: 'space-between',
+                  justifyContent: 'space-between',
                   }}
                 >
                   <Button
@@ -5026,98 +5306,126 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                         删除
                       </Button>
                     </div>
-                    <Input
-                      aria-label={`入口 ID ${endpointIndex + 1}`}
-                      placeholder="入口 ID"
-                      value={endpoint.endpointId}
-                      onChange={(event) =>
-                        updateGAgentEndpointDraft(endpointIndex, {
-                          endpointId: event.target.value,
-                        })
-                      }
-                    />
-                    <Input
-                      aria-label={`入口展示名称 ${endpointIndex + 1}`}
-                      placeholder="入口展示名称"
-                      value={endpoint.displayName}
-                      onChange={(event) =>
-                        updateGAgentEndpointDraft(endpointIndex, {
-                          displayName: event.target.value,
-                        })
-                      }
-                    />
-                    <Select
-                      aria-label={`入口类型 ${endpointIndex + 1}`}
-                      options={[
-                        {
-                          label: '命令入口',
-                          value: 'command',
-                        },
-                        {
-                          label: '聊天入口',
-                          value: 'chat',
-                        },
-                      ]}
-                      value={endpoint.kind}
-                      onChange={(value) =>
-                        updateGAgentEndpointDraft(endpointIndex, {
-                          kind: value,
-                        })
-                      }
-                    />
-                    <Input
-                      aria-label={`请求类型 URL ${endpointIndex + 1}`}
-                      placeholder="请求类型 URL"
-                      value={endpoint.requestTypeUrl}
-                      onChange={(event) =>
-                        updateGAgentEndpointDraft(endpointIndex, {
-                          requestTypeUrl: event.target.value,
-                        })
-                      }
-                    />
-                    <Input
-                      aria-label={`响应类型 URL ${endpointIndex + 1}`}
-                      placeholder="响应类型 URL（可选）"
-                      value={endpoint.responseTypeUrl}
-                      onChange={(event) =>
-                        updateGAgentEndpointDraft(endpointIndex, {
-                          responseTypeUrl: event.target.value,
-                        })
-                      }
-                    />
-                    <Input.TextArea
-                      aria-label={`入口说明 ${endpointIndex + 1}`}
-                      autoSize={{ minRows: 2, maxRows: 4 }}
-                      placeholder="入口说明"
-                      value={endpoint.description}
-                      onChange={(event) =>
-                        updateGAgentEndpointDraft(endpointIndex, {
-                          description: event.target.value,
-                        })
-                      }
-                    />
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      <Typography.Text strong>入口 ID</Typography.Text>
+                      <Input
+                        aria-label={`入口 ID ${endpointIndex + 1}`}
+                        placeholder="聊天入口推荐 chat，命令入口推荐 run"
+                        value={endpoint.endpointId}
+                        onChange={(event) =>
+                          updateGAgentEndpointDraft(endpointIndex, {
+                            endpointId: event.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      <Typography.Text strong>入口名称</Typography.Text>
+                      <Input
+                        aria-label={`入口展示名称 ${endpointIndex + 1}`}
+                        placeholder="例如 Chat / Run"
+                        value={endpoint.displayName}
+                        onChange={(event) =>
+                          updateGAgentEndpointDraft(endpointIndex, {
+                            displayName: event.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      <Typography.Text strong>入口类型</Typography.Text>
+                      <Select
+                        aria-label={`入口类型 ${endpointIndex + 1}`}
+                        options={[
+                          {
+                            label: '命令入口',
+                            value: 'command',
+                          },
+                          {
+                            label: '聊天入口',
+                            value: 'chat',
+                          },
+                        ]}
+                        value={endpoint.kind}
+                        onChange={(value) =>
+                          updateGAgentEndpointDraft(
+                            endpointIndex,
+                            applyStudioGAgentEndpointPreset(
+                              endpoint,
+                              value as 'command' | 'chat',
+                            ),
+                          )
+                        }
+                      />
+                      <Typography.Text type="secondary">
+                        {endpoint.kind === 'chat'
+                          ? '聊天入口会直接打开聊天型测试运行。'
+                          : '命令入口会把提示词或载荷草稿带入测试运行。'}
+                      </Typography.Text>
+                    </div>
+                    {gAgentAdvancedOpen ? (
+                      <>
+                        <Input
+                          aria-label={`请求类型 URL ${endpointIndex + 1}`}
+                          placeholder="请求类型 URL"
+                          value={endpoint.requestTypeUrl}
+                          onChange={(event) =>
+                            updateGAgentEndpointDraft(endpointIndex, {
+                              requestTypeUrl: event.target.value,
+                            })
+                          }
+                        />
+                        <Input
+                          aria-label={`响应类型 URL ${endpointIndex + 1}`}
+                          placeholder="响应类型 URL（可选）"
+                          value={endpoint.responseTypeUrl}
+                          onChange={(event) =>
+                            updateGAgentEndpointDraft(endpointIndex, {
+                              responseTypeUrl: event.target.value,
+                            })
+                          }
+                        />
+                        <Input.TextArea
+                          aria-label={`入口说明 ${endpointIndex + 1}`}
+                          autoSize={{ minRows: 2, maxRows: 4 }}
+                          placeholder="入口说明"
+                          value={endpoint.description}
+                          onChange={(event) =>
+                            updateGAgentEndpointDraft(endpointIndex, {
+                              description: event.target.value,
+                            })
+                          }
+                        />
+                      </>
+                    ) : null}
                   </div>
                 ))}
               </Space>
-              <Select
-                aria-label="测试运行默认入口"
-                style={{ width: '100%' }}
-                placeholder="选择绑定后默认打开的测试运行入口"
-                value={selectedOpenRunsEndpoint?.endpointId || undefined}
-                options={launchableGAgentEndpoints.map((endpoint) => ({
-                  value: endpoint.endpointId,
-                  label: `${
-                    endpoint.displayName.trim() || endpoint.endpointId.trim()
-                  } (${endpoint.kind})`,
-                }))}
-                notFoundContent="先填写入口 ID，才能启用测试运行跳转。"
-                onChange={(value) =>
-                  setGAgentDraft((current) => ({
-                    ...current,
-                    openRunsEndpointId: value,
-                  }))
-                }
-              />
+              {launchableGAgentEndpoints.length > 1 ? (
+                <Select
+                  aria-label="测试运行默认入口"
+                  style={{ width: '100%' }}
+                  placeholder="选择绑定后默认打开的测试运行入口"
+                  value={selectedOpenRunsEndpoint?.endpointId || undefined}
+                  options={launchableGAgentEndpoints.map((endpoint) => ({
+                    value: endpoint.endpointId,
+                    label: `${
+                      endpoint.displayName.trim() || endpoint.endpointId.trim()
+                    } (${endpoint.kind})`,
+                  }))}
+                  notFoundContent="先填写入口 ID，才能启用测试运行跳转。"
+                  onChange={(value) =>
+                    setGAgentDraft((current) => ({
+                      ...current,
+                      openRunsEndpointId: value,
+                    }))
+                  }
+                />
+              ) : selectedOpenRunsEndpoint ? (
+                <Typography.Text type="secondary">
+                  默认测试运行入口：{selectedOpenRunsEndpoint.displayName.trim() || selectedOpenRunsEndpoint.endpointId.trim()} ({selectedOpenRunsEndpoint.kind})
+                </Typography.Text>
+              ) : null}
               <Typography.Text type="secondary">
                 {selectedOpenRunsEndpoint?.kind === 'chat'
                   ? '测试运行目前会通过特殊的 “chat” 入口 ID 直接打开聊天类入口。'
@@ -6788,7 +7096,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             <div style={sectionPanelStyle}>
               <div style={cardStackStyle}>
                 <Typography.Text strong>运行时</Typography.Text>
@@ -6886,7 +7197,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             {settings.isError ? (
               <StudioNoticeCard
                 type="error"
@@ -7263,7 +7577,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             <div style={sectionPanelStyle}>
               <div
                 style={{
@@ -7373,7 +7690,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             <div style={cardStackStyle}>
               <div style={sectionPanelStyle}>
                 <div style={cardStackStyle}>
@@ -7777,9 +8097,11 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
             </div>
           </>
         ) : null}
+        <style>{studioSettingsTabsCss}</style>
         <Tabs
           activeKey={activeSection}
           animated={false}
+          className={studioSettingsTabsClassName}
           destroyOnHidden
           items={settingsTabs}
           onChange={(key) => setActiveSection(key as StudioSettingsSectionKey)}
