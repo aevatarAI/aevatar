@@ -1,23 +1,19 @@
 import {
-  ApiOutlined,
   DeploymentUnitOutlined,
-  EyeOutlined,
-  LinkOutlined,
   PlusOutlined,
-  SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import type { ProListMetas } from "@ant-design/pro-components";
-import { ProList } from "@ant-design/pro-components";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
   Space,
   Tag,
+  Table,
   Tabs,
   Typography,
   theme,
 } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { governanceApi } from "@/shared/api/governanceApi";
 import { servicesApi } from "@/shared/api/servicesApi";
@@ -27,7 +23,9 @@ import { studioApi } from "@/shared/studio/api";
 import type {
   ActivationCapabilityView,
   GovernanceIdentityInput,
+  ServiceBindingInput,
   ServiceBindingSnapshot,
+  ServiceEndpointExposureInput,
   ServiceEndpointExposureSnapshot,
   ServicePolicyInput,
   ServicePolicySnapshot,
@@ -38,29 +36,28 @@ import type {
 } from "@/shared/models/services";
 import {
   AEVATAR_GLOBAL_UI_SPEC,
-  buildAevatarMetricCardStyle,
   buildAevatarPanelStyle,
   buildAevatarTagStyle,
   buildAevatarViewportStyle,
   formatAevatarStatusLabel,
-  resolveAevatarMetricVisual,
   resolveAevatarSemanticTone,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
-import ConsoleMetricCard from "@/shared/ui/ConsoleMetricCard";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import GovernanceAuditTimeline, {
   type GovernanceAuditEvent,
 } from "./GovernanceAuditTimeline";
-import GovernanceContextPanel from "./GovernanceContextPanel";
 import GovernanceInspectorDrawer, {
   type GovernanceInspectorTarget,
 } from "./GovernanceInspectorDrawer";
 import GovernanceQueryCard from "./GovernanceQueryCard";
 import type { GovernanceRevisionOption } from "./GovernanceQueryCard";
-import { GovernanceSelectionNotice } from "./GovernanceResultPanels";
 import {
-  applyGovernanceServiceSelection,
+  formatGovernanceTimestamp,
+  GovernanceSelectionNotice,
+  GovernanceSummaryPanel,
+} from "./GovernanceResultPanels";
+import {
   buildGovernanceWorkbenchHref,
   buildGovernanceServiceOptions,
   type GovernanceWorkbenchView,
@@ -78,7 +75,7 @@ type GovernanceNotice = {
 };
 
 type GovernanceViewMeta = {
-  path: string;
+  description: string;
   title: string;
 };
 
@@ -93,25 +90,29 @@ type GovernanceViewActionConfig = {
 };
 
 const governanceViewMeta: Record<GovernanceWorkbenchView, GovernanceViewMeta> = {
-  activation: {
-    path: "/governance/activation",
-    title: "Activation",
+  overview: {
+    description: "",
+    title: "总览",
   },
-  audit: {
-    path: "/governance",
-    title: "Audit",
+  activation: {
+    description: "",
+    title: "激活诊断",
   },
   bindings: {
-    path: "/governance/bindings",
-    title: "Bindings",
+    description: "",
+    title: "绑定",
+  },
+  changes: {
+    description: "",
+    title: "变更摘要",
   },
   endpoints: {
-    path: "/governance/endpoints",
-    title: "Endpoints",
+    description: "",
+    title: "入口",
   },
   policies: {
-    path: "/governance/policies",
-    title: "Policies",
+    description: "",
+    title: "策略",
   },
 };
 
@@ -176,17 +177,30 @@ function buildBlankPolicy(): ServicePolicySnapshot {
   };
 }
 
-function openDrawerButton(
-  key: string,
-  label: string,
-  onClick: () => void,
-  icon?: React.ReactNode,
-) {
-  return (
-    <Button icon={icon} key={key} onClick={onClick} size="small">
-      {label}
-    </Button>
-  );
+function buildBlankBinding(): ServiceBindingSnapshot {
+  return {
+    bindingId: "",
+    bindingKind: "service",
+    connectorRef: null,
+    displayName: "",
+    policyIds: [],
+    retired: false,
+    secretRef: null,
+    serviceRef: null,
+  };
+}
+
+function buildBlankEndpoint(): ServiceEndpointExposureSnapshot {
+  return {
+    description: "",
+    displayName: "",
+    endpointId: "",
+    exposureKind: "internal",
+    kind: "command",
+    policyIds: [],
+    requestTypeUrl: "",
+    responseTypeUrl: "",
+  };
 }
 
 function buildBindingTargetLabel(record: ServiceBindingSnapshot): string {
@@ -236,6 +250,15 @@ function buildEndpointSummary(record: ServiceEndpointExposureSnapshot): string {
   ];
 
   return segments.join(" · ");
+}
+
+function resolveLatestGovernanceTimestamp(
+  ...values: Array<string | undefined | null>
+): string | undefined {
+  return values
+    .map((value) => value?.trim() ?? "")
+    .filter(Boolean)
+    .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
 }
 
 function buildAuditEvents(input: {
@@ -475,14 +498,6 @@ const GovernanceWorkbench: React.FC = () => {
   const initialDraft = useMemo(() => readGovernanceDraft(), []);
   const [draft, setDraft] = useState<GovernanceDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<GovernanceDraft>(initialDraft);
-  const [showContextPicker, setShowContextPicker] = useState(
-    () =>
-      initialDraft.serviceId.trim().length === 0 ||
-      (view === "activation" && initialDraft.revisionId.trim().length === 0),
-  );
-  const [visitedViews, setVisitedViews] = useState<GovernanceWorkbenchView[]>(() => [
-    view,
-  ]);
   const [notice, setNotice] = useState<GovernanceNotice | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [drawerTarget, setDrawerTarget] = useState<GovernanceInspectorTarget | null>(
@@ -616,33 +631,8 @@ const GovernanceWorkbench: React.FC = () => {
       !activeDraft.serviceId.trim()
     ) {
       setActiveDraft(nextDraft);
-    }
+      }
   }, [activeDraft, draft, resolvedScope?.scopeId]);
-
-  useEffect(() => {
-    if (!serviceOptions.length || activeDraft.serviceId.trim()) {
-      return;
-    }
-
-    const nextDraft = applyGovernanceServiceSelection(
-      {
-        ...draft,
-        appId: draft.appId.trim() || serviceOptions[0].appId,
-        namespace: draft.namespace.trim() || serviceOptions[0].namespace,
-        tenantId: draft.tenantId.trim() || serviceOptions[0].tenantId,
-      },
-      serviceOptions[0],
-    );
-
-    setDraft((currentDraft) =>
-      currentDraft.serviceId.trim() ? currentDraft : nextDraft,
-    );
-    setActiveDraft((currentDraft) =>
-      currentDraft.serviceId.trim() ? currentDraft : nextDraft,
-    );
-    setShowContextPicker(false);
-    history.replace(buildGovernanceWorkbenchHref(nextDraft, view));
-  }, [activeDraft.serviceId, draft, serviceOptions, view]);
 
   useEffect(() => {
     if (
@@ -670,25 +660,12 @@ const GovernanceWorkbench: React.FC = () => {
           }
         : currentDraft,
     );
-    setShowContextPicker(false);
   }, [
     activeDraft.revisionId,
     activeDraft.serviceId,
     preferredRevisionId,
     view,
   ]);
-
-  useEffect(() => {
-    if (view === "activation" && !activeDraft.revisionId.trim()) {
-      setShowContextPicker(true);
-    }
-  }, [activeDraft.revisionId, view]);
-
-  useEffect(() => {
-    setVisitedViews((currentViews) =>
-      currentViews.includes(view) ? currentViews : [...currentViews, view],
-    );
-  }, [view]);
 
   useEffect(() => {
     const revisions = revisionsQuery.data?.revisions ?? [];
@@ -742,29 +719,81 @@ const GovernanceWorkbench: React.FC = () => {
     ],
   );
 
-  const summaryMetrics = useMemo(
+  const activePolicies = useMemo(
+    () => (policiesQuery.data?.policies ?? []).filter((policy) => !policy.retired),
+    [policiesQuery.data],
+  );
+
+  const activeBindings = useMemo(
+    () => (bindingsQuery.data?.bindings ?? []).filter((binding) => !binding.retired),
+    [bindingsQuery.data],
+  );
+
+  const publicEndpoints = useMemo(
+    () =>
+      (endpointsQuery.data?.endpoints ?? []).filter(
+        (endpoint) => endpoint.exposureKind === "public",
+      ),
+    [endpointsQuery.data],
+  );
+
+  const internalEndpoints = useMemo(
+    () =>
+      (endpointsQuery.data?.endpoints ?? []).filter(
+        (endpoint) => endpoint.exposureKind === "internal",
+      ),
+    [endpointsQuery.data],
+  );
+
+  const disabledEndpoints = useMemo(
+    () =>
+      (endpointsQuery.data?.endpoints ?? []).filter(
+        (endpoint) => endpoint.exposureKind === "disabled",
+      ),
+    [endpointsQuery.data],
+  );
+
+  const latestGovernanceUpdatedAt = useMemo(
+    () =>
+      resolveLatestGovernanceTimestamp(
+        selectedService?.updatedAt,
+        bindingsQuery.data?.updatedAt,
+        policiesQuery.data?.updatedAt,
+        endpointsQuery.data?.updatedAt,
+      ),
+    [
+      bindingsQuery.data,
+      endpointsQuery.data,
+      policiesQuery.data,
+      selectedService?.updatedAt,
+    ],
+  );
+
+  const governanceMetrics = useMemo(
     () => [
       {
-        label: "Policies",
-        tone: "info" as const,
-        value: String(policiesQuery.data?.policies.length ?? 0),
+        label: "激活中的策略",
+        tone:
+          activePolicies.length > 0
+            ? ("default" as const)
+            : ("warning" as const),
+        value: String(activePolicies.length),
       },
       {
-        label: "Bindings",
-        tone: "default" as const,
-        value: String(bindingsQuery.data?.bindings.length ?? 0),
+        label: "激活中的绑定",
+        tone:
+          activeBindings.length > 0
+            ? ("default" as const)
+            : ("warning" as const),
+        value: String(activeBindings.length),
       },
       {
-        label: "Public endpoints",
+        label: "公开入口",
         tone: "success" as const,
-        value: String(
-          endpointsQuery.data?.endpoints.filter(
-            (endpoint) => endpoint.exposureKind === "public",
-          ).length ?? 0,
-        ),
+        value: String(publicEndpoints.length),
       },
       {
-        label: "Missing policies",
+        label: "激活阻塞",
         tone:
           (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
             ? ("warning" as const)
@@ -772,7 +801,7 @@ const GovernanceWorkbench: React.FC = () => {
         value: String(activationQuery.data?.missingPolicyIds.length ?? 0),
       },
     ],
-    [activationQuery.data, bindingsQuery.data, endpointsQuery.data, policiesQuery.data],
+    [activationQuery.data, activeBindings.length, activePolicies.length, publicEndpoints.length],
   );
 
   const governanceTabItems = useMemo(
@@ -784,15 +813,37 @@ const GovernanceWorkbench: React.FC = () => {
     [],
   );
 
+  const navigateToGovernanceView = useCallback(
+    (
+      nextView: GovernanceWorkbenchView,
+      nextDraft: GovernanceDraft = activeDraft,
+    ) => {
+      history.replace(buildGovernanceWorkbenchHref(nextDraft, nextView));
+    },
+    [activeDraft],
+  );
+
   const governanceViewActions = useMemo<
     Partial<Record<GovernanceWorkbenchView, GovernanceViewActionConfig>>
   >(
     () => ({
+      overview: hasSelectedServiceContext
+        ? {
+            icon: <DeploymentUnitOutlined />,
+            label: "检查激活",
+            onClick: () =>
+              navigateToGovernanceView("activation", {
+                ...activeDraft,
+                revisionId: activationRevisionId,
+              }),
+            type: "primary",
+          }
+        : undefined,
       activation:
         activationQuery.data != null
           ? {
               icon: <DeploymentUnitOutlined />,
-              label: "Open diagnostic",
+              label: "打开诊断",
               onClick: () =>
                 setDrawerTarget({
                   kind: "activation",
@@ -800,241 +851,265 @@ const GovernanceWorkbench: React.FC = () => {
                 }),
             }
           : undefined,
-      policies: {
-        icon: <PlusOutlined />,
-        label: "New policy",
-        onClick: () =>
-          setDrawerTarget({
-            kind: "policy",
-            mode: "create",
-            record: buildBlankPolicy(),
-          }),
-        type: "primary",
-      },
-    }),
-    [activationQuery.data],
-  );
-
-  const policyListMetas = useMemo<ProListMetas<ServicePolicySnapshot>>(
-    () => ({
-      actions: {
-        render: (_, record) => [
-          openDrawerButton(
-            `policy-${record.policyId}`,
-            "Configure",
-            () =>
+      policies: hasSelectedServiceContext
+        ? {
+            icon: <PlusOutlined />,
+            label: "新建策略",
+            onClick: () =>
               setDrawerTarget({
                 kind: "policy",
-                mode: "edit",
-                record,
+                mode: "create",
+                record: buildBlankPolicy(),
               }),
-            <EyeOutlined />,
-          ),
-        ],
-      },
-      avatar: {
-        render: () => (
-          <div
-            style={{
-              alignItems: "center",
-              background: surfaceToken.colorFillTertiary,
-              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
-              borderRadius: surfaceToken.borderRadiusLG,
-              color: surfaceToken.colorPrimary,
-              display: "inline-flex",
-              height: 36,
-              justifyContent: "center",
-              width: 36,
-            }}
-          >
-            <SafetyCertificateOutlined />
-          </div>
-        ),
-      },
-      content: {
+            type: "primary",
+          }
+        : undefined,
+      bindings: hasSelectedServiceContext
+        ? {
+            icon: <PlusOutlined />,
+            label: "新建绑定",
+            onClick: () =>
+              setDrawerTarget({
+                kind: "binding",
+                mode: "create",
+                record: buildBlankBinding(),
+              }),
+            type: "primary",
+          }
+        : undefined,
+      endpoints: hasSelectedServiceContext
+        ? {
+            icon: <PlusOutlined />,
+            label: "新建入口",
+            onClick: () =>
+              setDrawerTarget({
+                kind: "endpoint",
+                mode: "create",
+                record: buildBlankEndpoint(),
+              }),
+            type: "primary",
+          }
+        : undefined,
+    }),
+    [
+      activationQuery.data,
+      activationRevisionId,
+      activeDraft,
+      hasSelectedServiceContext,
+      navigateToGovernanceView,
+    ],
+  );
+
+  const stageTableShellStyle = useMemo(
+    () => ({
+      ...buildAevatarPanelStyle(surfaceToken, {
+        background: "rgba(255, 255, 255, 0.98)",
+      }),
+      borderRadius: 16,
+      boxShadow: "none",
+      overflow: "hidden",
+    }),
+    [surfaceToken],
+  );
+
+  const policyTableColumns = useMemo<ColumnsType<ServicePolicySnapshot>>(
+    () => [
+      {
+        key: "policy",
+        title: "策略",
         render: (_, record) => (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Typography.Text>{buildPolicySummary(record)}</Typography.Text>
-            <Space wrap size={[8, 8]}>
-              {record.activationRequiredBindingIds.map((bindingId) => (
-                <Tag key={bindingId}>{bindingId}</Tag>
-              ))}
-            </Space>
-          </div>
+          <Space orientation="vertical" size={2}>
+            <Typography.Text strong>
+              {record.displayName || record.policyId}
+            </Typography.Text>
+            <Typography.Text type="secondary">{record.policyId}</Typography.Text>
+          </Space>
         ),
       },
-      description: {
-        render: (_, record) => (
-          <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-            {record.policyId}
-          </Typography.Text>
-        ),
+      {
+        key: "bindings",
+        title: "激活依赖",
+        render: (_, record) =>
+          record.activationRequiredBindingIds.length > 0
+            ? `${record.activationRequiredBindingIds.length} 个绑定`
+            : "无前置绑定",
       },
-      subTitle: {
+      {
+        key: "callers",
+        title: "调用限制",
+        render: (_, record) =>
+          record.invokeAllowedCallerServiceKeys.length > 0
+            ? `${record.invokeAllowedCallerServiceKeys.length} 条 allowlist`
+            : "未限制 caller",
+      },
+      {
+        key: "status",
+        title: "状态",
+        width: 220,
         render: (_, record) => (
           <Space wrap size={[8, 8]}>
             <WorkbenchStatusTag status={record.retired ? "retired" : "active"} />
             {record.invokeRequiresActiveDeployment ? (
-              <Tag color="gold">Deployment gated</Tag>
+              <Tag color="gold">要求已激活部署</Tag>
             ) : null}
           </Space>
         ),
       },
-      title: {
+      {
+        key: "actions",
+        title: "操作",
+        width: 120,
         render: (_, record) => (
-          <Typography.Text strong>
-            {record.displayName || record.policyId}
-          </Typography.Text>
+          <Button
+            size="small"
+            type="link"
+            onClick={() =>
+              setDrawerTarget({
+                kind: "policy",
+                mode: "edit",
+                record,
+              })
+            }
+          >
+            配置
+          </Button>
         ),
       },
-    }),
-    [surfaceToken],
+    ],
+    [],
   );
 
-  const bindingListMetas = useMemo<ProListMetas<ServiceBindingSnapshot>>(
-    () => ({
-      actions: {
-        render: (_, record) => [
-          openDrawerButton(
-            `binding-${record.bindingId}`,
-            "Inspect",
-            () =>
+  const bindingTableColumns = useMemo<ColumnsType<ServiceBindingSnapshot>>(
+    () => [
+      {
+        key: "binding",
+        title: "绑定",
+        render: (_, record) => (
+          <Space orientation="vertical" size={2}>
+            <Typography.Text strong>
+              {record.displayName || record.bindingId}
+            </Typography.Text>
+            <Typography.Text type="secondary">{record.bindingId}</Typography.Text>
+          </Space>
+        ),
+      },
+      {
+        dataIndex: "bindingKind",
+        key: "bindingKind",
+        title: "类型",
+        width: 120,
+        render: (_, record) => formatAevatarStatusLabel(record.bindingKind),
+      },
+      {
+        key: "target",
+        title: "目标",
+        render: (_, record) => buildBindingTargetLabel(record),
+      },
+      {
+        key: "policies",
+        title: "挂载策略",
+        render: (_, record) =>
+          record.policyIds.length > 0
+            ? `${record.policyIds.length} 条`
+            : "未挂策略",
+      },
+      {
+        key: "status",
+        title: "状态",
+        width: 120,
+        render: (_, record) => (
+          <WorkbenchStatusTag status={record.retired ? "retired" : "active"} />
+        ),
+      },
+      {
+        key: "actions",
+        title: "操作",
+        width: 120,
+        render: (_, record) => (
+          <Button
+            size="small"
+            type="link"
+            onClick={() =>
               setDrawerTarget({
                 kind: "binding",
+                mode: "edit",
                 record,
-              }),
-            <EyeOutlined />,
-          ),
-        ],
-      },
-      avatar: {
-        render: () => (
-          <div
-            style={{
-              alignItems: "center",
-              background: surfaceToken.colorFillTertiary,
-              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
-              borderRadius: surfaceToken.borderRadiusLG,
-              color: surfaceToken.colorPrimary,
-              display: "inline-flex",
-              height: 36,
-              justifyContent: "center",
-              width: 36,
-            }}
+              })
+            }
           >
-            <LinkOutlined />
-          </div>
+            配置
+          </Button>
         ),
       },
-      content: {
-        render: (_, record) => (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Typography.Text>{buildBindingTargetLabel(record)}</Typography.Text>
-            <Space wrap size={[8, 8]}>
-              {record.policyIds.map((policyId) => (
-                <Tag key={policyId}>{policyId}</Tag>
-              ))}
-            </Space>
-          </div>
-        ),
-      },
-      description: {
-        render: (_, record) => (
-          <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-            {record.bindingId}
-          </Typography.Text>
-        ),
-      },
-      subTitle: {
-        render: (_, record) => (
-          <Space wrap size={[8, 8]}>
-            <WorkbenchStatusTag status={record.retired ? "retired" : "active"} />
-            <Tag color="blue">{formatAevatarStatusLabel(record.bindingKind)}</Tag>
-          </Space>
-        ),
-      },
-      title: {
-        render: (_, record) => (
-          <Typography.Text strong>
-            {record.displayName || record.bindingId}
-          </Typography.Text>
-        ),
-      },
-    }),
-    [surfaceToken],
+    ],
+    [],
   );
 
-  const endpointListMetas = useMemo<ProListMetas<ServiceEndpointExposureSnapshot>>(
-    () => ({
-      actions: {
-        render: (_, record) => [
-          openDrawerButton(
-            `endpoint-${record.endpointId}`,
-            "Manage",
-            () =>
-              setDrawerTarget({
-                kind: "endpoint",
-                record,
-              }),
-            <EyeOutlined />,
-          ),
-        ],
-      },
-      avatar: {
-        render: () => (
-          <div
-            style={{
-              alignItems: "center",
-              background: surfaceToken.colorFillTertiary,
-              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
-              borderRadius: surfaceToken.borderRadiusLG,
-              color: surfaceToken.colorPrimary,
-              display: "inline-flex",
-              height: 36,
-              justifyContent: "center",
-              width: 36,
-            }}
-          >
-            <ApiOutlined />
-          </div>
-        ),
-      },
-      content: {
+  const endpointTableColumns = useMemo<ColumnsType<ServiceEndpointExposureSnapshot>>(
+    () => [
+      {
+        key: "endpoint",
+        title: "入口",
         render: (_, record) => (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Typography.Text>{buildEndpointSummary(record)}</Typography.Text>
-            <Space wrap size={[8, 8]}>
-              {record.policyIds.map((policyId) => (
-                <Tag key={policyId}>{policyId}</Tag>
-              ))}
-            </Space>
-          </div>
-        ),
-      },
-      description: {
-        render: (_, record) => (
-          <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-            {record.endpointId}
-          </Typography.Text>
-        ),
-      },
-      subTitle: {
-        render: (_, record) => (
-          <Space wrap size={[8, 8]}>
-            <WorkbenchStatusTag status={record.exposureKind || "internal"} />
-            <Tag color="blue">{formatAevatarStatusLabel(record.kind)}</Tag>
+          <Space orientation="vertical" size={2}>
+            <Typography.Text strong>
+              {record.displayName || record.endpointId}
+            </Typography.Text>
+            <Typography.Text type="secondary">{record.endpointId}</Typography.Text>
           </Space>
         ),
       },
-      title: {
+      {
+        dataIndex: "kind",
+        key: "kind",
+        title: "类型",
+        width: 120,
+        render: (_, record) => formatAevatarStatusLabel(record.kind),
+      },
+      {
+        dataIndex: "exposureKind",
+        key: "exposureKind",
+        title: "暴露状态",
+        width: 140,
         render: (_, record) => (
-          <Typography.Text strong>
-            {record.displayName || record.endpointId}
-          </Typography.Text>
+          <WorkbenchStatusTag status={record.exposureKind || "internal"} />
         ),
       },
-    }),
-    [surfaceToken],
+      {
+        key: "policies",
+        title: "挂载策略",
+        render: (_, record) =>
+          record.policyIds.length > 0
+            ? `${record.policyIds.length} 条`
+            : "未挂策略",
+      },
+      {
+        key: "requestTypeUrl",
+        title: "请求契约",
+        render: (_, record) => record.requestTypeUrl || "未声明",
+      },
+      {
+        key: "actions",
+        title: "操作",
+        width: 120,
+        render: (_, record) => (
+          <Button
+            size="small"
+            type="link"
+            onClick={() =>
+              setDrawerTarget({
+                kind: "endpoint",
+                mode: "edit",
+                record,
+              })
+            }
+          >
+            配置
+          </Button>
+        ),
+      },
+    ],
+    [],
   );
 
   const invalidateGovernanceQueries = useCallback(async () => {
@@ -1085,6 +1160,30 @@ const GovernanceWorkbench: React.FC = () => {
         "create-policy",
         `Policy ${input.policyId} was accepted for governance creation.`,
         () => governanceApi.createPolicy(activeDraft.serviceId, input),
+        true,
+      );
+    },
+    [activeDraft.serviceId, runGovernanceAction],
+  );
+
+  const handleCreateBinding = useCallback(
+    async (input: ServiceBindingInput) => {
+      await runGovernanceAction(
+        "create-binding",
+        `Binding ${input.bindingId} was accepted for governance creation.`,
+        () => governanceApi.createBinding(activeDraft.serviceId, input),
+        true,
+      );
+    },
+    [activeDraft.serviceId, runGovernanceAction],
+  );
+
+  const handleUpdateBinding = useCallback(
+    async (bindingId: string, input: ServiceBindingInput) => {
+      await runGovernanceAction(
+        "save-binding",
+        `Binding ${bindingId} was accepted for update.`,
+        () => governanceApi.updateBinding(activeDraft.serviceId, bindingId, input),
         true,
       );
     },
@@ -1168,6 +1267,54 @@ const GovernanceWorkbench: React.FC = () => {
     [activeDraft.serviceId, activeIdentity, endpointsQuery.data, runGovernanceAction],
   );
 
+  const handleCreateEndpoint = useCallback(
+    async (input: ServiceEndpointExposureInput) => {
+      if (!activeIdentity) {
+        return;
+      }
+
+      const currentEndpoints = endpointsQuery.data?.endpoints ?? [];
+      const payload = {
+        ...activeIdentity,
+        endpoints: [...currentEndpoints, input],
+      };
+
+      await runGovernanceAction(
+        "create-endpoint",
+        `Endpoint ${input.endpointId} was accepted for governance creation.`,
+        () =>
+          endpointsQuery.data
+            ? governanceApi.updateEndpointCatalog(activeDraft.serviceId, payload)
+            : governanceApi.createEndpointCatalog(activeDraft.serviceId, payload),
+        true,
+      );
+    },
+    [activeDraft.serviceId, activeIdentity, endpointsQuery.data, runGovernanceAction],
+  );
+
+  const handleUpdateEndpoint = useCallback(
+    async (endpointId: string, input: ServiceEndpointExposureInput) => {
+      if (!activeIdentity || !endpointsQuery.data) {
+        return;
+      }
+
+      const payload = {
+        ...activeIdentity,
+        endpoints: endpointsQuery.data.endpoints.map((endpoint) =>
+          endpoint.endpointId === endpointId ? input : endpoint,
+        ),
+      };
+
+      await runGovernanceAction(
+        "save-endpoint",
+        `Endpoint ${endpointId} was accepted for update.`,
+        () => governanceApi.updateEndpointCatalog(activeDraft.serviceId, payload),
+        true,
+      );
+    },
+    [activeDraft.serviceId, activeIdentity, endpointsQuery.data, runGovernanceAction],
+  );
+
   const openAuditEvent = useCallback(
     (event: GovernanceAuditEvent) => {
       if (event.targetKind === "policy") {
@@ -1191,6 +1338,7 @@ const GovernanceWorkbench: React.FC = () => {
         if (record) {
           setDrawerTarget({
             kind: "binding",
+            mode: "edit",
             record,
           });
           return;
@@ -1204,6 +1352,7 @@ const GovernanceWorkbench: React.FC = () => {
         if (record) {
           setDrawerTarget({
             kind: "endpoint",
+            mode: "edit",
             record,
           });
           return;
@@ -1235,184 +1384,330 @@ const GovernanceWorkbench: React.FC = () => {
     if (!hasSelectedServiceContext) {
       return (
         <GovernanceSelectionNotice
-          title="Select a service"
+          title="选择一个服务"
+          highlights={[
+            {
+              label: "团队",
+              value: draft.tenantId || "待选择",
+            },
+            {
+              label: "应用",
+              value: draft.appId || "待选择",
+            },
+            {
+              label: "命名空间",
+              value: draft.namespace || "待选择",
+            },
+          ]}
         />
       );
     }
 
-    if (targetView === "activation" && !activeDraft.revisionId.trim()) {
+    if (targetView === "overview") {
+      const missingPolicyCount = activationQuery.data?.missingPolicyIds.length ?? 0;
+      const serviceBindings = activeBindings.filter(
+        (binding) => binding.bindingKind === "service",
+      ).length;
+      const connectorBindings = activeBindings.filter(
+        (binding) => binding.bindingKind === "connector",
+      ).length;
+      const secretBindings = activeBindings.filter(
+        (binding) => binding.bindingKind === "secret",
+      ).length;
+
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <GovernanceSummaryPanel
+            draft={activeDraft}
+            includeDefaultFields={false}
+            extraFields={[
+              {
+                label: "服务 Key",
+                value: selectedService?.serviceKey ?? "待选择",
+              },
+              {
+                label: "最近治理快照",
+                value: formatGovernanceTimestamp(latestGovernanceUpdatedAt),
+              },
+            ]}
+            metrics={governanceMetrics.map((metric) => ({
+              label: metric.label,
+              tone:
+                metric.tone === "warning"
+                  ? "warning"
+                  : metric.tone === "success"
+                    ? "success"
+                    : "default",
+              value: metric.value,
+            }))}
+            revisionId={activationRevisionId || undefined}
+            status={{
+              color: missingPolicyCount > 0 ? "warning" : "success",
+              label: missingPolicyCount > 0 ? "存在激活阻塞" : "治理闭环完整",
+            }}
+            title="治理总览"
+          />
+
+          <div
+            style={{
+              display: "grid",
+              gap: 16,
+              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+            }}
+          >
+            <GovernanceSelectionNotice
+              title="入口暴露"
+              highlights={[
+                { label: "公开", value: publicEndpoints.length },
+                { label: "内部", value: internalEndpoints.length },
+                { label: "停用", value: disabledEndpoints.length },
+                {
+                  label: "最近更新",
+                  value: formatGovernanceTimestamp(endpointsQuery.data?.updatedAt),
+                },
+              ]}
+            />
+            <GovernanceSelectionNotice
+              title="策略覆盖"
+              highlights={[
+                { label: "激活中的策略", value: activePolicies.length },
+                {
+                  label: "要求已激活部署",
+                  value: activePolicies.filter(
+                    (policy) => policy.invokeRequiresActiveDeployment,
+                  ).length,
+                },
+                {
+                  label: "缺失策略",
+                  value: missingPolicyCount,
+                },
+                {
+                  label: "最近更新",
+                  value: formatGovernanceTimestamp(policiesQuery.data?.updatedAt),
+                },
+              ]}
+            />
+            <GovernanceSelectionNotice
+              title="绑定依赖"
+              highlights={[
+                { label: "Service", value: serviceBindings },
+                { label: "Connector", value: connectorBindings },
+                { label: "Secret", value: secretBindings },
+                {
+                  label: "最近更新",
+                  value: formatGovernanceTimestamp(bindingsQuery.data?.updatedAt),
+                },
+              ]}
+            />
+            <GovernanceSelectionNotice
+              title="下一步建议"
+              highlights={[
+                {
+                  label: "当前版本",
+                  value: activationRevisionId || "待选择",
+                },
+                {
+                  label: "建议动作",
+                  value:
+                    missingPolicyCount > 0
+                      ? "先补齐缺失策略，再检查绑定是否挂齐"
+                      : publicEndpoints.length === 0
+                        ? "先确认是否需要公开入口，再检查 endpoint 暴露"
+                        : "进入激活诊断，确认 revision 已经可激活",
+                },
+              ]}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (targetView === "activation" && !activationRevisionId.trim()) {
       return (
         <GovernanceSelectionNotice
-          title="Select a revision"
+          title="选择一个版本"
         />
       );
     }
 
-    if (targetView === "audit") {
+    if (targetView === "changes") {
       return (
-        <GovernanceAuditTimeline
-          events={auditEvents}
-          loading={
-            bindingsQuery.isLoading ||
-            policiesQuery.isLoading ||
-            endpointsQuery.isLoading
-          }
-          onSelect={openAuditEvent}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <GovernanceSelectionNotice
+            title="变更摘要"
+            highlights={[
+              { label: "事件数", value: auditEvents.length },
+              {
+                label: "最近更新",
+                value: formatGovernanceTimestamp(latestGovernanceUpdatedAt),
+              },
+            ]}
+          />
+          <GovernanceAuditTimeline
+            events={auditEvents}
+            loading={
+              bindingsQuery.isLoading ||
+              policiesQuery.isLoading ||
+              endpointsQuery.isLoading
+            }
+            onSelect={openAuditEvent}
+          />
+        </div>
       );
     }
 
     if (targetView === "policies") {
       return (
-        <ProList<ServicePolicySnapshot>
-          dataSource={policiesQuery.data?.policies ?? []}
-          itemCardProps={{
-            bodyStyle: { padding: 16 },
-            style: {
-              background: surfaceToken.colorBgContainer,
-              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
-              borderRadius: surfaceToken.borderRadiusLG,
-              boxShadow: surfaceToken.boxShadowSecondary,
-            },
-          }}
-          locale={{
-            emptyText: policiesQuery.isLoading
-              ? "Loading..."
-              : "No policies",
-          }}
-          metas={policyListMetas}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
-          rowKey="policyId"
-          search={false}
-          showActions="always"
-          split={false}
-          toolBarRender={false}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <GovernanceSelectionNotice
+            title="策略目录"
+            highlights={[
+              { label: "激活中的策略", value: activePolicies.length },
+              {
+                label: "已退役",
+                value: (policiesQuery.data?.policies ?? []).filter(
+                  (policy) => policy.retired,
+                ).length,
+              },
+              {
+                label: "要求已激活部署",
+                value: activePolicies.filter(
+                  (policy) => policy.invokeRequiresActiveDeployment,
+                ).length,
+              },
+            ]}
+          />
+          <div style={stageTableShellStyle}>
+            <Table<ServicePolicySnapshot>
+              columns={policyTableColumns}
+              dataSource={policiesQuery.data?.policies ?? []}
+              locale={{
+                emptyText: policiesQuery.isLoading
+                  ? "正在加载策略..."
+                  : "当前服务还没有治理策略。",
+              }}
+              pagination={{ pageSize: 8, showSizeChanger: false }}
+              rowKey="policyId"
+              size="middle"
+            />
+          </div>
+        </div>
       );
     }
 
     if (targetView === "bindings") {
       return (
-        <ProList<ServiceBindingSnapshot>
-          dataSource={bindingsQuery.data?.bindings ?? []}
-          itemCardProps={{
-            bodyStyle: { padding: 16 },
-            style: {
-              background: surfaceToken.colorBgContainer,
-              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
-              borderRadius: surfaceToken.borderRadiusLG,
-              boxShadow: surfaceToken.boxShadowSecondary,
-            },
-          }}
-          locale={{
-            emptyText: bindingsQuery.isLoading
-              ? "Loading..."
-              : "No bindings",
-          }}
-          metas={bindingListMetas}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
-          rowKey="bindingId"
-          search={false}
-          showActions="always"
-          split={false}
-          toolBarRender={false}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <GovernanceSelectionNotice
+            title="绑定目录"
+            highlights={[
+              {
+                label: "Service",
+                value: activeBindings.filter(
+                  (binding) => binding.bindingKind === "service",
+                ).length,
+              },
+              {
+                label: "Connector",
+                value: activeBindings.filter(
+                  (binding) => binding.bindingKind === "connector",
+                ).length,
+              },
+              {
+                label: "Secret",
+                value: activeBindings.filter(
+                  (binding) => binding.bindingKind === "secret",
+                ).length,
+              },
+            ]}
+          />
+          <div style={stageTableShellStyle}>
+            <Table<ServiceBindingSnapshot>
+              columns={bindingTableColumns}
+              dataSource={bindingsQuery.data?.bindings ?? []}
+              locale={{
+                emptyText: bindingsQuery.isLoading
+                  ? "正在加载绑定..."
+                  : "当前服务还没有绑定依赖。",
+              }}
+              pagination={{ pageSize: 8, showSizeChanger: false }}
+              rowKey="bindingId"
+              size="middle"
+            />
+          </div>
+        </div>
       );
     }
 
     if (targetView === "endpoints") {
       return (
-        <ProList<ServiceEndpointExposureSnapshot>
-          dataSource={endpointsQuery.data?.endpoints ?? []}
-          itemCardProps={{
-            bodyStyle: { padding: 16 },
-            style: {
-              background: surfaceToken.colorBgContainer,
-              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
-              borderRadius: surfaceToken.borderRadiusLG,
-              boxShadow: surfaceToken.boxShadowSecondary,
-            },
-          }}
-          locale={{
-            emptyText: endpointsQuery.isLoading
-              ? "Loading..."
-              : "No endpoints",
-          }}
-          metas={endpointListMetas}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
-          rowKey="endpointId"
-          search={false}
-          showActions="always"
-          split={false}
-          toolBarRender={false}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <GovernanceSelectionNotice
+            title="入口目录"
+            highlights={[
+              { label: "公开", value: publicEndpoints.length },
+              { label: "内部", value: internalEndpoints.length },
+              { label: "停用", value: disabledEndpoints.length },
+            ]}
+          />
+          <div style={stageTableShellStyle}>
+            <Table<ServiceEndpointExposureSnapshot>
+              columns={endpointTableColumns}
+              dataSource={endpointsQuery.data?.endpoints ?? []}
+              locale={{
+                emptyText: endpointsQuery.isLoading
+                  ? "正在加载入口目录..."
+                  : "当前服务还没有入口目录。",
+              }}
+              pagination={{ pageSize: 8, showSizeChanger: false }}
+              rowKey="endpointId"
+              size="middle"
+            />
+          </div>
+        </div>
       );
     }
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div
-          style={{
-            display: "grid",
-            gap: 12,
-            gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+        <GovernanceSummaryPanel
+          draft={activeDraft}
+          includeDefaultFields={false}
+          metrics={[
+            {
+              label: "缺失策略",
+              tone:
+                (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
+                  ? "warning"
+                  : "success",
+              value: String(activationQuery.data?.missingPolicyIds.length ?? 0),
+            },
+            {
+              label: "可见绑定",
+              value: String((activationQuery.data?.bindings ?? []).length),
+            },
+            {
+              label: "可见入口",
+              value: String((activationQuery.data?.endpoints ?? []).length),
+            },
+            {
+              label: "可见策略",
+              value: String((activationQuery.data?.policies ?? []).length),
+            },
+          ]}
+          revisionId={activationRevisionId}
+          status={{
+            color:
+              (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
+                ? "warning"
+                : "success",
+            label:
+              (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
+                ? "存在激活阻塞"
+                : "可以进入激活",
           }}
-        >
-          {summaryMetrics.map((metric) => (
-            <div
-              key={metric.label}
-              style={buildAevatarMetricCardStyle(surfaceToken, metric.tone)}
-            >
-              <Typography.Text
-                style={{
-                  color: resolveAevatarMetricVisual(surfaceToken, metric.tone)
-                    .labelColor,
-                }}
-              >
-                {metric.label}
-              </Typography.Text>
-              <Typography.Text
-                strong
-                style={{
-                  color: resolveAevatarMetricVisual(surfaceToken, metric.tone)
-                    .valueColor,
-                }}
-              >
-                {metric.value}
-              </Typography.Text>
-            </div>
-          ))}
-        </div>
-
-        <div
-          style={{
-            ...buildAevatarPanelStyle(surfaceToken, {
-              background: surfaceToken.colorFillAlter,
-              padding: 16,
-            }),
-            boxShadow: "none",
-          }}
-        >
-          <Space direction="vertical" size={10} style={{ display: "flex" }}>
-            <Typography.Text strong>
-              Revision {activationRevisionId || "unresolved"}
-            </Typography.Text>
-            <Space wrap size={[8, 8]}>
-              <WorkbenchStatusTag
-                status={
-                  (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
-                    ? "blocked"
-                    : "ready"
-                }
-              />
-              {activationQuery.data?.missingPolicyIds.length ? (
-                <Tag color="gold">
-                  Missing {activationQuery.data.missingPolicyIds.length} policies
-                </Tag>
-              ) : null}
-            </Space>
-          </Space>
-        </div>
+          title="激活诊断"
+        />
 
         <div
           style={{
@@ -1421,127 +1716,71 @@ const GovernanceWorkbench: React.FC = () => {
             gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
           }}
         >
-          <div
-            style={{
-              ...buildAevatarPanelStyle(surfaceToken, {
-                background: surfaceToken.colorBgContainer,
-                padding: 16,
-              }),
-              boxShadow: "none",
-            }}
-          >
-            <Space direction="vertical" size={10} style={{ display: "flex" }}>
-              <Typography.Text strong>Missing policies</Typography.Text>
-              {activationQuery.data?.missingPolicyIds.length ? (
-                activationQuery.data.missingPolicyIds.map((policyId) => (
-                  <Tag key={policyId} color="gold">
-                    {policyId}
-                  </Tag>
-                ))
-              ) : (
-                <Typography.Text type="secondary">None</Typography.Text>
-              )}
-            </Space>
-          </div>
+          <GovernanceSelectionNotice
+            title="缺失策略"
+            highlights={
+              (activationQuery.data?.missingPolicyIds ?? []).length > 0
+                ? activationQuery.data?.missingPolicyIds.map((policyId) => ({
+                    label: policyId,
+                    value: "缺失",
+                  })) ?? []
+                : [{ label: "状态", value: "无缺失策略" }]
+            }
+          />
 
-          <div
-            style={{
-              ...buildAevatarPanelStyle(surfaceToken, {
-                background: surfaceToken.colorBgContainer,
-                padding: 16,
-              }),
-              boxShadow: "none",
-            }}
-          >
-            <Space direction="vertical" size={10} style={{ display: "flex" }}>
-              <Typography.Text strong>Bindings in scope</Typography.Text>
-              {(activationQuery.data?.bindings ?? []).length > 0 ? (
-                activationQuery.data?.bindings.map((binding) => (
-                  <button
-                    key={binding.bindingId}
-                    onClick={() =>
-                      setDrawerTarget({
-                        kind: "binding",
-                        record: binding,
-                      })
-                    }
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      padding: 0,
-                      textAlign: "left",
-                    }}
-                    type="button"
-                  >
-                    <Typography.Text>{binding.displayName || binding.bindingId}</Typography.Text>
-                  </button>
-                ))
-              ) : (
-                <Typography.Text type="secondary">None</Typography.Text>
-              )}
-            </Space>
-          </div>
+          <GovernanceSelectionNotice
+            title="作用域内绑定"
+            highlights={
+              (activationQuery.data?.bindings ?? []).length > 0
+                ? (activationQuery.data?.bindings ?? []).slice(0, 4).map((binding) => ({
+                    label: binding.bindingId,
+                    value: `${binding.displayName || binding.bindingId} · ${formatAevatarStatusLabel(binding.bindingKind)}`,
+                  }))
+                : [{ label: "状态", value: "当前没有可见绑定" }]
+            }
+          />
 
-          <div
-            style={{
-              ...buildAevatarPanelStyle(surfaceToken, {
-                background: surfaceToken.colorBgContainer,
-                padding: 16,
-              }),
-              boxShadow: "none",
-            }}
-          >
-            <Space direction="vertical" size={10} style={{ display: "flex" }}>
-              <Typography.Text strong>Exposed endpoints</Typography.Text>
-              {(activationQuery.data?.endpoints ?? []).length > 0 ? (
-                activationQuery.data?.endpoints.map((endpoint) => (
-                  <button
-                    key={endpoint.endpointId}
-                    onClick={() =>
-                      setDrawerTarget({
-                        kind: "endpoint",
-                        record: endpoint,
-                      })
-                    }
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      padding: 0,
-                      textAlign: "left",
-                    }}
-                    type="button"
-                  >
-                    <Typography.Text>{endpoint.displayName || endpoint.endpointId}</Typography.Text>
-                  </button>
-                ))
-              ) : (
-                <Typography.Text type="secondary">None</Typography.Text>
-              )}
-            </Space>
-          </div>
+          <GovernanceSelectionNotice
+            title="当前入口覆盖"
+            highlights={
+              (activationQuery.data?.endpoints ?? []).length > 0
+                ? (activationQuery.data?.endpoints ?? []).slice(0, 4).map((endpoint) => ({
+                    label: endpoint.endpointId,
+                    value: `${endpoint.displayName || endpoint.endpointId} · ${formatAevatarStatusLabel(endpoint.exposureKind)}`,
+                  }))
+                : [{ label: "状态", value: "当前没有可见入口" }]
+            }
+          />
         </div>
       </div>
     );
   }, [
-    activeDraft.revisionId,
+    activeBindings,
+    activeDraft,
+    activePolicies,
     activationQuery.data,
     activationRevisionId,
     auditEvents,
-    bindingListMetas,
     bindingsQuery.data,
     bindingsQuery.isLoading,
-    endpointListMetas,
+    disabledEndpoints,
     endpointsQuery.data,
     endpointsQuery.isLoading,
+    governanceMetrics,
     hasSelectedServiceContext,
+    internalEndpoints,
+    latestGovernanceUpdatedAt,
     openAuditEvent,
+    policyTableColumns,
     policiesQuery.data,
     policiesQuery.isLoading,
-    policyListMetas,
-    summaryMetrics,
+    publicEndpoints,
+    selectedService?.serviceKey,
+    bindingTableColumns,
+    endpointTableColumns,
+    stageTableShellStyle,
     surfaceToken,
+    draft,
   ]);
 
   return (
@@ -1564,17 +1803,14 @@ const GovernanceWorkbench: React.FC = () => {
           draft={draft}
           includeRevision={view === "activation"}
           loadLabel={
-            view === "activation" ? "Load activation capability" : "Load governance"
+            view === "activation" ? "加载激活诊断" : "加载治理工作台"
           }
           onChange={setDraft}
           onLoad={() => {
             const nextActiveDraft = normalizeGovernanceDraft(draft);
             setDraft(nextActiveDraft);
             setActiveDraft(nextActiveDraft);
-            setShowContextPicker(false);
-            history.replace(
-              buildGovernanceWorkbenchHref(nextActiveDraft, view),
-            );
+            navigateToGovernanceView(view, nextActiveDraft);
           }}
           onReset={() => {
             const nextDraft = resolvedScope?.scopeId?.trim()
@@ -1587,8 +1823,7 @@ const GovernanceWorkbench: React.FC = () => {
               : readGovernanceDraft("");
             setDraft(nextDraft);
             setActiveDraft(nextDraft);
-            setShowContextPicker(true);
-            history.replace(buildGovernanceWorkbenchHref(nextDraft, view));
+            navigateToGovernanceView(view, nextDraft);
           }}
           revisionOptions={revisionOptions}
           revisionOptionsLoading={revisionsQuery.isLoading}
@@ -1598,77 +1833,21 @@ const GovernanceWorkbench: React.FC = () => {
 
         <div
           style={{
-            display: "grid",
-            gap: 16,
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            display: "flex",
+            flexDirection: "column",
+            minWidth: 0,
           }}
         >
-          {summaryMetrics.map((metric) => (
-            <ConsoleMetricCard
-              key={metric.label}
-              label={metric.label}
-              tone={
-                metric.tone === "success"
-                  ? "green"
-                  : metric.tone === "info"
-                    ? "purple"
-                    : "default"
-              }
-              value={metric.value}
-            />
-          ))}
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            flex: 1,
-            gap: AEVATAR_GLOBAL_UI_SPEC.tokens.sectionGap,
-            gridTemplateColumns: "minmax(280px, 320px) minmax(0, 1fr)",
-            minHeight: 0,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: AEVATAR_GLOBAL_UI_SPEC.tokens.sectionGap,
-              minHeight: 0,
-            }}
-          >
-            {hasSelectedServiceContext ? (
-              <GovernanceContextPanel
-                draft={activeDraft}
-                includeRevision={Boolean(activeDraft.revisionId.trim())}
-                onChangeService={() => {
-                  setDraft(activeDraft);
-                  setShowContextPicker(true);
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  ...buildAevatarPanelStyle(surfaceToken, {
-                    background: surfaceToken.colorFillAlter,
-                    padding: 16,
-                  }),
-                  boxShadow: "none",
-                }}
-              >
-                <Typography.Text strong>Select a service</Typography.Text>
-              </div>
-            )}
-          </div>
-
           <div
             style={{
               ...buildAevatarPanelStyle(surfaceToken, {
                 background: surfaceToken.colorBgContainer,
+                minHeight: 640,
               }),
+              borderRadius: 18,
+              boxShadow: "0 18px 40px rgba(15, 23, 42, 0.06)",
               display: "flex",
               flexDirection: "column",
-              minHeight: 0,
-              position: "relative",
             }}
           >
             {(() => {
@@ -1678,11 +1857,13 @@ const GovernanceWorkbench: React.FC = () => {
                 <>
                   <div
                     style={{
+                      background:
+                        "linear-gradient(180deg, rgba(24, 144, 255, 0.06) 0%, rgba(255, 255, 255, 0.98) 100%)",
                       borderBottom: `1px solid ${surfaceToken.colorBorderSecondary}`,
                       display: "flex",
                       flexDirection: "column",
-                      gap: 12,
-                      padding: "16px 18px 0",
+                      gap: 14,
+                      padding: "18px 20px 0",
                     }}
                   >
                     <div
@@ -1691,16 +1872,35 @@ const GovernanceWorkbench: React.FC = () => {
                         columnGap: 12,
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) auto",
-                        minHeight: 72,
+                        minHeight: 80,
                       }}
                     >
-                      <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
+                      <Space orientation="vertical" size={2} style={{ minWidth: 0 }}>
+                        <Typography.Text
+                          style={{
+                            color: surfaceToken.colorPrimary,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          治理工作区
+                        </Typography.Text>
                         <Typography.Text
                           strong
-                          style={{ color: surfaceToken.colorTextHeading, fontSize: 16 }}
+                          style={{ color: surfaceToken.colorTextHeading, fontSize: 20 }}
                         >
                           {governanceViewMeta[view].title}
                         </Typography.Text>
+                        {governanceViewMeta[view].description ? (
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: 14, lineHeight: 1.65 }}
+                          >
+                            {governanceViewMeta[view].description}
+                          </Typography.Text>
+                        ) : null}
                       </Space>
                       <div
                         style={{
@@ -1725,12 +1925,10 @@ const GovernanceWorkbench: React.FC = () => {
                     <Tabs
                       activeKey={view}
                       items={governanceTabItems}
+                      style={{ marginBottom: -1 }}
                       onChange={(nextView) =>
-                        history.replace(
-                          buildGovernanceWorkbenchHref(
-                            activeDraft,
-                            nextView as GovernanceWorkbenchView,
-                          ),
+                        navigateToGovernanceView(
+                          nextView as GovernanceWorkbenchView,
                         )
                       }
                     />
@@ -1738,29 +1936,17 @@ const GovernanceWorkbench: React.FC = () => {
 
                   <div
                     style={{
-                      flex: 1,
-                      minHeight: 0,
-                      overflow: "hidden",
-                      position: "relative",
+                      display: "flex",
+                      flexDirection: "column",
                     }}
                   >
-                    {visitedViews.map((targetView) => (
-                      <div
-                        key={targetView}
-                        style={{
-                          inset: 0,
-                          opacity: targetView === view ? 1 : 0,
-                          overflowY: "auto",
-                          padding: "18px 18px 20px",
-                          pointerEvents: targetView === view ? "auto" : "none",
-                          position: "absolute",
-                          transition: "opacity 160ms ease",
-                          visibility: targetView === view ? "visible" : "hidden",
-                        }}
-                      >
-                        {renderStageForView(targetView)}
-                      </div>
-                    ))}
+                    <div
+                      style={{
+                        padding: "20px 20px 22px",
+                      }}
+                    >
+                      {renderStageForView(view)}
+                    </div>
                   </div>
                 </>
               );
@@ -1773,12 +1959,17 @@ const GovernanceWorkbench: React.FC = () => {
           endpointCatalog={endpointsQuery.data ?? null}
           identity={activeIdentity}
           onClose={() => setDrawerTarget(null)}
+          onCreateBinding={handleCreateBinding}
+          onCreateEndpoint={handleCreateEndpoint}
           onCreatePolicy={handleCreatePolicy}
           onRetireBinding={handleRetireBinding}
           onRetirePolicy={handleRetirePolicy}
           onSetEndpointExposure={handleSetEndpointExposure}
+          onUpdateEndpoint={handleUpdateEndpoint}
+          onUpdateBinding={handleUpdateBinding}
           onUpdatePolicy={handleUpdatePolicy}
           open={Boolean(drawerTarget)}
+          policyOptions={activePolicies.map((policy) => policy.policyId)}
           serviceId={activeDraft.serviceId}
           target={drawerTarget}
         />

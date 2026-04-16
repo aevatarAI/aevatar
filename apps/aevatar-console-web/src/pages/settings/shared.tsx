@@ -21,7 +21,7 @@ import { theme } from "antd";
 
 type SettingsPageShellProps = {
   children: React.ReactNode;
-  content: string;
+  content?: string;
   title?: string;
 };
 
@@ -40,7 +40,7 @@ const settingsTabs = [
   {
     icon: <UserOutlined />,
     key: "account",
-    label: "Account",
+    label: "账号",
     path: "/settings",
   },
 ] as const;
@@ -103,8 +103,7 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
       rail={
         <AevatarPanel
           layoutMode="document"
-          title="Preferences"
-          titleHelp="Workspace preferences, access posture, and identity stay anchored in the same focused shell as the rest of the console."
+          title="设置"
         >
           <Menu
             items={[...settingsTabs]}

@@ -60,7 +60,7 @@ describe('GovernanceQueryCard', () => {
     );
 
     expect(
-      screen.getByText('Enter tenantId and namespace first'),
+      screen.getByText('先填写团队、应用和命名空间'),
     ).toBeInTheDocument();
     expect(screen.getByRole('combobox')).toBeDisabled();
   });

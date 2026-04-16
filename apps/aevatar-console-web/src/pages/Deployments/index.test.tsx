@@ -295,40 +295,71 @@ afterEach(() => {
 });
 
 describe("DeploymentsPage", () => {
-  it("stays in empty detail state until an operator selects a deployment", async () => {
+  it("shows the service deployment list before an operator opens a service", async () => {
     renderDeploymentsPage();
 
     expect(await screen.findByText("Aevatar / Platform")).toBeInTheDocument();
-    expect(await screen.findAllByText("Deployments")).toHaveLength(2);
-    expect(await screen.findByText("Select a deployment")).toBeInTheDocument();
-    expect(screen.queryByText("Deployment Inventory")).toBeNull();
+    expect(
+      await screen.findByRole("heading", { name: "Deployments" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Deployments 是 Platform 的发布工作台，聚焦当前 serving、rollout 进度和流量分配。",
+      ),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("发布服务列表")).toBeInTheDocument();
+    expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
+    expect(screen.queryByText("发布摘要")).toBeNull();
   });
 
-  it("opens the extra-wide rollout drawer from the detail header", async () => {
+  it("renders the selected service workbench from URL context", async () => {
     renderDeploymentsPage(
-      "/deployments?tenantId=scope-1&serviceId=trade-agent&deploymentId=dep-1",
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",
     );
 
-    expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
-
-    fireEvent.click(await screen.findByRole("button", { name: "Weights" }));
-
-    expect(await screen.findByText("Deployment Controls")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Apply weights" })).toBeInTheDocument();
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
+    expect(await screen.findByText("Deployment 数")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("tab", { name: "部署目录", selected: true }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Serving" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Rollout" })).toBeInTheDocument();
   });
 
-  it("dispatches the candidate revision from the compare drawer", async () => {
+  it("opens the service deployment drawer from the service list row", async () => {
     renderDeploymentsPage(
-      "/deployments?tenantId=scope-1&serviceId=trade-agent&deploymentId=dep-1",
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market",
     );
 
-    expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByText("Trade Agent"));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Rollout" }));
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "部署候选版本" })).toBeInTheDocument();
+  });
+
+  it("opens the rollout control drawer from the workbench header", async () => {
+    renderDeploymentsPage(
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",
+    );
+
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "发布控制" }));
+
+    expect(await screen.findByText("推进 rollout")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "回滚 rollout" })).toBeInTheDocument();
+  });
+
+  it("dispatches the candidate revision from the candidate drawer", async () => {
+    renderDeploymentsPage(
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",
+    );
+
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
     fireEvent.click(
-      await screen.findByRole("button", { name: "Deploy candidate revision" }),
+      await screen.findByRole("button", { name: "部署候选版本" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "发布候选版本" }),
     );
 
     await waitFor(() => {
@@ -339,5 +370,18 @@ describe("DeploymentsPage", () => {
         }),
       );
     });
+  });
+
+  it("opens the deployment detail drawer from the catalog table", async () => {
+    renderDeploymentsPage(
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",
+    );
+
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: "部署目录" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+
+    expect(await screen.findByText("Deployment 详情")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停用 deployment" })).toBeInTheDocument();
   });
 });

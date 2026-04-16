@@ -10,6 +10,7 @@ import {
   Drawer,
   Form,
   Input,
+  Select,
   Space,
   Switch,
   Typography,
@@ -18,9 +19,11 @@ import {
 import React, { useEffect } from "react";
 import type {
   ActivationCapabilityView,
+  ServiceBindingInput,
   GovernanceIdentityInput,
   ServiceBindingSnapshot,
   ServiceEndpointCatalogSnapshot,
+  ServiceEndpointExposureInput,
   ServiceEndpointExposureSnapshot,
   ServicePolicyInput,
   ServicePolicySnapshot,
@@ -45,10 +48,12 @@ export type GovernanceInspectorTarget =
     }
   | {
       kind: "binding";
+      mode: "create" | "edit";
       record: ServiceBindingSnapshot;
     }
   | {
       kind: "endpoint";
+      mode: "create" | "edit";
       record: ServiceEndpointExposureSnapshot;
     }
   | {
@@ -66,12 +71,23 @@ type GovernanceInspectorDrawerProps = {
   identity: GovernanceIdentityInput | null;
   serviceId: string;
   endpointCatalog: ServiceEndpointCatalogSnapshot | null;
+  policyOptions: string[];
   busyAction?: string | null;
   onClose: () => void;
+  onCreateBinding: (input: ServiceBindingInput) => Promise<void>;
+  onUpdateBinding: (
+    bindingId: string,
+    input: ServiceBindingInput,
+  ) => Promise<void>;
   onCreatePolicy: (input: ServicePolicyInput) => Promise<void>;
   onUpdatePolicy: (policyId: string, input: ServicePolicyInput) => Promise<void>;
   onRetirePolicy: (policyId: string) => Promise<void>;
   onRetireBinding: (bindingId: string) => Promise<void>;
+  onCreateEndpoint: (input: ServiceEndpointExposureInput) => Promise<void>;
+  onUpdateEndpoint: (
+    endpointId: string,
+    input: ServiceEndpointExposureInput,
+  ) => Promise<void>;
   onSetEndpointExposure: (
     endpointId: string,
     exposureKind: string,
@@ -84,6 +100,32 @@ type PolicyFormValues = {
   activationRequiredBindingIds: string;
   invokeAllowedCallerServiceKeys: string;
   invokeRequiresActiveDeployment: boolean;
+};
+
+type BindingFormValues = {
+  bindingId: string;
+  displayName: string;
+  bindingKind: string;
+  policyIds: string[];
+  serviceTenantId: string;
+  serviceAppId: string;
+  serviceNamespace: string;
+  serviceId: string;
+  endpointId: string;
+  connectorType: string;
+  connectorId: string;
+  secretName: string;
+};
+
+type EndpointFormValues = {
+  endpointId: string;
+  displayName: string;
+  kind: string;
+  requestTypeUrl: string;
+  responseTypeUrl: string;
+  description: string;
+  exposureKind: string;
+  policyIds: string[];
 };
 
 function joinLines(values: string[]) {
@@ -129,7 +171,7 @@ function renderMetric(
 
 function renderList(values: string[]) {
   if (values.length === 0) {
-    return <Typography.Text type="secondary">n/a</Typography.Text>;
+    return <Typography.Text type="secondary">暂无</Typography.Text>;
   }
 
   return (
@@ -147,17 +189,24 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
   identity,
   serviceId,
   endpointCatalog,
+  policyOptions,
   busyAction = null,
   onClose,
+  onCreateBinding,
+  onUpdateBinding,
   onCreatePolicy,
   onUpdatePolicy,
   onRetirePolicy,
   onRetireBinding,
+  onCreateEndpoint,
+  onUpdateEndpoint,
   onSetEndpointExposure,
 }) => {
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
   const [policyForm] = Form.useForm<PolicyFormValues>();
+  const [bindingForm] = Form.useForm<BindingFormValues>();
+  const [endpointForm] = Form.useForm<EndpointFormValues>();
 
   useEffect(() => {
     if (!open || target?.kind !== "policy") {
@@ -178,12 +227,61 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
     });
   }, [open, policyForm, target]);
 
+  useEffect(() => {
+    if (!open || target?.kind !== "binding") {
+      return;
+    }
+
+    bindingForm.resetFields();
+    bindingForm.setFieldsValue({
+      bindingId: target.record.bindingId,
+      displayName: target.record.displayName,
+      bindingKind: target.record.bindingKind || "service",
+      policyIds: target.record.policyIds,
+      serviceTenantId: target.record.serviceRef?.identity.tenantId ?? "",
+      serviceAppId: target.record.serviceRef?.identity.appId ?? "",
+      serviceNamespace: target.record.serviceRef?.identity.namespace ?? "",
+      serviceId: target.record.serviceRef?.identity.serviceId ?? "",
+      endpointId: target.record.serviceRef?.endpointId ?? "",
+      connectorType: target.record.connectorRef?.connectorType ?? "",
+      connectorId: target.record.connectorRef?.connectorId ?? "",
+      secretName: target.record.secretRef?.secretName ?? "",
+    });
+  }, [bindingForm, open, target]);
+
+  useEffect(() => {
+    if (!open || target?.kind !== "endpoint") {
+      return;
+    }
+
+    endpointForm.resetFields();
+    endpointForm.setFieldsValue({
+      endpointId: target.record.endpointId,
+      displayName: target.record.displayName,
+      kind: target.record.kind || "command",
+      requestTypeUrl: target.record.requestTypeUrl,
+      responseTypeUrl: target.record.responseTypeUrl,
+      description: target.record.description,
+      exposureKind: target.record.exposureKind || "internal",
+      policyIds: target.record.policyIds,
+    });
+  }, [endpointForm, open, target]);
+
   const canManage = Boolean(identity && serviceId.trim());
+  const bindingKind = Form.useWatch("bindingKind", bindingForm) ?? "service";
 
   const policyAction =
     target?.kind === "policy" && target.mode === "create"
       ? "create-policy"
       : "save-policy";
+  const bindingAction =
+    target?.kind === "binding" && target.mode === "create"
+      ? "create-binding"
+      : "save-binding";
+  const endpointAction =
+    target?.kind === "endpoint" && target.mode === "create"
+      ? "create-endpoint"
+      : "save-endpoint";
 
   async function submitPolicy() {
     if (!identity || target?.kind !== "policy") {
@@ -212,6 +310,77 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
     await onUpdatePolicy(target.record.policyId, payload);
   }
 
+  async function submitBinding() {
+    if (!identity || target?.kind !== "binding") {
+      return;
+    }
+
+    const values = await bindingForm.validateFields();
+    const normalizedKind = values.bindingKind.trim() || "service";
+    const payload: ServiceBindingInput = {
+      ...identity,
+      bindingId: values.bindingId.trim(),
+      bindingKind: normalizedKind,
+      displayName: values.displayName.trim(),
+      policyIds: (values.policyIds ?? []).map((entry) => entry.trim()).filter(Boolean),
+    };
+
+    if (normalizedKind === "service") {
+      payload.service = {
+        tenantId: values.serviceTenantId.trim() || identity.tenantId,
+        appId: values.serviceAppId.trim() || identity.appId,
+        namespace: values.serviceNamespace.trim() || identity.namespace,
+        serviceId: values.serviceId.trim(),
+        endpointId: values.endpointId.trim() || undefined,
+      };
+    }
+
+    if (normalizedKind === "connector") {
+      payload.connector = {
+        connectorType: values.connectorType.trim(),
+        connectorId: values.connectorId.trim(),
+      };
+    }
+
+    if (normalizedKind === "secret") {
+      payload.secret = {
+        secretName: values.secretName.trim(),
+      };
+    }
+
+    if (target.mode === "create") {
+      await onCreateBinding(payload);
+      return;
+    }
+
+    await onUpdateBinding(target.record.bindingId, payload);
+  }
+
+  async function submitEndpoint() {
+    if (target?.kind !== "endpoint") {
+      return;
+    }
+
+    const values = await endpointForm.validateFields();
+    const payload: ServiceEndpointExposureInput = {
+      endpointId: values.endpointId.trim(),
+      displayName: values.displayName.trim(),
+      kind: values.kind.trim(),
+      requestTypeUrl: values.requestTypeUrl.trim(),
+      responseTypeUrl: values.responseTypeUrl.trim(),
+      description: values.description.trim(),
+      exposureKind: values.exposureKind.trim(),
+      policyIds: (values.policyIds ?? []).map((entry) => entry.trim()).filter(Boolean),
+    };
+
+    if (target.mode === "create") {
+      await onCreateEndpoint(payload);
+      return;
+    }
+
+    await onUpdateEndpoint(target.record.endpointId, payload);
+  }
+
   return (
     <Drawer
       destroyOnClose={false}
@@ -227,23 +396,27 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
       title={
         target?.kind === "policy"
           ? target.mode === "create"
-            ? "New Policy"
+            ? "新建策略"
             : target.record.policyId
           : target?.kind === "binding"
-            ? target.record.bindingId
-            : target?.kind === "endpoint"
-              ? target.record.endpointId
+            ? target.mode === "create"
+              ? "新建绑定"
+              : target.record.bindingId
+          : target?.kind === "endpoint"
+              ? target.mode === "create"
+                ? "新建入口"
+                : target.record.endpointId
               : target?.kind === "activation"
-                ? "Activation"
+                ? "激活校验"
                 : target?.kind === "audit"
-                  ? "Activity"
-                  : "Governance"
+                  ? "变更记录"
+                  : "治理详情"
       }
     >
       <div style={aevatarDrawerScrollStyle}>
         {!canManage ? (
           <Alert
-            message="Select a service"
+            message="请先选择服务"
             type="info"
           />
         ) : null}
@@ -263,7 +436,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <SafetyCertificateOutlined />
                 <Typography.Text strong>
                   {target.mode === "create"
-                    ? "Promote a new governance rule"
+                    ? "新建一条治理策略"
                     : target.record.displayName || target.record.policyId}
                 </Typography.Text>
                 {target.mode === "edit" ? (
@@ -285,41 +458,39 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 disabled={!canManage}
               >
                 <Form.Item
-                  label="Policy Id"
+                  label="策略 ID"
                   name="policyId"
-                  rules={[{ required: true, message: "Policy id is required." }]}
+                  rules={[{ required: true, message: "请填写策略 ID。" }]}
                 >
                   <Input disabled={target.mode === "edit"} />
                 </Form.Item>
                 <Form.Item
-                  label="Display Name"
+                  label="显示名称"
                   name="displayName"
-                  rules={[
-                    { required: true, message: "Display name is required." },
-                  ]}
+                  rules={[{ required: true, message: "请填写显示名称。" }]}
                 >
                   <Input />
                 </Form.Item>
                 <Form.Item
-                  label="Activation Required Bindings"
+                  label="激活依赖绑定"
                   name="activationRequiredBindingIds"
                 >
                   <Input.TextArea
                     autoSize={{ minRows: 3, maxRows: 6 }}
-                    placeholder="One binding id per line"
+                    placeholder="每行一个绑定 ID"
                   />
                 </Form.Item>
                 <Form.Item
-                  label="Allowed Caller Service Keys"
+                  label="允许调用的服务 Key"
                   name="invokeAllowedCallerServiceKeys"
                 >
                   <Input.TextArea
                     autoSize={{ minRows: 3, maxRows: 6 }}
-                    placeholder="tenant/app/ns/service"
+                    placeholder="团队/应用/命名空间/服务"
                   />
                 </Form.Item>
                 <Form.Item
-                  label="Requires Active Deployment"
+                  label="要求已激活部署"
                   name="invokeRequiresActiveDeployment"
                   valuePropName="checked"
                 >
@@ -333,7 +504,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   onClick={() => void submitPolicy()}
                   type="primary"
                 >
-                  {target.mode === "create" ? "Create policy" : "Save policy"}
+                  {target.mode === "create" ? "创建策略" : "保存策略"}
                 </Button>
                 {target.mode === "edit" ? (
                   <Button
@@ -341,7 +512,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     loading={busyAction === "retire-policy"}
                     onClick={() => void onRetirePolicy(target.record.policyId)}
                   >
-                    Retire policy
+                    下线策略
                   </Button>
                 ) : null}
               </Space>
@@ -363,63 +534,188 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               <Space align="center" size={[8, 8]} wrap>
                 <LinkOutlined />
                 <Typography.Text strong>
-                  {target.record.displayName || target.record.bindingId}
+                  {target.mode === "create"
+                    ? "新建一条治理绑定"
+                    : target.record.displayName || target.record.bindingId}
                 </Typography.Text>
-                <span
-                  style={buildAevatarTagStyle(
-                    surfaceToken,
-                    "governance",
-                    buildBindingStatus(target.record),
-                  )}
-                >
-                  {formatAevatarStatusLabel(buildBindingStatus(target.record))}
-                </span>
+                {target.mode === "edit" ? (
+                  <span
+                    style={buildAevatarTagStyle(
+                      surfaceToken,
+                      "governance",
+                      buildBindingStatus(target.record),
+                    )}
+                  >
+                    {formatAevatarStatusLabel(buildBindingStatus(target.record))}
+                  </span>
+                ) : null}
               </Space>
 
-              <div
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                }}
+              <Form<BindingFormValues>
+                form={bindingForm}
+                layout="vertical"
+                disabled={!canManage}
               >
-                {renderMetric(
-                  surfaceToken,
-                  "Binding Id",
-                  target.record.bindingId,
-                )}
-                {renderMetric(
-                  surfaceToken,
-                  "Kind",
-                  formatAevatarStatusLabel(target.record.bindingKind),
-                  "info",
-                )}
-              </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 12,
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  }}
+                >
+                  <Form.Item
+                    label="绑定 ID"
+                    name="bindingId"
+                    rules={[{ required: true, message: "请填写绑定 ID。" }]}
+                  >
+                    <Input disabled={target.mode === "edit"} />
+                  </Form.Item>
+                  <Form.Item
+                    label="显示名称"
+                    name="displayName"
+                    rules={[{ required: true, message: "请填写显示名称。" }]}
+                  >
+                    <Input />
+                  </Form.Item>
+                </div>
 
-              <div>
-                <Typography.Text type="secondary">Policies</Typography.Text>
-                <div style={{ marginTop: 8 }}>{renderList(target.record.policyIds)}</div>
-              </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 12,
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  }}
+                >
+                  <Form.Item
+                    label="绑定类型"
+                    name="bindingKind"
+                    rules={[{ required: true, message: "请选择绑定类型。" }]}
+                  >
+                    <Select
+                      options={[
+                        { label: "Service", value: "service" },
+                        { label: "Connector", value: "connector" },
+                        { label: "Secret", value: "secret" },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item label="挂载策略" name="policyIds">
+                    <Select
+                      mode="tags"
+                      options={policyOptions.map((policyId) => ({
+                        label: policyId,
+                        value: policyId,
+                      }))}
+                      placeholder="选择或输入 policy ID"
+                    />
+                  </Form.Item>
+                </div>
 
-              <div>
-                <Typography.Text type="secondary">Target</Typography.Text>
-                <Typography.Paragraph style={{ margin: "8px 0 0" }}>
-                  {target.record.serviceRef
-                    ? `${target.record.serviceRef.identity.serviceId}:${target.record.serviceRef.endpointId || "*"}`
-                    : target.record.connectorRef
-                      ? `${target.record.connectorRef.connectorType}:${target.record.connectorRef.connectorId}`
-                      : target.record.secretRef?.secretName || "n/a"}
-                </Typography.Paragraph>
-              </div>
+                {bindingKind === "service" ? (
+                  <>
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 12,
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                      }}
+                    >
+                      <Form.Item
+                        label="目标服务 ID"
+                        name="serviceId"
+                        rules={[{ required: true, message: "请填写目标服务 ID。" }]}
+                      >
+                        <Input placeholder="dependency-service" />
+                      </Form.Item>
+                      <Form.Item label="目标 endpoint" name="endpointId">
+                        <Input placeholder="chat" />
+                      </Form.Item>
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 12,
+                        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                      }}
+                    >
+                      <Form.Item
+                        label="目标 tenant"
+                        name="serviceTenantId"
+                        extra="留空则复用当前服务的 tenant。"
+                      >
+                        <Input placeholder={identity?.tenantId ?? ""} />
+                      </Form.Item>
+                      <Form.Item
+                        label="目标 app"
+                        name="serviceAppId"
+                        extra="留空则复用当前服务的 app。"
+                      >
+                        <Input placeholder={identity?.appId ?? ""} />
+                      </Form.Item>
+                      <Form.Item
+                        label="目标 namespace"
+                        name="serviceNamespace"
+                        extra="留空则复用当前服务的 namespace。"
+                      >
+                        <Input placeholder={identity?.namespace ?? ""} />
+                      </Form.Item>
+                    </div>
+                  </>
+                ) : null}
+
+                {bindingKind === "connector" ? (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 12,
+                      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    }}
+                  >
+                    <Form.Item
+                      label="Connector 类型"
+                      name="connectorType"
+                      rules={[{ required: true, message: "请填写 connector 类型。" }]}
+                    >
+                      <Input placeholder="mcp" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Connector ID"
+                      name="connectorId"
+                      rules={[{ required: true, message: "请填写 connector ID。" }]}
+                    >
+                      <Input placeholder="connector-1" />
+                    </Form.Item>
+                  </div>
+                ) : null}
+
+                {bindingKind === "secret" ? (
+                  <Form.Item
+                    label="Secret 名称"
+                    name="secretName"
+                    rules={[{ required: true, message: "请填写 secret 名称。" }]}
+                  >
+                    <Input placeholder="api-key" />
+                  </Form.Item>
+                ) : null}
+              </Form>
 
               <Space wrap>
                 <Button
-                  danger
-                  loading={busyAction === "retire-binding"}
-                  onClick={() => void onRetireBinding(target.record.bindingId)}
+                  loading={busyAction === bindingAction}
+                  onClick={() => void submitBinding()}
+                  type="primary"
                 >
-                  Retire binding
+                  {target.mode === "create" ? "创建绑定" : "保存绑定"}
                 </Button>
+                {target.mode === "edit" ? (
+                  <Button
+                    danger
+                    loading={busyAction === "retire-binding"}
+                    onClick={() => void onRetireBinding(target.record.bindingId)}
+                  >
+                    下线绑定
+                  </Button>
+                ) : null}
               </Space>
             </Space>
           </div>
@@ -439,85 +735,140 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               <Space align="center" size={[8, 8]} wrap>
                 <ApiOutlined />
                 <Typography.Text strong>
-                  {target.record.displayName || target.record.endpointId}
+                  {target.mode === "create"
+                    ? "新增一条治理入口"
+                    : target.record.displayName || target.record.endpointId}
                 </Typography.Text>
-                <span
-                  style={buildAevatarTagStyle(
-                    surfaceToken,
-                    "governance",
-                    buildEndpointStatus(target.record),
-                  )}
-                >
-                  {formatAevatarStatusLabel(buildEndpointStatus(target.record))}
-                </span>
+                {target.mode === "edit" ? (
+                  <span
+                    style={buildAevatarTagStyle(
+                      surfaceToken,
+                      "governance",
+                      buildEndpointStatus(target.record),
+                    )}
+                  >
+                    {formatAevatarStatusLabel(buildEndpointStatus(target.record))}
+                  </span>
+                ) : null}
               </Space>
 
-              <div
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                }}
+              <Form<EndpointFormValues>
+                form={endpointForm}
+                layout="vertical"
+                disabled={!canManage || (target.mode === "edit" && !endpointCatalog)}
               >
-                {renderMetric(
-                  surfaceToken,
-                  "Endpoint",
-                  target.record.endpointId,
-                )}
-                {renderMetric(
-                  surfaceToken,
-                  "Kind",
-                  formatAevatarStatusLabel(target.record.kind),
-                  "info",
-                )}
-              </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 12,
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  }}
+                >
+                  <Form.Item
+                    label="入口 ID"
+                    name="endpointId"
+                    rules={[{ required: true, message: "请填写入口 ID。" }]}
+                  >
+                    <Input disabled={target.mode === "edit"} />
+                  </Form.Item>
+                  <Form.Item
+                    label="显示名称"
+                    name="displayName"
+                    rules={[{ required: true, message: "请填写显示名称。" }]}
+                  >
+                    <Input />
+                  </Form.Item>
+                </div>
 
-              <div>
-                <Typography.Text type="secondary">Request Type</Typography.Text>
-                <Typography.Paragraph style={{ margin: "8px 0 0" }}>
-                  {target.record.requestTypeUrl || "n/a"}
-                </Typography.Paragraph>
-              </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 12,
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  }}
+                >
+                  <Form.Item
+                    label="入口类型"
+                    name="kind"
+                    rules={[{ required: true, message: "请选择入口类型。" }]}
+                  >
+                    <Select
+                      options={[
+                        { label: "Command", value: "command" },
+                        { label: "Chat", value: "chat" },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label="暴露状态"
+                    name="exposureKind"
+                    rules={[{ required: true, message: "请选择暴露状态。" }]}
+                  >
+                    <Select
+                      options={[
+                        { label: "Public", value: "public" },
+                        { label: "Internal", value: "internal" },
+                        { label: "Disabled", value: "disabled" },
+                      ]}
+                    />
+                  </Form.Item>
+                </div>
 
-              <div>
-                <Typography.Text type="secondary">Policies</Typography.Text>
-                <div style={{ marginTop: 8 }}>{renderList(target.record.policyIds)}</div>
-              </div>
+                <Form.Item
+                  label="请求类型"
+                  name="requestTypeUrl"
+                  rules={[{ required: true, message: "请填写请求类型。" }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item label="响应类型" name="responseTypeUrl">
+                  <Input />
+                </Form.Item>
+                <Form.Item label="描述" name="description">
+                  <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} />
+                </Form.Item>
+                <Form.Item label="挂载策略" name="policyIds">
+                  <Select
+                    mode="tags"
+                    options={policyOptions.map((policyId) => ({
+                      label: policyId,
+                      value: policyId,
+                    }))}
+                    placeholder="选择或输入 policy ID"
+                  />
+                </Form.Item>
+              </Form>
 
               {!endpointCatalog ? (
                 <Alert
-                  message="The endpoint catalog is unavailable, so exposure changes are temporarily blocked."
-                  type="warning"
+                  message={
+                    target.mode === "create"
+                      ? "当前还没有入口目录，保存后会创建第一份 endpoint catalog。"
+                      : "当前无法读取入口目录，暂时不能修改暴露状态。"
+                  }
+                  type={target.mode === "create" ? "info" : "warning"}
                 />
               ) : null}
 
               <Space wrap>
                 <Button
-                  loading={busyAction === "set-endpoint-exposure:public"}
-                  onClick={() =>
-                    void onSetEndpointExposure(target.record.endpointId, "public")
-                  }
+                  disabled={!canManage || (target.mode === "edit" && !endpointCatalog)}
+                  loading={busyAction === endpointAction}
+                  onClick={() => void submitEndpoint()}
                   type="primary"
                 >
-                  Make public
+                  {target.mode === "create" ? "创建入口" : "保存入口"}
                 </Button>
-                <Button
-                  loading={busyAction === "set-endpoint-exposure:internal"}
-                  onClick={() =>
-                    void onSetEndpointExposure(target.record.endpointId, "internal")
-                  }
-                >
-                  Set internal
-                </Button>
-                <Button
-                  danger
-                  loading={busyAction === "set-endpoint-exposure:disabled"}
-                  onClick={() =>
-                    void onSetEndpointExposure(target.record.endpointId, "disabled")
-                  }
-                >
-                  Disable endpoint
-                </Button>
+                {target.mode === "edit" ? (
+                  <Button
+                    loading={busyAction === "set-endpoint-exposure:public"}
+                    onClick={() =>
+                      void onSetEndpointExposure(target.record.endpointId, "public")
+                    }
+                  >
+                    快速公开
+                  </Button>
+                ) : null}
               </Space>
             </Space>
           </div>
@@ -535,7 +886,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
           >
             <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Typography.Text strong>
-                Revision {target.record.revisionId || "unresolved"} activation
+                版本 {target.record.revisionId || "未解析"} 的激活校验
               </Typography.Text>
               <div
                 style={{
@@ -546,22 +897,22 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               >
                 {renderMetric(
                   surfaceToken,
-                  "Bindings",
+                  "绑定",
                   String(target.record.bindings.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Policies",
+                  "策略",
                   String(target.record.policies.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Endpoints",
+                  "入口",
                   String(target.record.endpoints.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  "Missing policies",
+                  "缺失策略",
                   String(target.record.missingPolicyIds.length),
                   target.record.missingPolicyIds.length > 0
                     ? "warning"
@@ -570,7 +921,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               </div>
 
               <div>
-                <Typography.Text type="secondary">Missing policies</Typography.Text>
+                <Typography.Text type="secondary">缺失策略</Typography.Text>
                 <div style={{ marginTop: 8 }}>
                   {renderList(target.record.missingPolicyIds)}
                 </div>
@@ -611,13 +962,13 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
               <Space orientation="vertical" size={8} style={{ display: "flex" }}>
                 <Typography.Text type="secondary">
-                  Actor: {target.event.actor}
+                  来源: {target.event.actor}
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  Target: {target.event.targetLabel}
+                  对象: {target.event.targetLabel}
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  Timestamp: {target.event.at}
+                  时间: {target.event.at}
                 </Typography.Text>
               </Space>
             </Space>

@@ -10,8 +10,8 @@ describe('GovernanceResultPanels', () => {
   it('renders the selected governance scope and summary metrics', () => {
     render(
       <GovernanceSummaryPanel
-        title="Binding catalog"
-        description="Inspect raw binding targets and attached policies."
+        title="绑定目录"
+        description="查看绑定目标和已挂接策略。"
         draft={{
           tenantId: 'tenant-a',
           appId: 'app-main',
@@ -21,33 +21,63 @@ describe('GovernanceResultPanels', () => {
         }}
         extraFields={[
           {
-            label: 'Catalog updated',
+            label: '目录更新时间',
             value: formatGovernanceTimestamp('2026-03-25T08:00:00Z'),
           },
         ]}
         metrics={[
-          { label: 'Bindings', value: '8' },
-          { label: 'With policies', value: '6', tone: 'success' },
+          { label: '绑定', value: '8' },
+          { label: '已挂策略', value: '6', tone: 'success' },
         ]}
-        status={{ color: 'processing', label: 'Loaded' }}
+        status={{ color: 'processing', label: '已加载' }}
       />,
     );
 
-    expect(screen.getByText('Binding catalog')).toBeInTheDocument();
+    expect(screen.getByText('绑定目录')).toBeInTheDocument();
     expect(screen.getByText('svc-payments')).toBeInTheDocument();
     expect(screen.getByText('tenant-a')).toBeInTheDocument();
     expect(screen.getByText('app-main')).toBeInTheDocument();
     expect(screen.getByText('2026-03-25 08:00:00 UTC')).toBeInTheDocument();
-    expect(screen.getByText('Bindings')).toBeInTheDocument();
+    expect(screen.getByText('绑定')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
-    expect(screen.getByText('Loaded')).toBeInTheDocument();
+    expect(screen.getByText('已加载')).toBeInTheDocument();
   });
 
   it('renders a lightweight selection notice', () => {
     render(
-      <GovernanceSelectionNotice title="Select a service" />,
+      <GovernanceSelectionNotice title="选择服务" />,
     );
 
-    expect(screen.getByText('Select a service')).toBeInTheDocument();
+    expect(screen.getByText('选择服务')).toBeInTheDocument();
+  });
+
+  it('can omit default identity fields when the context is already shown elsewhere', () => {
+    render(
+      <GovernanceSummaryPanel
+        title="治理总览"
+        description="这里只显示治理结论。"
+        draft={{
+          tenantId: 'tenant-a',
+          appId: 'app-main',
+          namespace: 'ops',
+          serviceId: 'svc-payments',
+          revisionId: '',
+        }}
+        includeDefaultFields={false}
+        extraFields={[
+          {
+            label: '最近治理快照',
+            value: formatGovernanceTimestamp('2026-03-25T08:00:00Z'),
+          },
+        ]}
+        metrics={[{ label: '缺失策略', value: '0', tone: 'success' }]}
+      />,
+    );
+
+    expect(screen.getByText('治理总览')).toBeInTheDocument();
+    expect(screen.queryByText('svc-payments')).not.toBeInTheDocument();
+    expect(screen.queryByText('tenant-a')).not.toBeInTheDocument();
+    expect(screen.getByText('最近治理快照')).toBeInTheDocument();
+    expect(screen.getByText('2026-03-25 08:00:00 UTC')).toBeInTheDocument();
   });
 });

@@ -9,22 +9,33 @@ CONFIGURATION="${AEVATAR_APP_CONFIGURATION:-Debug}"
 API_HOST="${AEVATAR_APP_HOST:-127.0.0.1}"
 API_PORT="${AEVATAR_APP_PORT:-5080}"
 API_URL="http://${API_HOST}:${API_PORT}"
+APP_MODE="${AEVATAR_APP_MODE:-local}"
+DOTNET_CMD="${DOTNET_CMD:-}"
 LOG_FILE="${SCRIPT_DIR}/boot.log"
 PID_FILE="${SCRIPT_DIR}/boot.pid"
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./boot.sh [--port PORT] [--configuration CONFIGURATION]
+  ./boot.sh [--port PORT] [--configuration CONFIGURATION] [--mode MODE]
 
 Description:
   Stops the previous Aevatar.Mainnet.Host.Api process, frees the configured
   port, and starts a fresh instance in the background.
 
+Modes:
+  local             fully local dev mode. read/write state are both ephemeral,
+                    which avoids "write-side remains but read-side is empty"
+                    after a backend restart.
+  persistent-local  Orleans + Garnet + in-memory projections. keeps actor state
+                    across restarts, but read models are still ephemeral.
+  distributed       Orleans + Kafka + Elasticsearch/Neo4j profile.
+
 Environment:
   AEVATAR_APP_CONFIGURATION   dotnet configuration, default: Debug
   AEVATAR_APP_HOST            bind host, default: 127.0.0.1
   AEVATAR_APP_PORT            bind port, default: 5080
+  AEVATAR_APP_MODE            local | persistent-local | distributed
 
 Files:
   boot.log    runtime output
@@ -54,6 +65,15 @@ while [[ $# -gt 0 ]]; do
       CONFIGURATION="${1#--configuration=}"
       shift
       ;;
+    --mode)
+      [[ $# -lt 2 ]] && { echo "Missing value for ${1}" >&2; exit 1; }
+      APP_MODE="${2}"
+      shift 2
+      ;;
+    --mode=*)
+      APP_MODE="${1#--mode=}"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -66,9 +86,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "${APP_MODE}" in
+  local|persistent-local|distributed)
+    ;;
+  *)
+    echo "Unsupported mode: ${APP_MODE}" >&2
+    usage
+    exit 1
+    ;;
+esac
+
 if [[ ! -f "${PROJECT_FILE}" ]]; then
   echo "Project file not found: ${PROJECT_FILE}" >&2
   exit 1
+fi
+
+if [[ -z "${DOTNET_CMD}" ]]; then
+  if [[ -x "${HOME}/.dotnet/dotnet" ]]; then
+    DOTNET_CMD="${HOME}/.dotnet/dotnet"
+  else
+    DOTNET_CMD="dotnet"
+  fi
 fi
 
 list_listening_pids() {
@@ -174,9 +212,61 @@ fi
 
 echo "==> Starting Aevatar.Mainnet.Host.Api"
 echo "==> URL: ${API_URL}"
+echo "==> Mode: ${APP_MODE}"
 echo "==> Log: ${LOG_FILE}"
 
-nohup dotnet run \
+launch_env=(
+  "ASPNETCORE_URLS=${API_URL}"
+)
+
+unset_env=()
+
+case "${APP_MODE}" in
+  local)
+    launch_env+=(
+      "ASPNETCORE_ENVIRONMENT=Development"
+      "DOTNET_ENVIRONMENT=Development"
+      "AEVATAR_ActorRuntime__Provider=InMemory"
+      "AEVATAR_Projection__Document__Providers__InMemory__Enabled=true"
+      "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled=false"
+      "AEVATAR_Projection__Graph__Providers__InMemory__Enabled=true"
+      "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled=false"
+      "AEVATAR_Projection__Policies__Environment=Development"
+      "AEVATAR_Projection__Policies__DenyInMemoryDocumentReadStore=false"
+      "AEVATAR_Projection__Policies__DenyInMemoryGraphFactStore=false"
+      "AEVATAR_GAgentService__Demo__Enabled=false"
+    )
+    unset_env+=(
+      ASPNETCORE_ENVIRONMENT
+      DOTNET_ENVIRONMENT
+      AEVATAR_ActorRuntime__OrleansStreamBackend
+      AEVATAR_ActorRuntime__OrleansPersistenceBackend
+      AEVATAR_ActorRuntime__OrleansGarnetConnectionString
+      AEVATAR_ActorRuntime__KafkaBootstrapServers
+      AEVATAR_ActorRuntime__KafkaTopicName
+      AEVATAR_ActorRuntime__KafkaConsumerGroup
+      AEVATAR_Projection__Graph__Providers__Neo4j__Password
+    )
+    ;;
+  persistent-local)
+    launch_env+=(
+      "ASPNETCORE_ENVIRONMENT=PersistentLocal"
+    )
+    ;;
+  distributed)
+    launch_env+=(
+      "ASPNETCORE_ENVIRONMENT=Distributed"
+    )
+    ;;
+esac
+
+env_cmd=(env)
+for name in "${unset_env[@]}"; do
+  env_cmd+=(-u "${name}")
+done
+env_cmd+=("${launch_env[@]}")
+
+nohup "${env_cmd[@]}" "${DOTNET_CMD}" run \
   --project "${PROJECT_FILE}" \
   -c "${CONFIGURATION}" \
   --urls "${API_URL}" \
