@@ -64,12 +64,18 @@ public sealed class AppScopedWorkflowService
                 body: null,
                 ct) ?? [];
 
+        var storedWorkflowsById = await ListStoredWorkflowsByIdAsync(ct);
         var summaries = workflows
             .OrderByDescending(static item => item.UpdatedAt)
-            .Select(workflow => ToWorkflowSummary(normalizedScopeId, workflow))
+            .Select(workflow => ToWorkflowSummary(
+                normalizedScopeId,
+                workflow,
+                storedWorkflowsById.TryGetValue(workflow.WorkflowId, out var storedWorkflow)
+                    ? storedWorkflow
+                    : null))
             .ToList();
 
-        return await MergeStoredWorkflowSummariesAsync(normalizedScopeId, summaries, ct);
+        return MergeStoredWorkflowSummaries(normalizedScopeId, summaries, storedWorkflowsById);
     }
 
     public async Task<WorkflowFileResponse?> GetAsync(
@@ -127,6 +133,13 @@ public sealed class AppScopedWorkflowService
                             yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
                         }
                     }
+                }
+
+                if (string.IsNullOrWhiteSpace(yaml))
+                {
+                    var storedWorkflowFallback = await TryGetStoredWorkflowAsync(normalizedWorkflowId, ct);
+                    if (storedWorkflowFallback != null)
+                        yaml = storedWorkflowFallback.Yaml;
                 }
 
                 return ToWorkflowFileResponse(
@@ -319,19 +332,25 @@ public sealed class AppScopedWorkflowService
             workflow.UpdatedAt);
     }
 
-    private static WorkflowSummary ToWorkflowSummary(string scopeId, ScopeWorkflowSummary workflow)
+    private WorkflowSummary ToWorkflowSummary(
+        string scopeId,
+        ScopeWorkflowSummary workflow,
+        StoredWorkflowYaml? storedWorkflow)
     {
+        var parse = !string.IsNullOrWhiteSpace(storedWorkflow?.Yaml)
+            ? _yamlDocumentService.Parse(storedWorkflow.Yaml)
+            : null;
         var scopeDirectory = CreateScopeDirectory(scopeId);
         return new WorkflowSummary(
             workflow.WorkflowId,
-            ResolveWorkflowDisplayName(workflow),
-            string.Empty,
+            ResolveWorkflowSummaryName(workflow, storedWorkflow, parse),
+            parse?.Document?.Description ?? string.Empty,
             $"{workflow.WorkflowId}.yaml",
             $"{scopeDirectory.Path}/{workflow.WorkflowId}.yaml",
             scopeDirectory.DirectoryId,
             scopeDirectory.Label,
-            0,
-            false,
+            parse?.Document?.Steps.Count ?? 0,
+            TryReadPersistedLayout(scopeId, workflow.WorkflowId) != null,
             workflow.UpdatedAt);
     }
 
@@ -345,29 +364,16 @@ public sealed class AppScopedWorkflowService
         return workflow.WorkflowId;
     }
 
-    private async Task<IReadOnlyList<WorkflowSummary>> MergeStoredWorkflowSummariesAsync(
+    private IReadOnlyList<WorkflowSummary> MergeStoredWorkflowSummaries(
         string scopeId,
         IReadOnlyList<WorkflowSummary> runtimeSummaries,
-        CancellationToken ct)
+        IReadOnlyDictionary<string, StoredWorkflowYaml> storedWorkflowsById)
     {
-        if (_workflowStoragePort == null)
-            return runtimeSummaries;
-
-        IReadOnlyList<StoredWorkflowYaml> storedWorkflows;
-        try
-        {
-            storedWorkflows = await _workflowStoragePort.ListWorkflowYamlsAsync(ct);
-        }
-        catch
-        {
-            return runtimeSummaries;
-        }
-
-        if (storedWorkflows.Count == 0)
+        if (storedWorkflowsById.Count == 0)
             return runtimeSummaries;
 
         var merged = runtimeSummaries.ToDictionary(summary => summary.WorkflowId, StringComparer.Ordinal);
-        foreach (var storedWorkflow in storedWorkflows)
+        foreach (var storedWorkflow in storedWorkflowsById.Values)
         {
             if (merged.ContainsKey(storedWorkflow.WorkflowId))
                 continue;
@@ -378,6 +384,29 @@ public sealed class AppScopedWorkflowService
         return merged.Values
             .OrderByDescending(static item => item.UpdatedAtUtc)
             .ToList();
+    }
+
+    private async Task<IReadOnlyDictionary<string, StoredWorkflowYaml>> ListStoredWorkflowsByIdAsync(
+        CancellationToken ct)
+    {
+        if (_workflowStoragePort == null)
+            return new Dictionary<string, StoredWorkflowYaml>(StringComparer.Ordinal);
+
+        try
+        {
+            return (await _workflowStoragePort.ListWorkflowYamlsAsync(ct))
+                .GroupBy(static workflow => workflow.WorkflowId, StringComparer.Ordinal)
+                .ToDictionary(
+                    static group => group.Key,
+                    static group => group
+                        .OrderByDescending(static workflow => workflow.UpdatedAtUtc ?? DateTimeOffset.MinValue)
+                        .First(),
+                    StringComparer.Ordinal);
+        }
+        catch
+        {
+            return new Dictionary<string, StoredWorkflowYaml>(StringComparer.Ordinal);
+        }
     }
 
     private async Task<StoredWorkflowYaml?> TryGetStoredWorkflowAsync(string workflowId, CancellationToken ct)
@@ -448,6 +477,22 @@ public sealed class AppScopedWorkflowService
             return storedName;
 
         return storedWorkflow.WorkflowId;
+    }
+
+    private static string ResolveWorkflowSummaryName(
+        ScopeWorkflowSummary workflow,
+        StoredWorkflowYaml? storedWorkflow,
+        WorkflowParseResult? parseResult)
+    {
+        var parsedName = parseResult?.Document?.Name?.Trim();
+        if (!string.IsNullOrWhiteSpace(parsedName))
+            return parsedName;
+
+        var storedName = storedWorkflow?.WorkflowName?.Trim();
+        if (!string.IsNullOrWhiteSpace(storedName))
+            return storedName;
+
+        return ResolveWorkflowDisplayName(workflow);
     }
 
     private async Task<T?> SendAsync<T>(

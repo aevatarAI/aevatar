@@ -148,6 +148,43 @@ public sealed class AppScopedWorkflowServiceTests
     }
 
     [Fact]
+    public async Task ListAsync_WhenRuntimeWorkflowExists_ShouldUseStoredYamlToPopulateStepCount()
+    {
+        var workflow = new ScopeWorkflowSummary(
+            ScopeId: "scope-1",
+            WorkflowId: "test03",
+            DisplayName: "test03",
+            ServiceKey: "scope-1:default:default:test03",
+            WorkflowName: "test03",
+            ActorId: "actor-1",
+            ActiveRevisionId: "rev-1",
+            DeploymentId: "deploy-1",
+            DeploymentStatus: "active",
+            UpdatedAt: DateTimeOffset.UtcNow);
+
+        var service = new AppScopedWorkflowService(
+            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
+            {
+                BaseAddress = new Uri("https://backend.example"),
+            }),
+            new StubWorkflowYamlDocumentService(),
+            workflowQueryPort: new StubScopeWorkflowQueryPort(workflow),
+            workflowStoragePort: new StubWorkflowStoragePort(
+                new StoredWorkflowYaml(
+                    "test03",
+                    "test03",
+                    "name: test03\ndescription: restored from storage\nsteps:\n  - id: llm_call\n",
+                    new DateTimeOffset(2026, 4, 16, 10, 53, 48, TimeSpan.Zero))));
+
+        var workflows = await service.ListAsync("scope-1");
+
+        workflows.Should().ContainSingle();
+        workflows[0].WorkflowId.Should().Be("test03");
+        workflows[0].StepCount.Should().Be(1);
+        workflows[0].Description.Should().Be("restored from storage");
+    }
+
+    [Fact]
     public async Task GetAsync_WhenRuntimeWorkflowMissing_ShouldFallbackToStoredWorkflowYaml()
     {
         var service = new AppScopedWorkflowService(
@@ -172,6 +209,53 @@ public sealed class AppScopedWorkflowServiceTests
         workflow.Name.Should().Be("hello-chat");
         workflow.Yaml.Should().Contain("restored from storage");
         workflow.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenRuntimeWorkflowExistsButBindingYamlIsEmpty_ShouldFallbackToStoredWorkflowYaml()
+    {
+        var workflow = new ScopeWorkflowSummary(
+            ScopeId: "scope-1",
+            WorkflowId: "test03",
+            DisplayName: "test03",
+            ServiceKey: "scope-1:default:default:test03",
+            WorkflowName: "test03",
+            ActorId: "actor-1",
+            ActiveRevisionId: "rev-1",
+            DeploymentId: "deploy-1",
+            DeploymentStatus: "active",
+            UpdatedAt: DateTimeOffset.UtcNow);
+
+        var service = new AppScopedWorkflowService(
+            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
+            {
+                BaseAddress = new Uri("https://backend.example"),
+            }),
+            new StubWorkflowYamlDocumentService(),
+            workflowQueryPort: new StubScopeWorkflowQueryPort(workflow),
+            workflowActorBindingReader: new StubWorkflowActorBindingReader(
+                new WorkflowActorBinding(
+                    WorkflowActorKind.Definition,
+                    "actor-1",
+                    "actor-1",
+                    string.Empty,
+                    "test03",
+                    string.Empty,
+                    new Dictionary<string, string>(StringComparer.Ordinal))),
+            workflowStoragePort: new StubWorkflowStoragePort(
+                new StoredWorkflowYaml(
+                    "test03",
+                    "test03",
+                    "name: test03\ndescription: restored from storage\nsteps:\n  - id: llm_call\n",
+                    new DateTimeOffset(2026, 4, 16, 10, 53, 48, TimeSpan.Zero))));
+
+        var result = await service.GetAsync("scope-1", "test03");
+
+        result.Should().NotBeNull();
+        result!.Yaml.Should().Contain("llm_call");
+        result.Document.Should().NotBeNull();
+        result.Document!.Steps.Should().ContainSingle();
+        result.Findings.Should().BeEmpty();
     }
 
     private static AppScopedWorkflowService CreateService(
@@ -223,6 +307,8 @@ public sealed class AppScopedWorkflowServiceTests
     {
         private static readonly Regex NameRegex = new(@"(?m)^name:\s*(.+?)\s*$", RegexOptions.Compiled);
         private static readonly Regex DescriptionRegex = new(@"(?m)^description:\s*(.+?)\s*$", RegexOptions.Compiled);
+        private static readonly Regex StepsBlockRegex = new(@"(?ms)^steps:\s*\n(?<items>(?:\s*-\s.*\n?)*)", RegexOptions.Compiled);
+        private static readonly Regex StepItemRegex = new(@"(?m)^\s*-\s+", RegexOptions.Compiled);
 
         public WorkflowParseResult Parse(string yaml)
         {
@@ -232,10 +318,22 @@ public sealed class AppScopedWorkflowServiceTests
             var input = yaml ?? string.Empty;
             var nameMatch = NameRegex.Match(input);
             var descriptionMatch = DescriptionRegex.Match(input);
+            var steps = new List<StepModel>();
+            var stepsMatch = StepsBlockRegex.Match(input);
+            if (stepsMatch.Success)
+            {
+                var stepItems = StepItemRegex.Matches(stepsMatch.Groups["items"].Value).Count;
+                for (var index = 0; index < stepItems; index++)
+                {
+                    steps.Add(new StepModel());
+                }
+            }
+
             return new(new WorkflowDocument
             {
                 Name = nameMatch.Success ? nameMatch.Groups[1].Value.Trim() : string.Empty,
                 Description = descriptionMatch.Success ? descriptionMatch.Groups[1].Value.Trim() : string.Empty,
+                Steps = steps,
             }, []);
         }
 
