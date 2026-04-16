@@ -346,13 +346,41 @@ describe('StudioEditorPage', () => {
     render(React.createElement(StudioEditorPage, createBaseProps() as any));
 
     expect(screen.getByTestId('studio-editor-shell')).toHaveStyle({
-      height: 'calc(100vh - 176px)',
+      flex: '1 1 0',
+      minHeight: '0',
       overflow: 'hidden',
+    });
+    expect(screen.getByTestId('studio-editor-definition-list')).toHaveStyle({
+      overflowY: 'auto',
+      height: '0',
+      minHeight: '0',
+    });
+    expect(screen.getByTestId('studio-editor-canvas-viewport')).toHaveStyle({
+      flex: '1 1 0',
+      minHeight: '0',
     });
     expect(screen.getByTestId('studio-inspector-scroll')).toHaveStyle({
       overflowY: 'auto',
       minHeight: '0',
     });
+  });
+
+  it('keeps the editor available when the current draft has no YAML yet', () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          draftYaml: '',
+          draftWorkflowName: 'draft',
+          draftFileName: 'draft.yaml',
+          selectedWorkflowId: 'workflow-1',
+        }) as any,
+      ),
+    );
+
+    expect(screen.getByTestId('studio-editor-shell')).toBeInTheDocument();
+    expect(screen.getByText('行为定义')).toBeInTheDocument();
+    expect(screen.getByText('当前定义还没有步骤。')).toBeInTheDocument();
   });
 
   it('hides legacy recommendation notices for dirty drafts', async () => {

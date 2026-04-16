@@ -185,7 +185,10 @@ describe('StudioWorkflowsPage', () => {
     );
 
     const workflowSection = screen.getByText('NyxID Chat').closest('section');
-    expect(workflowSection).toHaveStyle('height: auto');
+    expect(workflowSection).toHaveStyle('height: 100%');
+    expect(workflowSection).toHaveStyle('min-height: 0');
+    expect(screen.getByTestId('studio-workflows-results')).toHaveStyle('overflow-y: auto');
+    expect(screen.getByTestId('studio-workflows-results')).toHaveStyle('height: 0');
     expect(screen.queryByText('当前团队下的行为定义。')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '进入编辑' })).toBeInTheDocument();
   });

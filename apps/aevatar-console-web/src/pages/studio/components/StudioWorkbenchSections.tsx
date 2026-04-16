@@ -363,7 +363,7 @@ function isScopeDirectoryPath(path: string): boolean {
 }
 
 const workflowWorkspaceRowStyle: React.CSSProperties = {
-  flex: 1,
+  flex: '1 1 0',
   minHeight: 0,
   height: '100%',
   overflow: 'hidden',
@@ -377,8 +377,12 @@ const workflowSidebarStackStyle: React.CSSProperties = {
 
 const workflowColumnStretchStyle: React.CSSProperties = {
   ...stretchColumnStyle,
+  flex: '1 1 0',
   flexDirection: 'column',
+  height: '100%',
   minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
 };
 
 const workflowSectionShellStyle: React.CSSProperties = {
@@ -615,7 +619,8 @@ const workflowSolidActionStyle: React.CSSProperties = {
 };
 
 const workflowResultsBodyStyle: React.CSSProperties = {
-  flex: 1,
+  flex: '1 1 0',
+  height: 0,
   minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
@@ -1038,10 +1043,40 @@ const studioStatusPillStyle: React.CSSProperties = {
 const studioCanvasViewportStyle: React.CSSProperties = {
   background: '#F2F1EE',
   borderRadius: 24,
-  flex: 1,
-  minHeight: 'calc(100vh - 278px)',
+  display: 'flex',
+  flex: '1 1 0',
+  flexDirection: 'column',
+  minHeight: 0,
   overflow: 'hidden',
   position: 'relative',
+};
+
+const studioEditorPageRootStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  flex: '1 1 0',
+  minHeight: 0,
+};
+
+const studioEditorShellStyle: React.CSSProperties = {
+  background: '#F2F1EE',
+  border: '1px solid #E6E3DE',
+  borderRadius: 36,
+  boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
+  display: 'flex',
+  flex: '1 1 0',
+  flexDirection: 'column',
+  minHeight: 0,
+  overflow: 'hidden',
+};
+
+const studioDefinitionListScrollStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: '1 1 0',
+  flexDirection: 'column',
+  height: 0,
+  minHeight: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto',
 };
 
 const studioToolDrawerSectionStyle: React.CSSProperties = {
@@ -2003,22 +2038,13 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
   });
   const workflowViewportMaxWidth = isScopeMode ? undefined : 1080;
   const resolvedWorkspaceRowStyle: React.CSSProperties = isScopeMode
-    ? { width: '100%' }
+    ? {
+        ...workflowWorkspaceRowStyle,
+        width: '100%',
+      }
     : workflowWorkspaceRowStyle;
-  const resolvedWorkflowBrowserStyle: React.CSSProperties = isScopeMode
-    ? {
-        ...workflowBrowserStyle,
-        flex: '0 0 auto',
-        height: 'auto',
-      }
-    : workflowBrowserStyle;
-  const resolvedWorkflowResultsBodyStyle: React.CSSProperties = isScopeMode
-    ? {
-        ...workflowResultsBodyStyle,
-        flex: '0 0 auto',
-        overflowY: 'visible',
-      }
-    : workflowResultsBodyStyle;
+  const resolvedWorkflowBrowserStyle: React.CSSProperties = workflowBrowserStyle;
+  const resolvedWorkflowResultsBodyStyle: React.CSSProperties = workflowResultsBodyStyle;
 
   const scopeSummaryDescription = workspaceSettings.isLoading
     ? '正在解析团队上下文。'
@@ -2343,7 +2369,10 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
             </div>
           </div>
 
-          <div style={resolvedWorkflowResultsBodyStyle}>
+          <div
+            data-testid="studio-workflows-results"
+            style={resolvedWorkflowResultsBodyStyle}
+          >
             {workflows.isLoading ? (
               <Typography.Text type="secondary">
                 正在加载定义...
@@ -3875,6 +3904,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   draftYaml,
   draftWorkflowName,
   draftDirectoryId,
+  draftFileName,
+  draftMode,
   selectedWorkflowId,
   templateWorkflowName,
   activeWorkflowDescription,
@@ -4621,6 +4652,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       compact
     />
   ) : null;
+  const hasEditableDraftContext = Boolean(
+    draftMode === 'new' ||
+      selectedWorkflowId.trim() ||
+      templateWorkflowName.trim() ||
+      draftWorkflowName.trim() ||
+      draftFileName.trim() ||
+      activeWorkflowFile?.workflowId?.trim(),
+  );
   const inspectorPanelBody = (
     <div
       data-testid="studio-inspector-scroll"
@@ -4649,10 +4688,10 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   );
 
   return (
-    <div style={cardStackStyle}>
+    <div style={studioEditorPageRootStyle}>
       {editorFatalNotice ? (
         <div style={studioNoticeStripStyle}>{editorFatalNotice}</div>
-      ) : draftYaml ? (
+      ) : hasEditableDraftContext ? (
         <>
           <input
             ref={workflowImportInputRef}
@@ -4664,16 +4703,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
           <div
             data-testid="studio-editor-shell"
-            style={{
-              background: '#F2F1EE',
-              border: '1px solid #E6E3DE',
-              borderRadius: 36,
-              boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
-              display: 'flex',
-              flexDirection: 'column',
-              height: 'calc(100vh - 176px)',
-              overflow: 'hidden',
-            }}
+            style={studioEditorShellStyle}
           >
             <div
               style={{
@@ -4825,13 +4855,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   </Typography.Text>
                 </div>
                 <div
-                  style={{
-                    display: 'flex',
-                    flex: 1,
-                    flexDirection: 'column',
-                    minHeight: 0,
-                    overflowY: 'auto',
-                  }}
+                  data-testid="studio-editor-definition-list"
+                  style={studioDefinitionListScrollStyle}
                 >
                   {workflows.isLoading ? (
                     <div style={{ padding: 14 }}>
@@ -4901,13 +4926,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   display: 'flex',
                   flex: 1,
                   gap: 12,
+                  minHeight: 0,
                   minWidth: 0,
                 }}
               >
                 <div
+                  data-testid="studio-editor-canvas-viewport"
                   style={{
                     ...studioCanvasViewportStyle,
-                    flex: 1,
                     minWidth: 0,
                   }}
                 >
@@ -4987,7 +5013,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   <GraphCanvas
                     nodes={workflowGraph.nodes}
                     edges={workflowGraph.edges}
-                    height="calc(100vh - 278px)"
+                    height="100%"
                     variant="studio"
                     selectedNodeId={selectedGraphNodeId}
                     selectedEdgeId={selectedGraphEdge?.edgeId}

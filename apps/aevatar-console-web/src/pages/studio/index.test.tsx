@@ -5,6 +5,10 @@ import { ensureActiveAuthSession } from "@/shared/auth/client";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import {
+  getLocationSnapshot,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -1553,6 +1557,20 @@ function renderStudioPage(route = "/studio") {
   return renderWithQueryClient(React.createElement(StudioPage));
 }
 
+function LocationSnapshotProbe() {
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => ""
+  );
+
+  return React.createElement(
+    "output",
+    { "data-testid": "location-snapshot-probe" },
+    locationSnapshot
+  );
+}
+
 async function replaceStudioRoute(route: string) {
   await act(async () => {
     window.history.replaceState({}, "", route);
@@ -1659,10 +1677,22 @@ describe("StudioPage", () => {
     expect(screen.getByRole("heading", { name: "行为定义" })).toBeTruthy();
     expect(screen.getByText("当前定义")).toBeTruthy();
     expect(screen.getByPlaceholderText("搜索定义")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "定义列表" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    );
     expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
+      flex: "1",
       flexDirection: "column",
+      height: "100%",
+      minHeight: "0",
       minWidth: "0",
+      overflow: "hidden",
     });
   });
 
@@ -1744,8 +1774,12 @@ describe("StudioPage", () => {
     expect(await screen.findByRole("heading", { name: "行为定义" })).toBeTruthy();
     expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
+      flex: "1",
       flexDirection: "column",
+      height: "100%",
+      minHeight: "0",
       minWidth: "0",
+      overflow: "hidden",
     });
   });
 
@@ -1776,6 +1810,93 @@ describe("StudioPage", () => {
 
     expect(await screen.findByText("当前定义")).toBeTruthy();
     expect(screen.queryByText("尚未加载定义")).toBeNull();
+    expect(screen.getByText("行为画布")).toBeTruthy();
+  });
+
+  it("lets operators switch between the behavior browser and editor within the shared tab", async () => {
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "定义列表" }));
+
+    expect(await screen.findByPlaceholderText("搜索定义")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "定义列表" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("workflows");
+      expect(searchParams.get("workflow")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑草稿" }));
+
+    expect(await screen.findByText("行为画布")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("studio");
+      expect(searchParams.get("workflow")).toBe("workflow-1");
+    });
+  });
+
+  it("keeps route subscribers in sync after one workflow workspace switch click", async () => {
+    window.history.pushState({}, "", "/studio?workflow=workflow-1&tab=studio");
+    renderWithQueryClient(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(StudioPage),
+        React.createElement(LocationSnapshotProbe)
+      )
+    );
+
+    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(screen.getByTestId("location-snapshot-probe")).toHaveTextContent(
+      "/studio?workflow=workflow-1&tab=studio"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "定义列表" }));
+
+    expect(await screen.findByPlaceholderText("搜索定义")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("location-snapshot-probe")).toHaveTextContent(
+        "/studio?tab=workflows"
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑草稿" }));
+
+    expect(await screen.findByText("行为画布")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("location-snapshot-probe")).toHaveTextContent(
+        "/studio?workflow=workflow-1&tab=studio"
+      );
+    });
+  });
+
+  it("keeps the behavior browser active when the route explicitly targets workflows with a prompt", async () => {
+    renderStudioPage(
+      "/studio?tab=workflows&prompt=Continue%20this%20workflow%20in%20Studio"
+    );
+
+    expect(await screen.findByPlaceholderText("搜索定义")).toBeTruthy();
+    expect(screen.queryByText("行为画布")).toBeNull();
+    expect(screen.getByRole("button", { name: "定义列表" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
   });
 
   it("tries to restore auth first and then loads Studio when the host session recovers", async () => {
@@ -1814,7 +1935,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("studio");
       expect(searchParams.get("workflow")).toBe("workflow-1");
-      expect(searchParams.get("execution")).toBe("execution-1");
+      expect(searchParams.get("execution")).toBeNull();
     });
   });
 
@@ -2239,13 +2360,12 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
     });
-    const publishButton = await screen.findByRole("button", {
-      name: "发布团队入口",
-    });
     await waitFor(() => {
-      expect(publishButton).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "发布团队入口" })
+      ).toBeEnabled();
     });
-    fireEvent.click(publishButton);
+    fireEvent.click(screen.getByRole("button", { name: "发布团队入口" }));
 
     await waitFor(() => {
       expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(

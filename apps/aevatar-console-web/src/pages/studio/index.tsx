@@ -130,6 +130,7 @@ type StudioRouteState = {
   scriptId: string;
   templateWorkflow: string;
   tab: StudioTab;
+  tabExplicit: boolean;
   draftMode: '' | 'new';
   prompt: string;
   legacySource: '' | 'playground';
@@ -138,6 +139,7 @@ type StudioRouteState = {
 };
 
 type StudioViewMode = 'editor' | 'execution';
+type WorkflowWorkspaceSection = 'browser' | 'editor';
 type StudioInspectorTab = 'node' | 'roles' | 'yaml';
 type StudioSelectedGraphEdge = {
   readonly edgeId: string;
@@ -830,6 +832,7 @@ function readStudioRouteState(search?: string): StudioRouteState {
       scriptId: '',
       templateWorkflow: '',
       tab: 'workflows',
+      tabExplicit: false,
       draftMode: '',
       prompt: '',
       legacySource: '',
@@ -854,6 +857,7 @@ function readStudioRouteState(search?: string): StudioRouteState {
     scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
     tab: parseStudioTab(params.get('tab')),
+    tabExplicit: params.has('tab'),
     draftMode: parseDraftMode(params.get('draft')),
     prompt: trimOptional(params.get('prompt')),
     legacySource: parseLegacySource(params.get('legacy')),
@@ -882,7 +886,7 @@ function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage 
         state.templateWorkflow ||
         state.draftMode === 'new' ||
         state.executionId ||
-        state.prompt
+        (!state.tabExplicit && state.prompt)
         ? 'studio'
         : 'workflows';
 }
@@ -1694,31 +1698,43 @@ const StudioPage: React.FC = () => {
         : workspacePage === 'execution'
           ? 'executions'
           : workspacePage;
+    const persistWorkflowDraftRoute = workspacePage === 'studio';
+    const persistExecutionRoute =
+      workspacePage === 'studio' && studioView === 'execution';
+    const persistScriptRoute = workspacePage === 'scripts';
 
-    window.history.replaceState(null, '', buildStudioRoute({
+    history.replace(buildStudioRoute({
       scopeId: resolvedStudioScopeId || undefined,
       scopeLabel: routeState.scopeLabel || undefined,
       memberId: routeState.memberId || undefined,
       memberLabel: routeState.memberLabel || undefined,
-      workflowId: selectedWorkflowId || undefined,
-      scriptId: selectedScriptId || undefined,
-      template: !selectedWorkflowId ? templateWorkflow || undefined : undefined,
+      workflowId: persistWorkflowDraftRoute ? selectedWorkflowId || undefined : undefined,
+      scriptId: persistScriptRoute ? selectedScriptId || undefined : undefined,
+      template:
+        persistWorkflowDraftRoute && !selectedWorkflowId
+          ? templateWorkflow || undefined
+          : undefined,
       tab,
       draftMode:
+        persistWorkflowDraftRoute &&
         !selectedWorkflowId &&
         !templateWorkflow &&
         draftMode === 'new'
           ? 'new'
           : undefined,
-      prompt: runPrompt || undefined,
+      prompt:
+        workspacePage === 'studio' || workspacePage === 'workflows'
+          ? runPrompt || undefined
+          : undefined,
       legacySource:
+        persistWorkflowDraftRoute &&
         !selectedWorkflowId &&
         !templateWorkflow &&
         draftMode === 'new' &&
         legacySource === 'playground'
           ? 'playground'
           : undefined,
-      executionId: selectedExecutionId || undefined,
+      executionId: persistExecutionRoute ? selectedExecutionId || undefined : undefined,
       logsMode: logsPopoutMode === 'popout' ? 'popout' : undefined,
     }));
   }, [
@@ -2241,6 +2257,20 @@ const StudioPage: React.FC = () => {
         ensureActiveWorkflowDraftLoaded();
       }
       setStudioView(view);
+    },
+    [ensureActiveWorkflowDraftLoaded],
+  );
+
+  const handleSelectWorkflowWorkspaceSection = useCallback(
+    (section: WorkflowWorkspaceSection) => {
+      if (section === 'browser') {
+        setWorkspacePage('workflows');
+        return;
+      }
+
+      ensureActiveWorkflowDraftLoaded();
+      setWorkspacePage('studio');
+      setStudioView('editor');
     },
     [ensureActiveWorkflowDraftLoaded],
   );
@@ -4339,7 +4369,77 @@ const StudioPage: React.FC = () => {
           ? 'Agent 角色'
           : workspacePage === 'connectors'
             ? '集成'
-            : '编辑器设置';
+          : '编辑器设置';
+
+  const workflowWorkspaceSection =
+    workspacePage === 'workflows'
+      ? 'browser'
+      : workspacePage === 'studio' && studioView === 'editor'
+        ? 'editor'
+        : null;
+  const workflowWorkspaceSectionLabel =
+    workflowWorkspaceSection === 'browser'
+      ? '定义列表'
+      : workflowWorkspaceSection === 'editor'
+        ? '编辑草稿'
+        : '';
+  const workflowWorkspaceSwitcher =
+    workflowWorkspaceSection ? (
+      <div
+        role="tablist"
+        aria-label="行为定义页面切换"
+        style={{
+          alignItems: 'center',
+          background: '#f5f5f5',
+          border: '1px solid #e5e7eb',
+          borderRadius: 10,
+          display: 'inline-flex',
+          gap: 4,
+          padding: 3,
+        }}
+      >
+        {(
+          [
+            {
+              key: 'browser',
+              label: '定义列表',
+            },
+            {
+              key: 'editor',
+              label: '编辑草稿',
+            },
+          ] as const
+        ).map((item) => {
+          const active = workflowWorkspaceSection === item.key;
+
+          return (
+            <button
+              key={item.key}
+              type="button"
+              aria-current={active ? 'page' : undefined}
+              aria-pressed={active}
+              onClick={() => handleSelectWorkflowWorkspaceSection(item.key)}
+              style={{
+                background: active ? '#ffffff' : 'transparent',
+                border: 'none',
+                borderRadius: 8,
+                boxShadow: active ? '0 1px 2px rgba(15, 23, 42, 0.12)' : 'none',
+                color: active ? '#1d2129' : '#8c8c8c',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: active ? 600 : 500,
+                lineHeight: '18px',
+                padding: '6px 10px',
+                transition:
+                  'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
+              }}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
 
   const studioContextActions =
     workspacePage === 'studio' && studioView === 'execution' ? (
@@ -4374,7 +4474,8 @@ const StudioPage: React.FC = () => {
     scopeBindingQuery.data?.displayName ||
     resolvedStudioScopeId;
   const studioContextMemberLabel =
-    routeState.memberLabel || activeWorkflowName || templateWorkflow;
+    routeState.memberLabel ||
+    (workspacePage === 'studio' ? activeWorkflowName || templateWorkflow : '');
   const currentStudioReturnTo =
     typeof window === 'undefined'
       ? ''
@@ -4447,7 +4548,13 @@ const StudioPage: React.FC = () => {
           / <b style={{ color: '#1d2129' }}>
             {studioContextMemberLabel || studioContextScopeLabel || '当前团队'}
           </b>{' '}
-          / {pageTitle}
+          / <b style={{ color: '#1d2129' }}>{pageTitle}</b>
+          {workflowWorkspaceSectionLabel ? (
+            <>
+              {' '}
+              / <span>{workflowWorkspaceSectionLabel}</span>
+            </>
+          ) : null}
         </span>
         {studioContextCode ? (
           <code
@@ -4470,7 +4577,19 @@ const StudioPage: React.FC = () => {
             marginLeft: 'auto',
           }}
         >
+          {workflowWorkspaceSwitcher}
           {studioContextActions}
+        </div>
+      ) : workflowWorkspaceSwitcher ? (
+        <div
+          style={{
+            alignItems: 'center',
+            display: 'flex',
+            gap: 8,
+            marginLeft: 'auto',
+          }}
+        >
+          {workflowWorkspaceSwitcher}
         </div>
       ) : null}
     </div>
@@ -4536,8 +4655,12 @@ const StudioPage: React.FC = () => {
         data-testid="studio-workflows-viewport"
         style={{
           display: 'flex',
+          flex: 1,
           flexDirection: 'column',
+          height: '100%',
+          minHeight: 0,
           minWidth: 0,
+          overflow: 'hidden',
         }}
       >
         <StudioWorkflowsPage
@@ -5027,6 +5150,7 @@ const StudioPage: React.FC = () => {
           currentPageContent
         ) : (
           <StudioShell
+            contentOverflow={workspacePage === 'workflows' ? 'hidden' : 'auto'}
             contextBar={studioContextBar}
             currentPage={
               workspacePage === 'studio'
