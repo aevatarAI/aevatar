@@ -1,12 +1,7 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.Middleware;
-using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Core;
-using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -18,21 +13,8 @@ namespace Aevatar.GAgents.StreamingProxy;
 /// OpenClaw agents. Does NOT call LLM itself — it receives messages from
 /// participants and broadcasts them to all SSE subscribers.
 /// </summary>
-public sealed class StreamingProxyGAgent : RoleGAgent
+public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 {
-    public StreamingProxyGAgent(
-        ILLMProviderFactory? llmProviderFactory = null,
-        IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
-        IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
-        IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
-    {
-    }
-
-    private StreamingProxyGAgentState _proxyState = new();
-
     [EventHandler(EndpointName = "initializeRoom")]
     public async Task HandleGroupChatRoomInitialized(GroupChatRoomInitializedEvent evt)
     {
@@ -46,7 +28,7 @@ public sealed class StreamingProxyGAgent : RoleGAgent
     /// converts the user prompt into a group chat topic and broadcasts it.
     /// </summary>
     [EventHandler]
-    public override async Task HandleChatRequest(ChatRequestEvent request)
+    public async Task HandleChatRequest(ChatRequestEvent request)
     {
         var topicEvent = new GroupChatTopicEvent
         {
@@ -101,19 +83,11 @@ public sealed class StreamingProxyGAgent : RoleGAgent
     }
 
     /// <summary>
-    /// Applies domain events to in-memory proxy state.
+    /// Applies domain events to the sole authoritative actor state.
     /// Called by the event sourcing infrastructure after PersistDomainEventAsync.
     /// </summary>
-    protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt)
-    {
-        // Let base handle its own events (InitializeRoleAgent, etc.)
-        var baseResult = base.TransitionState(current, evt);
-
-        // Also apply our proxy-specific events to _proxyState
-        _proxyState = ApplyProxyEvent(_proxyState, evt);
-
-        return baseResult;
-    }
+    protected override StreamingProxyGAgentState TransitionState(StreamingProxyGAgentState current, IMessage evt) =>
+        ApplyProxyEvent(current, evt);
 
     private static StreamingProxyGAgentState ApplyProxyEvent(StreamingProxyGAgentState current, IMessage evt)
     {
