@@ -109,6 +109,33 @@ if [[ -z "${DOTNET_CMD}" ]]; then
   fi
 fi
 
+ensure_neo4j_env() {
+  local environment_name="${ASPNETCORE_ENVIRONMENT:-${DOTNET_ENVIRONMENT:-}}"
+  local neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-}"
+
+  if [[ "${environment_name}" != "Distributed" && "${neo4j_enabled}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${AEVATAR_Projection__Graph__Providers__Neo4j__Username:-}" && -n "${NEO4J_USERNAME:-}" ]]; then
+    export AEVATAR_Projection__Graph__Providers__Neo4j__Username="${NEO4J_USERNAME}"
+  fi
+
+  if [[ -z "${AEVATAR_Projection__Graph__Providers__Neo4j__Password:-}" && -n "${NEO4J_PASSWORD:-}" ]]; then
+    export AEVATAR_Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}"
+  fi
+
+  if [[ -z "${AEVATAR_Projection__Graph__Providers__Neo4j__Password:-}" ]]; then
+    cat >&2 <<'EOF'
+Distributed mode with Neo4j enabled requires an explicit Neo4j password.
+Set one of:
+  export NEO4J_PASSWORD="<password>"
+  export AEVATAR_Projection__Graph__Providers__Neo4j__Password="<password>"
+EOF
+    exit 1
+  fi
+}
+
 list_listening_pids() {
   lsof -tiTCP:"${1}" -sTCP:LISTEN 2>/dev/null | sort -u || true
 }
@@ -204,6 +231,7 @@ wait_for_port_ready() {
 }
 
 kill_existing_processes
+ensure_neo4j_env
 
 if [[ -n "$(list_listening_pids "${API_PORT}")" ]]; then
   echo "Port ${API_PORT} is still occupied after cleanup." >&2
