@@ -1079,6 +1079,77 @@ const studioDefinitionListScrollStyle: React.CSSProperties = {
   overflowY: 'auto',
 };
 
+const studioEditorHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255,255,255,0.96)',
+  borderBottom: '1px solid #E8E2D9',
+  display: 'flex',
+  gap: 16,
+  justifyContent: 'space-between',
+  padding: '12px 16px',
+};
+
+const studioEditorToolbarStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-end',
+  minWidth: 0,
+};
+
+const studioCanvasEmptyStateStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: '#6B7280',
+  display: 'flex',
+  inset: 12,
+  justifyContent: 'center',
+  pointerEvents: 'none',
+  position: 'absolute',
+  textAlign: 'center',
+  zIndex: 1,
+};
+
+const studioCanvasEmptyCardStyle: React.CSSProperties = {
+  alignItems: 'center',
+  backdropFilter: 'blur(10px)',
+  background: 'rgba(255,255,255,0.94)',
+  border: '1px solid #E8E2D9',
+  borderRadius: 24,
+  boxShadow: '0 18px 38px rgba(17, 24, 39, 0.08)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  maxWidth: 380,
+  padding: '24px 24px 20px',
+  pointerEvents: 'auto',
+};
+
+const studioCanvasEmptyActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'center',
+};
+
+const studioInspectorEmptyStateStyle: React.CSSProperties = {
+  alignItems: 'stretch',
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  justifyContent: 'center',
+  minHeight: 0,
+  padding: 20,
+  textAlign: 'center',
+};
+
+const studioInspectorQuickActionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  marginTop: 16,
+};
+
 const studioToolDrawerSectionStyle: React.CSSProperties = {
   ...embeddedPanelStyle,
   display: 'flex',
@@ -1375,6 +1446,7 @@ type StudioScopeBindingPanelProps = {
   readonly error: unknown;
   readonly pendingRevisionId: string;
   readonly pendingRetirementRevisionId: string;
+  readonly onOpenBinding?: () => void;
   readonly onActivateRevision: (revisionId: string) => void;
   readonly onRetireRevision: (revisionId: string) => void;
 };
@@ -1386,6 +1458,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   error,
   pendingRevisionId,
   pendingRetirementRevisionId,
+  onOpenBinding,
   onActivateRevision,
   onRetireRevision,
 }) => {
@@ -1421,8 +1494,12 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
     : error
       ? '暂时无法读取当前团队入口。'
       : binding?.available
-        ? `当前默认入口指向 ${currentTarget || binding.displayName || binding.serviceId}。`
-        : `团队 ${scopeId} 还没有发布默认入口。`;
+        ? `默认入口指向 ${currentTarget || binding.displayName || binding.serviceId}。`
+        : '当前还没有发布默认入口。';
+  const canShowBindingDetails = Boolean(binding?.available);
+  const canInspectPublishedMembers = Boolean(
+    currentRevision?.primaryActorId || currentRevision?.staticActorTypeName,
+  );
   const detailsContent = loading ? (
     <StudioNoticeCard
       title="正在加载团队入口"
@@ -1662,74 +1739,132 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   return (
     <div
       style={{
-        ...workflowSectionShellStyle,
-        gap: detailsOpen ? 18 : 12,
-        padding: detailsOpen ? 20 : 16,
+        background: 'rgba(255, 255, 255, 0.84)',
+        border: '1px solid #E6E3DE',
+        borderRadius: 20,
+        boxShadow: '0 10px 24px rgba(17, 24, 39, 0.04)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: detailsOpen ? 14 : 8,
+        padding: detailsOpen ? 14 : 12,
       }}
     >
-      <div style={workflowSectionHeaderStyle}>
-        <div style={workflowDirectoryTextStackStyle}>
-          <Typography.Text style={workflowSectionHeadingStyle}>
-            团队入口
-          </Typography.Text>
+      <div
+        style={{
+          alignItems: 'center',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          justifyContent: 'space-between',
+        }}
+      >
+        <div
+          style={{
+            ...cardStackStyle,
+            flex: '1 1 320px',
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
           <Space wrap size={[8, 8]}>
-            <Typography.Title
-              level={5}
-              style={{ margin: 0 }}
-            >
+            <Typography.Text style={workflowSectionHeadingStyle}>
+              发布到团队
+            </Typography.Text>
+            <Typography.Text strong style={{ fontSize: 16, color: '#1F2937' }}>
               {binding?.available
                 ? binding.displayName || binding.serviceId
                 : '未发布默认入口'}
-            </Typography.Title>
+            </Typography.Text>
             <Tag color={bindingStateColor}>{bindingStateLabel}</Tag>
             {binding?.available ? (
               <Tag color="success">
                 {binding.defaultServingRevisionId || 'default pending'}
               </Tag>
             ) : null}
+            <code
+              style={{
+                color: '#8C8C8C',
+                fontFamily: '"SF Mono", "JetBrains Mono", monospace',
+                fontSize: 11,
+              }}
+            >
+              {scopeId}
+            </code>
           </Space>
           <Typography.Text
             type="secondary"
-            style={{ display: 'block' }}
+            style={{ display: 'block', fontSize: 12 }}
             ellipsis={{ tooltip: bindingSummary }}
           >
             {bindingSummary}
           </Typography.Text>
         </div>
         <Space wrap size={[8, 8]}>
-          <Tag color="processing">{scopeId}</Tag>
-          <Button
-            onClick={() =>
-              history.push(
-                buildRuntimeGAgentsHref({
-                  scopeId,
-                  actorId: currentRevision?.primaryActorId || undefined,
-                  actorTypeName: currentRevision?.staticActorTypeName || undefined,
-                }),
-              )
-            }
-          >
-            查看成员
-          </Button>
-          <Button
-            type="text"
-            size="small"
-            aria-expanded={detailsOpen}
-            onClick={() => setDetailsOpen((current) => !current)}
-            icon={
-              <DownOutlined
-                style={{
-                  transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.2s ease',
-                }}
-              />
-            }
-          >
-            {detailsOpen ? '收起详情' : '查看详情'}
-          </Button>
+          {onOpenBinding ? (
+            <Button
+              size="small"
+              type="default"
+              icon={<SafetyCertificateOutlined />}
+              onClick={onOpenBinding}
+            >
+              {binding?.available ? '更新团队入口' : '绑定团队入口'}
+            </Button>
+          ) : null}
+          {canShowBindingDetails ? (
+            <Button
+              type="text"
+              size="small"
+              aria-expanded={detailsOpen}
+              onClick={() => setDetailsOpen((current) => !current)}
+              icon={
+                <DownOutlined
+                  style={{
+                    transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s ease',
+                  }}
+                />
+              }
+            >
+              {detailsOpen ? '收起详情' : '查看详情'}
+            </Button>
+          ) : null}
         </Space>
       </div>
-      {detailsOpen ? detailsContent : null}
+      {canShowBindingDetails && detailsOpen ? (
+        <div
+          style={{
+            borderTop: '1px solid #F1EEE8',
+            display: 'grid',
+            gap: 12,
+            paddingTop: 12,
+          }}
+        >
+          {canInspectPublishedMembers ? (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+              }}
+            >
+              <Button
+                size="small"
+                onClick={() =>
+                  history.push(
+                    buildRuntimeGAgentsHref({
+                      scopeId,
+                      actorId: currentRevision?.primaryActorId || undefined,
+                      actorTypeName: currentRevision?.staticActorTypeName || undefined,
+                    }),
+                  )
+                }
+              >
+                查看成员
+              </Button>
+            </div>
+          ) : null}
+          {detailsContent}
+        </div>
+      ) : null}
     </div>
   );
 };
@@ -4161,6 +4296,22 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     setToolDrawerMode(null);
   };
 
+  const openPaletteFromEditor = React.useCallback(() => {
+    setPendingAddPosition({
+      x: 420,
+      y: 220,
+    });
+    setToolDrawerMode('palette');
+  }, []);
+
+  const openAskAiFromEditor = React.useCallback(() => {
+    if (!canAskAiGenerate) {
+      return;
+    }
+
+    setToolDrawerMode('ask-ai');
+  }, [canAskAiGenerate]);
+
   const openGAgentModal = React.useCallback(() => {
     const defaultDescriptor = gAgentTypes[0] ?? null;
     const defaultActorTypeName =
@@ -4312,6 +4463,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     setToolDrawerMode(null);
   };
 
+  const hasEditableDraftContext = Boolean(
+    draftMode === 'new' ||
+      selectedWorkflowId.trim() ||
+      templateWorkflowName.trim() ||
+      draftWorkflowName.trim() ||
+      draftFileName.trim() ||
+      activeWorkflowFile?.workflowId?.trim(),
+  );
+
   const askAiStatusText = !canAskAiGenerate
     ? askAiUnavailableMessage || '当前环境暂不支持 AI 辅助。'
     : askAiPending
@@ -4319,7 +4479,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       : askAiAnswer.trim()
         ? '校验通过的 YAML 已写回当前草稿。'
         : '返回格式仅限 workflow YAML。';
-  const toolDrawerVisible = Boolean(draftYaml) && toolDrawerMode !== null;
+  const toolDrawerVisible = hasEditableDraftContext && toolDrawerMode !== null;
   const toolDrawerTitle =
     toolDrawerMode === 'palette' ? '添加步骤' : 'AI 辅助';
   const nodePaletteDrawerContent = (
@@ -4571,16 +4731,12 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
   const editorStatusItems: React.ReactNode[] = [];
 
-  if (saveNotice) {
+  if (saveNotice && saveNotice.type === 'error') {
     editorStatusItems.push(
       <StudioNoticeCard
         key="save-notice"
         type={saveNotice.type}
-        title={
-          saveNotice.type === 'success'
-            ? '定义已保存'
-            : '定义保存失败'
-        }
+        title="定义保存失败"
         description={saveNotice.message}
         compact
       />,
@@ -4652,14 +4808,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       compact
     />
   ) : null;
-  const hasEditableDraftContext = Boolean(
-    draftMode === 'new' ||
-      selectedWorkflowId.trim() ||
-      templateWorkflowName.trim() ||
-      draftWorkflowName.trim() ||
-      draftFileName.trim() ||
-      activeWorkflowFile?.workflowId?.trim(),
-  );
   const inspectorPanelBody = (
     <div
       data-testid="studio-inspector-scroll"
@@ -4686,6 +4834,32 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       {inspectorContent}
     </div>
   );
+  const canvasIsEmpty = workflowGraph.nodes.length === 0;
+  const inspectorShowsNodeEmptyState =
+    inspectorTab === 'node' && !hasSelectedGraphNode;
+  const inspectorPanelWidth = inspectorShowsNodeEmptyState ? 272 : 320;
+  const inspectorPanelSurface = inspectorShowsNodeEmptyState ? (
+    <div
+      data-testid="studio-inspector-empty-state"
+      style={studioInspectorEmptyStateStyle}
+    >
+      <Typography.Text strong>先选一个步骤</Typography.Text>
+      <Typography.Text type="secondary">
+        当前先把画布搭起来。你也可以直接切去角色或 YAML 继续完善草稿。
+      </Typography.Text>
+      <div style={studioInspectorQuickActionsStyle}>
+        <Button icon={<PlusOutlined />} type="primary" onClick={openPaletteFromEditor}>
+          打开步骤库
+        </Button>
+        <Button onClick={() => onSetInspectorTab('roles')}>管理角色</Button>
+        <Button icon={<CodeOutlined />} onClick={() => onSetInspectorTab('yaml')}>
+          查看 YAML 草稿
+        </Button>
+      </div>
+    </div>
+  ) : (
+    inspectorPanelBody
+  );
 
   return (
     <div style={studioEditorPageRootStyle}>
@@ -4705,17 +4879,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             data-testid="studio-editor-shell"
             style={studioEditorShellStyle}
           >
-            <div
-              style={{
-                alignItems: 'center',
-                background: 'rgba(255,255,255,0.96)',
-                borderBottom: '1px solid #E8E2D9',
-                display: 'flex',
-                gap: 16,
-                justifyContent: 'space-between',
-                padding: '12px 16px',
-              }}
-            >
+            <div style={studioEditorHeaderStyle}>
               <div
                 style={{
                   alignItems: 'center',
@@ -4782,38 +4946,23 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               </div>
 
               <div
-                style={{
-                  alignItems: 'center',
-                  display: 'flex',
-                  gap: 8,
-                  justifyContent: 'flex-end',
-                  minWidth: 0,
-                }}
+                style={studioEditorToolbarStyle}
               >
                 <Button
-                  size="small"
-                  icon={<AppstoreOutlined />}
-                  onClick={() => setToolDrawerMode('palette')}
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={openPaletteFromEditor}
                 >
                   添加步骤
                 </Button>
                 <Button
-                  size="small"
                   icon={<RobotOutlined />}
                   type={toolDrawerMode === 'ask-ai' ? 'primary' : 'default'}
                   disabled={!canAskAiGenerate}
-                  onClick={() => setToolDrawerMode('ask-ai')}
+                  onClick={openAskAiFromEditor}
                   title={!canAskAiGenerate ? askAiUnavailableMessage : undefined}
                 >
                   AI 辅助
-                </Button>
-                <Button
-                  size="small"
-                  icon={<RobotOutlined />}
-                  onClick={openGAgentModal}
-                  disabled={!resolvedScopeId}
-                >
-                  绑定团队入口
                 </Button>
               </div>
             </div>
@@ -4985,27 +5134,31 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     </div>
                   ) : null}
 
-                  {workflowGraph.nodes.length === 0 ? (
-                    <div
-                      style={{
-                        alignItems: 'center',
-                        color: '#6B7280',
-                        display: 'flex',
-                        inset: 12,
-                        justifyContent: 'center',
-                        pointerEvents: 'none',
-                        position: 'absolute',
-                        textAlign: 'center',
-                        zIndex: 1,
-                      }}
-                    >
-                      <div>
+                  {canvasIsEmpty ? (
+                    <div style={studioCanvasEmptyStateStyle}>
+                      <div style={studioCanvasEmptyCardStyle}>
                         <Typography.Text strong style={{ display: 'block' }}>
                           当前定义还没有步骤。
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          在画布中添加第一个处理步骤。
+                          先把第一个处理步骤放进画布，再继续补角色、连接和运行方式。
                         </Typography.Text>
+                        <div style={studioCanvasEmptyActionsStyle}>
+                          <Button
+                            icon={<PlusOutlined />}
+                            type="primary"
+                            onClick={openPaletteFromEditor}
+                          >
+                            添加第一个步骤
+                          </Button>
+                          <Button
+                            icon={<RobotOutlined />}
+                            disabled={!canAskAiGenerate}
+                            onClick={openAskAiFromEditor}
+                          >
+                            用 AI 生成初稿
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -5039,6 +5192,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 </div>
 
                 <div
+                  data-testid="studio-inspector-shell"
                   style={{
                     background: '#FFFFFF',
                     border: '1px solid #E8E2D9',
@@ -5048,7 +5202,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     flexShrink: 0,
                     minHeight: 0,
                     overflow: 'hidden',
-                    width: 320,
+                    transition: 'width 0.18s ease',
+                    width: inspectorPanelWidth,
                   }}
                 >
                   <div
@@ -5094,13 +5249,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       {inspectorTab === 'node'
                         ? hasSelectedGraphNode
                           ? `选中: ${selectedGraphNodeId}`
-                          : '选择一个步骤后可在这里编辑属性'
+                          : '先选步骤，或切到角色 / YAML 继续编辑'
                         : inspectorTab === 'roles'
                           ? '管理当前定义的 Agent 角色'
                           : '查看和校验当前 YAML'}
                     </Typography.Text>
                   </div>
-                  {inspectorPanelBody}
+                  {inspectorPanelSurface}
                 </div>
               </div>
             </div>
@@ -5525,6 +5680,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             error={scopeBindingError}
             pendingRevisionId={bindingActivationRevisionId}
             pendingRetirementRevisionId={bindingRetirementRevisionId}
+            onOpenBinding={openGAgentModal}
             onActivateRevision={onActivateBindingRevision}
             onRetireRevision={onRetireBindingRevision}
           />

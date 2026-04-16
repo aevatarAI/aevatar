@@ -3,6 +3,10 @@ import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import {
+  clearStoredAuthSession,
+  persistAuthSession,
+} from "@/shared/auth/session";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamsHomePage from "./home";
@@ -150,6 +154,7 @@ jest.mock("@/shared/studio/api", () => ({
 describe("TeamsHomePage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    clearStoredAuthSession();
     jest.clearAllMocks();
   });
 
@@ -211,6 +216,40 @@ describe("TeamsHomePage", () => {
     expect(params.get("serviceId")).toBe("service-alpha");
     expect(params.get("workflowId")).toBeNull();
     expect(params.get("runId")).toBe("run-latest");
+  });
+
+  it("falls back to the locally stored auth scope when the live session lookup fails", async () => {
+    window.history.replaceState({}, "", "/teams");
+    persistAuthSession({
+      tokens: {
+        accessToken: "access-token",
+        tokenType: "Bearer",
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3600_000,
+        refreshToken: "refresh-token",
+      },
+      user: {
+        sub: "scope-a",
+        name: "Abigail Deng",
+      },
+    });
+    (studioApi.getAuthSession as jest.Mock).mockRejectedValueOnce(
+      new Error("Error occurred while trying to proxy: localhost:5173/api/auth/me"),
+    );
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
+    expect(screen.getByText("当前登录态校验失败，已回退到本地 Scope")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "登录状态暂时不可用，请刷新后重试。 当前已回退到本地会话里的 Scope scope-a。",
+      ),
+    ).toBeTruthy();
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
+    });
   });
 
   it("does not turn saved workflows into homepage teams before the current scope has an entry", async () => {

@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { message } from "antd";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
@@ -1224,6 +1225,15 @@ jest.mock("./components/StudioWorkbenchSections", () => {
         React.createElement(
           "button",
           {
+            key: "clear-directory",
+            type: "button",
+            onClick: () => props.onSetDraftDirectoryId?.(""),
+          },
+          "清空目录"
+        ),
+        React.createElement(
+          "button",
+          {
             key: "yaml",
             type: "button",
             onClick: () => props.onSetInspectorTab?.("yaml"),
@@ -1701,8 +1711,11 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "← 团队 A" })).toBeTruthy();
-    expect(screen.getByText(/成员 Alpha/)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("workspace-demo");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("行为定义草稿");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("团队 A");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("成员 Alpha");
     expect(screen.getAllByRole("button", { name: "测试运行" }).length).toBeGreaterThan(0);
 
     await waitFor(() => {
@@ -1723,15 +1736,19 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "← 团队 A" })).toBeTruthy();
-    expect(screen.getByText(/成员 Alpha/)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("团队 A");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("成员 Alpha");
 
     await replaceStudioRoute(
       "/studio?scopeId=scope-b&scopeLabel=%E5%9B%A2%E9%98%9F+B&memberId=service-beta&memberLabel=%E6%88%90%E5%91%98+Beta&tab=workflows"
     );
 
-    expect(await screen.findByRole("button", { name: "← 团队 B" })).toBeTruthy();
-    expect(screen.getByText(/成员 Beta/)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("行为定义");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("浏览团队内的行为定义");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("团队 B");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("成员 Beta");
     expect(screen.getByRole("heading", { name: "行为定义" })).toBeTruthy();
 
     await waitFor(() => {
@@ -2058,6 +2075,10 @@ describe("StudioPage", () => {
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {
+    const successSpy = jest
+      .spyOn(message, "success")
+      .mockImplementation(() => undefined as any);
+
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
     const editor = await screen.findByLabelText("定义 YAML");
@@ -2088,7 +2109,58 @@ describe("StudioPage", () => {
       );
     });
 
-    expect(await screen.findByText("定义已保存")).toBeTruthy();
+    await waitFor(() => {
+      expect(successSpy).toHaveBeenCalledWith(
+        "已保存到 Workspace/workspace-demo.yaml。",
+      );
+    });
+
+    successSpy.mockRestore();
+  });
+
+  it("keeps Studio workflow saves pinned to the current scope route", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&workflow=workflow-1&tab=studio");
+
+    const editor = await screen.findByLabelText("定义 YAML");
+    fireEvent.change(editor, {
+      target: {
+        value: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
+      },
+    });
+
+    const saveButton = screen.getByRole("button", { name: /^保\s*存$/ });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-1",
+          scopeId: "scope-1",
+          directoryId: "dir-1",
+          workflowName: "workspace-demo",
+        })
+      );
+    });
+  });
+
+  it("keeps the toolbar save action enabled when the draft falls back to the default directory", async () => {
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    await screen.findByText("当前定义");
+
+    const toolbarSaveButton = screen.getByRole("button", { name: /^保\s*存$/ });
+    await waitFor(() => {
+      expect(toolbarSaveButton).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "清空目录" }));
+
+    await waitFor(() => {
+      expect(toolbarSaveButton).toBeEnabled();
+    });
   });
 
   it("starts a blank draft when the Studio route requests draft mode", async () => {
@@ -2118,7 +2190,7 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&workflow=draft&tab=studio");
 
     await waitFor(() => {
-      expect(studioApi.getWorkflow).toHaveBeenCalledWith("draft");
+      expect(studioApi.getWorkflow).toHaveBeenCalledWith("draft", "scope-1");
     });
 
     await waitFor(() => {

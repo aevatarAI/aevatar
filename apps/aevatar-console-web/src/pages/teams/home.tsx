@@ -19,6 +19,7 @@ import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { history } from "@/shared/navigation/history";
 import {
   buildTeamCreateHref,
@@ -39,6 +40,7 @@ import {
   AevatarPageShell,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import ScopeQueryCard from "../scopes/components/ScopeQueryCard";
 import {
@@ -810,10 +812,31 @@ const TeamsHomePage: React.FC = () => {
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
+  const localScopeId = trimOptional(loadRestorableAuthSession()?.user.sub);
+  const locallyResolvedScope = React.useMemo(() => {
+    if (!localScopeId) {
+      return null;
+    }
+
+    return {
+      scopeId: localScopeId,
+      scopeSource: "local-session",
+    };
+  }, [localScopeId]);
   const resolvedScope = React.useMemo(
-    () => resolveStudioScopeContext(authSessionQuery.data),
-    [authSessionQuery.data],
+    () => resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
+    [authSessionQuery.data, locallyResolvedScope],
   );
+  const authSessionIssue = React.useMemo(() => {
+    if (!authSessionQuery.isError) {
+      return "";
+    }
+
+    return describeError(
+      authSessionQuery.error,
+      "登录状态暂时不可用，请刷新后重试。",
+    );
+  }, [authSessionQuery.error, authSessionQuery.isError]);
 
   React.useEffect(() => {
     if (!resolvedScope?.scopeId) {
@@ -1103,6 +1126,23 @@ const TeamsHomePage: React.FC = () => {
             description={partialIssues.join(" ")}
             showIcon
             title="部分团队信号暂时不可见"
+            type="warning"
+          />
+        ) : null}
+
+        {authSessionIssue ? (
+          <Alert
+            description={
+              resolvedScope?.scopeId
+                ? `${authSessionIssue} 当前已回退到本地会话里的 Scope ${resolvedScope.scopeId}。`
+                : authSessionIssue
+            }
+            showIcon
+            title={
+              resolvedScope?.scopeId
+                ? "当前登录态校验失败，已回退到本地 Scope"
+                : "当前登录态校验失败"
+            }
             type="warning"
           />
         ) : null}

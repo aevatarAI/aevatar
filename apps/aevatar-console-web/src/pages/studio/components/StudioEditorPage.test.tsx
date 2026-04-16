@@ -328,6 +328,24 @@ describe('StudioEditorPage', () => {
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
   });
 
+  it('turns the empty canvas state into a direct first-step action', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          draftYaml: '',
+          draftWorkflowName: 'draft',
+          draftFileName: 'draft.yaml',
+          selectedWorkflowId: 'workflow-1',
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '添加第一个步骤' }));
+
+    expect(await screen.findByText('步骤库')).toBeInTheDocument();
+  });
+
   it('disables Ask AI when workflow generation is unavailable', async () => {
     render(
       React.createElement(
@@ -383,6 +401,31 @@ describe('StudioEditorPage', () => {
     expect(screen.getByText('当前定义还没有步骤。')).toBeInTheDocument();
   });
 
+  it('keeps the empty node inspector compact and offers quick pivots', () => {
+    const onSetInspectorTab = jest.fn();
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          inspectorTab: 'node',
+          onSetInspectorTab,
+        }) as any,
+      ),
+    );
+
+    expect(screen.getByTestId('studio-inspector-shell')).toHaveStyle({
+      width: '272px',
+    });
+    expect(screen.getByTestId('studio-inspector-empty-state')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '管理角色' }));
+    fireEvent.click(screen.getByRole('button', { name: '查看 YAML 草稿' }));
+
+    expect(onSetInspectorTab).toHaveBeenNthCalledWith(1, 'roles');
+    expect(onSetInspectorTab).toHaveBeenNthCalledWith(2, 'yaml');
+  });
+
   it('hides legacy recommendation notices for dirty drafts', async () => {
     render(
       React.createElement(
@@ -398,7 +441,7 @@ describe('StudioEditorPage', () => {
     expect(screen.queryByText('下一步：保存定义')).not.toBeInTheDocument();
   });
 
-  it('keeps scope binding details collapsed until requested', async () => {
+  it('keeps the unpublished team entry summary collapsed with no details toggle', async () => {
     render(
       React.createElement(
         StudioEditorPage,
@@ -409,17 +452,10 @@ describe('StudioEditorPage', () => {
     );
 
     expect(await screen.findByText('未发布默认入口')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '绑定团队入口' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /查看详情/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /收起详情/i })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getAllByRole('button', { name: /查看详情/i })[0]);
-
-    expect(await screen.findByRole('button', { name: /收起详情/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getAllByRole('button', { name: /收起详情/i })[0]);
-
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /收起详情/i })).not.toBeInTheDocument();
-    });
+    expect(screen.queryByText('尚未发布默认入口')).not.toBeInTheDocument();
   });
 
   it('keeps the published team entry panel visible without recommendation cards', async () => {
@@ -448,7 +484,12 @@ describe('StudioEditorPage', () => {
 
     expect(await screen.findByText('Workspace Demo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /查看详情/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看成员' })).not.toBeInTheDocument();
     expect(screen.queryByText('下一步：打开测试台')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /查看详情/i }));
+
+    expect(await screen.findByRole('button', { name: '查看成员' })).toBeInTheDocument();
   });
 
   it('adds another GAgent endpoint before binding', async () => {

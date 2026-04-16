@@ -18,6 +18,7 @@ import {
   Button,
   Modal,
   Space,
+  message,
 } from 'antd';
 import React, {
   useCallback,
@@ -92,6 +93,7 @@ import type {
   StudioRuntimeTestResult,
   StudioValidationFinding,
   StudioWorkflowDocument,
+  StudioWorkflowFile,
   StudioWorkflowDirectory,
   StudioWorkspaceSettings,
 } from '@/shared/studio/models';
@@ -206,6 +208,23 @@ function trimOptional(value: string | null | undefined): string {
 
 function normalizeComparableText(value: string | null | undefined): string {
   return trimOptional(value).toLowerCase();
+}
+
+function describeSavedWorkflowLocation(
+  workflow: Pick<StudioWorkflowFile, 'directoryLabel' | 'fileName' | 'filePath'>,
+): string {
+  const directoryLabel = trimOptional(workflow.directoryLabel);
+  const fileName = trimOptional(workflow.fileName);
+  if (directoryLabel && fileName) {
+    return `${directoryLabel}/${fileName}`;
+  }
+
+  const filePath = trimOptional(workflow.filePath);
+  if (filePath) {
+    return filePath;
+  }
+
+  return directoryLabel || fileName || '当前工作区';
 }
 
 function describeScopeBindingTarget(result: {
@@ -1242,15 +1261,16 @@ const StudioPage: React.FC = () => {
     trimOptional(appContextQuery.data?.scopeId) ||
     trimOptional(authSessionQuery.data?.scopeId) ||
     '';
+  const workflowWorkspaceContextKey = resolvedStudioScopeId || 'workspace';
   const workspaceSettingsQuery = useQuery({
-    queryKey: ['studio-workspace-settings'],
+    queryKey: ['studio-workspace-settings', workflowWorkspaceContextKey],
     enabled: studioHostReady,
-    queryFn: () => studioApi.getWorkspaceSettings(),
+    queryFn: () => studioApi.getWorkspaceSettings(resolvedStudioScopeId),
   });
   const workflowsQuery = useQuery({
-    queryKey: ['studio-workspace-workflows'],
+    queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
     enabled: studioHostReady,
-    queryFn: () => studioApi.listWorkflows(),
+    queryFn: () => studioApi.listWorkflows(resolvedStudioScopeId),
   });
   const executionsQuery = useQuery({
     queryKey: ['studio-executions'],
@@ -1283,9 +1303,9 @@ const StudioPage: React.FC = () => {
     queryFn: () => studioApi.getSettings(),
   });
   const selectedWorkflowQuery = useQuery({
-    queryKey: ['studio-workflow', selectedWorkflowId],
+    queryKey: ['studio-workflow', workflowWorkspaceContextKey, selectedWorkflowId],
     enabled: studioHostReady && Boolean(selectedWorkflowId),
-    queryFn: () => studioApi.getWorkflow(selectedWorkflowId),
+    queryFn: () => studioApi.getWorkflow(selectedWorkflowId, resolvedStudioScopeId),
   });
   const selectedExecutionQuery = useQuery({
     queryKey: ['studio-execution', selectedExecutionId],
@@ -1390,7 +1410,7 @@ const StudioPage: React.FC = () => {
     [workspaceSettingsQuery.data?.directories],
   );
   const activeWorkflowSourceKey = selectedWorkflowId
-    ? `workspace:${selectedWorkflowId}`
+    ? `workflow:${workflowWorkspaceContextKey}:${selectedWorkflowId}`
     : templateWorkflow
       ? `template:${templateWorkflow}`
       : draftMode === 'new' && legacySource === 'playground'
@@ -1758,9 +1778,10 @@ const StudioPage: React.FC = () => {
   ]);
 
   const activeWorkflowName = draftWorkflowName || sourceWorkflowName;
+  const resolvedDraftDirectoryId = draftDirectoryId || defaultDirectoryId;
   const activeDirectoryLabel =
     workspaceSettingsQuery.data?.directories.find(
-      (item) => item.directoryId === draftDirectoryId,
+      (item) => item.directoryId === resolvedDraftDirectoryId,
     )?.label ||
     activeWorkflowFile?.directoryLabel ||
     'No directory';
@@ -1815,11 +1836,12 @@ const StudioPage: React.FC = () => {
     (draftYaml !== sourceYaml ||
       draftWorkflowName !== sourceWorkflowName ||
       draftFileName !== sourceFileName ||
-      draftDirectoryId !== sourceDirectoryId);
+      resolvedDraftDirectoryId !== sourceDirectoryId);
   const canSaveWorkflow =
+    studioHostReady &&
     Boolean(draftYaml.trim()) &&
     Boolean(draftWorkflowName.trim()) &&
-    Boolean(draftDirectoryId) &&
+    Boolean(resolvedDraftDirectoryId) &&
     !savePending;
   const canOpenRunWorkflow =
     Boolean(draftYaml.trim()) &&
@@ -1890,7 +1912,10 @@ const StudioPage: React.FC = () => {
           );
         }
 
-        const workflowFile = await studioApi.getWorkflow(workflowId);
+        const workflowFile = await studioApi.getWorkflow(
+          workflowId,
+          resolvedStudioScopeId,
+        );
         const childDocument =
           workflowFile.document ??
           (
@@ -1917,6 +1942,7 @@ const StudioPage: React.FC = () => {
     availableStepTypes,
     draftWorkflowName,
     draftYaml,
+    resolvedStudioScopeId,
     visibleWorkflowSummaries,
   ]);
   const recentPromptHistory = useMemo(
@@ -2276,7 +2302,7 @@ const StudioPage: React.FC = () => {
   );
 
   const handleSaveDraft = async () => {
-    const directoryId = draftDirectoryId || defaultDirectoryId;
+    const directoryId = resolvedDraftDirectoryId;
     if (!directoryId) {
       setSaveNotice({
         type: 'error',
@@ -2300,6 +2326,7 @@ const StudioPage: React.FC = () => {
     try {
       const savedWorkflow = await studioApi.saveWorkflow({
         workflowId: activeWorkflowFile?.workflowId || undefined,
+        scopeId: resolvedStudioScopeId || undefined,
         directoryId,
         workflowName,
         fileName: draftFileName,
@@ -2311,18 +2338,20 @@ const StudioPage: React.FC = () => {
       });
 
       queryClient.setQueryData(
-        ['studio-workflow', savedWorkflow.workflowId],
+        ['studio-workflow', workflowWorkspaceContextKey, savedWorkflow.workflowId],
         savedWorkflow,
       );
       await queryClient.invalidateQueries({
-        queryKey: ['studio-workspace-workflows'],
+        queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
       });
 
       setSelectedWorkflowId(savedWorkflow.workflowId);
       setTemplateWorkflow('');
       setDraftMode('');
       setLegacySource('');
-      setDraftSourceKey(`workspace:${savedWorkflow.workflowId}`);
+      setDraftSourceKey(
+        `workflow:${workflowWorkspaceContextKey}:${savedWorkflow.workflowId}`,
+      );
       setDraftYaml(savedWorkflow.yaml);
       setDraftWorkflowName(savedWorkflow.name);
       setDraftFileName(savedWorkflow.fileName);
@@ -2332,10 +2361,10 @@ const StudioPage: React.FC = () => {
           draftWorkflowLayout ||
           buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
       );
-      setSaveNotice({
-        type: 'success',
-        message: `Saved ${savedWorkflow.name} to ${savedWorkflow.directoryLabel}.`,
-      });
+      setSaveNotice(null);
+      void message.success(
+        `已保存到 ${describeSavedWorkflowLocation(savedWorkflow)}。`,
+      );
     } catch (error) {
       setSaveNotice({
         type: 'error',
@@ -3510,7 +3539,7 @@ const StudioPage: React.FC = () => {
       });
       queryClient.setQueryData(['studio-settings'], response);
       queryClient.setQueryData(
-        ['studio-workspace-settings'],
+        ['studio-workspace-settings', workflowWorkspaceContextKey],
         (current: StudioWorkspaceSettings | undefined) =>
           current
             ? {
@@ -4377,12 +4406,6 @@ const StudioPage: React.FC = () => {
       : workspacePage === 'studio' && studioView === 'editor'
         ? 'editor'
         : null;
-  const workflowWorkspaceSectionLabel =
-    workflowWorkspaceSection === 'browser'
-      ? '定义列表'
-      : workflowWorkspaceSection === 'editor'
-        ? '编辑草稿'
-        : '';
   const workflowWorkspaceSwitcher =
     workflowWorkspaceSection ? (
       <div
@@ -4473,22 +4496,44 @@ const StudioPage: React.FC = () => {
     routeState.scopeLabel ||
     scopeBindingQuery.data?.displayName ||
     resolvedStudioScopeId;
-  const studioContextMemberLabel =
-    routeState.memberLabel ||
-    (workspacePage === 'studio' ? activeWorkflowName || templateWorkflow : '');
+  const studioContextPrimaryTitle =
+    workspacePage === 'studio' && studioView === 'editor'
+      ? activeWorkflowName || templateWorkflow || '未命名草稿'
+      : workspacePage === 'studio' && studioView === 'execution'
+        ? activeWorkflowName || templateWorkflow || '测试运行'
+        : pageTitle;
+  const studioContextDescriptor =
+    workspacePage === 'studio' && studioView === 'editor'
+      ? '行为定义草稿'
+      : workspacePage === 'studio' && studioView === 'execution'
+        ? '测试运行'
+        : workspacePage === 'workflows'
+          ? '浏览团队内的行为定义'
+          : workspacePage === 'scripts'
+            ? '编写与发布 scope 感知脚本'
+            : workspacePage === 'roles'
+              ? '管理当前团队的 Agent 角色'
+              : workspacePage === 'connectors'
+                ? '管理团队可用集成'
+                : '管理 Studio 编辑器设置';
+  const studioContextMetaParts = [
+    studioContextDescriptor,
+    studioContextScopeLabel,
+    routeState.memberLabel &&
+    routeState.memberLabel !== studioContextPrimaryTitle &&
+    routeState.memberLabel !== studioContextScopeLabel
+      ? routeState.memberLabel
+      : '',
+    scopeBindingQuery.data?.serviceId || '',
+  ]
+    .map((value) => trimOptional(value))
+    .filter(Boolean);
   const currentStudioReturnTo =
     typeof window === 'undefined'
       ? ''
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
-  const studioContextCode = [
-    resolvedStudioScopeId,
-    scopeBindingQuery.data?.serviceId,
-  ]
-    .map((value) => trimOptional(value))
-    .filter(Boolean)
-    .join(' · ');
   const studioContextBar = (
     <div
       style={{
@@ -4497,11 +4542,12 @@ const StudioPage: React.FC = () => {
         borderBottom: '1px solid #f0f0f0',
         display: 'flex',
         gap: 12,
-        minHeight: 44,
-        padding: '0 16px',
+        minHeight: 64,
+        padding: '10px 16px',
       }}
     >
       <button
+        aria-label="返回团队"
         type="button"
         onClick={() =>
           history.push(
@@ -4527,45 +4573,39 @@ const StudioPage: React.FC = () => {
           padding: 0,
         }}
       >
-        ← {studioContextScopeLabel || '返回团队'}
+        ← 返回团队
       </button>
       <div
         style={{
-          alignItems: 'center',
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
+          display: 'grid',
+          gap: 4,
           minWidth: 0,
         }}
       >
-        <span
+        <div
+          data-testid="studio-context-title"
           style={{
-            color: '#8c8c8c',
-            fontSize: 13,
-            lineHeight: '20px',
+            color: '#1d2129',
+            fontSize: 14,
+            fontWeight: 700,
+            lineHeight: '22px',
+            minWidth: 0,
           }}
         >
-          / <b style={{ color: '#1d2129' }}>
-            {studioContextMemberLabel || studioContextScopeLabel || '当前团队'}
-          </b>{' '}
-          / <b style={{ color: '#1d2129' }}>{pageTitle}</b>
-          {workflowWorkspaceSectionLabel ? (
-            <>
-              {' '}
-              / <span>{workflowWorkspaceSectionLabel}</span>
-            </>
-          ) : null}
-        </span>
-        {studioContextCode ? (
-          <code
+          {studioContextPrimaryTitle}
+        </div>
+        {studioContextMetaParts.length > 0 ? (
+          <div
+            data-testid="studio-context-meta"
             style={{
               color: '#8c8c8c',
-              fontFamily: '"SF Mono", "JetBrains Mono", monospace',
-              fontSize: 11,
+              fontSize: 12,
+              lineHeight: '18px',
+              minWidth: 0,
             }}
           >
-            {studioContextCode}
-          </code>
+            {studioContextMetaParts.join(' · ')}
+          </div>
         ) : null}
       </div>
       {studioContextActions ? (

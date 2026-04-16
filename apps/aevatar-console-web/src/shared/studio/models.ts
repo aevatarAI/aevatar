@@ -104,6 +104,7 @@ export interface StudioWorkflowFile {
 
 export interface StudioSaveWorkflowInput {
   readonly workflowId?: string | null;
+  readonly scopeId?: string | null;
   readonly directoryId: string;
   readonly workflowName: string;
   readonly fileName?: string | null;
