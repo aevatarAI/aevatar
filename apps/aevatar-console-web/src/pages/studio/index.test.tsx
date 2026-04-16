@@ -197,8 +197,8 @@ function resetMockState(): void {
     document: mockParsedDocument,
   };
   mockConnectorCatalog = {
-    homeDirectory: "/tmp/.aevatar",
-    filePath: "/tmp/.aevatar/connectors.json",
+    homeDirectory: "actor://connector-catalog",
+    filePath: "actor://connector-catalog/connectors",
     fileExists: true,
     connectors: [
       {
@@ -235,15 +235,15 @@ function resetMockState(): void {
     ],
   };
   mockConnectorDraftResponse = {
-    homeDirectory: "/tmp/.aevatar",
-    filePath: "/tmp/.aevatar/connectors.draft.json",
+    homeDirectory: "actor://connector-catalog",
+    filePath: "actor://connector-catalog/connectors/draft",
     fileExists: false,
     updatedAtUtc: null,
     draft: null,
   };
   mockRoleCatalog = {
-    homeDirectory: "/tmp/.aevatar",
-    filePath: "/tmp/.aevatar/roles.json",
+    homeDirectory: "actor://role-catalog",
+    filePath: "actor://role-catalog/roles",
     fileExists: true,
     roles: [
       {
@@ -257,8 +257,8 @@ function resetMockState(): void {
     ],
   };
   mockRoleDraftResponse = {
-    homeDirectory: "/tmp/.aevatar",
-    filePath: "/tmp/.aevatar/roles.draft.json",
+    homeDirectory: "actor://role-catalog",
+    filePath: "actor://role-catalog/roles/draft",
     fileExists: false,
     updatedAtUtc: null,
     draft: null,

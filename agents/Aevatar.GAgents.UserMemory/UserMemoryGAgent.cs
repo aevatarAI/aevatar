@@ -17,8 +17,10 @@ namespace Aevatar.GAgents.UserMemory;
 ///   2. If no same-category entry remains, evict the globally oldest entry.
 ///
 /// </summary>
-public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
+public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>, IProjectedActor
 {
+    public static string ProjectionKind => "user-memory";
+
     internal const int MaxEntries = 50;
 
     [EventHandler(EndpointName = "addMemoryEntry")]

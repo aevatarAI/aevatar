@@ -405,7 +405,7 @@ export const settings = {
   testRuntime: (data: any) => request<any>('/settings/runtime/test', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-/* ─── User Config (per-user, chrono-storage backed) ─── */
+/* ─── User Config (per-user, actor-backed via UserConfigGAgent) ─── */
 export const userConfig = {
   get:    ()          => request<any>('/user-config'),
   save:   (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),

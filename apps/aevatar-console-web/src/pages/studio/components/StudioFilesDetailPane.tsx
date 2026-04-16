@@ -37,8 +37,8 @@ type QueryState<T> = {
 
 type StudioFileKey =
   | 'settings.json'
-  | 'roles.json'
-  | 'connectors.json'
+  | 'role-catalog'
+  | 'connector-catalog'
   | `chat-history:${string}`
   | `workflow:${string}`
   | `script:${string}`;
@@ -1196,7 +1196,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       setRoleCatalogDraft(response.roles.map(createRoleCatalogItem));
       setRoleNotice({
         type: 'success',
-        message: 'roles.json saved.',
+        message: 'Role catalog saved.',
       });
     } catch (error) {
       setRoleNotice({
@@ -1204,7 +1204,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         message:
           error instanceof Error
             ? error.message
-            : 'Failed to save roles.json.',
+            : 'Failed to save role catalog.',
       });
     } finally {
       setRolePending(false);
@@ -1233,7 +1233,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       setConnectorCatalogDraft(response.connectors.map(toConnectorCatalogItem));
       setConnectorNotice({
         type: 'success',
-        message: 'connectors.json saved.',
+        message: 'Connector catalog saved.',
       });
     } catch (error) {
       setConnectorNotice({
@@ -1241,7 +1241,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         message:
           error instanceof Error
             ? error.message
-            : 'Failed to save connectors.json.',
+            : 'Failed to save connector catalog.',
       });
     } finally {
       setConnectorPending(false);
@@ -1341,7 +1341,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       <div style={cliEditorShellStyle}>
         <div style={editorHeaderRowStyle}>
           <div>
-            <div style={editorHeaderLabelStyle}>roles.json</div>
+            <div style={editorHeaderLabelStyle}>role-catalog</div>
             <div style={editorHeaderTitleStyle}>Role Catalog</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -1375,7 +1375,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <Alert
             type="error"
             showIcon
-            message="Failed to load roles.json"
+            message="Failed to load role catalog"
             description={describeError(roles.error)}
           />
         ) : roles.isLoading ? (
@@ -1616,7 +1616,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       <div style={cliEditorShellStyle}>
         <div style={editorHeaderRowStyle}>
           <div>
-            <div style={editorHeaderLabelStyle}>connectors.json</div>
+            <div style={editorHeaderLabelStyle}>connector-catalog</div>
             <div style={editorHeaderTitleStyle}>Connector Catalog</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -1691,7 +1691,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <Alert
             type="error"
             showIcon
-            message="Failed to load connectors.json"
+            message="Failed to load connector catalog"
             description={describeError(connectors.error)}
           />
         ) : connectors.isLoading ? (
@@ -2644,11 +2644,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     return renderSettingsPanel();
   }
 
-  if (selectedFile === 'roles.json') {
+  if (selectedFile === 'role-catalog') {
     return renderRolesPanel();
   }
 
-  if (selectedFile === 'connectors.json') {
+  if (selectedFile === 'connector-catalog') {
     return renderConnectorsPanel();
   }
 

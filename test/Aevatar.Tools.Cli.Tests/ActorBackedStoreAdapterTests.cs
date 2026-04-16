@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
@@ -10,6 +12,7 @@ using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
@@ -74,6 +77,31 @@ public sealed class ActorBackedStoreAdapterTests
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
             Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    /// <summary>
+    /// Fake dispatch port that forwards envelopes to the FakeActor held by
+    /// the accompanying FakeActorRuntime so existing tests that assert on
+    /// <c>runtime.Actors[id].ReceivedEnvelopes</c> keep working after the
+    /// stores switched to <c>IActorDispatchPort.DispatchAsync</c>.
+    /// </summary>
+    private sealed class FakeActorDispatchPort : IActorDispatchPort
+    {
+        private readonly FakeActorRuntime _runtime;
+
+        public FakeActorDispatchPort(FakeActorRuntime runtime)
+        {
+            _runtime = runtime;
+        }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            if (_runtime.Actors.TryGetValue(actorId, out var actor))
+            {
+                return actor.HandleEventAsync(envelope, ct);
+            }
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>
@@ -162,6 +190,30 @@ public sealed class ActorBackedStoreAdapterTests
     private static FakeProjectionDocumentReader<TDoc> EmptyReader<TDoc>()
         where TDoc : class, IProjectionReadModel
         => new();
+
+    /// <summary>
+    /// Test bootstrap that only ensures the actor via the supplied
+    /// <see cref="FakeActorRuntime"/>. Adapter tests don't observe the
+    /// projection activation side-effect, so we skip that step and focus on
+    /// the actor-dispatch + document-read behaviour the store is
+    /// responsible for.
+    /// </summary>
+    private sealed class FakeStudioActorBootstrap : IStudioActorBootstrap
+    {
+        private readonly FakeActorRuntime _runtime;
+
+        public FakeStudioActorBootstrap(FakeActorRuntime runtime)
+        {
+            _runtime = runtime;
+        }
+
+        public async Task<IActor> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
+            where TAgent : IAgent, IProjectedActor
+        {
+            var existing = await _runtime.GetAsync(actorId);
+            return existing ?? await _runtime.CreateAsync<TAgent>(actorId, ct);
+        }
+    }
 
     private static FakeProjectionDocumentReader<UserMemoryCurrentStateDocument> PackedReader(
         string actorId, UserMemoryState state)
@@ -285,7 +337,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            runtime, scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         var groups = await store.GetAsync();
 
@@ -311,7 +363,7 @@ public sealed class ActorBackedStoreAdapterTests
         });
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
-        var store = new ActorBackedGAgentActorStore(runtime, scopeResolver, reader, logger);
+        var store = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var groups = await store.GetAsync();
 
@@ -332,7 +384,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            runtime, scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         await store.AddActorAsync("MyGAgent", "actor-123");
 
@@ -359,7 +411,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            runtime, scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         await store.RemoveActorAsync("MyGAgent", "actor-456");
 
@@ -396,7 +448,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var meta = new ConversationMeta(
             Id: "conv-1", Title: "Test", ServiceId: "svc",
@@ -426,7 +478,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         await store.DeleteConversationAsync("scope-1", "conv-1");
 
@@ -443,7 +495,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var index = await store.GetIndexAsync("scope-1");
 
@@ -475,7 +527,7 @@ public sealed class ActorBackedStoreAdapterTests
             StateRoot = Any.Pack(state),
         });
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var index = await store.GetIndexAsync("scope-1");
 
@@ -496,7 +548,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
+        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
 
         await store.AddAsync("room-1", "agent-abc", "Alice");
 
@@ -514,7 +566,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
+        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
 
         await store.RemoveRoomAsync("room-1");
 
@@ -529,7 +581,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
+        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
 
         await store.RemoveParticipantAsync("room-1", "agent-abc");
 
@@ -545,7 +597,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
+        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
 
         var participants = await store.ListAsync("room-1");
 
@@ -574,7 +626,7 @@ public sealed class ActorBackedStoreAdapterTests
             StateRoot = Any.Pack(state),
         });
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, reader, logger);
+        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), reader, logger);
 
         var participants = await store.ListAsync("room-1");
 
@@ -593,7 +645,7 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
 
         var entry = await store.AddEntryAsync("preference", "Dark mode", "explicit");
 
@@ -616,7 +668,7 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
 
         var doc = await store.GetAsync();
 
@@ -640,7 +692,7 @@ public sealed class ActorBackedStoreAdapterTests
         var reader = PackedReader("user-memory-user-1", state);
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, reader, logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var doc = await store.GetAsync();
 
@@ -676,7 +728,7 @@ public sealed class ActorBackedStoreAdapterTests
         var reader = PackedReader("user-memory-user-1", state);
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, reader, logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var doc = await store.GetAsync();
 
@@ -706,7 +758,7 @@ public sealed class ActorBackedStoreAdapterTests
         var reader = PackedReader("user-memory-user-1", state);
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, reader, logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         await store.SaveAsync(new UserMemoryDocument(
             1,
@@ -737,7 +789,7 @@ public sealed class ActorBackedStoreAdapterTests
         var reader = PackedReader("user-memory-user-1", state);
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, reader, logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var removed = await store.RemoveEntryAsync("missing");
 
@@ -770,7 +822,7 @@ public sealed class ActorBackedStoreAdapterTests
         var reader = PackedReader("user-memory-user-1", state);
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, reader, logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var prompt = await store.BuildPromptSectionAsync(70);
 
@@ -787,7 +839,7 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver();
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
 
         var prompt = await store.BuildPromptSectionAsync();
 
@@ -800,7 +852,7 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = null };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(runtime, scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
 
         var act = () => store.AddEntryAsync("preference", "test", "explicit");
 
@@ -819,7 +871,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
 
         var catalog = new StoredConnectorCatalog(
             HomeDirectory: "test",
@@ -860,7 +912,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
 
         var catalog = await store.GetConnectorCatalogAsync();
 
@@ -876,7 +928,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
 
         var act = () => store.ImportLocalCatalogAsync();
 
@@ -904,7 +956,7 @@ public sealed class ActorBackedStoreAdapterTests
         };
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
 
         var imported = await store.ImportLocalCatalogAsync();
 
@@ -925,7 +977,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
 
         var draft = await store.GetConnectorDraftAsync();
 
@@ -961,7 +1013,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, connReader, logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, connReader, logger);
 
         var draft = await store.GetConnectorDraftAsync();
 
@@ -981,7 +1033,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
         var updatedAt = DateTimeOffset.UtcNow;
         var draft = new StoredConnectorDraft(
             HomeDirectory: "test",
@@ -1013,7 +1065,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
 
         await store.DeleteConnectorDraftAsync();
 
@@ -1035,7 +1087,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         var catalog = new StoredRoleCatalog(
             HomeDirectory: "test",
@@ -1065,7 +1117,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         await store.DeleteRoleDraftAsync();
 
@@ -1080,7 +1132,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         var catalog = await store.GetRoleCatalogAsync();
 
@@ -1096,7 +1148,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         var act = () => store.ImportLocalCatalogAsync();
 
@@ -1120,7 +1172,7 @@ public sealed class ActorBackedStoreAdapterTests
         };
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         var imported = await store.ImportLocalCatalogAsync();
 
@@ -1162,7 +1214,7 @@ public sealed class ActorBackedStoreAdapterTests
         });
         var convReader = PackedReader("chat-scope-1-conv-1", state);
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, EmptyReader<ChatHistoryIndexCurrentStateDocument>(), convReader, logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), convReader, logger);
 
         var messages = await store.GetMessagesAsync("scope-1", "conv-1");
 
@@ -1181,7 +1233,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var messages = await store.GetMessagesAsync("scope-1", "conv-1");
 
@@ -1209,7 +1261,7 @@ public sealed class ActorBackedStoreAdapterTests
         });
         var indexReader = PackedReader("chat-index-scope-1", state);
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var index = await store.GetIndexAsync("scope-1");
 
@@ -1223,7 +1275,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         await store.SaveMessagesAsync(
             "scope-1",
@@ -1265,7 +1317,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(runtime, EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         await store.DeleteConversationAsync("scope-1", "conv-1");
 
@@ -1287,7 +1339,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         var draft = new StoredRoleDraft(
             HomeDirectory: "test",
@@ -1313,7 +1365,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         var draft = await store.GetRoleDraftAsync();
 
@@ -1346,7 +1398,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, roleReader, logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, roleReader, logger);
 
         var draft = await store.GetRoleDraftAsync();
 
@@ -1365,7 +1417,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
 
         await store.DeleteRoleDraftAsync();
 
@@ -1395,7 +1447,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
         var store = new ActorBackedRoleCatalogStore(
-            runtime, scopeResolver, workspaceStore, roleReader, logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, roleReader, logger);
 
         var catalog = await store.GetRoleCatalogAsync();
 
@@ -1432,7 +1484,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, connReader, logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, connReader, logger);
 
         var catalog = await store.GetConnectorCatalogAsync();
 
@@ -1500,7 +1552,7 @@ public sealed class ActorBackedStoreAdapterTests
         var workspaceStore = new StubWorkspaceStore();
         var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
         var store = new ActorBackedConnectorCatalogStore(
-            runtime, scopeResolver, workspaceStore, connReader, logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, connReader, logger);
 
         var catalog = await store.GetConnectorCatalogAsync();
 
@@ -1527,11 +1579,11 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var scopeA = new FakeScopeResolver { ScopeIdToReturn = "scope-a" };
-        var storeA = new ActorBackedGAgentActorStore(runtime, scopeA, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        var storeA = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeA, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
         await storeA.AddActorAsync("MyAgent", "actor-1");
 
         var scopeB = new FakeScopeResolver { ScopeIdToReturn = "scope-b" };
-        var storeB = new ActorBackedGAgentActorStore(runtime, scopeB, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        var storeB = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeB, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
         await storeB.AddActorAsync("MyAgent", "actor-2");
 
         runtime.Actors.Should().ContainKey("gagent-registry-scope-a");

@@ -315,7 +315,8 @@ public static class ScopeGAgentEndpoints
                 isNewActor = true;
             }
 
-            // Persist newly created actor to chrono-storage so it appears in actors.json
+            // Persist newly created actor to the actor-backed GAgent actor store so it is
+            // visible to scope-level listings.
             if (isNewActor)
             {
                 try

@@ -15,18 +15,21 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// </summary>
 internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IStudioActorBootstrap _bootstrap;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> _indexDocumentReader;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
     private readonly ILogger<ActorBackedChatHistoryStore> _logger;
 
     public ActorBackedChatHistoryStore(
-        IActorRuntime runtime,
+        IStudioActorBootstrap bootstrap,
+        IActorDispatchPort dispatchPort,
         IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> indexDocumentReader,
         IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
         ILogger<ActorBackedChatHistoryStore> logger)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _indexDocumentReader = indexDocumentReader ?? throw new ArgumentNullException(nameof(indexDocumentReader));
         _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -79,7 +82,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
         foreach (var msg in messages)
             replaceEvt.Messages.Add(ToStoredChatMessageProto(msg));
 
-        await ActorCommandDispatcher.SendAsync(conversationActor, replaceEvt, ct);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, conversationActor, replaceEvt, ct);
     }
 
     public async Task DeleteConversationAsync(
@@ -92,7 +95,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
             ConversationId = conversationId,
             ScopeId = scopeId,
         };
-        await ActorCommandDispatcher.SendAsync(conversationActor, deleteEvt, ct);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, conversationActor, deleteEvt, ct);
     }
 
     // ── Actor resolution ───────────────────────────────────────
@@ -100,9 +103,12 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
     private async Task<IActor> EnsureConversationActorAsync(
         string scopeId, string conversationId, CancellationToken ct)
     {
-        var actorId = ConversationActorId(scopeId, conversationId);
-        var actor = await _runtime.GetAsync(actorId);
-        return actor ?? await _runtime.CreateAsync<ChatConversationGAgent>(actorId, ct);
+        // The conversation actor forwards events to the per-scope index
+        // actor internally, so we bootstrap both so their projections
+        // materialize. Ordering doesn't matter; each call is idempotent.
+        await _bootstrap.EnsureAsync<ChatHistoryIndexGAgent>(IndexActorId(scopeId), ct);
+        return await _bootstrap.EnsureAsync<ChatConversationGAgent>(
+            ConversationActorId(scopeId, conversationId), ct);
     }
 
     // ── Actor ID conventions ───────────────────────────────────
