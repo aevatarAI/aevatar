@@ -1442,6 +1442,10 @@ function formatScopeBindingRevisionTimestamp(
 type StudioScopeBindingPanelProps = {
   readonly scopeId?: string;
   readonly binding?: StudioScopeBindingStatus;
+  readonly teamCreation?: {
+    readonly teamName: string;
+    readonly entryName: string;
+  } | null;
   readonly loading: boolean;
   readonly error: unknown;
   readonly pendingRevisionId: string;
@@ -1457,6 +1461,7 @@ type StudioScopeBindingPanelProps = {
 const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   scopeId,
   binding,
+  teamCreation,
   loading,
   error,
   pendingRevisionId,
@@ -1481,6 +1486,11 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
     binding?.primaryActorId ||
     '';
   const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const isTeamCreationMode = Boolean(teamCreation);
+  const teamCreationTeamName =
+    teamCreation?.teamName.trim() || teamCreation?.entryName.trim() || '未命名团队';
+  const teamCreationEntryName =
+    teamCreation?.entryName.trim() || teamCreation?.teamName.trim() || '未命名入口';
   const bindingStateColor = loading
     ? 'processing'
     : error
@@ -1496,13 +1506,26 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
         ? '已发布'
         : '未发布';
   const bindingSummary = loading
-    ? '正在读取当前团队入口状态。'
+    ? isTeamCreationMode
+      ? '正在读取当前 scope 默认入口状态。'
+      : '正在读取当前团队入口状态。'
     : error
-      ? '暂时无法读取当前团队入口。'
+      ? isTeamCreationMode
+        ? '暂时无法读取当前 scope 默认入口。'
+        : '暂时无法读取当前团队入口。'
       : binding?.available
-        ? `默认入口指向 ${currentTarget || binding.displayName || binding.serviceId}。`
-        : '当前还没有发布默认入口。';
-  const canShowBindingDetails = Boolean(binding?.available);
+        ? isTeamCreationMode
+          ? `当前 scope 默认入口仍指向 ${currentTarget || binding.displayName || binding.serviceId}。发布后会更新为 ${teamCreationEntryName}。`
+          : `默认入口指向 ${currentTarget || binding.displayName || binding.serviceId}。`
+        : isTeamCreationMode
+          ? `当前 scope 还没有默认入口。发布后会创建入口 ${teamCreationEntryName}。`
+          : '当前还没有发布默认入口。';
+  const canShowBindingDetails = Boolean(binding?.available) && !isTeamCreationMode;
+  const publishActionLabel = isTeamCreationMode
+    ? '发布团队入口'
+    : binding?.available
+      ? '更新团队入口'
+      : '绑定团队入口';
   const canInspectPublishedMembers = Boolean(
     currentRevision?.primaryActorId ||
       currentRevision?.staticActorTypeName ||
@@ -1776,12 +1799,14 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
         >
           <Space wrap size={[8, 8]}>
             <Typography.Text style={workflowSectionHeadingStyle}>
-              发布到团队
+              {isTeamCreationMode ? '创建团队入口' : '发布到团队'}
             </Typography.Text>
             <Typography.Text strong style={{ fontSize: 16, color: '#1F2937' }}>
-              {binding?.available
-                ? binding.displayName || binding.serviceId
-                : '未发布默认入口'}
+              {isTeamCreationMode
+                ? teamCreationTeamName
+                : binding?.available
+                  ? binding.displayName || binding.serviceId
+                  : '未发布默认入口'}
             </Typography.Text>
             <Tag color={bindingStateColor}>{bindingStateLabel}</Tag>
             {binding?.available ? (
@@ -1806,6 +1831,11 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
           >
             {bindingSummary}
           </Typography.Text>
+          {isTeamCreationMode ? (
+            <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+              入口草稿：{teamCreationEntryName}
+            </Typography.Text>
+          ) : null}
         </div>
         <Space wrap size={[8, 8]}>
           {onPublishWorkflow ? (
@@ -1817,19 +1847,19 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
               disabled={!canPublishWorkflow}
               onClick={onPublishWorkflow}
             >
-              {binding?.available ? '更新团队入口' : '绑定团队入口'}
+              {publishActionLabel}
             </Button>
-          ) : onOpenBinding ? (
+          ) : onOpenBinding && !isTeamCreationMode ? (
             <Button
               size="small"
               type="default"
               icon={<SafetyCertificateOutlined />}
               onClick={onOpenBinding}
             >
-              {binding?.available ? '更新团队入口' : '绑定团队入口'}
+              {publishActionLabel}
             </Button>
           ) : null}
-          {onPublishWorkflow && onOpenBinding ? (
+          {onPublishWorkflow && onOpenBinding && !isTeamCreationMode ? (
             <Button size="small" type="text" onClick={onOpenBinding}>
               高级设置
             </Button>
@@ -3980,6 +4010,10 @@ export type StudioEditorPageProps = {
   readonly publishPending: boolean;
   readonly canPublishWorkflow: boolean;
   readonly publishNotice: StudioNoticeLike | null;
+  readonly teamCreation?: {
+    readonly teamName: string;
+    readonly entryName: string;
+  } | null;
   readonly scopeBinding?: StudioScopeBindingStatus;
   readonly scopeBindingLoading: boolean;
   readonly scopeBindingError: unknown;
@@ -4099,6 +4133,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   publishPending,
   canPublishWorkflow,
   publishNotice,
+  teamCreation,
   scopeBinding,
   scopeBindingLoading,
   scopeBindingError,
@@ -4814,6 +4849,22 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       />,
     );
   }
+
+  const teamCreationNotice = teamCreation ? (
+    <StudioNoticeCard
+      key="team-creation-notice"
+      type={scopeBinding?.available ? 'warning' : 'info'}
+      title={`你正在创建团队「${teamCreation.teamName}」`}
+      description={
+        <Typography.Text type="secondary">
+          {scopeBinding?.available
+            ? `保存只会写草稿。点击“发布团队入口”后，当前 scope 的默认入口会切换成 ${teamCreation.entryName}。`
+            : `保存只会写草稿。点击“发布团队入口”后，当前 scope 会创建默认入口 ${teamCreation.entryName}。`}
+        </Typography.Text>
+      }
+      compact
+    />
+  ) : null;
 
   const editorFatalNotice = selectedWorkflow.isError ? (
     <StudioNoticeCard
@@ -5693,6 +5744,10 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             </div>
           </Modal>
 
+          {teamCreationNotice ? (
+            <div style={studioNoticeStripStyle}>{teamCreationNotice}</div>
+          ) : null}
+
           {editorStatusItems.length > 0 ? (
             <div style={studioNoticeStripStyle}>{editorStatusItems}</div>
           ) : null}
@@ -5700,6 +5755,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           <StudioScopeBindingPanel
             scopeId={resolvedScopeId}
             binding={scopeBinding}
+            teamCreation={teamCreation}
             loading={scopeBindingLoading}
             error={scopeBindingError}
             pendingRevisionId={bindingActivationRevisionId}

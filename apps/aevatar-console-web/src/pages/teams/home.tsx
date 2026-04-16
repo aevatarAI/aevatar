@@ -242,19 +242,6 @@ function compareRuns(
   return right.runId.localeCompare(left.runId);
 }
 
-function compareServices(
-  left: ServiceCatalogSnapshot,
-  right: ServiceCatalogSnapshot,
-): number {
-  const rightTime = parseTimestamp(right.updatedAt);
-  const leftTime = parseTimestamp(left.updatedAt);
-  if (rightTime !== leftTime) {
-    return rightTime - leftTime;
-  }
-
-  return right.serviceId.localeCompare(left.serviceId);
-}
-
 function isSuccessfulRun(run: ScopeServiceRunSummary | null | undefined): boolean {
   if (!run) {
     return false;
@@ -386,17 +373,15 @@ function resolveScopePreviewService(input: {
   readonly services: readonly ServiceCatalogSnapshot[];
 }): ServiceCatalogSnapshot | null {
   const boundServiceId = trimOptional(input.binding?.serviceId);
-  if (boundServiceId) {
-    const matchedBoundService =
-      input.services.find(
-        (service) => trimOptional(service.serviceId) === boundServiceId,
-      ) ?? null;
-    if (matchedBoundService) {
-      return matchedBoundService;
-    }
+  if (!boundServiceId) {
+    return null;
   }
 
-  return input.services.slice().sort(compareServices)[0] ?? null;
+  return (
+    input.services.find(
+      (service) => trimOptional(service.serviceId) === boundServiceId,
+    ) ?? null
+  );
 }
 
 function resolveRuntimeUnavailable(input: {
@@ -904,19 +889,10 @@ const TeamsHomePage: React.FC = () => {
       }),
     [bindingQuery.data, servicesQuery.data, workflowsQuery.data],
   );
-  const scopePreviewServiceId = React.useMemo(() => {
-    const boundServiceId = trimOptional(bindingQuery.data?.serviceId);
-    if (
-      boundServiceId &&
-      servicesQuery.data?.some(
-        (service) => trimOptional(service.serviceId) === boundServiceId,
-      )
-    ) {
-      return boundServiceId;
-    }
-
-    return servicesQuery.data?.slice().sort(compareServices)[0]?.serviceId ?? boundServiceId;
-  }, [bindingQuery.data?.serviceId, servicesQuery.data]);
+  const scopePreviewServiceId = React.useMemo(
+    () => trimOptional(bindingQuery.data?.serviceId),
+    [bindingQuery.data?.serviceId],
+  );
   const runtimeServiceIds = React.useMemo(() => {
     const normalizedScopePreviewServiceId = trimOptional(scopePreviewServiceId);
     const ordered = normalizedScopePreviewServiceId

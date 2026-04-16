@@ -33,6 +33,19 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?tab=workflows&draft=new');
   });
 
+  it('preserves create-team context when opening a blank Studio draft', () => {
+    expect(
+      buildStudioRoute({
+        teamMode: 'create',
+        teamName: '订单助手团队',
+        entryName: '订单入口',
+        draftMode: 'new',
+      }),
+    ).toBe(
+      '/studio?teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&tab=studio&draft=new',
+    );
+  });
+
   it('supports the dedicated Studio editor tab', () => {
     expect(
       buildStudioRoute({

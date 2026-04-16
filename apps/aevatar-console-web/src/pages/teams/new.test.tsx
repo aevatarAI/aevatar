@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import TeamCreatePage from './new';
@@ -19,6 +19,8 @@ describe('TeamCreatePage', () => {
     expect(screen.getByText('新增后端流')).toBeTruthy();
     expect(screen.getByText('Start Building')).toBeTruthy();
     expect(screen.getByRole('heading', { level: 3, name: 'Studio' })).toBeTruthy();
+    expect(screen.getByLabelText('团队名称')).toBeTruthy();
+    expect(screen.getByLabelText('入口名称')).toBeTruthy();
     expect(
       screen.getAllByRole('button', { name: 'Open Studio' }).length,
     ).toBeGreaterThan(0);
@@ -35,5 +37,33 @@ describe('TeamCreatePage', () => {
     expect(screen.queryByText('默认入口')).toBeNull();
     expect(screen.queryByText('后续页')).toBeNull();
     expect(screen.queryByText('数据源')).toBeNull();
+  });
+
+  it('opens Studio in create-team mode and carries the entered names into the route', async () => {
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    const openStudioButtons = await screen.findAllByRole('button', {
+      name: 'Open Studio',
+    });
+
+    expect(openStudioButtons[0]).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('团队名称'), {
+      target: { value: '订单助手团队' },
+    });
+    fireEvent.change(screen.getByLabelText('入口名称'), {
+      target: { value: '订单入口' },
+    });
+
+    expect(openStudioButtons[0]).toBeEnabled();
+    fireEvent.click(openStudioButtons[0]);
+
+    expect(window.location.pathname).toBe('/studio');
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('teamMode')).toBe('create');
+    expect(params.get('teamName')).toBe('订单助手团队');
+    expect(params.get('entryName')).toBe('订单入口');
+    expect(params.get('tab')).toBe('studio');
+    expect(params.get('draft')).toBe('new');
   });
 });

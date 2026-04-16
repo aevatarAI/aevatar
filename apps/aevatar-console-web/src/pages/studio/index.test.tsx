@@ -1161,11 +1161,18 @@ jest.mock("./components/StudioWorkbenchSections", () => {
     const [runOpen, setRunOpen] = React.useState(false);
     const [askAiOpen, setAskAiOpen] = React.useState(false);
     const title =
-      props.draftMode === "new"
+      props.teamCreation?.teamName
+        ? `创建团队：${props.teamCreation.teamName}`
+        : props.draftMode === "new"
         ? "新建草稿"
         : props.templateWorkflowName
         ? "模板定义"
         : "当前定义";
+    const publishLabel = props.teamCreation
+      ? "发布团队入口"
+      : props.scopeBinding?.available
+      ? "更新团队入口"
+      : "绑定团队入口";
 
     return React.createElement(
       "div",
@@ -1305,7 +1312,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
             disabled: !props.resolvedScopeId || !props.canPublishWorkflow,
             onClick: () => props.onPublishWorkflow?.(),
           },
-          props.scopeBinding?.available ? "更新团队入口" : "绑定团队入口"
+          publishLabel
         ),
         props.scopeBinding?.available &&
         props.projectEntryReadyForCurrentWorkflow
@@ -1780,6 +1787,40 @@ describe("StudioPage", () => {
     expect(searchParams.get("memberId")).toBe("service-beta");
     expect(searchParams.get("memberLabel")).toBe("成员 Beta");
     expect(searchParams.get("tab")).toBe("workflows");
+  });
+
+  it("switches Studio into create-team mode when opened from Create Team", async () => {
+    renderStudioPage(
+      "/studio?draft=new&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
+    );
+
+    expect(await screen.findByRole("button", { name: "返回创建页" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+        "订单助手团队"
+      );
+    });
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("创建团队入口");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent(
+      "入口草稿：订单入口"
+    );
+    expect(screen.getByTestId("studio-context-meta")).not.toHaveTextContent("default");
+    expect(screen.getByRole("button", { name: "保存草稿" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "发布团队入口" })).toBeTruthy();
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("teamMode")).toBe("create");
+    expect(searchParams.get("teamName")).toBe("订单助手团队");
+    expect(searchParams.get("entryName")).toBe("订单入口");
+
+    fireEvent.click(screen.getByRole("button", { name: "返回创建页" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/teams/new");
+    });
+    const returnParams = new URLSearchParams(window.location.search);
+    expect(returnParams.get("teamName")).toBe("订单助手团队");
+    expect(returnParams.get("entryName")).toBe("订单入口");
   });
 
   it("resyncs the Studio deep link when the target workflow changes after mount", async () => {

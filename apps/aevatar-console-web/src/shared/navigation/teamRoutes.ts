@@ -72,8 +72,14 @@ export function buildTeamsHref(): string {
   return '/teams';
 }
 
-export function buildTeamCreateHref(): string {
-  return '/teams/new';
+export function buildTeamCreateHref(options?: {
+  teamName?: string;
+  entryName?: string;
+}): string {
+  return buildHref('/teams/new', {
+    teamName: options?.teamName,
+    entryName: options?.entryName,
+  });
 }
 
 export function buildTeamDetailHref(options: {

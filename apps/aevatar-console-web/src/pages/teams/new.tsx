@@ -1,5 +1,5 @@
 import { BuildOutlined, RocketOutlined } from '@ant-design/icons';
-import { Button, Space, Typography } from 'antd';
+import { Button, Input, Space, Typography } from 'antd';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
 import { buildTeamsHref } from '@/shared/navigation/teamRoutes';
@@ -38,10 +38,36 @@ const stageChipStyle: React.CSSProperties = {
   padding: '6px 12px',
 };
 
+function readCreateTeamDraftFromLocation(): {
+  readonly teamName: string;
+  readonly entryName: string;
+} {
+  if (typeof window === 'undefined') {
+    return {
+      teamName: '',
+      entryName: '',
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return {
+    teamName: params.get('teamName')?.trim() ?? '',
+    entryName: params.get('entryName')?.trim() ?? '',
+  };
+}
+
 const TeamCreatePage: React.FC = () => {
+  const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
+  const [teamName, setTeamName] = React.useState(initialDraft.teamName);
+  const [entryName, setEntryName] = React.useState(initialDraft.entryName);
+  const resolvedEntryName = entryName.trim() || teamName.trim();
+  const canOpenBuilder = Boolean(teamName.trim());
   const openBuilder = () =>
     history.push(
       buildStudioRoute({
+        teamMode: 'create',
+        teamName: teamName.trim() || undefined,
+        entryName: resolvedEntryName || undefined,
         draftMode: 'new',
         tab: 'studio',
       }),
@@ -57,7 +83,11 @@ const TeamCreatePage: React.FC = () => {
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Teams"
       extra={
-        <Button onClick={openBuilder} style={primaryActionButtonStyle}>
+        <Button
+          disabled={!canOpenBuilder}
+          onClick={openBuilder}
+          style={primaryActionButtonStyle}
+        >
           Open Studio
         </Button>
       }
@@ -116,9 +146,44 @@ const TeamCreatePage: React.FC = () => {
                 </span>
               ))}
             </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: 12,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                maxWidth: 720,
+              }}
+            >
+              <div style={{ display: 'grid', gap: 8 }}>
+                <Typography.Text strong>团队名称</Typography.Text>
+                <Input
+                  aria-label="团队名称"
+                  placeholder="例如：订单助手团队"
+                  value={teamName}
+                  onChange={(event) => setTeamName(event.target.value)}
+                />
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <Typography.Text strong>入口名称</Typography.Text>
+                <Input
+                  aria-label="入口名称"
+                  placeholder="默认复用团队名称"
+                  value={entryName}
+                  onChange={(event) => setEntryName(event.target.value)}
+                />
+              </div>
+              <Typography.Text
+                type="secondary"
+                style={{ gridColumn: '1 / -1', lineHeight: 1.6 }}
+              >
+                团队名称会显示在创建流程中；入口名称会作为 Studio 新草稿的默认名称。
+                如果入口名称留空，Studio 会自动复用团队名称。
+              </Typography.Text>
+            </div>
             <Space wrap size={[8, 8]}>
               <Button
                 icon={<BuildOutlined />}
+                disabled={!canOpenBuilder}
                 onClick={openBuilder}
                 style={primaryActionButtonStyle}
               >
@@ -153,7 +218,9 @@ const TeamCreatePage: React.FC = () => {
                 fontWeight: 500,
               }}
             >
-              Studio
+              {teamName.trim()
+                ? `已填写团队名称：${teamName.trim()}`
+                : '先填写团队名称，再进入 Studio'}
             </Typography.Text>
           </div>
         </div>

@@ -38,7 +38,6 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
             sp.GetService<IScopeWorkflowQueryPort>(),
-            sp.GetService<IScopeWorkflowCommandPort>(),
             sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceRevisionArtifactStore>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>(),

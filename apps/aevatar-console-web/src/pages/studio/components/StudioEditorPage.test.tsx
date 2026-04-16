@@ -458,6 +458,48 @@ describe('StudioEditorPage', () => {
     expect(screen.queryByText('尚未发布默认入口')).not.toBeInTheDocument();
   });
 
+  it('switches to create-team guidance when the editor is opened from Create Team', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          teamCreation: {
+            teamName: '订单助手团队',
+            entryName: '订单入口',
+          },
+          scopeBinding: {
+            available: true,
+            scopeId: 'scope-a',
+            serviceId: 'default',
+            displayName: 'Workspace Demo',
+            serviceKey: 'scope-a:default',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'deploy-2',
+            deploymentStatus: 'Active',
+            primaryActorId: 'actor://scope-a/default',
+            updatedAt: '2026-03-26T08:00:00Z',
+            revisions: [],
+          },
+        }) as any,
+      ),
+    );
+
+    expect(
+      await screen.findByText('你正在创建团队「订单助手团队」'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发布团队入口' })).toBeInTheDocument();
+    expect(screen.getByText('入口草稿：订单入口')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '保存只会写草稿。点击“发布团队入口”后，当前 scope 的默认入口会切换成 订单入口。',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /查看详情/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '高级设置' })).not.toBeInTheDocument();
+  });
+
   it('keeps the published team entry panel visible without recommendation cards', async () => {
     render(
       React.createElement(
