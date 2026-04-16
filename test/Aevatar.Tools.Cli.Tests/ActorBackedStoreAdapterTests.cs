@@ -401,6 +401,22 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
+    public async Task GAgentActorStore_AddActorAsync_WithExplicitScope_UsesRouteScope()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ambient-scope" };
+        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+
+        var store = new ActorBackedGAgentActorStore(
+            runtime, scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+
+        await store.AddActorAsync("route-scope", "MyGAgent", "actor-789");
+
+        runtime.Actors.Should().ContainKey("gagent-registry-route-scope");
+        runtime.Actors.Should().NotContainKey("gagent-registry-ambient-scope");
+    }
+
+    [Fact]
     public async Task GAgentActorStore_RemoveActorAsync_SendsActorUnregisteredEvent()
     {
         var runtime = new FakeActorRuntime();

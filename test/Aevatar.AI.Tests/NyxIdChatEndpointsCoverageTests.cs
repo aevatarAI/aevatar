@@ -54,29 +54,59 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleCreateConversationAsync_ShouldReturnCreatedConversation()
     {
-        var store = new StubGAgentActorStore();
+        var actorStore = new StubGAgentActorStore();
+        var historyStore = new StubChatHistoryStore();
         var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
-            store,
+            actorStore,
+            historyStore,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         using var doc = JsonDocument.Parse(response.Body);
         doc.RootElement.TryGetProperty("actorId", out var actorId).Should().BeTrue();
+        doc.RootElement.TryGetProperty("createdAt", out var createdAt).Should().BeTrue();
         var createdActorId = actorId.GetString();
         createdActorId.Should().NotBeNullOrWhiteSpace();
-        store.AddedActors.Should().ContainSingle(entry =>
+        createdAt.GetDateTimeOffset().Should().NotBe(default);
+        actorStore.AddedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
             entry.ActorId == createdActorId);
+        historyStore.SavedConversations.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.ConversationId == createdActorId &&
+            entry.Meta.CreatedAt == createdAt.GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldBubbleFailure_WhenActorRegistrationFails()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            AddActorException = new InvalidOperationException("actor store unavailable"),
+        };
+        var historyStore = new StubChatHistoryStore();
+
+        var act = async () => await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            historyStore,
+            CancellationToken.None);
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.Which.Message.Should().Be("actor store unavailable");
     }
 
     [Fact]
     public async Task HandleListConversationsAsync_ShouldReturnList()
     {
-        var store = new StubGAgentActorStore
+        var actorStore = new StubGAgentActorStore
         {
             GroupsToReturn =
             [
@@ -84,12 +114,27 @@ public class NyxIdChatEndpointsCoverageTests
                 new GAgentActorGroup("other-agent", ["actor-2"]),
             ],
         };
-
+        var historyStore = new StubChatHistoryStore
+        {
+            IndexToReturn = new ChatHistoryIndex(
+            [
+                new ConversationMeta(
+                    Id: "actor-1",
+                    Title: NyxIdChatServiceDefaults.DisplayName,
+                    ServiceId: NyxIdChatServiceDefaults.ServiceId,
+                    ServiceKind: "chat",
+                    CreatedAt: DateTimeOffset.Parse("2026-04-16T10:20:30Z"),
+                    UpdatedAt: DateTimeOffset.Parse("2026-04-16T10:20:30Z"),
+                    MessageCount: 0),
+            ]),
+        };
         var result = await InvokeResultAsync(
             "HandleListConversationsAsync",
             new DefaultHttpContext(),
             "scope-a",
-            store,
+            actorStore,
+            historyStore,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -97,25 +142,34 @@ public class NyxIdChatEndpointsCoverageTests
         using var doc = JsonDocument.Parse(response.Body);
         doc.RootElement.GetArrayLength().Should().Be(1);
         doc.RootElement[0].GetProperty("actorId").GetString().Should().Be("actor-1");
+        doc.RootElement[0].GetProperty("createdAt").GetDateTimeOffset()
+            .Should().Be(DateTimeOffset.Parse("2026-04-16T10:20:30Z"));
+        actorStore.LastRequestedScopeId.Should().Be("scope-a");
     }
 
     [Fact]
     public async Task HandleDeleteConversationAsync_ShouldReturnOk_AndRemoveActor()
     {
-        var store = new StubGAgentActorStore();
+        var actorStore = new StubGAgentActorStore();
+        var historyStore = new StubChatHistoryStore();
         var result = await InvokeResultAsync(
             "HandleDeleteConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
             "actor-1",
-            store,
+            actorStore,
+            historyStore,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        store.RemovedActors.Should().ContainSingle(entry =>
+        actorStore.RemovedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
             entry.ActorId == "actor-1");
+        historyStore.DeletedConversations.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.ConversationId == "actor-1");
     }
 
     [Fact]
@@ -1043,18 +1097,42 @@ public class NyxIdChatEndpointsCoverageTests
     private sealed class StubGAgentActorStore : IGAgentActorStore
     {
         public IReadOnlyList<GAgentActorGroup> GroupsToReturn { get; init; } = [];
-        public List<(string GAgentType, string ActorId)> AddedActors { get; } = [];
-        public List<(string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public Exception? AddActorException { get; init; }
+        public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
+        public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public string? LastRequestedScopeId { get; private set; }
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(GroupsToReturn);
+
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default)
+        {
+            LastRequestedScopeId = scopeId;
+            return Task.FromResult(GroupsToReturn);
+        }
 
         public Task AddActorAsync(
             string gagentType,
             string actorId,
             CancellationToken cancellationToken = default)
         {
-            AddedActors.Add((gagentType, actorId));
+            if (AddActorException is not null)
+                throw AddActorException;
+            AddedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task AddActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            if (AddActorException is not null)
+                throw AddActorException;
+            AddedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
 
@@ -1063,7 +1141,58 @@ public class NyxIdChatEndpointsCoverageTests
             string actorId,
             CancellationToken cancellationToken = default)
         {
-            RemovedActors.Add((gagentType, actorId));
+            RemovedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            RemovedActors.Add((scopeId, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StubChatHistoryStore : IChatHistoryStore
+    {
+        public ChatHistoryIndex IndexToReturn { get; init; } = new([]);
+        public List<(string ScopeId, string ConversationId, ConversationMeta Meta)> SavedConversations { get; } = [];
+        public List<(string ScopeId, string ConversationId)> DeletedConversations { get; } = [];
+
+        public Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
+        {
+            _ = scopeId;
+            return Task.FromResult(IndexToReturn);
+        }
+
+        public Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
+            string scopeId,
+            string conversationId,
+            CancellationToken ct = default)
+        {
+            _ = scopeId;
+            _ = conversationId;
+            return Task.FromResult<IReadOnlyList<StoredChatMessage>>([]);
+        }
+
+        public Task SaveMessagesAsync(
+            string scopeId,
+            string conversationId,
+            ConversationMeta meta,
+            IReadOnlyList<StoredChatMessage> messages,
+            CancellationToken ct = default)
+        {
+            _ = messages;
+            SavedConversations.Add((scopeId, conversationId, meta));
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
+        {
+            DeletedConversations.Add((scopeId, conversationId));
             return Task.CompletedTask;
         }
     }

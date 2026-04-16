@@ -59,7 +59,7 @@ public static class StreamingProxyEndpoints
         var roomId = StreamingProxyDefaults.GenerateRoomId();
         try
         {
-            await actorStore.AddActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
+            await actorStore.AddActorAsync(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -88,7 +88,7 @@ public static class StreamingProxyEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to activate room {RoomId}; rolling back registration", roomId);
-            await TryRollbackRoomCreationAsync(roomId, actorStore, actorRuntime, logger);
+            await TryRollbackRoomCreationAsync(scopeId, roomId, actorStore, actorRuntime, logger);
             return Results.Json(
                 new { error = "Failed to create room" },
                 statusCode: StatusCodes.Status500InternalServerError);
@@ -107,7 +107,7 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            var groups = await actorStore.GetAsync(ct);
+            var groups = await actorStore.GetAsync(scopeId, ct);
             var group = groups.FirstOrDefault(g =>
                 string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentTypeName, StringComparison.Ordinal));
             var roomIds = group?.ActorIds ?? [];
@@ -133,7 +133,7 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            await actorStore.RemoveActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
+            await actorStore.RemoveActorAsync(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -504,6 +504,7 @@ public static class StreamingProxyEndpoints
         envelope.Route?.IsTopologyPublication() == true;
 
     private static async Task TryRollbackRoomCreationAsync(
+        string scopeId,
         string roomId,
         IGAgentActorStore actorStore,
         IActorRuntime actorRuntime,
@@ -521,6 +522,7 @@ public static class StreamingProxyEndpoints
         try
         {
             await actorStore.RemoveActorAsync(
+                scopeId,
                 StreamingProxyDefaults.GAgentTypeName,
                 roomId,
                 CancellationToken.None);

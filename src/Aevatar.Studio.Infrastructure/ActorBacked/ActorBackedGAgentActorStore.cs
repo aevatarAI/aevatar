@@ -40,6 +40,21 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         CancellationToken cancellationToken = default)
     {
         var actorId = ResolveWriteActorId();
+        return await GetByActorIdAsync(actorId, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+        string scopeId,
+        CancellationToken cancellationToken = default)
+    {
+        var actorId = ResolveWriteActorId(scopeId);
+        return await GetByActorIdAsync(actorId, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<GAgentActorGroup>> GetByActorIdAsync(
+        string actorId,
+        CancellationToken cancellationToken)
+    {
         var document = await _documentReader.GetAsync(actorId, cancellationToken);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(GAgentRegistryState.Descriptor))
@@ -54,11 +69,22 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
             .AsReadOnly();
     }
 
-    public async Task AddActorAsync(
+    public Task AddActorAsync(
         string gagentType, string actorId,
+        CancellationToken cancellationToken = default) =>
+        AddActorAsync(
+            _scopeResolver.ResolveScopeIdOrDefault(),
+            gagentType,
+            actorId,
+            cancellationToken);
+
+    public async Task AddActorAsync(
+        string scopeId,
+        string gagentType,
+        string actorId,
         CancellationToken cancellationToken = default)
     {
-        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(scopeId, cancellationToken);
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorRegisteredEvent
         {
             GagentType = gagentType,
@@ -66,11 +92,22 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         }, cancellationToken);
     }
 
-    public async Task RemoveActorAsync(
+    public Task RemoveActorAsync(
         string gagentType, string actorId,
+        CancellationToken cancellationToken = default) =>
+        RemoveActorAsync(
+            _scopeResolver.ResolveScopeIdOrDefault(),
+            gagentType,
+            actorId,
+            cancellationToken);
+
+    public async Task RemoveActorAsync(
+        string scopeId,
+        string gagentType,
+        string actorId,
         CancellationToken cancellationToken = default)
     {
-        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(scopeId, cancellationToken);
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorUnregisteredEvent
         {
             GagentType = gagentType,
@@ -80,8 +117,14 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
 
     // ── Actor resolution ──
 
-    private string ResolveWriteActorId() => WriteActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
+    private string ResolveWriteActorId(string? scopeId = null) =>
+        WriteActorIdPrefix + NormalizeScopeId(scopeId);
 
-    private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
-        _bootstrap.EnsureAsync<GAgentRegistryGAgent>(ResolveWriteActorId(), ct);
+    private Task<IActor> EnsureWriteActorAsync(string? scopeId, CancellationToken ct) =>
+        _bootstrap.EnsureAsync<GAgentRegistryGAgent>(ResolveWriteActorId(scopeId), ct);
+
+    private string NormalizeScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId)
+            ? _scopeResolver.ResolveScopeIdOrDefault()
+            : scopeId.Trim();
 }

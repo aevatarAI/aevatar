@@ -84,7 +84,9 @@ public class StreamingProxyCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("roomName");
-        actorStore.AddedActors.Should().ContainSingle(x => x.gagentType == StreamingProxyDefaults.GAgentTypeName);
+        actorStore.AddedActors.Should().ContainSingle(x =>
+            x.scopeId == "scope-a" &&
+            x.gagentType == StreamingProxyDefaults.GAgentTypeName);
         runtime.CreateCalls.Should().ContainSingle();
         runtime.CreateCalls[0].agentType.Should().Be(typeof(StreamingProxyGAgent));
     }
@@ -129,6 +131,7 @@ public class StreamingProxyCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         actorStore.RemovedActors.Should().ContainSingle(x =>
+            x.scopeId == "scope-a" &&
             x.gagentType == StreamingProxyDefaults.GAgentTypeName && x.actorId == "room-1");
         participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
     }
@@ -622,21 +625,46 @@ public class StreamingProxyCoverageTests
     private sealed class StubGAgentActorStore : IGAgentActorStore
     {
         public List<GAgentActorGroup> Groups { get; } = [];
-        public List<(string gagentType, string actorId)> AddedActors { get; } = [];
-        public List<(string gagentType, string actorId)> RemovedActors { get; } = [];
+        public List<(string scopeId, string gagentType, string actorId)> AddedActors { get; } = [];
+        public List<(string scopeId, string gagentType, string actorId)> RemovedActors { get; } = [];
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Groups.AsReadOnly());
 
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Groups.AsReadOnly());
+
         public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {
-            AddedActors.Add((gagentType, actorId));
+            AddedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task AddActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            AddedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
 
         public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {
-            RemovedActors.Add((gagentType, actorId));
+            RemovedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            RemovedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
     }
