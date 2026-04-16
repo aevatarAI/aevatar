@@ -95,6 +95,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Prepare Runner
         uses: ./.github/actions/prepare-runner
@@ -110,6 +112,14 @@ jobs:
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
           GITHUB_SHA: ${{ github.sha }}
         run: bash tools/ci/architecture_guards.sh
+
+      - name: PR Size Guard (advisory)
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash tools/ci/pr_size_guard.sh
 
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
@@ -155,8 +165,7 @@ jobs:
   split-test-guards:
     if: |
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
@@ -299,7 +308,7 @@ jobs:
         if: ${{ success() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./artifacts/coverage/**/report/Cobertura.xml
+          files: ./artifacts/coverage/**/raw/**/coverage.cobertura.xml
           disable_search: true
           fail_ci_if_error: true
           flags: ci
@@ -311,8 +320,7 @@ jobs:
   distributed-3node-smoke:
     if: |
       github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -327,8 +335,7 @@ jobs:
   distributed-mixed-version-smoke:
     if: |
       github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:

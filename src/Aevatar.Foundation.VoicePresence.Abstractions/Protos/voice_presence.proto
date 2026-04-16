@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package aevatar.voice;
+
+option csharp_namespace = "Aevatar.Foundation.VoicePresence.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+message VoiceProviderConfig {
+  string provider_name = 1;
+  string endpoint = 2;
+  string api_key = 3;
+  string model = 4;
+}
+
+message VoiceSessionConfig {
+  string voice = 1;
+  string instructions = 2;
+  int32 sample_rate_hz = 3;
+  repeated string tool_names = 4;
+  repeated VoiceToolDefinition tool_definitions = 5;
+}
+
+message VoiceToolDefinition {
+  string name = 1;
+  string description = 2;
+  string parameters_schema = 3;
+}
+
+message VoiceConversationEventInjection {
+  string envelope_id = 1;
+  string publisher_actor_id = 2;
+  string event_type = 3;
+  string payload_json = 4;
+  google.protobuf.Timestamp observed_at = 5;
+}
+
+message VoiceRemoteSessionOpenRequested {
+  string session_id = 1;
+}
+
+message VoiceRemoteSessionCloseRequested {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message VoiceRemoteAudioInputReceived {
+  string session_id = 1;
+  bytes pcm16 = 2;
+}
+
+message VoiceAudioReceived {
+  bytes pcm16 = 1;
+  int32 sample_rate_hz = 2;
+}
+
+message VoiceResponseStarted {
+  int32 response_id = 1;
+}
+
+message VoiceResponseDone {
+  int32 response_id = 1;
+}
+
+message VoiceResponseCancelled {
+  int32 response_id = 1;
+}
+
+message VoiceFunctionCallRequested {
+  string call_id = 1;
+  string tool_name = 2;
+  string arguments_json = 3;
+  int32 response_id = 4;
+}
+
+message VoiceSpeechStarted {}
+
+message VoiceSpeechStopped {}
+
+message VoiceProviderError {
+  string error_code = 1;
+  string error_message = 2;
+}
+
+message VoiceProviderDisconnected {
+  string reason = 1;
+}
+
+message VoiceProviderEvent {
+  oneof event {
+    VoiceAudioReceived audio_received = 1;
+    VoiceResponseStarted response_started = 2;
+    VoiceResponseDone response_done = 3;
+    VoiceResponseCancelled response_cancelled = 4;
+    VoiceFunctionCallRequested function_call = 5;
+    VoiceSpeechStarted speech_started = 6;
+    VoiceSpeechStopped speech_stopped = 7;
+    VoiceProviderError error = 8;
+    VoiceProviderDisconnected disconnected = 9;
+  }
+}
+
+message VoiceDrainAcknowledged {
+  int32 response_id = 1;
+  int64 playout_sequence = 2;
+}
+
+message VoiceControlFrame {
+  oneof frame {
+    VoiceDrainAcknowledged drain_acknowledged = 1;
+  }
+}
+
+message VoiceRemoteControlInputReceived {
+  string session_id = 1;
+  VoiceControlFrame control_frame = 2;
+}
+
+message VoiceRemoteSessionClosed {
+  string reason = 1;
+}
+
+message VoiceRemoteTransportOutput {
+  string module_name = 1;
+  string session_id = 2;
+
+  oneof output {
+    VoiceAudioReceived audio_output = 3;
+    VoiceRemoteSessionClosed session_closed = 4;
+  }
+}
+
+message VoiceModuleSignal {
+  string module_name = 1;
+
+  oneof signal {
+    VoiceProviderEvent provider_event = 2;
+    VoiceControlFrame control_frame = 3;
+    VoiceRemoteSessionOpenRequested remote_session_open_requested = 4;
+    VoiceRemoteSessionCloseRequested remote_session_close_requested = 5;
+    VoiceRemoteAudioInputReceived remote_audio_input_received = 6;
+    VoiceRemoteControlInputReceived remote_control_input_received = 7;
+  }
+}

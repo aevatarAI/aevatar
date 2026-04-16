@@ -28,13 +28,15 @@ namespace Aevatar.Foundation.Core;
 /// Stateless GAgent base class with unified event pipeline, module management,
 /// and dual hook channels (virtual methods + IGAgentExecutionHook pipeline).
 /// </summary>
-public abstract class GAgentBase : IAgent
+public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerContext>
 {
     private EventHandlerMetadata[]? _staticHandlers;
     private volatile IEventModule<IEventHandlerContext>[] _modules = [];
+    private volatile IEventModule<IEventHandlerContext>[]? _cachedPipeline;
     private volatile IGAgentExecutionHook[] _hooks = [];
     private EventEnvelope? _activeInboundEnvelope;
     private ExternalLinkManager? _externalLinkManager;
+    private bool _lifecycleAwareModulesInitialized;
 
     // Identity
 
@@ -86,12 +88,21 @@ public abstract class GAgentBase : IAgent
         ct.ThrowIfCancellationRequested();
         LoadHooksFromDI();
         await StartExternalLinksAsync(ct);
+        if (!DeferLifecycleAwareModuleInitialization)
+            await InitializeLifecycleAwareModulesAsync(ct);
     }
 
     /// <summary>Deactivates agent.</summary>
     public virtual async Task DeactivateAsync(CancellationToken ct = default)
     {
-        await StopExternalLinksAsync();
+        try
+        {
+            await DisposeLifecycleAwareModulesAsync();
+        }
+        finally
+        {
+            await StopExternalLinksAsync();
+        }
     }
 
     // Unified event dispatch (with dual hook channels)
@@ -115,7 +126,7 @@ public abstract class GAgentBase : IAgent
         try
         {
             var ctx = CreateHandlerContext(envelope);
-            var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
+            var pipeline = GetOrBuildPipeline();
 
             foreach (var handler in pipeline)
             {
@@ -222,12 +233,49 @@ public abstract class GAgentBase : IAgent
         current.CopyTo(next, 0);
         next[current.Length] = module;
         _modules = next;
+        InvalidatePipelineCache();
+    }
+
+    /// <summary>Registers a dynamic event module and initializes it if lifecycle modules are already active.</summary>
+    public async Task RegisterModuleAsync(IEventModule<IEventHandlerContext> module, CancellationToken ct = default)
+    {
+        RegisterModule(module);
+
+        if (_lifecycleAwareModulesInitialized && module is ILifecycleAwareEventModule lifecycleAware)
+            await lifecycleAware.InitializeAsync(ct);
     }
 
     /// <summary>Replaces dynamic event modules in batch.</summary>
     public void SetModules(IEnumerable<IEventModule<IEventHandlerContext>> modules)
     {
         _modules = modules.ToArray();
+        InvalidatePipelineCache();
+    }
+
+    /// <summary>Replaces dynamic event modules in batch, disposing removed lifecycle modules and initializing new ones.</summary>
+    public async Task SetModulesAsync(IEnumerable<IEventModule<IEventHandlerContext>> modules, CancellationToken ct = default)
+    {
+        var previous = _modules;
+        SetModules(modules);
+
+        if (!_lifecycleAwareModulesInitialized)
+            return;
+
+        var retained = new HashSet<IEventModule<IEventHandlerContext>>(_modules, ReferenceEqualityComparer.Instance);
+        foreach (var old in previous)
+        {
+            if (old is ILifecycleAwareEventModule lifecycleAware && !retained.Contains(old))
+            {
+                try { await lifecycleAware.DisposeAsync(); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Failed to dispose removed lifecycle module {Name}.", old.Name); }
+            }
+        }
+
+        foreach (var mod in _modules)
+        {
+            if (mod is ILifecycleAwareEventModule lifecycleAware && !previous.Contains(mod))
+                await lifecycleAware.InitializeAsync(ct);
+        }
     }
 
     /// <summary>Gets all currently registered dynamic modules.</summary>
@@ -340,6 +388,88 @@ public abstract class GAgentBase : IAgent
 
     private EventHandlerMetadata[] GetStaticHandlers() =>
         _staticHandlers ??= EventHandlerDiscoverer.Discover(GetType());
+
+    private IEventModule<IEventHandlerContext>[] GetOrBuildPipeline()
+    {
+        var pipeline = _cachedPipeline;
+        if (pipeline != null)
+            return pipeline;
+
+        pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
+        _cachedPipeline = pipeline;
+        return pipeline;
+    }
+
+    private void InvalidatePipelineCache() => _cachedPipeline = null;
+
+    /// <summary>
+    /// Allows stateful agents to defer module initialization until after replay restores state.
+    /// </summary>
+    protected virtual bool DeferLifecycleAwareModuleInitialization => false;
+
+    /// <summary>
+    /// Initializes lifecycle-aware dynamic modules once per agent activation.
+    /// </summary>
+    protected async Task InitializeLifecycleAwareModulesAsync(CancellationToken ct)
+    {
+        if (_lifecycleAwareModulesInitialized)
+            return;
+
+        var initialized = new HashSet<ILifecycleAwareEventModule>(ReferenceEqualityComparer.Instance);
+        try
+        {
+            foreach (var module in _modules)
+            {
+                if (module is not ILifecycleAwareEventModule lifecycleAware || !initialized.Add(lifecycleAware))
+                    continue;
+
+                await lifecycleAware.InitializeAsync(ct);
+            }
+        }
+        catch
+        {
+            foreach (var started in initialized)
+            {
+                try { await started.DisposeAsync(); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Failed to dispose module during init rollback."); }
+            }
+
+            throw;
+        }
+
+        _lifecycleAwareModulesInitialized = true;
+    }
+
+    /// <summary>
+    /// Disposes lifecycle-aware dynamic modules during agent shutdown.
+    /// </summary>
+    protected async Task DisposeLifecycleAwareModulesAsync()
+    {
+        if (!_lifecycleAwareModulesInitialized)
+            return;
+
+        List<Exception>? errors = null;
+        var disposed = new HashSet<ILifecycleAwareEventModule>(ReferenceEqualityComparer.Instance);
+        foreach (var module in _modules.Reverse())
+        {
+            if (module is not ILifecycleAwareEventModule lifecycleAware || !disposed.Add(lifecycleAware))
+                continue;
+
+            try
+            {
+                await lifecycleAware.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                errors ??= [];
+                errors.Add(ex);
+            }
+        }
+
+        _lifecycleAwareModulesInitialized = false;
+        if (errors is { Count: > 0 })
+            throw new AggregateException(errors);
+    }
 
     private EventHandlerContext CreateHandlerContext(EventEnvelope envelope) =>
         new(
