@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
+import { servicesApi } from "@/shared/api/servicesApi";
+import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamsHomePage from "./home";
 
@@ -158,7 +160,7 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByText("Aevatar / Teams")).toBeTruthy();
     expect(await screen.findByText("我的 AI 团队")).toBeTruthy();
     expect(await screen.findByText("客服团队")).toBeTruthy();
-    expect(screen.getByText("当前 Scope")).toBeTruthy();
+    expect(screen.getByText("当前 Team")).toBeTruthy();
     expect(screen.getByText("当前可见团队")).toBeTruthy();
     expect(screen.getByText("可见运行信号")).toBeTruthy();
     expect(screen.getByText("草稿条目")).toBeTruthy();
@@ -226,6 +228,100 @@ describe("TeamsHomePage", () => {
     expect(params.get("workflowId")).toBe("workflow-alpha");
     expect(params.get("serviceId")).toBe("service-alpha");
     expect(params.get("runId")).toBe("run-latest");
+  });
+
+  it("shows a scope-backed team card when the current scope has binding and service facts but no workflows yet", async () => {
+    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: "scope-a",
+      serviceId: "service-alpha",
+      displayName: "NyxID Chat",
+      serviceKey: "scope-a:alpha",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "deploy-1",
+      deploymentStatus: "Active",
+      primaryActorId: "actor://nyxid-chat",
+      updatedAt: "2026-04-13T10:00:00Z",
+      revisions: [
+        {
+          revisionId: "rev-2",
+          implementationKind: "gagent",
+          status: "Published",
+          artifactHash: "hash-2",
+          failureReason: "",
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: "Active",
+          deploymentId: "deploy-1",
+          primaryActorId: "actor://nyxid-chat",
+          createdAt: "2026-04-13T09:00:00Z",
+          preparedAt: "2026-04-13T09:01:00Z",
+          publishedAt: "2026-04-13T09:02:00Z",
+          retiredAt: null,
+          workflowName: "",
+          workflowDefinitionActorId: "",
+          inlineWorkflowCount: 0,
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent",
+        },
+      ],
+    });
+    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-a:alpha",
+        tenantId: "scope-a",
+        appId: "default",
+        namespace: "default",
+        serviceId: "service-alpha",
+        displayName: "NyxID Chat",
+        defaultServingRevisionId: "rev-2",
+        activeServingRevisionId: "rev-2",
+        deploymentId: "deploy-1",
+        primaryActorId: "actor://nyxid-chat",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-13T10:01:00Z",
+      },
+    ]);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      serviceId: "service-alpha",
+      serviceKey: "scope-a:alpha",
+      displayName: "NyxID Chat",
+      runs: [],
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 3,
+        name: "NyxID Chat",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText("已存在 service 记录，但当前还没有可见的运行信号。")).toBeTruthy();
+    expect(screen.getAllByText("待运行").length).toBeGreaterThan(0);
+    expect(screen.queryByText("未知")).toBeNull();
+    expect(screen.getAllByText("service-alpha").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看团队" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/teams/scope-a");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("serviceId")).toBe("service-alpha");
+    expect(params.get("workflowId")).toBeNull();
   });
 
   it("switches to the compact roster when many teams are visible", async () => {

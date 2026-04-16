@@ -26,6 +26,13 @@ import {
 } from "@/shared/navigation/teamRoutes";
 import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
+import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
+import type { ServiceCatalogSnapshot } from "@/shared/models/services";
+import {
+  describeStudioScopeBindingRevisionTarget,
+  getStudioScopeBindingCurrentRevision,
+  type StudioScopeBindingStatus,
+} from "@/shared/studio/models";
 import {
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
@@ -56,6 +63,19 @@ const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
 
+type ScopeBackedTeamPreview = {
+  readonly attention: WorkflowOperationalAttention;
+  readonly attentionDetail: string;
+  readonly detailHref: string;
+  readonly latestRun: ScopeServiceRunSummary | null;
+  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
+  readonly primaryLabel: string;
+  readonly secondaryLabel: string;
+  readonly serviceId: string;
+  readonly title: string;
+  readonly updatedAt: string | null;
+};
+
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
@@ -73,6 +93,35 @@ function formatRunStatusLabel(status: string | null | undefined): string {
       return "稳定";
     default:
       return trimOptional(status) || "未知";
+  }
+}
+
+function formatOperationalStatusLabel(
+  status: string | null | undefined,
+  attention: WorkflowOperationalAttention,
+): string {
+  const normalizedStatus = trimOptional(status);
+  if (normalizedStatus) {
+    return formatRunStatusLabel(normalizedStatus);
+  }
+
+  switch (attention) {
+    case "healthy":
+      return "运行中";
+    case "waiting":
+      return "待关注";
+    case "failed":
+      return "异常";
+    case "draft":
+      return "草稿中";
+    case "no-bound-service":
+      return "待绑定";
+    case "no-recent-runs":
+      return "待运行";
+    case "runtime-unresolved":
+      return "待确认";
+    default:
+      return "未知";
   }
 }
 
@@ -166,6 +215,93 @@ function formatShortTime(value: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(parsed);
+}
+
+function parseTimestamp(value: string | null | undefined): number {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeStatus(value: string | null | undefined): string {
+  return trimOptional(value).toLowerCase();
+}
+
+function compareRuns(
+  left: ScopeServiceRunSummary,
+  right: ScopeServiceRunSummary,
+): number {
+  const rightTime = parseTimestamp(right.lastUpdatedAt);
+  const leftTime = parseTimestamp(left.lastUpdatedAt);
+  if (rightTime !== leftTime) {
+    return rightTime - leftTime;
+  }
+
+  if (right.stateVersion !== left.stateVersion) {
+    return right.stateVersion - left.stateVersion;
+  }
+
+  return right.runId.localeCompare(left.runId);
+}
+
+function compareServices(
+  left: ServiceCatalogSnapshot,
+  right: ServiceCatalogSnapshot,
+): number {
+  const rightTime = parseTimestamp(right.updatedAt);
+  const leftTime = parseTimestamp(left.updatedAt);
+  if (rightTime !== leftTime) {
+    return rightTime - leftTime;
+  }
+
+  return right.serviceId.localeCompare(left.serviceId);
+}
+
+function isSuccessfulRun(run: ScopeServiceRunSummary | null | undefined): boolean {
+  if (!run) {
+    return false;
+  }
+
+  if (run.lastSuccess === true) {
+    return true;
+  }
+
+  return ["completed", "finished", "success", "succeeded"].includes(
+    normalizeStatus(run.completionStatus),
+  );
+}
+
+function isWaitingRun(run: ScopeServiceRunSummary | null | undefined): boolean {
+  if (!run) {
+    return false;
+  }
+
+  return [
+    "waiting",
+    "waiting_approval",
+    "waiting_signal",
+    "blocked",
+    "human_approval",
+    "human_input",
+    "suspended",
+  ].includes(normalizeStatus(run.completionStatus));
+}
+
+function isFailedRun(run: ScopeServiceRunSummary | null | undefined): boolean {
+  if (!run) {
+    return false;
+  }
+
+  if (isWaitingRun(run)) {
+    return false;
+  }
+
+  if (run.lastSuccess === false) {
+    return true;
+  }
+
+  return ["failed", "error", "stopped", "timed_out", "timedout"].includes(
+    normalizeStatus(run.completionStatus),
+  );
 }
 
 function stopEvent<T extends (...args: any[]) => void>(handler: T): T {
@@ -317,6 +453,174 @@ function buildWorkflowTeamActions(
   };
 }
 
+function resolveScopePreviewService(input: {
+  readonly binding: StudioScopeBindingStatus | null | undefined;
+  readonly services: readonly ServiceCatalogSnapshot[];
+}): ServiceCatalogSnapshot | null {
+  const boundServiceId = trimOptional(input.binding?.serviceId);
+  if (boundServiceId) {
+    const matchedBoundService =
+      input.services.find(
+        (service) => trimOptional(service.serviceId) === boundServiceId,
+      ) ?? null;
+    if (matchedBoundService) {
+      return matchedBoundService;
+    }
+  }
+
+  return input.services.slice().sort(compareServices)[0] ?? null;
+}
+
+function resolveRuntimeUnavailable(input: {
+  readonly serviceId: string;
+  readonly runtimeAvailableByServiceId?: ReadonlySet<string>;
+  readonly runtimeGuardrailedServiceIds?: ReadonlySet<string>;
+}): boolean {
+  const serviceId = trimOptional(input.serviceId);
+  if (!serviceId) {
+    return false;
+  }
+
+  if (input.runtimeGuardrailedServiceIds?.has(serviceId)) {
+    return true;
+  }
+
+  if (!input.runtimeAvailableByServiceId) {
+    return false;
+  }
+
+  return !input.runtimeAvailableByServiceId.has(serviceId);
+}
+
+function buildScopeBackedTeamPreview(input: {
+  readonly binding: StudioScopeBindingStatus | null | undefined;
+  readonly guardrailedServiceIds?: ReadonlySet<string>;
+  readonly runsByServiceId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
+  readonly runtimeAvailableByServiceId?: ReadonlySet<string>;
+  readonly scopeId: string;
+  readonly services: readonly ServiceCatalogSnapshot[];
+}): ScopeBackedTeamPreview | null {
+  const currentRevision = getStudioScopeBindingCurrentRevision(input.binding);
+  const matchedService = resolveScopePreviewService({
+    binding: input.binding,
+    services: input.services,
+  });
+  const boundServiceId = trimOptional(input.binding?.serviceId);
+  const serviceId = trimOptional(matchedService?.serviceId) || boundServiceId;
+  const runtimeUnavailable = resolveRuntimeUnavailable({
+    runtimeAvailableByServiceId: input.runtimeAvailableByServiceId,
+    runtimeGuardrailedServiceIds: input.guardrailedServiceIds,
+    serviceId,
+  });
+  const runs =
+    serviceId && !runtimeUnavailable ? input.runsByServiceId[serviceId] ?? [] : [];
+  const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
+  const title =
+    trimOptional(input.binding?.displayName) ||
+    trimOptional(matchedService?.displayName) ||
+    describeStudioScopeBindingRevisionTarget(currentRevision) ||
+    serviceId ||
+    input.scopeId;
+
+  if (
+    !trimOptional(title) &&
+    !serviceId &&
+    !matchedService &&
+    !currentRevision &&
+    !trimOptional(input.binding?.serviceKey)
+  ) {
+    return null;
+  }
+
+  let attention: WorkflowOperationalAttention = "draft";
+  let attentionDetail = "当前 Team 还没有形成可运行的入口。";
+
+  if (runtimeUnavailable) {
+    attention = "runtime-unresolved";
+    attentionDetail = "团队入口已经存在，但当前运行信号暂时不可见。";
+  } else if (latestRun && isFailedRun(latestRun)) {
+    attention = "failed";
+    attentionDetail =
+      trimOptional(latestRun.lastError) || "最近一次团队运行处于异常状态。";
+  } else if (latestRun && isWaitingRun(latestRun)) {
+    attention = "waiting";
+    attentionDetail =
+      trimOptional(latestRun.lastError) || "最近一次团队运行正在等待人工或外部信号。";
+  } else if (latestRun && isSuccessfulRun(latestRun)) {
+    attention = "healthy";
+    attentionDetail = "最近一次团队运行正常，可继续进入详情查看。";
+  } else if (serviceId || matchedService) {
+    attention = "no-recent-runs";
+    attentionDetail = "已存在 service 记录，但当前还没有可见的运行信号。";
+  } else if (
+    currentRevision ||
+    trimOptional(input.binding?.serviceKey) ||
+    trimOptional(input.binding?.displayName)
+  ) {
+    attention = "no-bound-service";
+    attentionDetail = "当前 Team 已绑定入口，但服务能力还没有完整就绪。";
+  }
+
+  const detailHref = buildTeamDetailHref({
+    runId: latestRun?.runId || undefined,
+    scopeId: input.scopeId,
+    serviceId: serviceId || undefined,
+  });
+  const runtimeHref =
+    serviceId.length > 0
+      ? buildRuntimeRunsHref({
+          actorId:
+            latestRun?.actorId ||
+            matchedService?.primaryActorId ||
+            trimOptional(input.binding?.primaryActorId) ||
+            undefined,
+          scopeId: input.scopeId,
+          serviceId,
+        })
+      : "";
+  const builderHref = buildStudioWorkflowWorkspaceRoute({
+    scopeId: input.scopeId,
+    scopeLabel: input.scopeId,
+  });
+  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
+  if (runtimeHref) {
+    moreActions.push({
+      key: "runtime",
+      label: "查看运行",
+      onClick: () => history.push(runtimeHref),
+    });
+  }
+  moreActions.push({
+    key: "builder",
+    label: "进入 Studio",
+    onClick: () => history.push(builderHref),
+  });
+
+  return {
+    attention,
+    attentionDetail,
+    detailHref,
+    latestRun,
+    moreActions,
+    primaryLabel:
+      trimOptional(matchedService?.displayName) ||
+      trimOptional(input.binding?.displayName) ||
+      describeStudioScopeBindingRevisionTarget(currentRevision) ||
+      "当前团队入口",
+    secondaryLabel: formatOperationalStatusLabel(
+      latestRun?.completionStatus,
+      attention,
+    ),
+    serviceId,
+    title,
+    updatedAt:
+      latestRun?.lastUpdatedAt ||
+      matchedService?.updatedAt ||
+      input.binding?.updatedAt ||
+      null,
+  };
+}
+
 const MoreActionsButton: React.FC<{
   readonly actions: Array<{ key: string; label: string; onClick: () => void }>;
 }> = ({ actions }) => (
@@ -449,7 +753,7 @@ const WorkflowTeamCard: React.FC<{
       >
         <TeamFact
           label="当前状态"
-          value={formatRunStatusLabel(unit.latestRun?.completionStatus)}
+          value={formatOperationalStatusLabel(unit.latestRun?.completionStatus, unit.attention)}
         />
         <TeamFact
           label="最近更新"
@@ -560,7 +864,7 @@ const WorkflowTeamRow: React.FC<{
 
       <TeamFact
         label="状态"
-        value={formatRunStatusLabel(unit.latestRun?.completionStatus)}
+        value={formatOperationalStatusLabel(unit.latestRun?.completionStatus, unit.attention)}
       />
       <TeamFact
         label="更新"
@@ -579,6 +883,220 @@ const WorkflowTeamRow: React.FC<{
           查看团队
         </Button>
         <MoreActionsButton actions={moreActions} />
+      </Space>
+    </div>
+  );
+};
+
+const ScopeBackedTeamCard: React.FC<{
+  readonly preview: ScopeBackedTeamPreview;
+}> = ({ preview }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      onClick={() => history.push(preview.detailHref)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          history.push(preview.detailHref);
+        }
+      }}
+      role="button"
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 24,
+        boxShadow: token.boxShadowTertiary,
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        minWidth: 0,
+        padding: 18,
+      }}
+      tabIndex={0}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          gap: 16,
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <Typography.Title
+            level={3}
+            style={{
+              fontSize: 22,
+              margin: 0,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {preview.title}
+          </Typography.Title>
+          <Typography.Paragraph
+            ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
+            style={{
+              color: token.colorTextSecondary,
+              fontSize: 14,
+              marginBottom: 0,
+              marginTop: 6,
+            }}
+          >
+            {preview.attentionDetail}
+          </Typography.Paragraph>
+        </div>
+        <span
+          style={{
+            ...resolveAttentionPillStyle(token, preview.attention),
+            borderRadius: 999,
+            display: "inline-flex",
+            fontSize: 12,
+            fontWeight: 600,
+            lineHeight: 1,
+            padding: "8px 12px",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {formatAttentionLabel(preview.attention)}
+        </span>
+      </div>
+
+      <Space size={[10, 10]} wrap>
+        <EvidencePill text={preview.primaryLabel} />
+        <EvidencePill text={preview.secondaryLabel} />
+      </Space>
+
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <TeamFact
+          label="当前状态"
+          value={formatOperationalStatusLabel(
+            preview.latestRun?.completionStatus,
+            preview.attention,
+          )}
+        />
+        <TeamFact
+          label="最近更新"
+          value={formatShortTime(preview.updatedAt)}
+        />
+        <TeamFact label="主服务" value={preview.serviceId || "未记录"} />
+      </div>
+
+      <Space wrap>
+        <Button
+          onClick={stopEvent(() => history.push(preview.detailHref))}
+          size="large"
+          type="primary"
+        >
+          查看团队
+        </Button>
+        <MoreActionsButton actions={preview.moreActions} />
+      </Space>
+    </div>
+  );
+};
+
+const ScopeBackedTeamRow: React.FC<{
+  readonly preview: ScopeBackedTeamPreview;
+}> = ({ preview }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      onClick={() => history.push(preview.detailHref)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          history.push(preview.detailHref);
+        }
+      }}
+      role="button"
+      style={{
+        alignItems: "center",
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 20,
+        boxShadow: token.boxShadowTertiary,
+        cursor: "pointer",
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "minmax(0, 1.8fr) repeat(3, minmax(88px, 120px)) auto",
+        minWidth: 0,
+        padding: 16,
+      }}
+      tabIndex={0}
+    >
+      <div style={{ minWidth: 0 }}>
+        <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
+          <Typography.Title
+            level={4}
+            style={{
+              margin: 0,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {preview.title}
+          </Typography.Title>
+          <span
+            style={{
+              ...resolveAttentionPillStyle(token, preview.attention),
+              borderRadius: 999,
+              display: "inline-flex",
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1,
+              padding: "7px 10px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {formatAttentionLabel(preview.attention)}
+          </span>
+        </Space>
+        <Typography.Paragraph
+          ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
+          style={{
+            color: token.colorTextSecondary,
+            fontSize: 13,
+            marginBottom: 0,
+            marginTop: 0,
+          }}
+        >
+          {preview.attentionDetail}
+        </Typography.Paragraph>
+        <Space size={[8, 8]} style={{ marginTop: 10 }} wrap>
+          <EvidencePill text={preview.primaryLabel} />
+          <EvidencePill text={preview.secondaryLabel} />
+        </Space>
+      </div>
+
+      <TeamFact
+        label="状态"
+        value={formatOperationalStatusLabel(
+          preview.latestRun?.completionStatus,
+          preview.attention,
+        )}
+      />
+      <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
+      <TeamFact label="服务" value={preview.serviceId || "未记录"} />
+
+      <Space wrap>
+        <Button
+          onClick={stopEvent(() => history.push(preview.detailHref))}
+          type="primary"
+        >
+          查看团队
+        </Button>
+        <MoreActionsButton actions={preview.moreActions} />
       </Space>
     </div>
   );
@@ -660,13 +1178,36 @@ const TeamsHomePage: React.FC = () => {
       }),
     [bindingQuery.data, servicesQuery.data, workflowsQuery.data],
   );
-  const runtimeSampleServiceIds = matchedServiceIds.slice(
+  const scopePreviewServiceId = React.useMemo(() => {
+    const boundServiceId = trimOptional(bindingQuery.data?.serviceId);
+    if (
+      boundServiceId &&
+      servicesQuery.data?.some(
+        (service) => trimOptional(service.serviceId) === boundServiceId,
+      )
+    ) {
+      return boundServiceId;
+    }
+
+    return servicesQuery.data?.slice().sort(compareServices)[0]?.serviceId ?? boundServiceId;
+  }, [bindingQuery.data?.serviceId, servicesQuery.data]);
+  const runtimeServiceIds = React.useMemo(() => {
+    const normalizedScopePreviewServiceId = trimOptional(scopePreviewServiceId);
+    const ordered = normalizedScopePreviewServiceId
+      ? [
+          normalizedScopePreviewServiceId,
+          ...matchedServiceIds.filter((serviceId) => serviceId !== normalizedScopePreviewServiceId),
+        ]
+      : matchedServiceIds;
+    return ordered;
+  }, [matchedServiceIds, scopePreviewServiceId]);
+  const runtimeSampleServiceIds = runtimeServiceIds.slice(
     0,
     WORKFLOW_RUNTIME_GUARDRAIL,
   );
   const guardrailedServiceIds = React.useMemo(
-    () => new Set(matchedServiceIds.slice(WORKFLOW_RUNTIME_GUARDRAIL)),
-    [matchedServiceIds],
+    () => new Set(runtimeServiceIds.slice(WORKFLOW_RUNTIME_GUARDRAIL)),
+    [runtimeServiceIds],
   );
   const serviceRunQueries = useQueries({
     queries: runtimeSampleServiceIds.map((serviceId) => ({
@@ -721,20 +1262,46 @@ const TeamsHomePage: React.FC = () => {
       workflowsQuery.data,
     ],
   );
+  const scopePreviewTeam = React.useMemo(
+    () =>
+      buildScopeBackedTeamPreview({
+        binding: bindingQuery.data ?? null,
+        guardrailedServiceIds,
+        runsByServiceId,
+        runtimeAvailableByServiceId,
+        scopeId,
+        services: servicesQuery.data ?? [],
+      }),
+    [
+      bindingQuery.data,
+      guardrailedServiceIds,
+      runsByServiceId,
+      runtimeAvailableByServiceId,
+      scopeId,
+      servicesQuery.data,
+    ],
+  );
 
   const draftUnits = units.filter((unit) => unit.isDraftOnly);
   const visibleUnits = showDrafts
     ? units
     : units.filter((unit) => !unit.isDraftOnly);
+  const visibleTeamCount =
+    visibleUnits.length > 0 ? visibleUnits.length : scopePreviewTeam ? 1 : 0;
   const resolvedRosterView =
     manualRosterView ??
-    (visibleUnits.length >= compactTeamRosterThreshold ? "list" : "cards");
+    (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
   const activeUnits = units.filter((unit) => !unit.isDraftOnly);
-  const visibleRuns = activeUnits.filter((unit) => unit.latestRun).length;
+  const visibleRuns =
+    activeUnits.length > 0
+      ? activeUnits.filter((unit) => unit.latestRun).length
+      : scopePreviewTeam?.latestRun
+        ? 1
+        : 0;
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
-    bindingQuery.isError ? "当前 Scope 绑定信息暂时不可见。" : null,
+    bindingQuery.isError ? "当前 Team 绑定信息暂时不可见。" : null,
     ...serviceRunQueries.map((query) =>
       query.isError ? "部分运行信号暂时不可见。" : null,
     ),
@@ -860,32 +1427,32 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="当前 Scope" value={scopeId} />
-              <SummaryStatCard label="当前可见团队" value={visibleUnits.length} />
+              <SummaryStatCard accent label="当前 Team" value={scopeId} />
+              <SummaryStatCard label="当前可见团队" value={visibleTeamCount} />
               <SummaryStatCard label="可见运行信号" value={visibleRuns} />
               <SummaryStatCard label="草稿条目" value={draftUnits.length} />
             </div>
 
             {workflowsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在整理当前 Scope 下的团队卡片。" />
+              <AevatarInspectorEmpty description="正在整理当前 Team 的入口卡片。" />
             ) : workflowsQuery.isError ? (
               <Alert
                 showIcon
-                title="当前 Scope 下的团队列表暂时无法加载。"
+                title="当前 Team 的入口列表暂时无法加载。"
                 type="error"
               />
-            ) : visibleUnits.length > 0 ? (
+            ) : visibleUnits.length > 0 || scopePreviewTeam ? (
               <>
                 <div
                   style={{
                     alignItems: "center",
                     display: "flex",
                     gap: 12,
-                    justifyContent: "space-between",
+                  justifyContent: "space-between",
                   }}
                 >
                   <Typography.Text type="secondary">
-                    {visibleUnits.length} 支团队
+                    {visibleTeamCount} 支团队
                   </Typography.Text>
                   <Space.Compact>
                     <Tooltip title="卡片视图">
@@ -915,13 +1482,17 @@ const TeamsHomePage: React.FC = () => {
                       gap: 14,
                     }}
                   >
-                    {visibleUnits.map((unit) => (
-                      <WorkflowTeamRow
-                        key={unit.workflow.workflowId}
-                        scopeId={scopeId}
-                        unit={unit}
-                      />
-                    ))}
+                    {visibleUnits.length > 0
+                      ? visibleUnits.map((unit) => (
+                          <WorkflowTeamRow
+                            key={unit.workflow.workflowId}
+                            scopeId={scopeId}
+                            unit={unit}
+                          />
+                        ))
+                      : scopePreviewTeam && (
+                          <ScopeBackedTeamRow preview={scopePreviewTeam} />
+                        )}
                   </div>
                 ) : (
                   <div
@@ -932,19 +1503,23 @@ const TeamsHomePage: React.FC = () => {
                       gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
                     }}
                   >
-                    {visibleUnits.map((unit) => (
-                      <WorkflowTeamCard
-                        key={unit.workflow.workflowId}
-                        scopeId={scopeId}
-                        unit={unit}
-                      />
-                    ))}
+                    {visibleUnits.length > 0
+                      ? visibleUnits.map((unit) => (
+                          <WorkflowTeamCard
+                            key={unit.workflow.workflowId}
+                            scopeId={scopeId}
+                            unit={unit}
+                          />
+                        ))
+                      : scopePreviewTeam && (
+                          <ScopeBackedTeamCard preview={scopePreviewTeam} />
+                        )}
                   </div>
                 )}
               </>
             ) : (
               <Empty
-                description="当前 Scope 里还没有可展示的团队。"
+                description="当前 Team 还没有可展示的入口。"
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
               >
                 <Button

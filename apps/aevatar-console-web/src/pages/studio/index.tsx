@@ -76,7 +76,6 @@ import {
   buildStudioRoute,
   type StudioTab,
 } from '@/shared/studio/navigation';
-import { syncStudioHostBodyClass } from '@/shared/studio/studioLayout';
 import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
@@ -969,7 +968,6 @@ const StudioPage: React.FC = () => {
   );
   const isStudioLocation =
     typeof window !== 'undefined' && window.location.pathname === '/studio';
-  useEffect(() => syncStudioHostBodyClass(isStudioLocation), [isStudioLocation]);
   const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
   const [workspacePage, setWorkspacePage] = useState<StudioWorkspacePage>(
@@ -2675,6 +2673,9 @@ const StudioPage: React.FC = () => {
             ? error.message
             : 'Failed to bind the current scope to the GAgent service.',
       });
+      throw (error instanceof Error
+        ? error
+        : new Error('Failed to bind the current scope to the GAgent service.'));
     } finally {
       setPublishPending(false);
     }
@@ -4925,6 +4926,7 @@ const StudioPage: React.FC = () => {
           display: 'flex',
           flex: 1,
           flexDirection: 'column',
+          height: '100%',
           minHeight: 0,
           overflow: 'hidden',
         }}

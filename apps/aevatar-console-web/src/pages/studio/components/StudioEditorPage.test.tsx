@@ -436,4 +436,45 @@ describe('StudioEditorPage', () => {
       );
     });
   });
+
+  it('keeps the GAgent binding dialog open when binding fails', async () => {
+    const onBindGAgent = jest.fn(async () => {
+      throw new Error('Bind failed');
+    });
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          gAgentTypes: [
+            {
+              typeName: 'OrdersGAgent',
+              fullName: 'Tests.OrdersGAgent',
+              assemblyName: 'Tests',
+            },
+          ],
+          onBindGAgent,
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+
+    expect(
+      await screen.findByRole('dialog', { name: '绑定团队入口' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '仅绑定' }));
+
+    await waitFor(() => {
+      expect(onBindGAgent).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('dialog', { name: '绑定团队入口' }),
+      ).toBeInTheDocument();
+    });
+  });
 });

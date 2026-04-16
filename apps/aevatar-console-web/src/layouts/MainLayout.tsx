@@ -1,6 +1,11 @@
 import { theme } from "antd";
 import React from "react";
 import {
+  getLocationSnapshot,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
+import { syncStudioHostBodyClass } from "@/shared/studio/studioLayout";
+import {
   buildAevatarViewportStyle,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
@@ -11,6 +16,16 @@ type MainLayoutProps = {
 
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const { token } = theme.useToken();
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => "",
+  );
+
+  React.useEffect(() => {
+    const pathname = locationSnapshot.split("?")[0]?.split("#")[0] ?? "";
+    return syncStudioHostBodyClass(pathname === "/studio");
+  }, [locationSnapshot]);
 
   return (
     <div

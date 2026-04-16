@@ -2944,26 +2944,39 @@ const TeamDetailPage: React.FC = () => {
   const conversationActionLabel = lens.playback.currentRunId ? "本次对话" : "运行记录";
   const serviceMappingActionLabel = "服务映射";
   const teamBuilderActionLabel = "高级编辑";
+  const topologyFocusActorId =
+    trimText(effectiveActorId) ||
+    trimText(lens.graph.focusActorId) ||
+    trimText(lens.playback.rootActorId) ||
+    trimText(lens.currentRun?.actorId) ||
+    "";
+  const canAdjustTopologyDepth = topologyFocusActorId.length > 0;
+  const canOpenPlatformTopology = topologyFocusActorId.length > 0;
+  const topologyDepthLabel = formatTopologyDepthLabel(graphDepth);
+  const topologyControlsHint = canAdjustTopologyDepth
+    ? ""
+    : "当前还没有可用的团队成员焦点，待成员或运行信号可见后再切换视角。";
+  const platformTopologyHint = canOpenPlatformTopology
+    ? ""
+    : "当前还没有可打开的平台拓扑焦点。";
+  const topologyEmptyDescription = canAdjustTopologyDepth
+    ? `当前在${topologyDepthLabel}视角下还没有更多可见的事件拓扑关系。`
+    : "当前还没有可用的团队成员焦点，所以暂时没有可展开的事件拓扑关系。";
   const handleOpenTeamsList = React.useCallback(() => {
     history.push(teamsListHref);
   }, [teamsListHref]);
 
   const handleOpenServiceMapping = React.useCallback(() => {
     handleOpenPlaybackActor(
-      effectiveActorId ||
-        lens.graph.focusActorId ||
-        lens.playback.rootActorId ||
-        lens.currentRun?.actorId,
+      topologyFocusActorId,
       lens.currentRun?.runId || lens.playback.currentRunId,
     );
   }, [
-    effectiveActorId,
     handleOpenPlaybackActor,
     lens.currentRun?.actorId,
     lens.currentRun?.runId,
-    lens.graph.focusActorId,
     lens.playback.currentRunId,
-    lens.playback.rootActorId,
+    topologyFocusActorId,
   ]);
   const handleOpenServices = React.useCallback(() => {
     history.push(buildPlatformServicesHref(platformRouteIdentity));
@@ -3040,16 +3053,18 @@ const TeamDetailPage: React.FC = () => {
   const renderTopologyTab = () => {
     return (
       <TeamTopologyTab
+        depthControlDisabled={!canAdjustTopologyDepth}
+        depthControlHint={topologyControlsHint || undefined}
         graphDepth={graphDepth}
         graphEdgeCount={topologyGraph.edges.length}
-        graphFocusLabel={`${formatTopologyDepthLabel(graphDepth)}视角 · 焦点 ${compactId(effectiveActorId)}`}
+        graphFocusLabel={`${topologyDepthLabel}视角 · 焦点 ${topologyFocusActorId ? compactId(topologyFocusActorId) : "未选中"}`}
         graphNodeCount={topologyGraph.nodes.length}
         isError={actorGraphQuery.isError}
         isLoading={actorGraphQuery.isLoading}
         onCanvasSelect={() =>
           setSelectedTopologyNodeId(
-            topologyGraph.entityMap.has(effectiveActorId)
-              ? effectiveActorId
+            topologyGraph.entityMap.has(topologyFocusActorId)
+              ? topologyFocusActorId
               : topologyGraph.nodes[0]?.id || "",
           )
         }
@@ -3061,6 +3076,8 @@ const TeamDetailPage: React.FC = () => {
         }}
         onOpenPlatformTopology={handleOpenServiceMapping}
         onSetGraphDepth={setGraphDepth}
+        platformTopologyDisabled={!canOpenPlatformTopology}
+        platformTopologyHint={platformTopologyHint || undefined}
         openPlatformTopologyButtonStyle={{
           borderRadius: 16,
           height: 40,
@@ -3091,7 +3108,8 @@ const TeamDetailPage: React.FC = () => {
         selectedFocusReason={
           selectedFocusReason || "围绕当前焦点成员展开团队消息路径。点击左侧节点即可切换视角。"
         }
-        selectedNodeId={selectedTopologyNodeId || effectiveActorId}
+        selectedNodeId={selectedTopologyNodeId || topologyFocusActorId}
+        topologyEmptyDescription={topologyEmptyDescription}
         topologyEdges={topologyGraph.edges}
         topologyNodes={topologyGraph.nodes}
       />
@@ -3136,6 +3154,8 @@ const TeamDetailPage: React.FC = () => {
       <TeamMembersTab
         compositionRows={memberCompositionRows}
         identityRows={memberIdentityRows}
+        openRuntimeExplorerDisabled={!canOpenPlatformTopology}
+        openRuntimeExplorerHint={platformTopologyHint || undefined}
         onOpenRuntimeExplorer={handleOpenServiceMapping}
         onOpenServices={handleOpenServices}
         onSelectActor={setSelectedActorId}
@@ -3212,6 +3232,8 @@ const TeamDetailPage: React.FC = () => {
         onOpenConversation={handleOpenConversation}
         onOpenServiceMapping={handleOpenServiceMapping}
         onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
+        serviceMappingDisabled={!canOpenPlatformTopology}
+        serviceMappingHint={platformTopologyHint || undefined}
         primaryActionButtonStyle={resolveActionButtonStyle(token, "primary")}
         secondaryActionButtonStyle={resolveActionButtonStyle(token)}
         serviceMappingActionLabel={serviceMappingActionLabel}
@@ -3259,6 +3281,8 @@ const TeamDetailPage: React.FC = () => {
           onOpenConversation={handleOpenConversation}
           onOpenServiceMapping={handleOpenServiceMapping}
           onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
+          serviceMappingDisabled={!canOpenPlatformTopology}
+          serviceMappingHint={platformTopologyHint || undefined}
           serviceMappingActionLabel={serviceMappingActionLabel}
           teamBuilderActionLabel={teamBuilderActionLabel}
         />

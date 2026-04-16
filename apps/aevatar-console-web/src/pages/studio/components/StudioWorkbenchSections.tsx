@@ -817,6 +817,7 @@ const studioSurfaceStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   flex: 1,
+  height: '100%',
   minHeight: 0,
   minWidth: 0,
   overflow: 'hidden',
@@ -848,10 +849,65 @@ const studioSurfaceBodyStyle: React.CSSProperties = {
 const studioSettingsTabsStyle: React.CSSProperties = {
   display: 'flex',
   flex: 1,
+  height: '100%',
   minHeight: 0,
   minWidth: 0,
+  overflow: 'hidden',
   width: '100%',
 };
+
+const studioSettingsTabsClassName = 'studio-settings-tabs';
+const studioSettingsTabContentClassName = 'studio-settings-tab-content';
+const studioSettingsTabsCss = `
+.${studioSettingsTabsClassName} {
+  align-items: stretch;
+  display: flex;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-content-holder {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-content {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-tabpane-hidden {
+  display: none !important;
+}
+
+.${studioSettingsTabsClassName} .ant-tabs-tabpane-active {
+  display: flex !important;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.${studioSettingsTabContentClassName} {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+`;
 
 const studioSettingsTabLabelStyle: React.CSSProperties = {
   alignItems: 'center',
@@ -862,12 +918,9 @@ const studioSettingsTabLabelStyle: React.CSSProperties = {
 
 const studioSettingsTabContentStyle: React.CSSProperties = {
   ...cardStackStyle,
-  height: '100%',
+  flex: 1,
   minHeight: 0,
   minWidth: 0,
-  overflowX: 'hidden',
-  overflowY: 'auto',
-  paddingRight: 4,
 };
 
 const studioStatusStripStyle: React.CSSProperties = {
@@ -4028,6 +4081,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         },
       );
       setGAgentModalOpen(false);
+    } catch {
+      // The page-level binder already surfaces the error notice. Keep the dialog
+      // open so the user can correct the input or retry.
     } finally {
       setGAgentBindingPending(false);
     }
@@ -6788,7 +6844,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             <div style={sectionPanelStyle}>
               <div style={cardStackStyle}>
                 <Typography.Text strong>运行时</Typography.Text>
@@ -6886,7 +6945,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             {settings.isError ? (
               <StudioNoticeCard
                 type="error"
@@ -7263,7 +7325,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             <div style={sectionPanelStyle}>
               <div
                 style={{
@@ -7373,7 +7438,10 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           </span>
         ),
         children: (
-          <div style={studioSettingsTabContentStyle}>
+          <div
+            className={studioSettingsTabContentClassName}
+            style={studioSettingsTabContentStyle}
+          >
             <div style={cardStackStyle}>
               <div style={sectionPanelStyle}>
                 <div style={cardStackStyle}>
@@ -7777,9 +7845,11 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
             </div>
           </>
         ) : null}
+        <style>{studioSettingsTabsCss}</style>
         <Tabs
           activeKey={activeSection}
           animated={false}
+          className={studioSettingsTabsClassName}
           destroyOnHidden
           items={settingsTabs}
           onChange={(key) => setActiveSection(key as StudioSettingsSectionKey)}
