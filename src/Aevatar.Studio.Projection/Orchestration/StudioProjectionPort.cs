@@ -47,18 +47,3 @@ public sealed class StudioProjectionPort
     }
 }
 
-/// <summary>
-/// Canonical projection-kind strings for the Studio materialization scope.
-/// Each actor type gets its own kind so the scope agent IDs don't collide.
-/// </summary>
-public static class StudioProjectionKinds
-{
-    public const string UserConfig = "user-config";
-    public const string RoleCatalog = "role-catalog";
-    public const string ConnectorCatalog = "connector-catalog";
-    public const string ChatHistoryIndex = "chat-history-index";
-    public const string ChatConversation = "chat-conversation";
-    public const string GAgentRegistry = "gagent-registry";
-    public const string UserMemory = "user-memory";
-    public const string StreamingProxyParticipant = "streaming-proxy-participant";
-}

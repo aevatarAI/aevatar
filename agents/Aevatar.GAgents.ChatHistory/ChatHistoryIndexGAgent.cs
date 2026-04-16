@@ -10,8 +10,11 @@ namespace Aevatar.GAgents.ChatHistory;
 /// Per-user index actor that holds conversation list and metadata.
 /// Actor ID: <c>chat-index-{scopeId}</c>.
 /// </summary>
-public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
+public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>, IProjectedActor
 {
+    public static string ProjectionKind => "chat-history-index";
+
+
     [EventHandler(EndpointName = "upsertConversation")]
     public async Task HandleConversationUpserted(ConversationUpsertedEvent evt)
     {

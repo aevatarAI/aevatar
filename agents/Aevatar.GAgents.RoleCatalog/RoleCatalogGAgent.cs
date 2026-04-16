@@ -13,8 +13,11 @@ namespace Aevatar.GAgents.RoleCatalog;
 ///
 /// Actor ID: <c>role-catalog</c> (cluster-scoped singleton).
 /// </summary>
-public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
+public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>, IProjectedActor
 {
+    public static string ProjectionKind => "role-catalog";
+
+
     [EventHandler(EndpointName = "saveCatalog")]
     public async Task HandleCatalogSaved(RoleCatalogSavedEvent evt)
     {

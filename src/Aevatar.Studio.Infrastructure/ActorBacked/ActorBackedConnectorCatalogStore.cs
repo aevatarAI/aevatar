@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -22,29 +21,26 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     private const string ActorHomeDirectory = "actor://connector-catalog";
     private const string ActorFilePath = "actor://connector-catalog/connectors";
 
-    private readonly IActorRuntime _runtime;
+    private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _workspaceStore;
     private readonly IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> _documentReader;
-    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
 
     public ActorBackedConnectorCatalogStore(
-        IActorRuntime runtime,
+        IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore workspaceStore,
         IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> documentReader,
-        StudioProjectionPort projectionPort,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _workspaceStore = workspaceStore ?? throw new ArgumentNullException(nameof(workspaceStore));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -185,14 +181,8 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
 
-    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
-    {
-        var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId)
-                    ?? await _runtime.CreateAsync<ConnectorCatalogGAgent>(actorId, ct);
-        await _projectionPort.EnsureProjectionAsync(actorId, StudioProjectionKinds.ConnectorCatalog, ct);
-        return actor;
-    }
+    private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
+        _bootstrap.EnsureAsync<ConnectorCatalogGAgent>(ResolveWriteActorId(), ct);
 
     // ── Proto <-> Domain mapping ──
 

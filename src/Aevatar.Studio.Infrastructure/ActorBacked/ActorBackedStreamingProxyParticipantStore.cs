@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -19,23 +18,20 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
 {
     private const string WriteActorId = "streaming-proxy-participants";
 
-    private readonly IActorRuntime _runtime;
+    private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> _documentReader;
-    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedStreamingProxyParticipantStore> _logger;
 
     public ActorBackedStreamingProxyParticipantStore(
-        IActorRuntime runtime,
+        IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
         IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> documentReader,
-        StudioProjectionPort projectionPort,
         ILogger<ActorBackedStreamingProxyParticipantStore> logger)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -100,11 +96,6 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
 
     // ── Actor resolution ──
 
-    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(WriteActorId)
-                    ?? await _runtime.CreateAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
-        await _projectionPort.EnsureProjectionAsync(WriteActorId, StudioProjectionKinds.StreamingProxyParticipant, ct);
-        return actor;
-    }
+    private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
+        _bootstrap.EnsureAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
 }

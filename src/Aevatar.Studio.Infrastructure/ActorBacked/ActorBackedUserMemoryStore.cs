@@ -5,7 +5,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -20,26 +19,23 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 {
     private const string WriteActorIdPrefix = "user-memory-";
 
-    private readonly IActorRuntime _runtime;
+    private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> _documentReader;
-    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedUserMemoryStore> _logger;
 
     public ActorBackedUserMemoryStore(
-        IActorRuntime runtime,
+        IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
         IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> documentReader,
-        StudioProjectionPort projectionPort,
         ILogger<ActorBackedUserMemoryStore> logger)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -220,14 +216,8 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
 
-    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
-    {
-        var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId)
-                    ?? await _runtime.CreateAsync<UserMemoryGAgent>(actorId, ct);
-        await _projectionPort.EnsureProjectionAsync(actorId, StudioProjectionKinds.UserMemory, ct);
-        return actor;
-    }
+    private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
+        _bootstrap.EnsureAsync<UserMemoryGAgent>(ResolveWriteActorId(), ct);
 
     private static string GenerateId()
     {

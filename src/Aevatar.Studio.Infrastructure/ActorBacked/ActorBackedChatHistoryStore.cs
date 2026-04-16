@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -16,26 +15,23 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// </summary>
 internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> _indexDocumentReader;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
-    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedChatHistoryStore> _logger;
 
     public ActorBackedChatHistoryStore(
-        IActorRuntime runtime,
+        IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
         IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> indexDocumentReader,
         IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
-        StudioProjectionPort projectionPort,
         ILogger<ActorBackedChatHistoryStore> logger)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _indexDocumentReader = indexDocumentReader ?? throw new ArgumentNullException(nameof(indexDocumentReader));
         _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -107,16 +103,12 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
     private async Task<IActor> EnsureConversationActorAsync(
         string scopeId, string conversationId, CancellationToken ct)
     {
-        var actorId = ConversationActorId(scopeId, conversationId);
-        var actor = await _runtime.GetAsync(actorId)
-                    ?? await _runtime.CreateAsync<ChatConversationGAgent>(actorId, ct);
-        // Activate both projections: the conversation's own state AND the
-        // per-scope index actor that the conversation forwards events to
-        // internally. Without this either projection, GET returns stale
-        // data after saves.
-        await _projectionPort.EnsureProjectionAsync(actorId, StudioProjectionKinds.ChatConversation, ct);
-        await _projectionPort.EnsureProjectionAsync(IndexActorId(scopeId), StudioProjectionKinds.ChatHistoryIndex, ct);
-        return actor;
+        // The conversation actor forwards events to the per-scope index
+        // actor internally, so we bootstrap both so their projections
+        // materialize. Ordering doesn't matter; each call is idempotent.
+        await _bootstrap.EnsureAsync<ChatHistoryIndexGAgent>(IndexActorId(scopeId), ct);
+        return await _bootstrap.EnsureAsync<ChatConversationGAgent>(
+            ConversationActorId(scopeId, conversationId), ct);
     }
 
     // ── Actor ID conventions ───────────────────────────────────
