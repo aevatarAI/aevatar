@@ -65,17 +65,39 @@ type ScopeBackedTeamPreview = {
   readonly attention: WorkflowOperationalAttention;
   readonly attentionDetail: string;
   readonly detailHref: string;
+  readonly entryLabel: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
-  readonly primaryLabel: string;
-  readonly secondaryLabel: string;
   readonly serviceId: string;
+  readonly serviceLabel: string;
   readonly title: string;
   readonly updatedAt: string | null;
 };
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function isPlaceholderTeamLabel(value: string | null | undefined): boolean {
+  const normalized = trimOptional(value).toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return ["not configured", "unconfigured", "unknown", "n/a"].includes(normalized);
+}
+
+function pickMeaningfulLabel(
+  ...candidates: Array<string | null | undefined>
+): string {
+  for (const candidate of candidates) {
+    const normalized = trimOptional(candidate);
+    if (normalized && !isPlaceholderTeamLabel(normalized)) {
+      return normalized;
+    }
+  }
+
+  return "";
 }
 
 function formatRunStatusLabel(status: string | null | undefined): string {
@@ -331,30 +353,6 @@ const SummaryStatCard: React.FC<{
   );
 };
 
-const EvidencePill: React.FC<{
-  readonly text: string;
-}> = ({ text }) => {
-  const { token } = theme.useToken();
-
-  return (
-    <span
-      style={{
-        background: token.colorInfoBg,
-        border: `1px solid ${token.colorInfoBorder}`,
-        borderRadius: 999,
-        color: token.colorInfo,
-        display: "inline-flex",
-        fontSize: 12,
-        fontWeight: 500,
-        lineHeight: 1,
-        padding: "7px 10px",
-      }}
-    >
-      {text}
-    </span>
-  );
-};
-
 const TeamFact: React.FC<{
   readonly label: string;
   readonly value: React.ReactNode;
@@ -431,6 +429,7 @@ function buildScopeBackedTeamPreview(input: {
   readonly services: readonly ServiceCatalogSnapshot[];
 }): ScopeBackedTeamPreview | null {
   const currentRevision = getStudioScopeBindingCurrentRevision(input.binding);
+  const revisionTarget = describeStudioScopeBindingRevisionTarget(currentRevision);
   const matchedService = resolveScopePreviewService({
     binding: input.binding,
     services: input.services,
@@ -457,15 +456,25 @@ function buildScopeBackedTeamPreview(input: {
     return null;
   }
 
+  const entryLabel =
+    pickMeaningfulLabel(
+      revisionTarget,
+      trimOptional(input.binding?.serviceKey),
+      trimOptional(input.binding?.displayName),
+      trimOptional(matchedService?.displayName),
+    ) || "未命名入口";
+  const serviceLabel =
+    pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
+    "未记录";
   const title =
-    trimOptional(input.binding?.displayName) ||
-    trimOptional(matchedService?.displayName) ||
-    describeStudioScopeBindingRevisionTarget(currentRevision) ||
-    serviceId ||
-    input.scopeId;
+    pickMeaningfulLabel(
+      trimOptional(input.binding?.displayName),
+      trimOptional(matchedService?.displayName),
+      entryLabel,
+    ) || "未命名团队";
 
   let attention: WorkflowOperationalAttention = "draft";
-  let attentionDetail = "当前 Team 还没有形成可运行的入口。";
+  let attentionDetail = "当前团队入口还没有形成可运行状态。";
 
   if (runtimeUnavailable) {
     attention = "runtime-unresolved";
@@ -490,7 +499,7 @@ function buildScopeBackedTeamPreview(input: {
     trimOptional(input.binding?.displayName)
   ) {
     attention = "no-bound-service";
-    attentionDetail = "当前 Team 已绑定入口，但服务能力还没有完整就绪。";
+    attentionDetail = "当前团队入口已经绑定，但服务能力还没有完整就绪。";
   }
 
   const detailHref = buildTeamDetailHref({
@@ -532,18 +541,11 @@ function buildScopeBackedTeamPreview(input: {
     attention,
     attentionDetail,
     detailHref,
+    entryLabel,
     latestRun,
     moreActions,
-    primaryLabel:
-      trimOptional(matchedService?.displayName) ||
-      trimOptional(input.binding?.displayName) ||
-      describeStudioScopeBindingRevisionTarget(currentRevision) ||
-      "当前团队入口",
-    secondaryLabel: formatOperationalStatusLabel(
-      latestRun?.completionStatus,
-      attention,
-    ),
     serviceId,
+    serviceLabel,
     title,
     updatedAt:
       latestRun?.lastUpdatedAt ||
@@ -660,10 +662,14 @@ const ScopeBackedTeamCard: React.FC<{
         </span>
       </div>
 
-      <Space size={[10, 10]} wrap>
-        <EvidencePill text={preview.primaryLabel} />
-        <EvidencePill text={preview.secondaryLabel} />
-      </Space>
+      <Typography.Text
+        style={{
+          color: token.colorTextSecondary,
+          fontSize: 13,
+        }}
+      >
+        默认入口：{preview.entryLabel}
+      </Typography.Text>
 
       <div
         style={{
@@ -685,7 +691,7 @@ const ScopeBackedTeamCard: React.FC<{
           label="最近更新"
           value={formatShortTime(preview.updatedAt)}
         />
-        <TeamFact label="主服务" value={preview.serviceId || "未记录"} />
+        <TeamFact label="关联服务" value={preview.serviceLabel} />
       </div>
 
       <Space wrap>
@@ -769,10 +775,14 @@ const ScopeBackedTeamRow: React.FC<{
         >
           {preview.attentionDetail}
         </Typography.Paragraph>
-        <Space size={[8, 8]} style={{ marginTop: 10 }} wrap>
-          <EvidencePill text={preview.primaryLabel} />
-          <EvidencePill text={preview.secondaryLabel} />
-        </Space>
+        <Typography.Text
+          style={{
+            color: token.colorTextSecondary,
+            fontSize: 13,
+          }}
+        >
+          默认入口：{preview.entryLabel}
+        </Typography.Text>
       </div>
 
       <TeamFact
@@ -783,7 +793,7 @@ const ScopeBackedTeamRow: React.FC<{
         )}
       />
       <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
-      <TeamFact label="服务" value={preview.serviceId || "未记录"} />
+      <TeamFact label="服务" value={preview.serviceLabel} />
 
       <Space wrap>
         <Button
@@ -1006,14 +1016,16 @@ const TeamsHomePage: React.FC = () => {
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
-  const visibleRuns = scopePreviewTeam?.latestRun ? 1 : 0;
+  const healthyTeamCount = scopePreviewTeam?.attention === "healthy" ? 1 : 0;
+  const attentionTeamCount =
+    scopePreviewTeam && scopePreviewTeam.attention !== "healthy" ? 1 : 0;
   const draftHint =
     draftUnits.length > 0
-      ? `当前 Team 还有 ${draftUnits.length} 个已保存的行为定义，但它们还没有形成首页入口。`
-      : "当前 Team 还没有可展示的入口。";
+      ? `当前 Scope 里还有 ${draftUnits.length} 个已保存的行为定义，但它们还没有形成首页团队入口。`
+      : "当前 Scope 里还没有形成首页团队入口。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
-    bindingQuery.isError ? "当前 Team 绑定信息暂时不可见。" : null,
+    bindingQuery.isError ? "当前 Scope 的团队绑定信息暂时不可见。" : null,
     ...serviceRunQueries.map((query) =>
       query.isError ? "部分运行信号暂时不可见。" : null,
     ),
@@ -1042,6 +1054,7 @@ const TeamsHomePage: React.FC = () => {
       </Typography.Title>
     </div>
   );
+  const canCancelScopePicker = showScopePicker && scopeId.length > 0;
 
   return (
     <AevatarPageShell
@@ -1069,6 +1082,18 @@ const TeamsHomePage: React.FC = () => {
       >
         {(showScopePicker || !scopeId) && (
           <AevatarPanel
+            extra={
+              canCancelScopePicker ? (
+                <Button
+                  onClick={() => {
+                    setDraft(normalizeScopeDraft(activeDraft));
+                    setShowScopePicker(false);
+                  }}
+                >
+                  取消
+                </Button>
+              ) : null
+            }
             title="Scope 上下文"
             titleHelp="这一步只负责锁定你当前要查看的 Scope，不把它抢成首页主角。"
           >
@@ -1113,6 +1138,49 @@ const TeamsHomePage: React.FC = () => {
           </AevatarPanel>
         )}
 
+        {scopeId && !showScopePicker ? (
+          <div
+            style={{
+              alignItems: "flex-start",
+              background: token.colorBgContainer,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: 22,
+              boxShadow: token.boxShadowTertiary,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 16,
+              justifyContent: "space-between",
+              padding: 18,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                minWidth: 0,
+              }}
+            >
+              <Typography.Text type="secondary">当前 Scope</Typography.Text>
+              <Typography.Text
+                strong
+                style={{
+                  fontSize: 16,
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {scopeId}
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                首页按这个 Scope 汇总已经形成入口的团队，Scope 只做上下文，不再直接当团队名展示。
+              </Typography.Text>
+            </div>
+            <Space wrap>
+              <Button onClick={() => setShowScopePicker(true)}>切换 Scope</Button>
+            </Space>
+          </div>
+        ) : null}
+
         {!scopeId ? (
           <Alert
             showIcon
@@ -1153,21 +1221,45 @@ const TeamsHomePage: React.FC = () => {
               style={{
                 display: "grid",
                 gap: 16,
-                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="当前 Team" value={scopeId} />
-              <SummaryStatCard label="当前可见团队" value={visibleTeamCount} />
-              <SummaryStatCard label="可见运行信号" value={visibleRuns} />
-              <SummaryStatCard label="草稿条目" value={draftUnits.length} />
+              <SummaryStatCard accent label="团队入口" value={visibleTeamCount} />
+              <SummaryStatCard label="运行正常" value={healthyTeamCount} />
+              <SummaryStatCard label="需要处理" value={attentionTeamCount} />
             </div>
 
+            {draftUnits.length > 0 ? (
+              <Alert
+                action={
+                  <Button
+                    onClick={() =>
+                      history.push(
+                        buildStudioWorkflowWorkspaceRoute({
+                          scopeId,
+                          scopeLabel: scopeId,
+                        }),
+                      )
+                    }
+                    size="small"
+                    type="primary"
+                  >
+                    打开 Studio
+                  </Button>
+                }
+                description={`其中 ${draftUnits.length} 个行为定义还停留在草稿阶段，尚未形成首页团队入口。`}
+                showIcon
+                title="还有草稿待整理"
+                type="info"
+              />
+            ) : null}
+
             {workflowsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在整理当前 Team 的入口卡片。" />
+              <AevatarInspectorEmpty description="正在整理当前 Scope 的团队入口。" />
             ) : workflowsQuery.isError ? (
               <Alert
                 showIcon
-                title="当前 Team 的入口列表暂时无法加载。"
+                title="当前 Scope 的团队入口暂时无法加载。"
                 type="error"
               />
             ) : scopePreviewTeam ? (
@@ -1176,31 +1268,50 @@ const TeamsHomePage: React.FC = () => {
                   style={{
                     alignItems: "center",
                     display: "flex",
+                    flexWrap: "wrap",
                     gap: 12,
-                  justifyContent: "space-between",
+                    justifyContent: "space-between",
                   }}
                 >
-                  <Typography.Text type="secondary">
-                    {visibleTeamCount} 支团队
-                  </Typography.Text>
-                  <Space.Compact>
-                    <Tooltip title="卡片视图">
-                      <Button
-                        aria-label="切换到卡片视图"
-                        icon={<AppstoreOutlined />}
-                        onClick={() => setManualRosterView("cards")}
-                        type={resolvedRosterView === "cards" ? "primary" : "default"}
-                      />
-                    </Tooltip>
-                    <Tooltip title="列表视图">
-                      <Button
-                        aria-label="切换到列表视图"
-                        icon={<BarsOutlined />}
-                        onClick={() => setManualRosterView("list")}
-                        type={resolvedRosterView === "list" ? "primary" : "default"}
-                      />
-                    </Tooltip>
-                  </Space.Compact>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <Typography.Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                      }}
+                    >
+                      团队入口
+                    </Typography.Title>
+                    <Typography.Text type="secondary">
+                      当前 Scope 下已经形成首页入口的团队。
+                    </Typography.Text>
+                  </div>
+                  {visibleTeamCount > 1 ? (
+                    <Space.Compact>
+                      <Tooltip title="卡片视图">
+                        <Button
+                          aria-label="切换到卡片视图"
+                          icon={<AppstoreOutlined />}
+                          onClick={() => setManualRosterView("cards")}
+                          type={resolvedRosterView === "cards" ? "primary" : "default"}
+                        />
+                      </Tooltip>
+                      <Tooltip title="列表视图">
+                        <Button
+                          aria-label="切换到列表视图"
+                          icon={<BarsOutlined />}
+                          onClick={() => setManualRosterView("list")}
+                          type={resolvedRosterView === "list" ? "primary" : "default"}
+                        />
+                      </Tooltip>
+                    </Space.Compact>
+                  ) : null}
                 </div>
                 {useCompactRoster ? (
                   <div
