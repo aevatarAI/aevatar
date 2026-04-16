@@ -55,7 +55,25 @@ export AEVATAR_Orleans__GatewayPort=30000
 
 ## 本地持久化开发模式（Orleans + Garnet）
 
-如果只是想避免本地 scope workflow / actor state 因后端重启而完全丢失，而当前机器又没有 Kafka / Elasticsearch / Neo4j，可以先用仓库内置的 `PersistentLocal` 环境：
+如果只是想快速起一个本地开发后端，并且希望避免“写侧还在、读侧已丢失”的不对称状态，优先使用脚本默认的 `local` 模式。脚本会优先使用 `~/.dotnet/dotnet`，避免系统 `dotnet` 与仓库 `global.json` 的 SDK 版本不匹配：
+
+```bash
+bash src/Aevatar.Mainnet.Host.Api/boot.sh
+```
+
+该模式默认显式启用：
+
+- `AEVATAR_ActorRuntime__Provider=InMemory`
+- `Projection:Document:Providers:InMemory:Enabled=true`
+- `Projection:Graph:Providers:InMemory:Enabled=true`
+- `GAgentService:Demo:Enabled=false`
+
+说明：
+
+- 这是最一致的单机开发模式：read/write 都是本地临时态。
+- 后端重启后，actor state 与 projection/read model 会一起清空，不会出现“service definition 还在，但 services/read model 已空”的错位。
+
+如果只是想避免本地 scope workflow / actor state 因后端重启而完全丢失，而当前机器又没有 Kafka / Elasticsearch / Neo4j，可以使用仓库内置的 `PersistentLocal` 环境：
 
 ```bash
 ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.Host.Api
@@ -76,6 +94,7 @@ ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.
 说明：
 
 - 该模式的目标是保住本地 actor 持久态与 workflow 存储回补能力，适合单机开发验证。
+- 由于 document / graph projection 仍是 `InMemory`，后端重启后 read model 会清空；如果 write-side 仍保留，可能出现本地 Console 看不到团队卡、但重复绑定提示“already exists”的现象。
 - 它不是完整的 distributed / production profile；若需要 durable document / graph projection，仍应使用 `Distributed` 环境并启动 Kafka、Elasticsearch、Neo4j。
 
 ## 多机集群测试（Docker）

@@ -1,6 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { message } from 'antd';
 import React from 'react';
-import { StudioEditorPage } from './StudioWorkbenchSections';
+import {
+  dedupeStudioWorkflowSummaries,
+  StudioEditorPage,
+} from './StudioWorkbenchSections';
 
 jest.mock('@/shared/graphs/GraphCanvas', () => ({
   __esModule: true,
@@ -243,6 +247,40 @@ function createBaseProps(overrides = {}) {
 }
 
 describe('StudioEditorPage', () => {
+  it('keeps workflow summaries in a stable order when selection changes', () => {
+    const workflows = [
+      {
+        workflowId: 'workflow-a',
+        name: 'alpha',
+        description: '',
+        fileName: 'alpha.yaml',
+        filePath: '/tmp/workflows/alpha.yaml',
+        directoryId: 'dir-1',
+        directoryLabel: 'Workspace',
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: '2026-03-25T00:00:00Z',
+      },
+      {
+        workflowId: 'workflow-b',
+        name: 'beta',
+        description: '',
+        fileName: 'beta.yaml',
+        filePath: '/tmp/workflows/beta.yaml',
+        directoryId: 'dir-1',
+        directoryLabel: 'Workspace',
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: '2026-03-24T00:00:00Z',
+      },
+    ];
+
+    expect(dedupeStudioWorkflowSummaries(workflows).map((item) => item.workflowId)).toEqual([
+      'workflow-a',
+      'workflow-b',
+    ]);
+  });
+
   it('opens the node library drawer from the toolbar and inserts a node', async () => {
     const onAddGraphNode = jest.fn();
 
@@ -435,5 +473,146 @@ describe('StudioEditorPage', () => {
         },
       );
     });
+  });
+
+  it('prefills a chat endpoint for chat-oriented GAgent types', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          gAgentTypes: [
+            {
+              typeName: 'NyxIdChatGAgent',
+              fullName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+              assemblyName: 'Aevatar.GAgents.NyxidChat',
+            },
+          ],
+          onBindGAgent: jest.fn(async () => undefined),
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+
+    expect(
+      await screen.findByRole('dialog', { name: '绑定团队入口' }),
+    ).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('入口 ID 1')).toHaveValue('chat');
+      expect(screen.getByLabelText('入口展示名称 1')).toHaveValue('Chat');
+    });
+
+    expect(
+      screen.getByText('聊天入口会直接打开聊天型测试运行。'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('测试运行默认入口'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText('默认测试运行入口：Chat (chat)'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('入口 Actor 类型'),
+    ).not.toBeInTheDocument();
+
+    expect(screen.getAllByRole('button', { name: '显示高级设置' })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: '显示高级设置' }));
+    expect(screen.getByLabelText('入口 Actor 类型')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '显示高级设置' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '收起高级设置' })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /添加入口/i }));
+    expect(screen.getByLabelText('测试运行默认入口')).toBeInTheDocument();
+  });
+
+  it('keeps the GAgent binding dialog open when binding fails', async () => {
+    const onBindGAgent = jest.fn(async () => {
+      throw new Error('Bind failed');
+    });
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          gAgentTypes: [
+            {
+              typeName: 'OrdersGAgent',
+              fullName: 'Tests.OrdersGAgent',
+              assemblyName: 'Tests',
+            },
+          ],
+          onBindGAgent,
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+
+    expect(
+      await screen.findByRole('dialog', { name: '绑定团队入口' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '仅绑定' }));
+
+    await waitFor(() => {
+      expect(onBindGAgent).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('dialog', { name: '绑定团队入口' }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('shows a success toast after binding a GAgent without opening runs', async () => {
+    const messageSuccessSpy = jest
+      .spyOn(message, 'success')
+      .mockImplementation(() => ({}) as any);
+
+    try {
+      const onBindGAgent = jest.fn(async () => undefined);
+
+      render(
+        React.createElement(
+          StudioEditorPage,
+          createBaseProps({
+            resolvedScopeId: 'scope-a',
+            gAgentTypes: [
+              {
+                typeName: 'OrdersGAgent',
+                fullName: 'Tests.OrdersGAgent',
+                assemblyName: 'Tests',
+              },
+            ],
+            onBindGAgent,
+          }) as any,
+        ),
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+
+      expect(
+        await screen.findByRole('dialog', { name: '绑定团队入口' }),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '仅绑定' }));
+
+      await waitFor(() => {
+        expect(onBindGAgent).toHaveBeenCalled();
+      });
+
+      await waitFor(() => {
+        expect(messageSuccessSpy).toHaveBeenCalledWith('团队入口已绑定成功。');
+      });
+    } finally {
+      messageSuccessSpy.mockRestore();
+    }
   });
 });

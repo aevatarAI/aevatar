@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { servicesApi } from "@/shared/api/servicesApi";
+import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { history } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
@@ -751,6 +753,68 @@ describe("TeamDetailPage", () => {
     expect(params.get("runId")).toBe("run-current");
     expect(params.get("scopeId")).toBe("scope-1");
     expect(params.get("serviceId")).toBe("default");
+  });
+
+  it("updates the topology depth selection when the focus member is available", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "服务映射" });
+    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
+    await screen.findByText("团队事件路径");
+
+    const nearButton = screen.getByRole("button", { name: "近邻" });
+    const expandButton = screen.getByRole("button", { name: "扩展" });
+    const panoramaButton = screen.getByRole("button", { name: "全景" });
+
+    expect(expandButton).toHaveAttribute("aria-pressed", "true");
+    expect(nearButton).toHaveAttribute("aria-pressed", "false");
+    expect(panoramaButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(panoramaButton);
+
+    expect(panoramaButton).toHaveAttribute("aria-pressed", "true");
+    expect(expandButton).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("disables topology controls when the current team has no focus member yet", async () => {
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+      available: false,
+      scopeId: "scope-1",
+      serviceId: "",
+      displayName: "",
+      serviceKey: "",
+      defaultServingRevisionId: "",
+      activeServingRevisionId: "",
+      deploymentId: "",
+      deploymentStatus: "",
+      primaryActorId: "",
+      updatedAt: "2026-04-09T09:00:00Z",
+      revisions: [],
+    });
+    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
+    (runtimeGAgentApi.listActors as jest.Mock).mockResolvedValueOnce([]);
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "服务映射" });
+    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
+    await screen.findByText("团队事件路径");
+
+    expect(
+      screen.getByText("当前还没有可用的团队成员焦点，待成员或运行信号可见后再切换视角。"),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "服务映射" })[0]).toBeDisabled();
+    expect(screen.getByRole("button", { name: "近邻" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "扩展" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "全景" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "打开平台拓扑" })).toBeDisabled();
+    expect(
+      screen.getByText("当前还没有可用的团队成员焦点，所以暂时没有可展开的事件拓扑关系。"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    expect(await screen.findByText("继续调整这支团队")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "服务映射" })[0]).toBeDisabled();
   });
 
   it("opens platform workbenches from members and bindings", async () => {

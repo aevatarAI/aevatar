@@ -39,6 +39,8 @@ type TeamAdvancedTabProps = {
   readonly onOpenConversation: () => void;
   readonly onOpenServiceMapping: () => void;
   readonly onOpenTeamBuilder: () => void;
+  readonly serviceMappingDisabled?: boolean;
+  readonly serviceMappingHint?: string;
   readonly primaryActionButtonStyle: React.CSSProperties;
   readonly secondaryActionButtonStyle: React.CSSProperties;
   readonly serviceMappingActionLabel: string;
@@ -59,6 +61,8 @@ const TeamAdvancedTab: React.FC<TeamAdvancedTabProps> = ({
   onOpenConversation,
   onOpenServiceMapping,
   onOpenTeamBuilder,
+  serviceMappingDisabled = false,
+  serviceMappingHint,
   primaryActionButtonStyle,
   secondaryActionButtonStyle,
   serviceMappingActionLabel,
@@ -171,8 +175,10 @@ const TeamAdvancedTab: React.FC<TeamAdvancedTabProps> = ({
             </div>
             <Space wrap>
               <Button
+                disabled={serviceMappingDisabled}
                 onClick={onOpenServiceMapping}
                 style={primaryActionButtonStyle}
+                title={serviceMappingDisabled ? serviceMappingHint : undefined}
                 type="primary"
               >
                 {serviceMappingActionLabel}

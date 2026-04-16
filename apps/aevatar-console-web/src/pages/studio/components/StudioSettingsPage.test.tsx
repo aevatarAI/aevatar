@@ -215,4 +215,49 @@ describe('StudioSettingsPage', () => {
       screen.getByRole('button', { name: '检测宿主运行时' }),
     ).toBeInTheDocument();
   });
+
+  it('keeps the settings detail viewport stretchable so the active pane can scroll', () => {
+    const { container } = render(<StudioSettingsPage {...createBaseProps()} />);
+
+    expect(container.firstElementChild).toHaveStyle({
+      height: '100%',
+      minHeight: '0',
+      overflow: 'hidden',
+    });
+
+    const tabs = container.querySelector(`.${'studio-settings-tabs'}`);
+    expect(tabs).not.toBeNull();
+    expect(tabs).toHaveStyle({
+      flex: '1',
+      height: '100%',
+      minHeight: '0',
+      overflow: 'hidden',
+    });
+
+    const contentHolder = container.querySelector(
+      '.studio-settings-tabs .ant-tabs-content-holder',
+    );
+    expect(contentHolder).not.toBeNull();
+    expect(contentHolder).toHaveStyle({
+      flex: '1',
+      minHeight: '0',
+      overflow: 'hidden',
+    });
+
+    const tabContent = container.querySelector(
+      '.studio-settings-tab-content',
+    );
+    expect(tabContent).not.toBeNull();
+    expect(tabContent).toHaveStyle({
+      flex: '1',
+      minHeight: '0',
+      overflowY: 'auto',
+    });
+
+    const styleNode = container.querySelector('style');
+    expect(styleNode?.textContent).toContain('.studio-settings-tabs .ant-tabs-tabpane-active');
+    expect(styleNode?.textContent).toContain('display: flex !important');
+    expect(styleNode?.textContent).toContain('.studio-settings-tab-content');
+    expect(styleNode?.textContent).toContain('overflow-y: auto;');
+  });
 });
