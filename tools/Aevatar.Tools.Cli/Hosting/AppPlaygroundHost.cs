@@ -211,6 +211,17 @@ internal static class AppPlaygroundHost
         if (!path.StartsWith("/api/scopes/", StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // Scope binding is the companion write-path for the nyxid-chat /
+        // streaming-proxy chat flows below — when those go local the binding
+        // that registers the service in the scope's catalog must land on the
+        // same backend, otherwise streamInvoke can't find the service.
+        // `/api/scopes/{scopeId}/binding` has no discriminator in the path,
+        // so we route all scope bindings local (aevatar app is a dev tool —
+        // scope binding UX targets the local backend by design).
+        if (path.EndsWith("/binding", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/binding?", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         return path.Contains("/nyxid-chat/", StringComparison.OrdinalIgnoreCase)
             || path.Contains("/streaming-proxy/", StringComparison.OrdinalIgnoreCase)
             || path.Contains("/chat-history", StringComparison.OrdinalIgnoreCase);
