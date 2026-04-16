@@ -41,11 +41,15 @@ const stageChipStyle: React.CSSProperties = {
 function readCreateTeamDraftFromLocation(): {
   readonly teamName: string;
   readonly entryName: string;
+  readonly teamDraftWorkflowId: string;
+  readonly teamDraftWorkflowName: string;
 } {
   if (typeof window === 'undefined') {
     return {
       teamName: '',
       entryName: '',
+      teamDraftWorkflowId: '',
+      teamDraftWorkflowName: '',
     };
   }
 
@@ -53,6 +57,8 @@ function readCreateTeamDraftFromLocation(): {
   return {
     teamName: params.get('teamName')?.trim() ?? '',
     entryName: params.get('entryName')?.trim() ?? '',
+    teamDraftWorkflowId: params.get('teamDraftWorkflowId')?.trim() ?? '',
+    teamDraftWorkflowName: params.get('teamDraftWorkflowName')?.trim() ?? '',
   };
 }
 
@@ -60,7 +66,17 @@ const TeamCreatePage: React.FC = () => {
   const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
   const [teamName, setTeamName] = React.useState(initialDraft.teamName);
   const [entryName, setEntryName] = React.useState(initialDraft.entryName);
+  const [teamDraftWorkflowId, setTeamDraftWorkflowId] = React.useState(
+    initialDraft.teamDraftWorkflowId,
+  );
+  const [teamDraftWorkflowName, setTeamDraftWorkflowName] = React.useState(
+    initialDraft.teamDraftWorkflowName,
+  );
   const resolvedEntryName = entryName.trim() || teamName.trim();
+  const resolvedDraftWorkflowId = teamDraftWorkflowId.trim();
+  const resolvedDraftWorkflowName =
+    teamDraftWorkflowName.trim() || resolvedDraftWorkflowId;
+  const hasSavedDraft = Boolean(resolvedDraftWorkflowId);
   const canOpenBuilder = Boolean(teamName.trim());
   const openBuilder = () =>
     history.push(
@@ -68,7 +84,10 @@ const TeamCreatePage: React.FC = () => {
         teamMode: 'create',
         teamName: teamName.trim() || undefined,
         entryName: resolvedEntryName || undefined,
-        draftMode: 'new',
+        teamDraftWorkflowId: resolvedDraftWorkflowId || undefined,
+        teamDraftWorkflowName: resolvedDraftWorkflowName || undefined,
+        workflowId: resolvedDraftWorkflowId || undefined,
+        draftMode: resolvedDraftWorkflowId ? undefined : 'new',
         tab: 'studio',
       }),
     );
@@ -178,6 +197,9 @@ const TeamCreatePage: React.FC = () => {
               >
                 团队名称会显示在创建流程中；入口名称会作为 Studio 新草稿的默认名称。
                 如果入口名称留空，Studio 会自动复用团队名称。
+                {hasSavedDraft
+                  ? ' 这次创建流程已经有已保存草稿，重新进入 Studio 会继续编辑它。'
+                  : ''}
               </Typography.Text>
             </div>
             <Space wrap size={[8, 8]}>
@@ -225,6 +247,42 @@ const TeamCreatePage: React.FC = () => {
           </div>
         </div>
       </AevatarPanel>
+
+      {hasSavedDraft ? (
+        <AevatarPanel
+          layoutMode="document"
+          padding={20}
+          title="Saved Draft"
+        >
+          <div
+            style={{
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <Typography.Text strong>已保存草稿</Typography.Text>
+            <Typography.Text>{resolvedDraftWorkflowName}</Typography.Text>
+            <Typography.Text type="secondary" style={{ lineHeight: 1.6 }}>
+              这份行为定义草稿已经和当前创建团队流程关联。再次进入 Studio 时，会继续编辑它。
+            </Typography.Text>
+            <Space wrap size={[8, 8]}>
+              <Button
+                icon={<BuildOutlined />}
+                onClick={openBuilder}
+                style={primaryActionButtonStyle}
+              >
+                Continue Draft
+              </Button>
+              <Button disabled style={secondaryActionButtonStyle}>
+                Delete Draft
+              </Button>
+            </Space>
+            <Typography.Text type="secondary" style={{ lineHeight: 1.6 }}>
+              Delete Draft 需要后端删除 workflow 接口，当前前端先不提供假删除。
+            </Typography.Text>
+          </div>
+        </AevatarPanel>
+      ) : null}
     </ConsoleMenuPageShell>
   );
 };

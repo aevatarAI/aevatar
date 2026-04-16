@@ -1445,6 +1445,7 @@ type StudioScopeBindingPanelProps = {
   readonly teamCreation?: {
     readonly teamName: string;
     readonly entryName: string;
+    readonly workflowName: string;
   } | null;
   readonly loading: boolean;
   readonly error: unknown;
@@ -4013,6 +4014,7 @@ export type StudioEditorPageProps = {
   readonly teamCreation?: {
     readonly teamName: string;
     readonly entryName: string;
+    readonly workflowName: string;
   } | null;
   readonly scopeBinding?: StudioScopeBindingStatus;
   readonly scopeBindingLoading: boolean;
@@ -4040,6 +4042,7 @@ export type StudioEditorPageProps = {
   readonly onSetWorkflowDescription: (value: string) => void;
   readonly onSetDraftYaml: (value: string) => void;
   readonly onSetDraftWorkflowName: (value: string) => void;
+  readonly onSetTeamEntryName: (value: string) => void;
   readonly onSetDraftDirectoryId: (value: string) => void;
   readonly onSetDraftFileName: (value: string) => void;
   readonly onSetInspectorTab: (tab: StudioInspectorTab) => void;
@@ -4153,6 +4156,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   onDeleteSelectedGraphEdge,
   onSetWorkflowDescription,
   onSetDraftWorkflowName,
+  onSetTeamEntryName,
   onSetInspectorTab,
   onWorkflowImportChange,
   onSaveDraft,
@@ -4500,6 +4504,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     activeWorkflowFile?.name ||
     templateWorkflowName ||
     'draft';
+  const teamEntryDisplayName = teamCreation?.entryName.trim() || '';
+  const teamWorkflowLabel =
+    teamCreation?.workflowName.trim() || workflowDisplayName;
+  const showTeamWorkflowLabel =
+    Boolean(teamCreation) &&
+    Boolean(teamWorkflowLabel.trim()) &&
+    teamWorkflowLabel.trim() !== teamEntryDisplayName;
   const visibleWorkflowDefinitions = React.useMemo(
     () => dedupeStudioWorkflowSummaries(workflows.data ?? []),
     [workflows.data],
@@ -4966,13 +4977,30 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               >
                 <div style={studioTitleBarStyle}>
                   <div style={studioTitleGroupStyle}>
-                    <input
-                      aria-label="Studio workflow title"
-                      placeholder={workflowDisplayName}
-                      value={draftWorkflowName}
-                      onChange={(event) => onSetDraftWorkflowName(event.target.value)}
-                      style={studioTitleInputStyle}
-                    />
+                    {teamCreation ? (
+                      <>
+                        <input
+                          aria-label="Studio team entry name"
+                          placeholder="入口名称"
+                          value={teamEntryDisplayName}
+                          onChange={(event) => onSetTeamEntryName(event.target.value)}
+                          style={studioTitleInputStyle}
+                        />
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {showTeamWorkflowLabel
+                            ? `当前行为定义：${teamWorkflowLabel}`
+                            : '当前正在编辑团队入口草稿。'}
+                        </Typography.Text>
+                      </>
+                    ) : (
+                      <input
+                        aria-label="Studio workflow title"
+                        placeholder={workflowDisplayName}
+                        value={draftWorkflowName}
+                        onChange={(event) => onSetDraftWorkflowName(event.target.value)}
+                        style={studioTitleInputStyle}
+                      />
+                    )}
                     <StudioInfoPopover
                       open={descriptionEditorOpen}
                       ariaLabel="编辑定义说明"

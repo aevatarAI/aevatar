@@ -2171,6 +2171,34 @@ describe("StudioPage", () => {
     });
   });
 
+  it("updates the create-team draft pointer after saving a team draft", async () => {
+    renderStudioPage(
+      "/studio?workflow=workflow-1&tab=studio&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
+    );
+
+    const editor = await screen.findByLabelText("定义 YAML");
+    fireEvent.change(editor, {
+      target: {
+        value: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
+      },
+    });
+
+    const saveButton = screen.getByRole("button", { name: "保存草稿" });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(window.location.pathname).toBe("/studio");
+      expect(searchParams.get("teamDraftWorkflowId")).toBe("workflow-1");
+      expect(searchParams.get("teamDraftWorkflowName")).toBe("workspace-demo");
+      expect(searchParams.get("workflow")).toBe("workflow-1");
+      expect(searchParams.get("entryName")).toBe("订单入口");
+    });
+  });
+
   it("keeps Studio workflow saves pinned to the current scope route", async () => {
     renderStudioPage("/studio?scopeId=scope-1&workflow=workflow-1&tab=studio");
 

@@ -16,6 +16,8 @@ type StudioRouteOptions = {
   teamMode?: 'create';
   teamName?: string;
   entryName?: string;
+  teamDraftWorkflowId?: string;
+  teamDraftWorkflowName?: string;
   workflowId?: string;
   scriptId?: string;
   template?: string;
@@ -77,6 +79,12 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   if (options?.entryName?.trim()) {
     params.set('entryName', options.entryName.trim());
   }
+  if (options?.teamDraftWorkflowId?.trim()) {
+    params.set('teamDraftWorkflowId', options.teamDraftWorkflowId.trim());
+  }
+  if (options?.teamDraftWorkflowName?.trim()) {
+    params.set('teamDraftWorkflowName', options.teamDraftWorkflowName.trim());
+  }
   if (options?.workflowId?.trim()) {
     params.set('workflow', options.workflowId.trim());
   }
@@ -136,6 +144,8 @@ export function buildStudioWorkflowEditorRoute(options?: {
   teamMode?: 'create';
   teamName?: string;
   entryName?: string;
+  teamDraftWorkflowId?: string;
+  teamDraftWorkflowName?: string;
   workflowId?: string;
   template?: string;
   draftMode?: 'new';

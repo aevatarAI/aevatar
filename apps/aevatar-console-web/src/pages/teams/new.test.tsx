@@ -66,4 +66,36 @@ describe('TeamCreatePage', () => {
     expect(params.get('tab')).toBe('studio');
     expect(params.get('draft')).toBe('new');
   });
+
+  it('shows the saved draft summary and resumes that draft in Studio', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
+    );
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    expect(await screen.findByText('Saved Draft')).toBeTruthy();
+    expect(screen.getByText('已保存草稿')).toBeTruthy();
+    expect(screen.getByText('order-entry-draft')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete Draft' })).toBeDisabled();
+    expect(
+      screen.getByText(
+        'Delete Draft 需要后端删除 workflow 接口，当前前端先不提供假删除。',
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Draft' }));
+
+    expect(window.location.pathname).toBe('/studio');
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('teamMode')).toBe('create');
+    expect(params.get('teamName')).toBe('订单助手团队');
+    expect(params.get('entryName')).toBe('订单入口');
+    expect(params.get('teamDraftWorkflowId')).toBe('workflow-7');
+    expect(params.get('teamDraftWorkflowName')).toBe('order-entry-draft');
+    expect(params.get('workflow')).toBe('workflow-7');
+    expect(params.get('draft')).toBeNull();
+  });
 });

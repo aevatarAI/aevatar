@@ -46,6 +46,21 @@ describe('buildStudioRoute', () => {
     );
   });
 
+  it('preserves the saved create-team draft pointer when resuming in Studio', () => {
+    expect(
+      buildStudioRoute({
+        teamMode: 'create',
+        teamName: '订单助手团队',
+        entryName: '订单入口',
+        teamDraftWorkflowId: 'workflow-7',
+        teamDraftWorkflowName: 'order-entry-draft',
+        workflowId: 'workflow-7',
+      }),
+    ).toBe(
+      '/studio?teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft&workflow=workflow-7&tab=studio',
+    );
+  });
+
   it('supports the dedicated Studio editor tab', () => {
     expect(
       buildStudioRoute({

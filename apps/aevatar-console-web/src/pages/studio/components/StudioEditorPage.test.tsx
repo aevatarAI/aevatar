@@ -216,6 +216,7 @@ function createBaseProps(overrides = {}) {
     onSetWorkflowDescription: jest.fn(),
     onSetDraftYaml: jest.fn(),
     onSetDraftWorkflowName: jest.fn(),
+    onSetTeamEntryName: jest.fn(),
     onSetDraftDirectoryId: jest.fn(),
     onSetDraftFileName: jest.fn(),
     onSetInspectorTab: jest.fn(),
@@ -459,6 +460,9 @@ describe('StudioEditorPage', () => {
   });
 
   it('switches to create-team guidance when the editor is opened from Create Team', async () => {
+    const onSetTeamEntryName = jest.fn();
+    const onSetDraftWorkflowName = jest.fn();
+
     render(
       React.createElement(
         StudioEditorPage,
@@ -467,6 +471,7 @@ describe('StudioEditorPage', () => {
           teamCreation: {
             teamName: '订单助手团队',
             entryName: '订单入口',
+            workflowName: 'test01',
           },
           scopeBinding: {
             available: true,
@@ -482,6 +487,8 @@ describe('StudioEditorPage', () => {
             updatedAt: '2026-03-26T08:00:00Z',
             revisions: [],
           },
+          onSetTeamEntryName,
+          onSetDraftWorkflowName,
         }) as any,
       ),
     );
@@ -489,6 +496,8 @@ describe('StudioEditorPage', () => {
     expect(
       await screen.findByText('你正在创建团队「订单助手团队」'),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText('Studio team entry name')).toHaveValue('订单入口');
+    expect(screen.getByText('当前行为定义：test01')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发布团队入口' })).toBeInTheDocument();
     expect(screen.getByText('入口草稿：订单入口')).toBeInTheDocument();
     expect(
@@ -496,6 +505,11 @@ describe('StudioEditorPage', () => {
         '保存只会写草稿。点击“发布团队入口”后，当前 scope 的默认入口会切换成 订单入口。',
       ),
     ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Studio team entry name'), {
+      target: { value: '订单入口-v2' },
+    });
+    expect(onSetTeamEntryName).toHaveBeenCalledWith('订单入口-v2');
+    expect(onSetDraftWorkflowName).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /查看详情/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '高级设置' })).not.toBeInTheDocument();
   });

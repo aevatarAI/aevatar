@@ -132,6 +132,8 @@ type StudioRouteState = {
   teamMode: '' | 'create';
   teamName: string;
   entryName: string;
+  teamDraftWorkflowId: string;
+  teamDraftWorkflowName: string;
   workflowId: string;
   scriptId: string;
   templateWorkflow: string;
@@ -858,6 +860,8 @@ function readStudioRouteState(search?: string): StudioRouteState {
       teamMode: '',
       teamName: '',
       entryName: '',
+      teamDraftWorkflowId: '',
+      teamDraftWorkflowName: '',
       workflowId: '',
       scriptId: '',
       templateWorkflow: '',
@@ -886,6 +890,8 @@ function readStudioRouteState(search?: string): StudioRouteState {
     teamMode: parseTeamMode(params.get('teamMode')),
     teamName: trimOptional(params.get('teamName')),
     entryName: trimOptional(params.get('entryName')),
+    teamDraftWorkflowId: trimOptional(params.get('teamDraftWorkflowId')),
+    teamDraftWorkflowName: trimOptional(params.get('teamDraftWorkflowName')),
     workflowId: trimOptional(params.get('workflow')),
     scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
@@ -1036,6 +1042,15 @@ const StudioPage: React.FC = () => {
   );
   const [draftYaml, setDraftYaml] = useState('');
   const [draftWorkflowName, setDraftWorkflowName] = useState('');
+  const [teamEntryName, setTeamEntryName] = useState(
+    () => readStudioRouteState().entryName,
+  );
+  const [teamDraftWorkflowId, setTeamDraftWorkflowId] = useState(
+    () => readStudioRouteState().teamDraftWorkflowId,
+  );
+  const [teamDraftWorkflowName, setTeamDraftWorkflowName] = useState(
+    () => readStudioRouteState().teamDraftWorkflowName,
+  );
   const [draftFileName, setDraftFileName] = useState('');
   const [draftDirectoryId, setDraftDirectoryId] = useState('');
   const [draftWorkflowLayout, setDraftWorkflowLayout] = useState<unknown | null>(
@@ -1187,16 +1202,34 @@ const StudioPage: React.FC = () => {
         ? currentLegacySource
         : routeState.legacySource,
     );
+    setTeamEntryName((currentEntryName) =>
+      trimOptional(currentEntryName) === routeState.entryName
+        ? currentEntryName
+        : routeState.entryName,
+    );
+    setTeamDraftWorkflowId((currentWorkflowId) =>
+      trimOptional(currentWorkflowId) === routeState.teamDraftWorkflowId
+        ? currentWorkflowId
+        : routeState.teamDraftWorkflowId,
+    );
+    setTeamDraftWorkflowName((currentWorkflowName) =>
+      trimOptional(currentWorkflowName) === routeState.teamDraftWorkflowName
+        ? currentWorkflowName
+        : routeState.teamDraftWorkflowName,
+    );
     setRunPrompt((currentPrompt) =>
       currentPrompt === routeState.prompt ? currentPrompt : routeState.prompt,
     );
   }, [
     locationSnapshot,
     routeState.draftMode,
+    routeState.entryName,
     routeState.executionId,
     routeState.legacySource,
     routeState.prompt,
     routeState.scriptId,
+    routeState.teamDraftWorkflowId,
+    routeState.teamDraftWorkflowName,
     routeState.templateWorkflow,
     routeState.workflowId,
     routeStudioView,
@@ -1750,10 +1783,17 @@ const StudioPage: React.FC = () => {
       teamName: routeState.teamName || undefined,
       entryName:
         routeState.teamMode === 'create'
-          ? draftWorkflowName.trim() ||
-            routeState.entryName ||
+          ? teamEntryName.trim() ||
             routeState.teamName ||
             undefined
+          : undefined,
+      teamDraftWorkflowId:
+        routeState.teamMode === 'create'
+          ? trimOptional(teamDraftWorkflowId) || undefined
+          : undefined,
+      teamDraftWorkflowName:
+        routeState.teamMode === 'create'
+          ? trimOptional(teamDraftWorkflowName) || undefined
           : undefined,
       workflowId: persistWorkflowDraftRoute ? selectedWorkflowId || undefined : undefined,
       scriptId: persistScriptRoute ? selectedScriptId || undefined : undefined,
@@ -1798,12 +1838,17 @@ const StudioPage: React.FC = () => {
     routeState.memberId,
     routeState.memberLabel,
     routeState.scopeLabel,
+    routeState.teamDraftWorkflowId,
+    routeState.teamDraftWorkflowName,
     routeState.teamMode,
     routeState.teamName,
     selectedExecutionId,
     selectedScriptId,
     selectedWorkflowId,
     studioView,
+    teamDraftWorkflowId,
+    teamDraftWorkflowName,
+    teamEntryName,
     templateWorkflow,
     workspacePage,
   ]);
@@ -2392,6 +2437,10 @@ const StudioPage: React.FC = () => {
           draftWorkflowLayout ||
           buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
       );
+      if (isTeamCreateMode) {
+        setTeamDraftWorkflowId(savedWorkflow.workflowId);
+        setTeamDraftWorkflowName(savedWorkflow.name);
+      }
       setSaveNotice(null);
       void message.success(
         `已保存到 ${describeSavedWorkflowLocation(savedWorkflow)}。`,
@@ -2520,11 +2569,14 @@ const StudioPage: React.FC = () => {
 
   const handlePublishWorkflow = async () => {
     const workflowName = activeWorkflowName.trim();
+    const entryName = isTeamCreateMode ? teamCreateEntryLabel : workflowName;
     const scopeId = resolvedStudioScopeId;
-    if (!workflowName) {
+    if (!entryName) {
       setPublishNotice({
         type: 'error',
-        message: 'Workflow name is required before binding the current scope.',
+        message: isTeamCreateMode
+          ? 'Entry name is required before binding the current scope.'
+          : 'Workflow name is required before binding the current scope.',
       });
       return;
     }
@@ -2560,7 +2612,7 @@ const StudioPage: React.FC = () => {
       const workflowYamls = await buildWorkflowYamlBundle();
       const result = await studioApi.bindScopeWorkflow({
         scopeId,
-        displayName: workflowName,
+        displayName: entryName,
         workflowYamls,
       });
       await queryClient.invalidateQueries({
@@ -4432,15 +4484,20 @@ const StudioPage: React.FC = () => {
           : '编辑器设置';
   const teamCreateTeamLabel =
     trimOptional(routeState.teamName) ||
-    trimOptional(activeWorkflowName) ||
+    trimOptional(teamEntryName) ||
     trimOptional(routeState.entryName) ||
     '未命名团队';
   const teamCreateEntryLabel =
-    trimOptional(draftWorkflowName) ||
-    trimOptional(activeWorkflowName) ||
+    trimOptional(teamEntryName) ||
     trimOptional(routeState.entryName) ||
     trimOptional(routeState.teamName) ||
     '未命名入口';
+  const teamCreateSavedDraftWorkflowId =
+    trimOptional(teamDraftWorkflowId) ||
+    trimOptional(routeState.teamDraftWorkflowId);
+  const teamCreateSavedDraftWorkflowName =
+    trimOptional(teamDraftWorkflowName) ||
+    trimOptional(routeState.teamDraftWorkflowName);
 
   const workflowWorkspaceSection =
     !isTeamCreateMode && workspacePage === 'workflows'
@@ -4590,6 +4647,8 @@ const StudioPage: React.FC = () => {
     ? buildTeamCreateHref({
         teamName: routeState.teamName || undefined,
         entryName: teamCreateEntryLabel || undefined,
+        teamDraftWorkflowId: teamCreateSavedDraftWorkflowId || undefined,
+        teamDraftWorkflowName: teamCreateSavedDraftWorkflowName || undefined,
       })
     : resolvedStudioScopeId
       ? buildTeamDetailHref({
@@ -4902,6 +4961,7 @@ const StudioPage: React.FC = () => {
               ? {
                   teamName: teamCreateTeamLabel,
                   entryName: teamCreateEntryLabel,
+                  workflowName: activeWorkflowName,
                 }
               : null
           }
@@ -4948,6 +5008,10 @@ const StudioPage: React.FC = () => {
           onSetDraftWorkflowName={(value) => {
             setDraftWorkflowName(value);
             setSaveNotice(null);
+          }}
+          onSetTeamEntryName={(value) => {
+            setTeamEntryName(value);
+            setPublishNotice(null);
           }}
           onSetDraftDirectoryId={(value) => {
             setDraftDirectoryId(value);
