@@ -89,9 +89,11 @@ public sealed class UserConfigProjectionAndControllerTests
             RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl));
 
         actorRuntime.GetCalls.Should().ContainSingle().Which.Should().Be("user-config-scope-new");
-        actorRuntime.CreateCalls.Should().ContainSingle()
-            .Which.Should().Be("user-config-scope-new");
-        dispatchPort.ActorId.Should().Be("user-config-scope-new");
+        actorRuntime.CreateCalls.Should().Contain("user-config-scope-new", "user-config actor must be created before dispatch");
+        actorRuntime.CreateCalls.Should().Contain(
+            x => x.Contains("user-config-scope-new", StringComparison.Ordinal) && x.Contains("projection", StringComparison.Ordinal),
+            "projection scope actor must also be created so the materializer subscribes to the stream");
+        dispatchPort.ActorId.Should().Be("user-config-scope-new", "last dispatch is the UserConfigUpdatedEvent to the user-config actor");
         dispatchPort.Envelope.Should().NotBeNull();
     }
 
@@ -114,7 +116,8 @@ public sealed class UserConfigProjectionAndControllerTests
             RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl));
 
         actorRuntime.GetCalls.Should().ContainSingle().Which.Should().Be("user-config-scope-existing");
-        actorRuntime.CreateCalls.Should().BeEmpty("actor already existed, CreateAsync should be skipped");
+        actorRuntime.CreateCalls.Should().NotContain("user-config-scope-existing",
+            "user-config actor already existed, CreateAsync should be skipped for it");
         dispatchPort.ActorId.Should().Be("user-config-scope-existing");
     }
 
@@ -135,7 +138,7 @@ public sealed class UserConfigProjectionAndControllerTests
             LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl));
 
-        actorRuntime.CreateCalls.Should().ContainSingle().Which.Should().Be("user-config-default");
+        actorRuntime.CreateCalls.Should().Contain("user-config-default");
         dispatchPort.ActorId.Should().Be("user-config-default");
     }
 

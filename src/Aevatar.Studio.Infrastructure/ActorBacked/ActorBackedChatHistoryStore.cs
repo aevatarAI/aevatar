@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -16,19 +17,25 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
 {
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> _indexDocumentReader;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
+    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedChatHistoryStore> _logger;
 
     public ActorBackedChatHistoryStore(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> indexDocumentReader,
         IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
+        StudioProjectionPort projectionPort,
         ILogger<ActorBackedChatHistoryStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _indexDocumentReader = indexDocumentReader ?? throw new ArgumentNullException(nameof(indexDocumentReader));
         _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -79,7 +86,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
         foreach (var msg in messages)
             replaceEvt.Messages.Add(ToStoredChatMessageProto(msg));
 
-        await ActorCommandDispatcher.SendAsync(conversationActor, replaceEvt, ct);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, conversationActor, replaceEvt, ct);
     }
 
     public async Task DeleteConversationAsync(
@@ -92,7 +99,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
             ConversationId = conversationId,
             ScopeId = scopeId,
         };
-        await ActorCommandDispatcher.SendAsync(conversationActor, deleteEvt, ct);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, conversationActor, deleteEvt, ct);
     }
 
     // ── Actor resolution ───────────────────────────────────────
@@ -101,8 +108,15 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
         string scopeId, string conversationId, CancellationToken ct)
     {
         var actorId = ConversationActorId(scopeId, conversationId);
-        var actor = await _runtime.GetAsync(actorId);
-        return actor ?? await _runtime.CreateAsync<ChatConversationGAgent>(actorId, ct);
+        var actor = await _runtime.GetAsync(actorId)
+                    ?? await _runtime.CreateAsync<ChatConversationGAgent>(actorId, ct);
+        // Activate both projections: the conversation's own state AND the
+        // per-scope index actor that the conversation forwards events to
+        // internally. Without this either projection, GET returns stale
+        // data after saves.
+        await _projectionPort.EnsureProjectionAsync(actorId, StudioProjectionKinds.ChatConversation, ct);
+        await _projectionPort.EnsureProjectionAsync(IndexActorId(scopeId), StudioProjectionKinds.ChatHistoryIndex, ct);
+        return actor;
     }
 
     // ── Actor ID conventions ───────────────────────────────────

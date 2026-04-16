@@ -111,6 +111,10 @@ public static class ServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<ChatConversationCurrentStateDocument>,
             ChatConversationCurrentStateDocumentMetadataProvider>();
 
+        // Projection scope activation port — required so Studio projectors
+        // actually subscribe to their actor streams and materialize events.
+        services.TryAddSingleton<StudioProjectionPort>();
+
         // Query ports (read side)
         services.TryAddSingleton<IUserConfigQueryPort, ProjectionUserConfigQueryPort>();
 

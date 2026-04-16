@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -19,16 +20,22 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     private const string WriteActorId = "streaming-proxy-participants";
 
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> _documentReader;
+    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedStreamingProxyParticipantStore> _logger;
 
     public ActorBackedStreamingProxyParticipantStore(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> documentReader,
+        StudioProjectionPort projectionPort,
         ILogger<ActorBackedStreamingProxyParticipantStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -65,7 +72,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
             DisplayName = displayName,
             JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
     }
 
     public async Task RemoveParticipantAsync(
@@ -77,7 +84,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
             RoomId = roomId,
             AgentId = agentId,
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
     }
 
     public async Task RemoveRoomAsync(
@@ -88,14 +95,16 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
         {
             RoomId = roomId,
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
     }
 
     // ── Actor resolution ──
 
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        var actor = await _runtime.GetAsync(WriteActorId);
-        return actor ?? await _runtime.CreateAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
+        var actor = await _runtime.GetAsync(WriteActorId)
+                    ?? await _runtime.CreateAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
+        await _projectionPort.EnsureProjectionAsync(WriteActorId, StudioProjectionKinds.StreamingProxyParticipant, ct);
+        return actor;
     }
 }

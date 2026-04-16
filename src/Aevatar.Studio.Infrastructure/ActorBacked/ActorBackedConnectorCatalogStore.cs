@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -22,22 +23,28 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     private const string ActorFilePath = "actor://connector-catalog/connectors";
 
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _workspaceStore;
     private readonly IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> _documentReader;
+    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
 
     public ActorBackedConnectorCatalogStore(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore workspaceStore,
         IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> documentReader,
+        StudioProjectionPort projectionPort,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _workspaceStore = workspaceStore ?? throw new ArgumentNullException(nameof(workspaceStore));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -73,7 +80,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ConnectorCatalogSavedEvent();
         evt.Connectors.AddRange(catalog.Connectors.Select(ToProtoConnectorDefinition));
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         return new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -95,7 +102,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ConnectorCatalogSavedEvent();
         evt.Connectors.AddRange(localCatalog.Connectors.Select(ToProtoConnectorDefinition));
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         var importedCatalog = new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -140,7 +147,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
             Draft = draft.Draft is not null ? ToProtoConnectorDefinition(draft.Draft) : null,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         // Also persist to local workspace for offline access
         await _workspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
@@ -156,7 +163,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     public async Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await ActorCommandDispatcher.SendAsync(actor, new ConnectorDraftDeletedEvent(), cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ConnectorDraftDeletedEvent(), cancellationToken);
 
         await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }
@@ -181,8 +188,10 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
         var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return actor ?? await _runtime.CreateAsync<ConnectorCatalogGAgent>(actorId, ct);
+        var actor = await _runtime.GetAsync(actorId)
+                    ?? await _runtime.CreateAsync<ConnectorCatalogGAgent>(actorId, ct);
+        await _projectionPort.EnsureProjectionAsync(actorId, StudioProjectionKinds.ConnectorCatalog, ct);
+        return actor;
     }
 
     // ── Proto <-> Domain mapping ──

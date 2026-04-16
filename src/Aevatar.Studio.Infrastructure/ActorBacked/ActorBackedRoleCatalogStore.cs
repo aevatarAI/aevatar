@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.RoleCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -23,22 +24,28 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     private const string ActorFilePath = "actor://role-catalog/roles";
 
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _localWorkspaceStore;
     private readonly IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> _documentReader;
+    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
 
     public ActorBackedRoleCatalogStore(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore localWorkspaceStore,
         IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> documentReader,
+        StudioProjectionPort projectionPort,
         ILogger<ActorBackedRoleCatalogStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _localWorkspaceStore = localWorkspaceStore ?? throw new ArgumentNullException(nameof(localWorkspaceStore));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -65,7 +72,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         return new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -85,7 +92,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(localCatalog.Roles.Select(ToProtoRoleDefinition));
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         var importedCatalog = new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -129,7 +136,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             Draft = draft.Draft is not null ? ToProtoRoleDefinition(draft.Draft) : null,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         await _localWorkspaceStore.SaveRoleDraftAsync(draft, cancellationToken);
 
@@ -144,7 +151,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     public async Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await ActorCommandDispatcher.SendAsync(actor, new RoleDraftDeletedEvent(), cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new RoleDraftDeletedEvent(), cancellationToken);
 
         await _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
     }
@@ -169,8 +176,14 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
         var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return actor ?? await _runtime.CreateAsync<RoleCatalogGAgent>(actorId, ct);
+        var actor = await _runtime.GetAsync(actorId)
+                    ?? await _runtime.CreateAsync<RoleCatalogGAgent>(actorId, ct);
+        // Ensure the Studio projection scope is subscribed to this actor's
+        // committed event stream — without this, projector never runs and
+        // GetRoleCatalogAsync keeps returning empty after saves (data lost
+        // on refresh). Idempotent.
+        await _projectionPort.EnsureProjectionAsync(actorId, StudioProjectionKinds.RoleCatalog, ct);
+        return actor;
     }
 
     private static StoredRoleDefinition ToStoredRoleDefinition(RoleDefinitionEntry entry) =>

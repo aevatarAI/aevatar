@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Registry;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -17,19 +18,25 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
     private const string WriteActorIdPrefix = "gagent-registry-";
 
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
+    private readonly StudioProjectionPort _projectionPort;
     private readonly ILogger<ActorBackedGAgentActorStore> _logger;
 
     public ActorBackedGAgentActorStore(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
         IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> documentReader,
+        StudioProjectionPort projectionPort,
         ILogger<ActorBackedGAgentActorStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -56,7 +63,7 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await ActorCommandDispatcher.SendAsync(actor, new ActorRegisteredEvent
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorRegisteredEvent
         {
             GagentType = gagentType,
             ActorId = actorId,
@@ -68,7 +75,7 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
         CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await ActorCommandDispatcher.SendAsync(actor, new ActorUnregisteredEvent
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ActorUnregisteredEvent
         {
             GagentType = gagentType,
             ActorId = actorId,
@@ -82,7 +89,9 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
         var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return actor ?? await _runtime.CreateAsync<GAgentRegistryGAgent>(actorId, ct);
+        var actor = await _runtime.GetAsync(actorId)
+                    ?? await _runtime.CreateAsync<GAgentRegistryGAgent>(actorId, ct);
+        await _projectionPort.EnsureProjectionAsync(actorId, StudioProjectionKinds.GAgentRegistry, ct);
+        return actor;
     }
 }
