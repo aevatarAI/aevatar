@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -87,74 +88,92 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     /// Called by the event sourcing infrastructure after PersistDomainEventAsync.
     /// </summary>
     protected override StreamingProxyGAgentState TransitionState(StreamingProxyGAgentState current, IMessage evt) =>
-        ApplyProxyEvent(current, evt);
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<GroupChatRoomInitializedEvent>(ApplyRoomInitialized)
+            .On<GroupChatTopicEvent>(ApplyTopic)
+            .On<GroupChatMessageEvent>(ApplyMessage)
+            .On<GroupChatParticipantJoinedEvent>(ApplyParticipantJoined)
+            .On<GroupChatParticipantLeftEvent>(ApplyParticipantLeft)
+            .OrCurrent();
 
-    private static StreamingProxyGAgentState ApplyProxyEvent(StreamingProxyGAgentState current, IMessage evt)
+    private static StreamingProxyGAgentState ApplyRoomInitialized(
+        StreamingProxyGAgentState current,
+        GroupChatRoomInitializedEvent evt)
     {
-        switch (evt)
+        var next = current.Clone();
+        next.RoomName = evt.RoomName;
+        return next;
+    }
+
+    private static StreamingProxyGAgentState ApplyTopic(
+        StreamingProxyGAgentState current,
+        GroupChatTopicEvent evt)
+    {
+        var next = current.Clone();
+        next.NextSequence++;
+        next.Messages.Add(new StreamingProxyChatMessage
         {
-            case GroupChatRoomInitializedEvent init:
-                var initState = current.Clone();
-                initState.RoomName = init.RoomName;
-                return initState;
+            Sequence = next.NextSequence,
+            SenderAgentId = "user",
+            SenderName = "User",
+            Content = evt.Prompt,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            IsTopic = true,
+        });
+        TrimMessages(next);
+        return next;
+    }
 
-            case GroupChatTopicEvent topic:
-                var topicState = current.Clone();
-                topicState.NextSequence++;
-                topicState.Messages.Add(new StreamingProxyChatMessage
-                {
-                    Sequence = topicState.NextSequence,
-                    SenderAgentId = "user",
-                    SenderName = "User",
-                    Content = topic.Prompt,
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    IsTopic = true,
-                });
-                TrimMessages(topicState);
-                return topicState;
+    private static StreamingProxyGAgentState ApplyMessage(
+        StreamingProxyGAgentState current,
+        GroupChatMessageEvent evt)
+    {
+        var next = current.Clone();
+        next.NextSequence++;
+        next.Messages.Add(new StreamingProxyChatMessage
+        {
+            Sequence = next.NextSequence,
+            SenderAgentId = evt.AgentId,
+            SenderName = evt.AgentName,
+            Content = evt.Content,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            IsTopic = false,
+        });
+        TrimMessages(next);
+        return next;
+    }
 
-            case GroupChatMessageEvent msg:
-                var msgState = current.Clone();
-                msgState.NextSequence++;
-                msgState.Messages.Add(new StreamingProxyChatMessage
-                {
-                    Sequence = msgState.NextSequence,
-                    SenderAgentId = msg.AgentId,
-                    SenderName = msg.AgentName,
-                    Content = msg.Content,
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    IsTopic = false,
-                });
-                TrimMessages(msgState);
-                return msgState;
+    private static StreamingProxyGAgentState ApplyParticipantJoined(
+        StreamingProxyGAgentState current,
+        GroupChatParticipantJoinedEvent evt)
+    {
+        var next = current.Clone();
+        RemoveParticipant(next, evt.AgentId);
+        next.Participants.Add(new StreamingProxyParticipant
+        {
+            AgentId = evt.AgentId,
+            DisplayName = evt.DisplayName,
+            JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        return next;
+    }
 
-            case GroupChatParticipantJoinedEvent joined:
-                var joinState = current.Clone();
-                // Remove existing entry if re-joining
-                for (var i = joinState.Participants.Count - 1; i >= 0; i--)
-                {
-                    if (string.Equals(joinState.Participants[i].AgentId, joined.AgentId, StringComparison.Ordinal))
-                        joinState.Participants.RemoveAt(i);
-                }
-                joinState.Participants.Add(new StreamingProxyParticipant
-                {
-                    AgentId = joined.AgentId,
-                    DisplayName = joined.DisplayName,
-                    JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                });
-                return joinState;
+    private static StreamingProxyGAgentState ApplyParticipantLeft(
+        StreamingProxyGAgentState current,
+        GroupChatParticipantLeftEvent evt)
+    {
+        var next = current.Clone();
+        RemoveParticipant(next, evt.AgentId);
+        return next;
+    }
 
-            case GroupChatParticipantLeftEvent left:
-                var leftState = current.Clone();
-                for (var i = leftState.Participants.Count - 1; i >= 0; i--)
-                {
-                    if (string.Equals(leftState.Participants[i].AgentId, left.AgentId, StringComparison.Ordinal))
-                        leftState.Participants.RemoveAt(i);
-                }
-                return leftState;
-
-            default:
-                return current;
+    private static void RemoveParticipant(StreamingProxyGAgentState state, string agentId)
+    {
+        for (var i = state.Participants.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(state.Participants[i].AgentId, agentId, StringComparison.Ordinal))
+                state.Participants.RemoveAt(i);
         }
     }
 

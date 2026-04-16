@@ -351,7 +351,7 @@ public class StreamingProxyCoverageTests
         });
         await agent.HandleGroupChatParticipantLeft(new GroupChatParticipantLeftEvent { AgentId = "agent-1" });
 
-        var state = AgentCoverageTestSupport.ReadPrivateField<StreamingProxyGAgentState>(agent, "_proxyState");
+        var state = agent.State;
         state.RoomName.Should().Be("Nyx Room");
         state.NextSequence.Should().Be(2);
         state.Messages.Should().HaveCount(2);
@@ -416,7 +416,7 @@ public class StreamingProxyCoverageTests
         var agent = new StreamingProxyGAgent
         {
             Services = provider,
-            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<StreamingProxyGAgentState>>(),
         };
 
         AgentCoverageTestSupport.AssignActorId(agent, actorId);
