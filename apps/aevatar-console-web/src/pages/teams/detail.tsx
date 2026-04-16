@@ -12,6 +12,10 @@ import { Button, Space, Tooltip, Typography, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
+import {
+  formatCompactDateTime,
+  formatTimeOnly,
+} from "@/shared/datetime/dateTime";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import { buildActorGraphElements } from "@/shared/graphs/buildGraphElements";
 import {
@@ -46,6 +50,7 @@ import {
   AevatarInspectorEmpty,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AevatarCompactText } from "@/shared/ui/compactText";
 import {
   TeamActionRail,
   TeamDetailEmptyState,
@@ -117,6 +122,27 @@ type MemberLike = {
 
 function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function resolveMachineGeneratedTeamId(
+  title: string | null | undefined,
+  scopeId: string | null | undefined,
+): string {
+  const normalizedTitle = trimText(title);
+  const normalizedScopeId = trimText(scopeId);
+
+  if (!normalizedTitle || !normalizedScopeId) {
+    return "";
+  }
+
+  if (
+    normalizedTitle === normalizedScopeId ||
+    normalizedTitle === `Team ${normalizedScopeId}`
+  ) {
+    return normalizedScopeId;
+  }
+
+  return "";
 }
 
 function compactId(value: string | null | undefined): string {
@@ -680,42 +706,11 @@ function resolveEventStreamTone(
 }
 
 function formatCompactTimestamp(value: string | null | undefined): string {
-  const normalized = trimText(value);
-  if (!normalized) {
-    return "暂无";
-  }
-
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    return "暂无";
-  }
-
-  return parsed.toLocaleString("zh-CN", {
-    day: "2-digit",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "2-digit",
-  });
+  return formatCompactDateTime(value, "暂无");
 }
 
 function formatClockTimestamp(value: string | null | undefined): string {
-  const normalized = trimText(value);
-  if (!normalized) {
-    return "--";
-  }
-
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    return "--";
-  }
-
-  return parsed.toLocaleTimeString("zh-CN", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return formatTimeOnly(value, "--");
 }
 
 function readWorkflowRoleName(role: Record<string, unknown>, index: number): string {
@@ -1355,7 +1350,26 @@ const TeamDetailPage: React.FC = () => {
     [lens.playback.currentRunId, lens.playback.rootActorId, runtimeServiceId, scopeId],
   );
 
-  const teamTitle = activeWorkflowSummary?.displayName || lens.title;
+  const rawTeamTitle = activeWorkflowSummary?.displayName || lens.title;
+  const machineGeneratedTeamId = resolveMachineGeneratedTeamId(rawTeamTitle, scopeId);
+  const teamTitle =
+    machineGeneratedTeamId && machineGeneratedTeamId.length > 18
+      ? "团队详情"
+      : rawTeamTitle;
+  const teamTitleMeta =
+    machineGeneratedTeamId && machineGeneratedTeamId.length > 18 ? (
+      <Space size={6} wrap>
+        <span style={{ textTransform: "none" }}>scopeId</span>
+        <AevatarCompactText
+          color="inherit"
+          head={8}
+          maxWidth={320}
+          monospace
+          tail={6}
+          value={machineGeneratedTeamId}
+        />
+      </Space>
+    ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
   const teamCompositionRows = React.useMemo(
@@ -3293,12 +3307,15 @@ const TeamDetailPage: React.FC = () => {
       onOpenTeamsList={handleOpenTeamsList}
       onSelectTab={pushTeamTab}
       statusBadge={
-        <DetailPill
-          style={resolveStatusPillStyle(token, currentHeaderStatus)}
-          text={currentHeaderStatusFriendly}
-        />
+        currentHeaderStatusFriendly !== "--" ? (
+          <DetailPill
+            style={resolveStatusPillStyle(token, currentHeaderStatus)}
+            text={currentHeaderStatusFriendly}
+          />
+        ) : null
       }
       tabOptions={tabOptions}
+      teamMeta={teamTitleMeta}
       teamTitle={teamTitle}
       teamsListHref={teamsListHref}
     >

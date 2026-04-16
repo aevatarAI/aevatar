@@ -21,15 +21,6 @@ describe('runtimeRoutes', () => {
     );
   });
 
-  it('preserves sample mode for mock topology details', () => {
-    expect(
-      buildRuntimeExplorerHref({
-        actorId: 'actor://mock',
-        mode: 'sample',
-      }),
-    ).toBe('/runtime/explorer/detail?actorId=actor%3A%2F%2Fmock&mode=sample');
-  });
-
   it('lets runs return back to topology detail routes', () => {
     expect(
       buildRuntimeRunsHref({

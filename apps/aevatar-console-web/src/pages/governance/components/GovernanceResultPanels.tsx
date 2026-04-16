@@ -9,6 +9,8 @@ import {
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from '@/shared/ui/proComponents';
+import { formatDateTime } from '@/shared/datetime/dateTime';
+import { AevatarCompactText } from '@/shared/ui/compactText';
 import type { GovernanceDraft } from './governanceQuery';
 
 type GovernanceStatusTag = {
@@ -41,7 +43,11 @@ type GovernanceSummaryPanelProps = {
 type GovernanceSelectionNoticeProps = {
   title: string;
   description?: string;
-  highlights?: Array<{ label: string; value: React.ReactNode }>;
+  highlights?: Array<{
+    key?: string;
+    label: React.ReactNode;
+    value: React.ReactNode;
+  }>;
 };
 
 const governanceSurfaceStyle: React.CSSProperties = {
@@ -139,12 +145,7 @@ function GovernanceMetric({
 }
 
 export function formatGovernanceTimestamp(value: string | undefined): string {
-  const normalized = value?.trim() ?? '';
-  if (!normalized) {
-    return '待更新';
-  }
-
-  return normalized.replace('T', ' ').replace('Z', ' UTC');
+  return formatDateTime(value, '待更新');
 }
 
 export const GovernanceSelectionNotice: React.FC<
@@ -179,17 +180,22 @@ export const GovernanceSelectionNotice: React.FC<
             gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))',
           }}
         >
-          {highlights.map((item) => (
-            <div key={item.label} style={governanceSelectionHighlightStyle}>
+          {highlights.map((item, index) => (
+            <div
+              key={
+                item.key ??
+                (typeof item.label === 'string' ? item.label : `highlight-${index}`)
+              }
+              style={governanceSelectionHighlightStyle}
+            >
               <Typography.Text style={summaryFieldLabelStyle}>
                 {item.label}
               </Typography.Text>
-              <Typography.Text
-                strong
+              <div
                 style={{ fontSize: 15, lineHeight: 1.5, overflowWrap: 'anywhere' }}
               >
                 {renderFieldValue(item.value)}
-              </Typography.Text>
+              </div>
             </div>
           ))}
         </div>
@@ -287,12 +293,18 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
                 <Typography.Text style={summaryFieldLabelStyle}>
                   {field.label}
                 </Typography.Text>
-                <Typography.Text
-                  strong
-                  style={{ fontSize: 15, lineHeight: 1.5, overflowWrap: 'anywhere' }}
+                <div
+                  style={{
+                    color: 'var(--ant-color-text)',
+                    fontSize: 15,
+                    fontWeight: 600,
+                    lineHeight: 1.5,
+                    minWidth: 0,
+                    overflowWrap: 'anywhere',
+                  }}
                 >
                   {renderFieldValue(field.value)}
-                </Typography.Text>
+                </div>
               </div>
             ))}
           </div>
@@ -301,7 +313,7 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
         {metrics.length > 0 ? (
           <div style={summaryMetricGridStyle}>
             {metrics.map((metric) => (
-              <GovernanceMetric key={metric.label} {...metric} />
+      <GovernanceMetric key={metric.label} {...metric} />
             ))}
           </div>
         ) : null}
@@ -309,3 +321,29 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
     </div>
   );
 };
+
+export function buildGovernanceCompactValue(
+  value: string | undefined,
+  options?: {
+    head?: number;
+    maxChars?: number;
+    mode?: 'middle' | 'tail';
+    tail?: number;
+  },
+): React.ReactNode {
+  const normalized = value?.trim() ?? '';
+  if (!normalized) {
+    return '暂无';
+  }
+
+  return (
+    <AevatarCompactText
+      head={options?.head}
+      maxChars={options?.maxChars}
+      mode={options?.mode ?? 'middle'}
+      monospace
+      tail={options?.tail}
+      value={normalized}
+    />
+  );
+}
