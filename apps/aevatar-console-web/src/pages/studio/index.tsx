@@ -1306,12 +1306,8 @@ const StudioPage: React.FC = () => {
     queryFn: () => runtimeQueryApi.listPrimitives(),
   });
   const visibleWorkflowSummaries = useMemo(
-    () =>
-      dedupeStudioWorkflowSummaries(
-        workflowsQuery.data ?? [],
-        selectedWorkflowId,
-      ),
-    [selectedWorkflowId, workflowsQuery.data],
+    () => dedupeStudioWorkflowSummaries(workflowsQuery.data ?? []),
+    [workflowsQuery.data],
   );
   const currentScopeBindingRevision = useMemo(
     () => getStudioScopeBindingCurrentRevision(scopeBindingQuery.data ?? null),

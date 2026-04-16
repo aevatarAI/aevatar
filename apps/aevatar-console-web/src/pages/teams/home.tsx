@@ -33,10 +33,7 @@ import {
   getStudioScopeBindingCurrentRevision,
   type StudioScopeBindingStatus,
 } from "@/shared/studio/models";
-import {
-  buildStudioWorkflowEditorRoute,
-  buildStudioWorkflowWorkspaceRoute,
-} from "@/shared/studio/navigation";
+import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
@@ -55,7 +52,6 @@ import {
   collectWorkflowOperationalServiceIds,
   WORKFLOW_RUNTIME_GUARDRAIL,
   type WorkflowOperationalAttention,
-  type WorkflowOperationalUnit,
 } from "./workflowOperationalUnits";
 
 const initialDraft = readScopeQueryDraft();
@@ -176,27 +172,6 @@ function resolveAttentionPillStyle(
         background: token.colorFillQuaternary,
         color: token.colorTextSecondary,
       };
-  }
-}
-
-function formatCardDescription(unit: WorkflowOperationalUnit): string {
-  switch (unit.attention) {
-    case "waiting":
-      return "最近一次执行正在等待人工确认或外部信号。";
-    case "failed":
-      return "最近一次执行出现异常，建议先进入详情排查。";
-    case "healthy":
-      return "最近一次执行正常，可继续查看运行状态和配置。";
-    case "no-bound-service":
-      return "已存在 workflow 定义，但当前还没有匹配到可运行的服务入口。";
-    case "no-recent-runs":
-      return "已存在 service 记录，但当前还没有可见的运行信号。";
-    case "draft":
-      return "当前仍处在搭建阶段，建议先完成服务绑定或首次运行。";
-    case "runtime-unresolved":
-      return "当前运行信号暂时不完整，建议稍后刷新或进入详情继续查看。";
-    default:
-      return unit.attentionDetail;
   }
 }
 
@@ -406,53 +381,6 @@ const TeamFact: React.FC<{
   </div>
 );
 
-function buildWorkflowTeamActions(
-  scopeId: string,
-  unit: WorkflowOperationalUnit,
-): {
-  readonly builderHref: string;
-  readonly detailHref: string;
-  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
-} {
-  const detailHref = buildTeamDetailHref({
-    scopeId,
-    workflowId: unit.workflow.workflowId,
-    serviceId: unit.matchedService?.serviceId,
-    runId: unit.latestRun?.runId,
-  });
-  const builderHref = buildStudioWorkflowEditorRoute({
-    scopeId,
-    workflowId: unit.workflow.workflowId,
-  });
-  const runtimeHref = unit.matchedService
-    ? buildRuntimeRunsHref({
-        actorId: unit.latestRun?.actorId || undefined,
-        route: unit.workflow.workflowName || undefined,
-        scopeId,
-        serviceId: unit.matchedService.serviceId,
-      })
-    : "";
-  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
-  if (runtimeHref) {
-    moreActions.push({
-      key: "runtime",
-      label: "查看运行",
-      onClick: () => history.push(runtimeHref),
-    });
-  }
-  moreActions.push({
-    key: "builder",
-    label: "进入 Studio",
-    onClick: () => history.push(builderHref),
-  });
-
-  return {
-    builderHref,
-    detailHref,
-    moreActions,
-  };
-}
-
 function resolveScopePreviewService(input: {
   readonly binding: StudioScopeBindingStatus | null | undefined;
   readonly services: readonly ServiceCatalogSnapshot[];
@@ -515,22 +443,24 @@ function buildScopeBackedTeamPreview(input: {
   const runs =
     serviceId && !runtimeUnavailable ? input.runsByServiceId[serviceId] ?? [] : [];
   const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
+  const hasEntryFacts = Boolean(
+    serviceId ||
+      matchedService ||
+      currentRevision ||
+      trimOptional(input.binding?.serviceKey) ||
+      trimOptional(input.binding?.displayName),
+  );
+
+  if (!hasEntryFacts) {
+    return null;
+  }
+
   const title =
     trimOptional(input.binding?.displayName) ||
     trimOptional(matchedService?.displayName) ||
     describeStudioScopeBindingRevisionTarget(currentRevision) ||
     serviceId ||
     input.scopeId;
-
-  if (
-    !trimOptional(title) &&
-    !serviceId &&
-    !matchedService &&
-    !currentRevision &&
-    !trimOptional(input.binding?.serviceKey)
-  ) {
-    return null;
-  }
 
   let attention: WorkflowOperationalAttention = "draft";
   let attentionDetail = "当前 Team 还没有形成可运行的入口。";
@@ -651,242 +581,6 @@ const MoreActionsButton: React.FC<{
     </Button>
   </Dropdown>
 );
-
-const WorkflowTeamCard: React.FC<{
-  readonly scopeId: string;
-  readonly unit: WorkflowOperationalUnit;
-}> = ({ scopeId, unit }) => {
-  const { token } = theme.useToken();
-  const { detailHref, moreActions } = buildWorkflowTeamActions(scopeId, unit);
-  const description = formatCardDescription(unit);
-  const factChips = [
-    trimOptional(unit.workflow.workflowName),
-    unit.matchedService?.displayName || "",
-    formatRunStatusLabel(unit.latestRun?.completionStatus),
-  ].filter(Boolean);
-
-  return (
-    <div
-      onClick={() => history.push(detailHref)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          history.push(detailHref);
-        }
-      }}
-      role="button"
-      style={{
-        background: token.colorBgContainer,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 24,
-        boxShadow: token.boxShadowTertiary,
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "column",
-        gap: 14,
-        minWidth: 0,
-        padding: 18,
-      }}
-      tabIndex={0}
-    >
-      <div
-        style={{
-          alignItems: "flex-start",
-          display: "flex",
-          gap: 16,
-          justifyContent: "space-between",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <Typography.Title
-            level={3}
-            style={{
-              fontSize: 22,
-              margin: 0,
-              overflowWrap: "anywhere",
-            }}
-          >
-            {unit.workflow.displayName || unit.workflow.workflowId}
-          </Typography.Title>
-          <Typography.Paragraph
-            ellipsis={{ rows: 1, tooltip: description }}
-            style={{
-              color: token.colorTextSecondary,
-              fontSize: 14,
-              marginBottom: 0,
-              marginTop: 6,
-            }}
-          >
-            {description}
-          </Typography.Paragraph>
-        </div>
-        <span
-          style={{
-            ...resolveAttentionPillStyle(token, unit.attention),
-            borderRadius: 999,
-            display: "inline-flex",
-            fontSize: 12,
-            fontWeight: 600,
-            lineHeight: 1,
-            padding: "8px 12px",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {formatAttentionLabel(unit.attention)}
-        </span>
-      </div>
-
-      <Space size={[10, 10]} wrap>
-        {factChips.map((chip) => (
-          <EvidencePill key={chip} text={chip} />
-        ))}
-      </Space>
-
-      <div
-        style={{
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
-          display: "grid",
-          gap: 14,
-          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-          paddingTop: 14,
-        }}
-      >
-        <TeamFact
-          label="当前状态"
-          value={formatOperationalStatusLabel(unit.latestRun?.completionStatus, unit.attention)}
-        />
-        <TeamFact
-          label="最近更新"
-          value={formatShortTime(unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt)}
-        />
-        <TeamFact
-          label="主服务"
-          value={unit.matchedService?.serviceId || "未发布"}
-        />
-      </div>
-
-      <Space wrap>
-        <Button
-          onClick={stopEvent(() => history.push(detailHref))}
-          size="large"
-          type="primary"
-        >
-          查看团队
-        </Button>
-        <MoreActionsButton actions={moreActions} />
-      </Space>
-    </div>
-  );
-};
-
-const WorkflowTeamRow: React.FC<{
-  readonly scopeId: string;
-  readonly unit: WorkflowOperationalUnit;
-}> = ({ scopeId, unit }) => {
-  const { token } = theme.useToken();
-  const { detailHref, moreActions } = buildWorkflowTeamActions(scopeId, unit);
-  const description = formatCardDescription(unit);
-  const factChips = [
-    trimOptional(unit.workflow.workflowName),
-    unit.matchedService?.displayName || "",
-  ].filter(Boolean);
-
-  return (
-    <div
-      onClick={() => history.push(detailHref)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          history.push(detailHref);
-        }
-      }}
-      role="button"
-      style={{
-        alignItems: "center",
-        background: token.colorBgContainer,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 20,
-        boxShadow: token.boxShadowTertiary,
-        cursor: "pointer",
-        display: "grid",
-        gap: 16,
-        gridTemplateColumns: "minmax(0, 1.8fr) repeat(3, minmax(88px, 120px)) auto",
-        minWidth: 0,
-        padding: 16,
-      }}
-      tabIndex={0}
-    >
-      <div style={{ minWidth: 0 }}>
-        <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
-          <Typography.Title
-            level={4}
-            style={{
-              margin: 0,
-              overflowWrap: "anywhere",
-            }}
-          >
-            {unit.workflow.displayName || unit.workflow.workflowId}
-          </Typography.Title>
-          <span
-            style={{
-              ...resolveAttentionPillStyle(token, unit.attention),
-              borderRadius: 999,
-              display: "inline-flex",
-              fontSize: 12,
-              fontWeight: 600,
-              lineHeight: 1,
-              padding: "7px 10px",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {formatAttentionLabel(unit.attention)}
-          </span>
-        </Space>
-        <Typography.Paragraph
-          ellipsis={{ rows: 1, tooltip: description }}
-          style={{
-            color: token.colorTextSecondary,
-            fontSize: 13,
-            marginBottom: 0,
-            marginTop: 0,
-          }}
-        >
-          {description}
-        </Typography.Paragraph>
-        {factChips.length > 0 ? (
-          <Space size={[8, 8]} style={{ marginTop: 10 }} wrap>
-            {factChips.map((chip) => (
-              <EvidencePill key={chip} text={chip} />
-            ))}
-          </Space>
-        ) : null}
-      </div>
-
-      <TeamFact
-        label="状态"
-        value={formatOperationalStatusLabel(unit.latestRun?.completionStatus, unit.attention)}
-      />
-      <TeamFact
-        label="更新"
-        value={formatShortTime(unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt)}
-      />
-      <TeamFact
-        label="服务"
-        value={unit.matchedService?.serviceId || "未发布"}
-      />
-
-      <Space wrap>
-        <Button
-          onClick={stopEvent(() => history.push(detailHref))}
-          type="primary"
-        >
-          查看团队
-        </Button>
-        <MoreActionsButton actions={moreActions} />
-      </Space>
-    </div>
-  );
-};
 
 const ScopeBackedTeamCard: React.FC<{
   readonly preview: ScopeBackedTeamPreview;
@@ -1109,7 +803,6 @@ const TeamsHomePage: React.FC = () => {
   const [manualRosterView, setManualRosterView] = React.useState<
     "cards" | "list" | null
   >(null);
-  const [showDrafts, setShowDrafts] = React.useState(false);
   const [showScopePicker, setShowScopePicker] = React.useState(false);
 
   const authSessionQuery = useQuery({
@@ -1282,23 +975,19 @@ const TeamsHomePage: React.FC = () => {
     ],
   );
 
-  const draftUnits = units.filter((unit) => unit.isDraftOnly);
-  const visibleUnits = showDrafts
-    ? units
-    : units.filter((unit) => !unit.isDraftOnly);
-  const visibleTeamCount =
-    visibleUnits.length > 0 ? visibleUnits.length : scopePreviewTeam ? 1 : 0;
+  const draftUnits = units.filter(
+    (unit) => unit.isDraftOnly || (!unit.matchedService && !unit.latestRun),
+  );
+  const visibleTeamCount = scopePreviewTeam ? 1 : 0;
   const resolvedRosterView =
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
-  const activeUnits = units.filter((unit) => !unit.isDraftOnly);
-  const visibleRuns =
-    activeUnits.length > 0
-      ? activeUnits.filter((unit) => unit.latestRun).length
-      : scopePreviewTeam?.latestRun
-        ? 1
-        : 0;
+  const visibleRuns = scopePreviewTeam?.latestRun ? 1 : 0;
+  const draftHint =
+    draftUnits.length > 0
+      ? `当前 Team 还有 ${draftUnits.length} 个已保存的行为定义，但它们还没有形成首页入口。`
+      : "当前 Team 还没有可展示的入口。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
     bindingQuery.isError ? "当前 Team 绑定信息暂时不可见。" : null,
@@ -1441,7 +1130,7 @@ const TeamsHomePage: React.FC = () => {
                 title="当前 Team 的入口列表暂时无法加载。"
                 type="error"
               />
-            ) : visibleUnits.length > 0 || scopePreviewTeam ? (
+            ) : scopePreviewTeam ? (
               <>
                 <div
                   style={{
@@ -1482,17 +1171,7 @@ const TeamsHomePage: React.FC = () => {
                       gap: 14,
                     }}
                   >
-                    {visibleUnits.length > 0
-                      ? visibleUnits.map((unit) => (
-                          <WorkflowTeamRow
-                            key={unit.workflow.workflowId}
-                            scopeId={scopeId}
-                            unit={unit}
-                          />
-                        ))
-                      : scopePreviewTeam && (
-                          <ScopeBackedTeamRow preview={scopePreviewTeam} />
-                        )}
+                    <ScopeBackedTeamRow preview={scopePreviewTeam} />
                   </div>
                 ) : (
                   <div
@@ -1503,23 +1182,13 @@ const TeamsHomePage: React.FC = () => {
                       gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
                     }}
                   >
-                    {visibleUnits.length > 0
-                      ? visibleUnits.map((unit) => (
-                          <WorkflowTeamCard
-                            key={unit.workflow.workflowId}
-                            scopeId={scopeId}
-                            unit={unit}
-                          />
-                        ))
-                      : scopePreviewTeam && (
-                          <ScopeBackedTeamCard preview={scopePreviewTeam} />
-                        )}
+                    <ScopeBackedTeamCard preview={scopePreviewTeam} />
                   </div>
                 )}
               </>
             ) : (
               <Empty
-                description="当前 Team 还没有可展示的入口。"
+                description={draftHint}
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
               >
                 <Button
@@ -1537,16 +1206,6 @@ const TeamsHomePage: React.FC = () => {
                 </Button>
               </Empty>
             )}
-
-            {draftUnits.length > 0 ? (
-              <div style={{ display: "flex", justifyContent: "center" }}>
-                <Button onClick={() => setShowDrafts((value) => !value)}>
-                  {showDrafts
-                    ? `隐藏草稿团队 (${draftUnits.length})`
-                    : `显示草稿团队 (${draftUnits.length})`}
-                </Button>
-              </div>
-            ) : null}
 
           </>
         ) : null}

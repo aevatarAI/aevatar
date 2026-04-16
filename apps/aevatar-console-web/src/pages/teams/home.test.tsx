@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { studioApi } from "@/shared/studio/api";
@@ -106,7 +107,7 @@ jest.mock("@/shared/studio/api", () => ({
       available: true,
       scopeId: "scope-a",
       serviceId: "service-alpha",
-      displayName: "客服团队",
+      displayName: "NyxID Chat",
       serviceKey: "scope-a:alpha",
       defaultServingRevisionId: "rev-2",
       activeServingRevisionId: "rev-2",
@@ -146,55 +147,37 @@ jest.mock("@/shared/studio/api", () => ({
   },
 }));
 
-import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-
 describe("TeamsHomePage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/teams?scopeId=scope-a");
     jest.clearAllMocks();
   });
 
-  it("renders the team homepage in the new summary-plus-cards layout", async () => {
+  it("renders the team homepage around the current scope-backed team preview", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByText("Aevatar / Teams")).toBeTruthy();
-    expect(await screen.findByText("我的 AI 团队")).toBeTruthy();
-    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
+    expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
+    expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.getByText("当前 Team")).toBeTruthy();
     expect(screen.getByText("当前可见团队")).toBeTruthy();
     expect(screen.getByText("可见运行信号")).toBeTruthy();
     expect(screen.getByText("草稿条目")).toBeTruthy();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "切换到卡片视图" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "切换到列表视图" })).toBeTruthy();
     expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "更多" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "显示草稿团队 (1)" })).toBeTruthy();
     expect(screen.queryByText("草稿团队")).toBeNull();
+    expect(screen.queryByRole("button", { name: "显示草稿团队 (1)" })).toBeNull();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "更多" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
 
     expect(await screen.findByText("查看运行")).toBeTruthy();
     expect(screen.getByText("进入 Studio")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "显示草稿团队 (1)" }));
-
-    expect(await screen.findByText("草稿团队")).toBeTruthy();
-    fireEvent.click(screen.getAllByRole("button", { name: "更多" })[0]);
-    expect(screen.getAllByText("进入 Studio").length).toBeGreaterThan(0);
-    expect(
-      screen.queryByText(
-        "先看到“我有哪些团队、这些团队在做什么、哪里需要我关注”，而不是先看到工程术语和底层模块。",
-      ),
-    ).toBeNull();
-    expect(screen.queryByText("产品意图：")).toBeNull();
   });
 
   it("lets the user switch from cards to the compact roster manually", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    await screen.findByText("客服团队");
+    await screen.findByRole("heading", { level: 3, name: "NyxID Chat" });
     fireEvent.click(screen.getByRole("button", { name: "切换到列表视图" }));
 
     expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
@@ -208,14 +191,14 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
     expect(screen.getByText("部分团队信号暂时不可见")).toBeTruthy();
     expect(
       screen.queryByText("No stub for /api/scopes/scope-a/services/service-alpha/runs"),
     ).toBeNull();
   });
 
-  it("opens the workflow-focused team detail handoff from the primary card action", async () => {
+  it("opens the scope-backed team detail handoff from the primary card action", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     fireEvent.click(await screen.findByRole("button", { name: "查看团队" }));
@@ -225,125 +208,28 @@ describe("TeamsHomePage", () => {
     });
 
     const params = new URLSearchParams(window.location.search);
-    expect(params.get("workflowId")).toBe("workflow-alpha");
     expect(params.get("serviceId")).toBe("service-alpha");
+    expect(params.get("workflowId")).toBeNull();
     expect(params.get("runId")).toBe("run-latest");
   });
 
-  it("shows a scope-backed team card when the current scope has binding and service facts but no workflows yet", async () => {
-    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
-    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
-      available: true,
-      scopeId: "scope-a",
-      serviceId: "service-alpha",
-      displayName: "NyxID Chat",
-      serviceKey: "scope-a:alpha",
-      defaultServingRevisionId: "rev-2",
-      activeServingRevisionId: "rev-2",
-      deploymentId: "deploy-1",
-      deploymentStatus: "Active",
-      primaryActorId: "actor://nyxid-chat",
-      updatedAt: "2026-04-13T10:00:00Z",
-      revisions: [
-        {
-          revisionId: "rev-2",
-          implementationKind: "gagent",
-          status: "Published",
-          artifactHash: "hash-2",
-          failureReason: "",
-          isDefaultServing: true,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: "Active",
-          deploymentId: "deploy-1",
-          primaryActorId: "actor://nyxid-chat",
-          createdAt: "2026-04-13T09:00:00Z",
-          preparedAt: "2026-04-13T09:01:00Z",
-          publishedAt: "2026-04-13T09:02:00Z",
-          retiredAt: null,
-          workflowName: "",
-          workflowDefinitionActorId: "",
-          inlineWorkflowCount: 0,
-          scriptId: "",
-          scriptRevision: "",
-          scriptDefinitionActorId: "",
-          scriptSourceHash: "",
-          staticActorTypeName: "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent",
-        },
-      ],
-    });
-    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([
-      {
-        serviceKey: "scope-a:alpha",
-        tenantId: "scope-a",
-        appId: "default",
-        namespace: "default",
-        serviceId: "service-alpha",
-        displayName: "NyxID Chat",
-        defaultServingRevisionId: "rev-2",
-        activeServingRevisionId: "rev-2",
-        deploymentId: "deploy-1",
-        primaryActorId: "actor://nyxid-chat",
-        deploymentStatus: "Active",
-        endpoints: [],
-        policyIds: [],
-        updatedAt: "2026-04-13T10:01:00Z",
-      },
-    ]);
+  it("does not turn saved workflows into homepage teams before the current scope has an entry", async () => {
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
       serviceId: "service-alpha",
       serviceKey: "scope-a:alpha",
-      displayName: "NyxID Chat",
+      displayName: "客服运行时",
       runs: [],
     });
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(
-      await screen.findByRole("heading", {
-        level: 3,
-        name: "NyxID Chat",
-      }),
-    ).toBeTruthy();
-    expect(screen.getByText("已存在 service 记录，但当前还没有可见的运行信号。")).toBeTruthy();
-    expect(screen.getAllByText("待运行").length).toBeGreaterThan(0);
-    expect(screen.queryByText("未知")).toBeNull();
-    expect(screen.getAllByText("service-alpha").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "查看团队" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a");
-    });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("serviceId")).toBe("service-alpha");
-    expect(params.get("workflowId")).toBeNull();
-  });
-
-  it("switches to the compact roster when many teams are visible", async () => {
-    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce(
-      Array.from({ length: 7 }, (_, index) => ({
-        scopeId: "scope-a",
-        workflowId: `workflow-${index + 1}`,
-        displayName: `团队 ${index + 1}`,
-        serviceKey: "scope-a:alpha",
-        workflowName: `team-${index + 1}`,
-        actorId: `actor://workflow-${index + 1}`,
-        activeRevisionId: "rev-2",
-        deploymentStatus: "Active",
-        deploymentId: "deploy-1",
-        updatedAt: `2026-04-13T10:0${Math.min(index, 5)}:00Z`,
-      })),
-    );
-
-    renderWithQueryClient(React.createElement(TeamsHomePage));
-
-    expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
-    expect(screen.getByText("团队 1")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "查看团队" }).length).toBe(7);
+    expect(await screen.findByRole("button", { name: "打开 Studio" })).toBeTruthy();
+    expect(screen.getByText(/已保存的行为定义/)).toBeTruthy();
+    expect(screen.queryByText("客服团队")).toBeNull();
+    expect(screen.queryByText("草稿团队")).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看团队" })).toBeNull();
   });
 });
