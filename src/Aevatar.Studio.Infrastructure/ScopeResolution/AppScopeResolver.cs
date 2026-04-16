@@ -1,16 +1,10 @@
 using System.Security.Claims;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.Studio.Infrastructure.ScopeResolution;
-
-public sealed record AppScopeContext(string ScopeId, string Source);
-
-public interface IAppScopeResolver
-{
-    AppScopeContext? Resolve(HttpContext? httpContext = null);
-}
 
 public sealed class DefaultAppScopeResolver : IAppScopeResolver
 {

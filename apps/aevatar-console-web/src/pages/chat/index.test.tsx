@@ -1240,7 +1240,7 @@ describe("ChatPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Explorer" }));
 
-    expect(window.location.pathname).toBe("/runtime/explorer");
+    expect(window.location.pathname).toBe("/runtime/explorer/detail");
     const query = new URLSearchParams(window.location.search);
     expect(query.get("actorId")).toBe("actor://support-command");
     expect(query.get("runId")).toBe("run-execute-command");

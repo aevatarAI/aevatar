@@ -96,18 +96,6 @@ export default [
     hideInMenu: true,
   },
   {
-    path: "/runtime/explorer",
-    name: "Topology",
-    component: "./actors",
-    menuGroupKey: "platform",
-  },
-  {
-    path: "/runtime/gagents",
-    name: "Members",
-    component: "./gagents",
-    hideInMenu: true,
-  },
-  {
     path: "/services",
     name: "Services",
     component: "./services",
@@ -118,12 +106,6 @@ export default [
     component: "./services",
     hideInMenu: true,
     parentKeys: ["/services"],
-  },
-  {
-    path: "/deployments",
-    name: "Deployments",
-    component: "./Deployments",
-    menuGroupKey: "platform",
   },
   {
     path: "/governance",
@@ -156,6 +138,30 @@ export default [
     parentKeys: ["/governance"],
   },
   {
+    path: "/deployments",
+    name: "Deployments",
+    component: "./Deployments",
+    menuGroupKey: "platform",
+  },
+  {
+    path: "/runtime/explorer",
+    name: "Topology",
+    component: "./actors",
+    menuGroupKey: "platform",
+  },
+  {
+    path: "/runtime/explorer/detail",
+    component: "./actors/detail",
+    hideInMenu: true,
+    parentKeys: ["/runtime/explorer"],
+  },
+  {
+    path: "/runtime/gagents",
+    name: "Members",
+    component: "./gagents",
+    hideInMenu: true,
+  },
+  {
     path: "/scopes/overview",
     component: "./scopes/overview",
     hideInMenu: true,
@@ -183,7 +189,7 @@ export default [
   },
   {
     path: "/governance/audit",
-    redirect: "/governance",
+    redirect: "/governance?view=changes",
     hideInMenu: true,
   },
   {

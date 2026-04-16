@@ -16,10 +16,12 @@ internal sealed class ChronoStorageWorkflowStoragePort : IWorkflowStoragePort
 
     public async Task UploadWorkflowYamlAsync(string workflowId, string workflowName, string yaml, CancellationToken ct)
     {
+        _ = workflowName;
         var yamlBytes = Encoding.UTF8.GetBytes(yaml);
         var key = $"{WorkflowDirectory}/{workflowId}.yaml";
         var context = _blobClient.TryResolveContext(string.Empty, key);
-        if (context == null) return;
+        if (context == null)
+            return;
 
         await _blobClient.UploadAsync(context, yamlBytes, "text/yaml", ct);
     }
@@ -42,11 +44,11 @@ internal sealed class ChronoStorageWorkflowStoragePort : IWorkflowStoragePort
                 continue;
 
             var stored = await GetWorkflowYamlAsync(workflowId, ct);
-            if (stored != null)
-            {
-                var updatedAtUtc = TryParseUpdatedAt(storageObject.LastModified) ?? stored.UpdatedAtUtc;
-                workflows.Add(stored with { UpdatedAtUtc = updatedAtUtc });
-            }
+            if (stored is null)
+                continue;
+
+            var updatedAtUtc = TryParseUpdatedAt(storageObject.LastModified) ?? stored.UpdatedAtUtc;
+            workflows.Add(stored with { UpdatedAtUtc = updatedAtUtc });
         }
 
         return workflows;

@@ -99,6 +99,8 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
                 commandId = NormalizeOptional(request.CommandId),
                 approved = request.Approved,
                 userInput = NormalizeOptional(request.UserInput),
+                editedContent = NormalizeOptional(request.EditedContent),
+                feedback = NormalizeOptional(request.Feedback),
                 metadata = request.Metadata,
             },
             cancellationToken);

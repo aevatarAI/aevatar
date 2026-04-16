@@ -31,12 +31,12 @@ describe("AccountSettingsPage", () => {
     renderWithQueryClient(React.createElement(AccountSettingsPage));
 
     expect(await screen.findByText("Aevatar / Settings")).toBeTruthy();
-    expect(await screen.findByText("Settings")).toBeTruthy();
-    expect(screen.getByText("账号信息")).toBeTruthy();
-    expect(screen.getAllByText("Ada Lovelace")).toHaveLength(2);
-    expect(screen.getAllByText("ada@example.com")).toHaveLength(2);
-    expect(screen.getByText("会话摘要")).toBeTruthy();
-    expect(screen.queryByText("Access Notes")).toBeNull();
-    expect(screen.getByRole("button", { name: "退出登录" })).toBeTruthy();
+    expect(await screen.findByText("Account Settings")).toBeTruthy();
+    expect(screen.getByText("Profile")).toBeTruthy();
+    expect(screen.getByText("Authentication")).toBeTruthy();
+    expect(screen.queryByText("Access")).toBeNull();
+    expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+    expect(screen.getAllByText("ada@example.com").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
   });
 });

@@ -204,6 +204,56 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
+    public async Task ParseInbound_extracts_card_action_with_resume_fields()
+    {
+        var payload = new
+        {
+            schema = "2.0",
+            header = new { event_type = "card.action.trigger", token = "verify-token", event_id = "evt_card_123" },
+            @event = new
+            {
+                @operator = new
+                {
+                    open_id = "ou_operator_1",
+                },
+                context = new
+                {
+                    open_chat_id = "oc_chat_card_1",
+                    open_message_id = "om_card_msg_1",
+                },
+                action = new
+                {
+                    value = new
+                    {
+                        actor_id = "run-actor-1",
+                        run_id = "run-1",
+                        step_id = "approval-1",
+                        approved = true,
+                    },
+                    form_value = new
+                    {
+                        user_input = "Looks good",
+                    },
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
+
+        inbound.Should().NotBeNull();
+        inbound!.ChatType.Should().Be("card_action");
+        inbound.ConversationId.Should().Be("oc_chat_card_1");
+        inbound.SenderId.Should().Be("ou_operator_1");
+        inbound.MessageId.Should().Be("evt_card_123");
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("actor_id", "run-actor-1"));
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("run_id", "run-1"));
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("step_id", "approval-1"));
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("approved", "True"));
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("user_input", "Looks good"));
+    }
+
+    [Fact]
     public async Task ParseInbound_returns_null_for_non_message_event()
     {
         var payload = new
@@ -289,7 +339,7 @@ public class LarkPlatformAdapterTests
     {
         var httpClient = CreateHttpClient(HttpStatusCode.OK, """
             {"code":0,"msg":"success","data":{"message_id":"om_success_123"}}
-            """);
+            """, out _);
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             httpClient);
@@ -313,7 +363,7 @@ public class LarkPlatformAdapterTests
     {
         var httpClient = CreateHttpClient(HttpStatusCode.OK, """
             {"code":230001,"msg":"invalid receive id"}
-            """);
+            """, out _);
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             httpClient);
@@ -332,9 +382,45 @@ public class LarkPlatformAdapterTests
         result.Detail.Should().Be("lark_code=230001 msg=invalid receive id");
     }
 
-    private static HttpClient CreateHttpClient(HttpStatusCode statusCode, string body)
+    [Fact]
+    public async Task SendReplyAsync_uses_interactive_message_type_for_card_payload()
     {
-        return new HttpClient(new StaticResponseHandler(statusCode, body))
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, """
+            {"code":0,"msg":"success","data":{"message_id":"om_card_123"}}
+            """, out var handler);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_123",
+            SenderId = "ou_sender_1",
+            SenderName = "sender-1",
+            Text = "hello",
+        };
+        const string replyText = """
+            {"header":{"title":{"tag":"plain_text","content":"Approval"}},"elements":[]}
+            """;
+
+        var result = await _adapter.SendReplyAsync(replyText, inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        handler.LastRequestBody.Should().Contain("\"msg_type\":\"interactive\"");
+        handler.LastRequestBody.Should().Contain("\\u0022header\\u0022");
+    }
+
+    [Fact]
+    public void IsInteractiveCardPayload_detects_feishu_card_json()
+    {
+        LarkPlatformAdapter.IsInteractiveCardPayload("""{"elements":[]}""").Should().BeTrue();
+        LarkPlatformAdapter.IsInteractiveCardPayload("hello").Should().BeFalse();
+    }
+
+    private static HttpClient CreateHttpClient(HttpStatusCode statusCode, string body, out StaticResponseHandler handler)
+    {
+        handler = new StaticResponseHandler(statusCode, body);
+        return new HttpClient(handler)
         {
             BaseAddress = new Uri("https://nyx.example.com"),
         };
@@ -759,7 +845,7 @@ public class LarkPlatformAdapterTests
     [Fact]
     public async Task SendReplyAsync_returns_failed_for_empty_response()
     {
-        var httpClient = CreateHttpClient(HttpStatusCode.OK, "");
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, "", out _);
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             httpClient);
@@ -778,7 +864,7 @@ public class LarkPlatformAdapterTests
     [Fact]
     public async Task SendReplyAsync_throws_when_response_contains_error_field()
     {
-        var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"error":true,"message":"forbidden"}""");
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"error":true,"message":"forbidden"}""", out _);
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             httpClient);
@@ -797,7 +883,7 @@ public class LarkPlatformAdapterTests
     [Fact]
     public async Task SendReplyAsync_returns_result_length_when_no_message_id_in_response()
     {
-        var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"code":0,"msg":"success","data":{}}""");
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"code":0,"msg":"success","data":{}}""", out _);
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             httpClient);
@@ -947,12 +1033,17 @@ public class LarkPlatformAdapterTests
 
     private sealed class StaticResponseHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        public string? LastRequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            return Task.FromResult(new HttpResponseMessage(statusCode)
+            LastRequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            });
+            };
         }
     }
 }

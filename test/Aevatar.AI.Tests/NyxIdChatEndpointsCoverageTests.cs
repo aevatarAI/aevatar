@@ -19,6 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Hosting;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.AI.Tests;
 
@@ -53,7 +54,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleCreateConversationAsync_ShouldReturnCreatedConversation()
     {
-        var store = new NyxIdChatActorStore();
+        var store = new StubGAgentActorStore();
         var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
@@ -65,16 +66,24 @@ public class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         using var doc = JsonDocument.Parse(response.Body);
         doc.RootElement.TryGetProperty("actorId", out var actorId).Should().BeTrue();
-        actorId.GetString().Should().NotBeNullOrWhiteSpace();
-        doc.RootElement.TryGetProperty("createdAt", out _).Should().BeTrue();
-        (await store.ListActorsAsync("scope-a")).Should().ContainSingle();
+        var createdActorId = actorId.GetString();
+        createdActorId.Should().NotBeNullOrWhiteSpace();
+        store.AddedActors.Should().ContainSingle(entry =>
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == createdActorId);
     }
 
     [Fact]
     public async Task HandleListConversationsAsync_ShouldReturnList()
     {
-        var store = new NyxIdChatActorStore();
-        await store.CreateActorAsync("scope-a");
+        var store = new StubGAgentActorStore
+        {
+            GroupsToReturn =
+            [
+                new GAgentActorGroup(NyxIdChatServiceDefaults.GAgentTypeName, ["actor-1"]),
+                new GAgentActorGroup("other-agent", ["actor-2"]),
+            ],
+        };
 
         var result = await InvokeResultAsync(
             "HandleListConversationsAsync",
@@ -87,22 +96,26 @@ public class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         using var doc = JsonDocument.Parse(response.Body);
         doc.RootElement.GetArrayLength().Should().Be(1);
+        doc.RootElement[0].GetProperty("actorId").GetString().Should().Be("actor-1");
     }
 
     [Fact]
-    public async Task HandleDeleteConversationAsync_ShouldReturnNotFound_WhenMissing()
+    public async Task HandleDeleteConversationAsync_ShouldReturnOk_AndRemoveActor()
     {
-        var store = new NyxIdChatActorStore();
+        var store = new StubGAgentActorStore();
         var result = await InvokeResultAsync(
             "HandleDeleteConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
-            "missing-id",
+            "actor-1",
             store,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        store.RemovedActors.Should().ContainSingle(entry =>
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == "actor-1");
     }
 
     [Fact]
@@ -396,7 +409,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             new StubActorRuntime(),
             new StubSubscriptionProvider(),
-            new NyxIdChatActorStore(),
+            new StubGAgentActorStore(),
             new NyxIdRelayOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
@@ -418,7 +431,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             new StubActorRuntime(),
             new StubSubscriptionProvider(),
-            new NyxIdChatActorStore(),
+            new StubGAgentActorStore(),
             new NyxIdRelayOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
@@ -444,7 +457,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             new StubActorRuntime(),
             new StubSubscriptionProvider(),
-            new NyxIdChatActorStore(),
+            new StubGAgentActorStore(),
             new NyxIdRelayOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
@@ -484,7 +497,7 @@ public class NyxIdChatEndpointsCoverageTests
                 new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "partial reply" }) },
             },
         };
-        var store = new NyxIdChatActorStore();
+        var store = new StubGAgentActorStore();
 
         var result = await InvokeResultAsync(
             "HandleRelayWebhookAsync",
@@ -499,7 +512,9 @@ public class NyxIdChatEndpointsCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("partial reply");
-        (await store.ListActorsAsync("scope-a")).Should().ContainSingle("nyxid-relay-slack-room-1");
+        store.AddedActors.Should().ContainSingle(entry =>
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == "nyxid-relay-slack-room-1");
     }
 
     [Fact]
@@ -547,7 +562,7 @@ public class NyxIdChatEndpointsCoverageTests
                     },
                 },
             },
-            new NyxIdChatActorStore(),
+            new StubGAgentActorStore(),
             new NyxIdRelayOptions
             {
                 ResponseTimeoutSeconds = 1,
@@ -591,28 +606,26 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public void BuildConnectedServicesContext_ShouldRenderServiceHintsAndFallbackMessage()
+    public async Task BuildConnectedServicesContext_ShouldRenderServiceHintsAndFallbackMessage()
     {
-        var method = EndpointsType.GetMethod("BuildConnectedServicesContext", BindingFlags.NonPublic | BindingFlags.Static)!;
-
         var arrayPayload = """
             [
               {"slug":"calendar","label":"Calendar","base_url":"https://api.example.com"}
             ]
             """;
-        var arrayContext = (string)method.Invoke(null, [arrayPayload])!;
+        var arrayContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            arrayPayload, null, "", CancellationToken.None);
         arrayContext.Should().Contain("calendar");
         arrayContext.Should().Contain("Use nyxid_proxy");
 
-        var emptyContext = (string)method.Invoke(null, ["""{"services":[]}"""])!;
+        var emptyContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            """{"services":[]}""", null, "", CancellationToken.None);
         emptyContext.Should().Contain("No services connected yet");
     }
 
     [Fact]
-    public void BuildConnectedServicesContext_ShouldHandleDataShape_AndInvalidJson()
+    public async Task BuildConnectedServicesContext_ShouldHandleDataShape_AndInvalidJson()
     {
-        var method = EndpointsType.GetMethod("BuildConnectedServicesContext", BindingFlags.NonPublic | BindingFlags.Static)!;
-
         var dataPayload = """
             {
               "data":[
@@ -620,11 +633,13 @@ public class NyxIdChatEndpointsCoverageTests
               ]
             }
             """;
-        var dataContext = (string)method.Invoke(null, [dataPayload])!;
+        var dataContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            dataPayload, null, "", CancellationToken.None);
         dataContext.Should().Contain("GitHub");
         dataContext.Should().Contain("https://api.github.com");
 
-        var invalidContext = (string)method.Invoke(null, ["{ invalid"])!;
+        var invalidContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            "{ invalid", null, "", CancellationToken.None);
         invalidContext.Should().Contain("No services connected yet");
         invalidContext.Should().Contain("Use nyxid_proxy");
     }
@@ -1022,6 +1037,34 @@ public class NyxIdChatEndpointsCoverageTests
                     handler((TMessage)(object)message).GetAwaiter().GetResult();
             }
             return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
+        }
+    }
+
+    private sealed class StubGAgentActorStore : IGAgentActorStore
+    {
+        public IReadOnlyList<GAgentActorGroup> GroupsToReturn { get; init; } = [];
+        public List<(string GAgentType, string ActorId)> AddedActors { get; } = [];
+        public List<(string GAgentType, string ActorId)> RemovedActors { get; } = [];
+
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(GroupsToReturn);
+
+        public Task AddActorAsync(
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            AddedActors.Add((gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            RemovedActors.Add((gagentType, actorId));
+            return Task.CompletedTask;
         }
     }
 

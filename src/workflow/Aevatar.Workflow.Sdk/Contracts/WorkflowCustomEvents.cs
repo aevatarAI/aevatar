@@ -53,6 +53,8 @@ public sealed record WorkflowHumanInputRequestEventData
     public string? Prompt { get; init; }
     public int? TimeoutSeconds { get; init; }
     public string? VariableName { get; init; }
+    public string? Content { get; init; }
+    public string? DeliveryTargetId { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
 }
 
@@ -170,6 +172,8 @@ public static class WorkflowCustomEventParser
             Prompt = WorkflowSdkJson.TryReadString(obj, "prompt", "Prompt"),
             TimeoutSeconds = TryReadInt(obj, "timeoutSeconds", "TimeoutSeconds"),
             VariableName = WorkflowSdkJson.TryReadString(obj, "variableName", "VariableName"),
+            Content = WorkflowSdkJson.TryReadString(obj, "content", "Content"),
+            DeliveryTargetId = WorkflowSdkJson.TryReadString(obj, "deliveryTargetId", "DeliveryTargetId"),
             Metadata = TryReadStringMap(obj, "metadata", "Metadata"),
         };
         return true;

@@ -2316,7 +2316,7 @@ public sealed class ScopeServiceEndpointsTests
         var successContext = new DefaultHttpContext
         {
             RequestServices = new ServiceCollection()
-                .AddSingleton<IUserConfigStore>(new StubUserConfigStore(
+                .AddSingleton<IUserConfigQueryPort>(new StubUserConfigStore(
                     new UserConfig("user-model", "/preferred-route")))
                 .BuildServiceProvider(),
         };
@@ -2339,7 +2339,7 @@ public sealed class ScopeServiceEndpointsTests
         var failingContext = new DefaultHttpContext
         {
             RequestServices = new ServiceCollection()
-                .AddSingleton<IUserConfigStore>(new ThrowingUserConfigStore())
+                .AddSingleton<IUserConfigQueryPort>(new ThrowingUserConfigStore())
                 .BuildServiceProvider(),
         };
         var failedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
@@ -3758,7 +3758,7 @@ public sealed class ScopeServiceEndpointsTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class StubUserConfigStore : IUserConfigStore
+    private sealed class StubUserConfigStore : IUserConfigQueryPort
     {
         private readonly UserConfig _config;
 
@@ -3767,17 +3767,13 @@ public sealed class ScopeServiceEndpointsTests
             _config = config;
         }
 
-        public Task<UserConfig> GetAsync(CancellationToken cancellationToken = default) => Task.FromResult(_config);
-
-        public Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
     }
 
-    private sealed class ThrowingUserConfigStore : IUserConfigStore
+    private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
     {
-        public Task<UserConfig> GetAsync(CancellationToken cancellationToken = default) =>
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
             throw new InvalidOperationException("config unavailable");
-
-        public Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingResumeDispatchService

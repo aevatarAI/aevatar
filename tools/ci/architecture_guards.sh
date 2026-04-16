@@ -124,9 +124,13 @@ if rg -n "Projection:ReadModel:Bindings" src test; then
 fi
 
 set +e
+# Check for reader.ListAsync() calls (dot-prefixed) in files that use IProjectionDocumentReader.
+# Business-domain ListAsync methods (e.g., IStreamingProxyParticipantStore.ListAsync) are excluded
+# by requiring the call to be on a reader/document field (dot prefix pattern).
 projection_document_reader_list_report="$(
   rg -l "IProjectionDocumentReader<" src test demos \
-    | xargs -r rg -n "ListAsync\("
+    | xargs -r rg -n "\.ListAsync\(" \
+    | rg -i "(reader|document|projection).*\.ListAsync"
 )"
 projection_document_reader_list_status=$?
 set -e

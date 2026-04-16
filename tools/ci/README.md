@@ -47,6 +47,6 @@ This directory keeps CI gate scripts and smoke tests.
   - Job `coverage-quality`
     - Runs restore/build + `tools/ci/coverage_quality_guard.sh`.
     - Uploads `artifacts/coverage/**` as CI artifacts (`coverage-quality-report`).
-    - Uploads the filtered `artifacts/coverage/**/report/Cobertura.xml` to Codecov when `CODECOV_TOKEN` is available.
+    - Uploads the raw `artifacts/coverage/**/raw/**/coverage.cobertura.xml` files to Codecov when `CODECOV_TOKEN` is available, while the filtered report remains the local quality-gate input.
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
   - Job `distributed-3node-smoke` -> `tools/ci/distributed_3node_smoke.sh`

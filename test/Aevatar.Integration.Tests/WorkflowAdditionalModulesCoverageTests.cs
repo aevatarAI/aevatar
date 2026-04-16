@@ -632,6 +632,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "approve?",
                     ["timeout"] = "90",
+                    ["delivery_target_id"] = "agent-approval-1",
                 },
             }),
             ctx,
@@ -640,6 +641,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.StepId.Should().Be("approval-1");
         suspended.SuspensionType.Should().Be("human_approval");
+        suspended.Content.Should().Be("original");
+        suspended.DeliveryTargetId.Should().Be("agent-approval-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -648,7 +651,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-1",
                 StepId = "approval-1",
                 Approved = true,
-                UserInput = "approved-output",
+                UserInput = "legacy-approved-output",
+                EditedContent = "approved-output",
+                Feedback = "looks good",
             }),
             ctx,
             CancellationToken.None);
@@ -658,6 +663,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         approved.RunId.Should().Be("run-1");
         approved.Success.Should().BeTrue();
         approved.Output.Should().Be("approved-output");
+        var approvalResolved = ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Single();
+        approvalResolved.RunId.Should().Be("run-1");
+        approvalResolved.StepId.Should().Be("approval-1");
+        approvalResolved.Approved.Should().BeTrue();
+        approvalResolved.UserInput.Should().Be("legacy-approved-output");
+        approvalResolved.EditedContent.Should().Be("approved-output");
+        approvalResolved.Feedback.Should().Be("looks good");
+        approvalResolved.DeliveryTargetId.Should().Be("agent-approval-1");
+        approvalResolved.ResolvedContent.Should().Be("approved-output");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -688,6 +702,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         rejected.Success.Should().BeTrue();
         rejected.Output.Should().Be("keep-me");
         rejected.Error.Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Should().BeEmpty();
     }
 
     [Fact]
@@ -800,6 +815,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "please type",
                     ["variable"] = "answer",
+                    ["deliveryTargetId"] = "agent-input-1",
                 },
             }),
             ctx,
@@ -807,6 +823,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.VariableName.Should().Be("answer");
+        suspended.Content.Should().Be("fallback");
+        suspended.DeliveryTargetId.Should().Be("agent-input-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -992,6 +1010,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "provide secret",
                     ["variable"] = "api_key",
+                    ["delivery_target_id"] = "agent-secure-1",
                 },
             }),
             ctx,
@@ -1001,6 +1020,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         suspended.SuspensionType.Should().Be("secure_input");
         suspended.Metadata["secure"].Should().Be("true");
         suspended.Metadata["variable"].Should().Be("api_key");
+        suspended.Content.Should().BeEmpty();
+        suspended.DeliveryTargetId.Should().Be("agent-secure-1");
         ctx.Published.Clear();
 
         var persistedState = ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
@@ -2003,7 +2024,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-branch-1",
                 StepId = "branch-approve",
                 Approved = true,
-                UserInput = "looks good",
+                UserInput = "legacy-approved",
+                EditedContent = "looks good",
+                Feedback = "approved as edited",
             }),
             ctx,
             CancellationToken.None);
@@ -2039,7 +2062,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-branch-2",
                 StepId = "branch-reject",
                 Approved = false,
-                UserInput = "change the model to gpt-4",
+                UserInput = "legacy-reject",
+                EditedContent = "edited but rejected",
+                Feedback = "change the model to gpt-4",
             }),
             ctx,
             CancellationToken.None);

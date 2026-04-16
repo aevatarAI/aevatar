@@ -10,3 +10,5 @@ test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaProviderRuntimeIntegra
 test/Aevatar.Tools.Cli.Tests/ChronoStorageUserMemoryStoreTests.cs
 test/Aevatar.Tools.Cli.Tests/ChronoStorageChatHistoryStoreTests.cs
 test/Aevatar.AI.Tests/StreamingToolExecutorTests.cs
+# Fake voice transport uses Task.Delay(Infinite, ct) to keep receive loop alive until relay teardown cancels it
+test/Aevatar.Foundation.VoicePresence.Tests/VoiceTransportRelayTests.cs

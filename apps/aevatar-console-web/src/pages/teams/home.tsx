@@ -20,6 +20,7 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
+import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
   buildTeamCreateHref,
@@ -200,20 +201,7 @@ function resolveAttentionPillStyle(
 }
 
 function formatShortTime(value: string | null | undefined): string {
-  const normalized = trimOptional(value);
-  if (!normalized) {
-    return "--";
-  }
-
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    return "--";
-  }
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(parsed);
+  return formatCompactDateTime(value, "--");
 }
 
 function parseTimestamp(value: string | null | undefined): number {

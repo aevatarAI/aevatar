@@ -3,6 +3,7 @@ const runtimePaths = {
   primitives: "/runtime/primitives",
   runs: "/runtime/runs",
   explorer: "/runtime/explorer",
+  explorerDetail: "/runtime/explorer/detail",
   gagents: "/runtime/gagents",
 } as const;
 
@@ -81,7 +82,8 @@ export function buildRuntimeExplorerHref(options?: {
   serviceId?: string;
   serviceOverrideId?: string;
 }): string {
-  return buildHref(runtimePaths.explorer, {
+  const pathname = options?.actorId ? runtimePaths.explorerDetail : runtimePaths.explorer;
+  return buildHref(pathname, {
     actorId: options?.actorId,
     runId: options?.runId,
     scopeId: options?.scopeId,

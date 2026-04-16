@@ -79,6 +79,8 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                 TimeoutSeconds = timeoutSeconds,
                 VariableName = variable,
             };
+            WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
+            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
 
             await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;

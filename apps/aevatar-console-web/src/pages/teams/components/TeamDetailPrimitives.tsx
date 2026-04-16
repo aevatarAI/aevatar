@@ -1,8 +1,11 @@
 import { Space, Tooltip, Typography, theme } from "antd";
 import React from "react";
+import {
+  AevatarCompactText,
+  aevatarMonoFontFamily,
+} from "@/shared/ui/compactText";
 
-export const factValueFontFamily =
-  '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+export const factValueFontFamily = aevatarMonoFontFamily;
 
 export const SignalCard: React.FC<{
   readonly caption?: React.ReactNode;
@@ -129,3 +132,32 @@ export const FactLine: React.FC<{
     </Tooltip>
   );
 };
+
+export const CompactFactValue: React.FC<{
+  readonly color?: string;
+  readonly head?: number;
+  readonly maxWidth?: React.CSSProperties["maxWidth"];
+  readonly mode?: "middle" | "tail";
+  readonly strong?: boolean;
+  readonly tail?: number;
+  readonly value: string;
+}> = ({
+  color,
+  head = 4,
+  maxWidth = "100%",
+  mode = "middle",
+  strong = true,
+  tail = 4,
+  value,
+}) => (
+  <AevatarCompactText
+    color={color}
+    head={head}
+    maxWidth={maxWidth}
+    mode={mode}
+    monospace
+    strong={strong}
+    tail={tail}
+    value={value}
+  />
+);
