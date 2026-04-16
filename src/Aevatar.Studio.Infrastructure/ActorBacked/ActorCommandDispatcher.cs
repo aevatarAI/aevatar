@@ -7,18 +7,21 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// <summary>
 /// Sends a domain event (command) to a target actor by wrapping it in an
 /// <see cref="EventEnvelope"/> and invoking the grain synchronously via
-/// <see cref="IActorDispatchPort"/>. We deliberately route through the
-/// dispatch port (direct grain call) rather than <c>IActor.HandleEventAsync</c>
-/// (which publishes to the actor's stream): stream publication is
-/// fire-and-forget and has proven unreliable as a write path in the current
-/// InMemory setup — envelopes sometimes never reach the grain pipeline, so
-/// <c>PersistDomainEventAsync</c> never runs and saves appear successful
-/// but the actor state never commits. Dispatch port waits for the grain to
-/// process the event, matching the pattern used by
-/// <c>WorkflowRunActorPort</c> and <c>ProjectionScopeActorRuntime.DispatchAsync</c>.
+/// <see cref="IActorDispatchPort"/>. Uses a <c>Direct</c> envelope route so
+/// the grain's <c>HandleEnvelopeAsyncCore</c> treats it as an explicit
+/// direct dispatch (matches the target actor, runs the event handler
+/// pipeline, commits the event). This mirrors every other working write
+/// path in the codebase — <c>GAgentService</c>,
+/// <c>ServiceInvocationDispatcher</c>, <c>A2AAdapterService</c>,
+/// <c>ProjectionScopeActorRuntime</c> — all use <c>CreateDirect</c>.
+/// The earlier <c>TopologyPublication.Self</c> routing was only reliably
+/// delivered via stream subscription, which does not fire the persistence
+/// pipeline in the current InMemory setup.
 /// </summary>
 internal static class ActorCommandDispatcher
 {
+    private const string PublisherActorId = "aevatar.studio.infrastructure.actor-backed";
+
     public static Task SendAsync<TEvent>(
         IActorDispatchPort dispatchPort,
         IActor actor,
@@ -35,8 +38,7 @@ internal static class ActorCommandDispatcher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
-                actor.Id, TopologyAudience.Self),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, actor.Id),
         };
 
         return dispatchPort.DispatchAsync(actor.Id, envelope, ct);

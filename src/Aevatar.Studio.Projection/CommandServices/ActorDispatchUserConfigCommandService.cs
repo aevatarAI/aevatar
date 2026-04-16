@@ -55,8 +55,11 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
-                actor.Id, TopologyAudience.Self),
+            // Direct route matches the target grain and triggers the event
+            // handler pipeline — same pattern used by every other working
+            // write path in the repo (GAgentService / ProjectionScope etc.).
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                "aevatar.studio.projection.user-config", actor.Id),
         };
 
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
