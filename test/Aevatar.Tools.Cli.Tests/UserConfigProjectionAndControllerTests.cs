@@ -31,8 +31,10 @@ public sealed class UserConfigProjectionAndControllerTests
     {
         var services = new ServiceCollection();
         var dispatchPort = new RecordingActorDispatchPort();
+        var actorRuntime = new StubActorRuntime();
         var scopeResolver = new StubScopeResolver { ScopeIdToReturn = "scope-1" };
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IActorRuntime>(actorRuntime);
         services.AddSingleton<IAppScopeResolver>(scopeResolver);
         services.AddSingleton<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>(
             new StubUserConfigDocumentReader());
@@ -64,6 +66,97 @@ public sealed class UserConfigProjectionAndControllerTests
         evt.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:5080");
         evt.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.com");
         evt.MaxToolRounds.Should().Be(9);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenActorMissing_ShouldCreateActorBeforeDispatch()
+    {
+        // Regression: first save in a scope previously failed with
+        // "Actor user-config-{scopeId} is not initialized" because the command
+        // service dispatched without ensuring the actor existed.
+        var provider = BuildCommandServiceProvider(
+            out var actorRuntime,
+            out var dispatchPort,
+            scopeId: "scope-new");
+        await using var _ = provider;
+        var commandService = provider.GetRequiredService<IUserConfigCommandService>();
+
+        await commandService.SaveAsync(new UserConfig(
+            DefaultModel: "gpt-5.4",
+            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
+            RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
+            LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
+            RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl));
+
+        actorRuntime.GetCalls.Should().ContainSingle().Which.Should().Be("user-config-scope-new");
+        actorRuntime.CreateCalls.Should().Contain("user-config-scope-new", "user-config actor must be created before dispatch");
+        actorRuntime.CreateCalls.Should().Contain(
+            x => x.Contains("user-config-scope-new", StringComparison.Ordinal) && x.Contains("projection", StringComparison.Ordinal),
+            "projection scope actor must also be created so the materializer subscribes to the stream");
+        dispatchPort.ActorId.Should().Be("user-config-scope-new", "last dispatch is the UserConfigUpdatedEvent to the user-config actor");
+        dispatchPort.Envelope.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenActorAlreadyExists_ShouldSkipCreateAndDispatch()
+    {
+        var provider = BuildCommandServiceProvider(
+            out var actorRuntime,
+            out var dispatchPort,
+            scopeId: "scope-existing");
+        await using var _ = provider;
+        actorRuntime.ExistingActors["user-config-scope-existing"] = new StubActor("user-config-scope-existing");
+        var commandService = provider.GetRequiredService<IUserConfigCommandService>();
+
+        await commandService.SaveAsync(new UserConfig(
+            DefaultModel: "claude-opus",
+            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
+            RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
+            LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
+            RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl));
+
+        actorRuntime.GetCalls.Should().ContainSingle().Which.Should().Be("user-config-scope-existing");
+        actorRuntime.CreateCalls.Should().NotContain("user-config-scope-existing",
+            "user-config actor already existed, CreateAsync should be skipped for it");
+        dispatchPort.ActorId.Should().Be("user-config-scope-existing");
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenScopeUnresolved_ShouldFallBackToDefaultScopeActor()
+    {
+        var provider = BuildCommandServiceProvider(
+            out var actorRuntime,
+            out var dispatchPort,
+            scopeId: null);
+        await using var _ = provider;
+        var commandService = provider.GetRequiredService<IUserConfigCommandService>();
+
+        await commandService.SaveAsync(new UserConfig(
+            DefaultModel: string.Empty,
+            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
+            RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
+            LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
+            RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl));
+
+        actorRuntime.CreateCalls.Should().Contain("user-config-default");
+        dispatchPort.ActorId.Should().Be("user-config-default");
+    }
+
+    private static ServiceProvider BuildCommandServiceProvider(
+        out StubActorRuntime actorRuntime,
+        out RecordingActorDispatchPort dispatchPort,
+        string? scopeId)
+    {
+        actorRuntime = new StubActorRuntime();
+        dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(actorRuntime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IAppScopeResolver>(new StubScopeResolver { ScopeIdToReturn = scopeId });
+        services.AddSingleton<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>(
+            new StubUserConfigDocumentReader());
+        services.AddStudioProjectionComponents();
+        return services.BuildServiceProvider();
     }
 
     [Fact]
@@ -373,6 +466,61 @@ public sealed class UserConfigProjectionAndControllerTests
             Envelope = envelope.Clone();
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class StubActorRuntime : IActorRuntime
+    {
+        public List<string> GetCalls { get; } = new();
+        public List<string> CreateCalls { get; } = new();
+        public Dictionary<string, IActor> ExistingActors { get; } = new(StringComparer.Ordinal);
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
+        {
+            var actorId = id ?? Guid.NewGuid().ToString("N");
+            CreateCalls.Add(actorId);
+            var actor = new StubActor(actorId);
+            ExistingActors[actorId] = actor;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? Guid.NewGuid().ToString("N");
+            CreateCalls.Add(actorId);
+            var actor = new StubActor(actorId);
+            ExistingActors[actorId] = actor;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            ExistingActors.Remove(id);
+            return Task.CompletedTask;
+        }
+
+        public Task<IActor?> GetAsync(string id)
+        {
+            GetCalls.Add(id);
+            return Task.FromResult<IActor?>(ExistingActors.TryGetValue(id, out var actor) ? actor : null);
+        }
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(ExistingActors.ContainsKey(id));
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class StubActor : IActor
+    {
+        public StubActor(string id) { Id = id; }
+        public string Id { get; }
+        public IAgent Agent => throw new NotSupportedException("test stub");
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
     }
 
     private sealed class StubUserConfigDocumentReader

@@ -13,8 +13,11 @@ namespace Aevatar.GAgents.ConnectorCatalog;
 ///
 /// Actor ID: <c>connector-catalog</c> (cluster-scoped singleton).
 /// </summary>
-public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
+public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>, IProjectedActor
 {
+    public static string ProjectionKind => "connector-catalog";
+
+
     [EventHandler(EndpointName = "saveCatalog")]
     public async Task HandleCatalogSaved(ConnectorCatalogSavedEvent evt)
     {

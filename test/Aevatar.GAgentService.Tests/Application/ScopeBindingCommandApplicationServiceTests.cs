@@ -978,6 +978,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         new(
             commandPort,
             lifecyclePort,
+            new FakeServiceServingQueryPort(),
             governanceCommandPort,
             governanceQueryPort,
             scopeScriptQueryPort,
@@ -1186,6 +1187,29 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+    }
+
+    /// <summary>
+    /// Test stub — returns null for every readmodel lookup. Combined with
+    /// <see cref="FakeServiceLifecycleQueryPort"/> returning null for
+    /// <c>GetServiceAsync</c>, the bind service's post-activate visibility
+    /// poll fast-fails (8 consecutive no-progress polls at 25ms) and
+    /// <c>UpsertAsync</c> returns within ~200ms. Tests that want to exercise
+    /// the visibility wait should supply a custom stub.
+    /// </summary>
+    private sealed class FakeServiceServingQueryPort : IServiceServingQueryPort
+    {
+        public Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
+            ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceServingSetSnapshot?>(null);
+
+        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
+            ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
+            ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
     }
 
     private sealed class RecordingServiceGovernanceCommandPort : IServiceGovernanceCommandPort

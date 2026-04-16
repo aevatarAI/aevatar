@@ -119,7 +119,7 @@ public class WorkflowStudioBranchCoverageTests
         normalized.Steps[0].Parameters.Should().ContainKey("headers");
         normalized.Steps[1].TimeoutMs.Should().Be(2500);
         normalized.Steps[2].Children.Should().ContainSingle();
-        normalized.Steps[2].Children[0].Type.Should().Be("llm");
+        normalized.Steps[2].Children[0].Type.Should().Be("llm_call");
         normalized.Steps[3].Type.Should().Be("connector_call");
     }
 

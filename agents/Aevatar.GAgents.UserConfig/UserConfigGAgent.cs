@@ -12,8 +12,11 @@ namespace Aevatar.GAgents.UserConfig;
 ///
 /// Actor ID: <c>user-config-{scopeId}</c> (per-scope).
 /// </summary>
-public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
+public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProjectedActor
 {
+    public static string ProjectionKind => "user-config";
+
+
     [EventHandler(EndpointName = "updateConfig")]
     public async Task HandleConfigUpdated(UserConfigUpdatedEvent evt)
     {
