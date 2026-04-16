@@ -323,7 +323,7 @@ describe('StudioEditorPage', () => {
     expect(await screen.findByText('行为描述')).toBeInTheDocument();
     expect(screen.getByText('校验后的 YAML')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /生\s*成/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^生\s*成$/ }));
 
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
   });
@@ -512,7 +512,7 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+    fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
     expect(
       await screen.findByRole('dialog', { name: '绑定团队入口' }),
@@ -562,7 +562,7 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+    fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
     expect(
       await screen.findByRole('dialog', { name: '绑定团队入口' }),
@@ -621,7 +621,7 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+    fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
     expect(
       await screen.findByRole('dialog', { name: '绑定团队入口' }),
@@ -665,7 +665,7 @@ describe('StudioEditorPage', () => {
         ),
       );
 
-      fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+      fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
       expect(
         await screen.findByRole('dialog', { name: '绑定团队入口' }),

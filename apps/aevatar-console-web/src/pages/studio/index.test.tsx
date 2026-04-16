@@ -15,6 +15,21 @@ import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import StudioPage from "./index";
 
+jest.mock("antd", () => {
+  const actual = jest.requireActual("antd");
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
+    },
+  };
+});
+
 const PROMPT_HISTORY_STORAGE_KEY = "aevatar-console-playground-prompt-history";
 const SCRIPTS_STUDIO_STORAGE_KEY = "aevatar:console:scripts-studio:v1";
 const STUDIO_AUTO_RELOGIN_ATTEMPT_KEY =
@@ -1285,11 +1300,12 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           "button",
           {
             key: "publish",
+            "data-testid": "studio-publish-workflow-button",
             type: "button",
             disabled: !props.resolvedScopeId || !props.canPublishWorkflow,
             onClick: () => props.onPublishWorkflow?.(),
           },
-          "发布团队入口"
+          props.scopeBinding?.available ? "更新团队入口" : "绑定团队入口"
         ),
         props.scopeBinding?.available &&
         props.projectEntryReadyForCurrentWorkflow
@@ -1418,12 +1434,12 @@ jest.mock("./components/StudioWorkbenchSections", () => {
               "Retire rev-1"
             )
           : null,
-        runOpen
+        (runOpen || props.canOpenRunWorkflow)
           ? React.createElement("div", { key: "run-dialog" }, [
               React.createElement("textarea", {
                 key: "run-prompt",
                 "data-testid": "studio-run-prompt-input",
-                "aria-label": "Studio execution prompt",
+                "aria-label": "Studio 测试运行输入",
                 value: props.runPrompt ?? "",
                 onChange: (event: MockValueEvent) =>
                   props.onRunPromptChange?.(event.target.value),
@@ -1437,7 +1453,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                   disabled: !props.canRunWorkflow,
                   onClick: () => props.onStartExecution?.(),
                 },
-                "Run"
+                "打开测试运行"
               ),
             ])
           : null,
@@ -1712,7 +1728,9 @@ describe("StudioPage", () => {
     );
 
     expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
-    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("workspace-demo");
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-context-title")).toHaveTextContent("workspace-demo");
+    });
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("行为定义草稿");
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("团队 A");
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("成员 Alpha");
@@ -2075,10 +2093,6 @@ describe("StudioPage", () => {
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {
-    const successSpy = jest
-      .spyOn(message, "success")
-      .mockImplementation(() => undefined as any);
-
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
     const editor = await screen.findByLabelText("定义 YAML");
@@ -2110,12 +2124,10 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(successSpy).toHaveBeenCalledWith(
+      expect(message.success).toHaveBeenCalledWith(
         "已保存到 Workspace/workspace-demo.yaml。",
       );
     });
-
-    successSpy.mockRestore();
   });
 
   it("keeps Studio workflow saves pinned to the current scope route", async () => {
@@ -2340,7 +2352,7 @@ describe("StudioPage", () => {
 
     expect(screen.getByTestId("studio-run-submit-button")).toBeDisabled();
 
-    fireEvent.change(await screen.findByLabelText("Studio execution prompt"), {
+    fireEvent.change(await screen.findByLabelText("Studio 测试运行输入"), {
       target: {
         value: "Run the active draft from Studio.",
       },
@@ -2427,17 +2439,17 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       scopeResolved: true,
     });
-    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&workflow=workflow-1&tab=studio");
 
     await waitFor(() => {
       expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
     });
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "发布团队入口" })
+        screen.getByTestId("studio-publish-workflow-button")
       ).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "发布团队入口" }));
+    fireEvent.click(screen.getByTestId("studio-publish-workflow-button"));
 
     await waitFor(() => {
       expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(

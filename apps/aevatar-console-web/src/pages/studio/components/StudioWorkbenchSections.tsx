@@ -1446,6 +1446,9 @@ type StudioScopeBindingPanelProps = {
   readonly error: unknown;
   readonly pendingRevisionId: string;
   readonly pendingRetirementRevisionId: string;
+  readonly canPublishWorkflow?: boolean;
+  readonly publishPending?: boolean;
+  readonly onPublishWorkflow?: () => void;
   readonly onOpenBinding?: () => void;
   readonly onActivateRevision: (revisionId: string) => void;
   readonly onRetireRevision: (revisionId: string) => void;
@@ -1458,6 +1461,9 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   error,
   pendingRevisionId,
   pendingRetirementRevisionId,
+  canPublishWorkflow,
+  publishPending,
+  onPublishWorkflow,
   onOpenBinding,
   onActivateRevision,
   onRetireRevision,
@@ -1498,7 +1504,9 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
         : '当前还没有发布默认入口。';
   const canShowBindingDetails = Boolean(binding?.available);
   const canInspectPublishedMembers = Boolean(
-    currentRevision?.primaryActorId || currentRevision?.staticActorTypeName,
+    currentRevision?.primaryActorId ||
+      currentRevision?.staticActorTypeName ||
+      binding?.primaryActorId,
   );
   const detailsContent = loading ? (
     <StudioNoticeCard
@@ -1800,7 +1808,18 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
           </Typography.Text>
         </div>
         <Space wrap size={[8, 8]}>
-          {onOpenBinding ? (
+          {onPublishWorkflow ? (
+            <Button
+              size="small"
+              type={binding?.available ? 'default' : 'primary'}
+              icon={<SafetyCertificateOutlined />}
+              loading={publishPending}
+              disabled={!canPublishWorkflow}
+              onClick={onPublishWorkflow}
+            >
+              {binding?.available ? '更新团队入口' : '绑定团队入口'}
+            </Button>
+          ) : onOpenBinding ? (
             <Button
               size="small"
               type="default"
@@ -1808,6 +1827,11 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
               onClick={onOpenBinding}
             >
               {binding?.available ? '更新团队入口' : '绑定团队入口'}
+            </Button>
+          ) : null}
+          {onPublishWorkflow && onOpenBinding ? (
+            <Button size="small" type="text" onClick={onOpenBinding}>
+              高级设置
             </Button>
           ) : null}
           {canShowBindingDetails ? (
@@ -5680,6 +5704,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             error={scopeBindingError}
             pendingRevisionId={bindingActivationRevisionId}
             pendingRetirementRevisionId={bindingRetirementRevisionId}
+            canPublishWorkflow={canPublishWorkflow}
+            publishPending={publishPending}
+            onPublishWorkflow={onPublishWorkflow}
             onOpenBinding={openGAgentModal}
             onActivateRevision={onActivateBindingRevision}
             onRetireRevision={onRetireBindingRevision}

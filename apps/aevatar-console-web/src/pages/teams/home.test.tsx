@@ -164,14 +164,15 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
-    expect(screen.getByText("当前 Team")).toBeTruthy();
-    expect(screen.getByText("当前可见团队")).toBeTruthy();
-    expect(screen.getByText("可见运行信号")).toBeTruthy();
-    expect(screen.getByText("草稿条目")).toBeTruthy();
+    expect(screen.getByText("当前 Scope")).toBeTruthy();
+    expect(screen.getAllByText("团队入口").length).toBeGreaterThan(0);
+    expect(screen.getByText("运行正常")).toBeTruthy();
+    expect(screen.getByText("需要处理")).toBeTruthy();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "切换 Scope" })).toBeTruthy();
     expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
     expect(screen.queryByText("草稿团队")).toBeNull();
-    expect(screen.queryByRole("button", { name: "显示草稿团队 (1)" })).toBeNull();
+    expect(screen.getByText("还有草稿待整理")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "更多" }));
 
@@ -179,14 +180,13 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("进入 Studio")).toBeTruthy();
   });
 
-  it("lets the user switch from cards to the compact roster manually", async () => {
+  it("does not show the roster view toggle when the homepage only has one visible team", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     await screen.findByRole("heading", { level: 3, name: "NyxID Chat" });
-    fireEvent.click(screen.getByRole("button", { name: "切换到列表视图" }));
-
-    expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
-    expect(screen.queryByLabelText("团队卡片视图")).toBeNull();
+    expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "切换到卡片视图" })).toBeNull();
   });
 
   it("keeps the homepage visible when runtime sampling partially fails", async () => {
@@ -265,7 +265,8 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "打开 Studio" })).toBeTruthy();
+    const openStudioButtons = await screen.findAllByRole("button", { name: "打开 Studio" });
+    expect(openStudioButtons.length).toBeGreaterThan(0);
     expect(screen.getByText(/已保存的行为定义/)).toBeTruthy();
     expect(screen.queryByText("客服团队")).toBeNull();
     expect(screen.queryByText("草稿团队")).toBeNull();
