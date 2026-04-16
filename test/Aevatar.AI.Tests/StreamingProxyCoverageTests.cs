@@ -264,10 +264,10 @@ public class StreamingProxyCoverageTests
                 BindingFlags.NonPublic | BindingFlags.Static)!;
         var methodCalls = new[]
         {
-            new EventEnvelope { Payload = Any.Pack(new GroupChatTopicEvent { Prompt = "topic", SessionId = "s1" }) },
-            new EventEnvelope { Payload = Any.Pack(new GroupChatMessageEvent { AgentId = "a1", AgentName = "A1", Content = "hi", SessionId = "s1" }) },
-            new EventEnvelope { Payload = Any.Pack(new GroupChatParticipantJoinedEvent { AgentId = "a1", DisplayName = "A1" }) },
-            new EventEnvelope { Payload = Any.Pack(new GroupChatParticipantLeftEvent { AgentId = "a1" }) },
+            CreateTopologyEnvelope(new GroupChatTopicEvent { Prompt = "topic", SessionId = "s1" }),
+            CreateTopologyEnvelope(new GroupChatMessageEvent { AgentId = "a1", AgentName = "A1", Content = "hi", SessionId = "s1" }),
+            CreateTopologyEnvelope(new GroupChatParticipantJoinedEvent { AgentId = "a1", DisplayName = "A1" }),
+            CreateTopologyEnvelope(new GroupChatParticipantLeftEvent { AgentId = "a1" }),
         };
 
         foreach (var envelope in methodCalls)
@@ -292,6 +292,47 @@ public class StreamingProxyCoverageTests
         body.Should().Contain("AGENT_MESSAGE");
         body.Should().Contain("PARTICIPANT_JOINED");
         body.Should().Contain("PARTICIPANT_LEFT");
+    }
+
+    [Fact]
+    public async Task MapAndWriteEventAsync_ShouldIgnoreDirectInboundEvents()
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyGAgent).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxySseWriter",
+            context.Response);
+
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "MapAndWriteEventAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        var result = method.Invoke(null, [new EventEnvelope
+        {
+            Payload = Any.Pack(new GroupChatMessageEvent
+            {
+                AgentId = "a1",
+                AgentName = "A1",
+                Content = "hi",
+                SessionId = "s1",
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect("api", "room-1"),
+        }, writer])!;
+
+        switch (result)
+        {
+            case ValueTask valueTask:
+                await valueTask;
+                break;
+            case Task task:
+                await task;
+                break;
+        }
+
+        context.Response.Body.Position = 0;
+        var body = new StreamReader(context.Response.Body).ReadToEnd();
+        body.Should().BeEmpty();
     }
 
     [Fact]
@@ -422,6 +463,15 @@ public class StreamingProxyCoverageTests
         AgentCoverageTestSupport.AssignActorId(agent, actorId);
         return agent;
     }
+
+    private static EventEnvelope CreateTopologyEnvelope(IMessage payload) =>
+        new()
+        {
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                "streaming-proxy-room",
+                TopologyAudience.Parent),
+        };
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
     {

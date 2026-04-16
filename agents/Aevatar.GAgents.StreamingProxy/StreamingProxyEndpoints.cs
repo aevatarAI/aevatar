@@ -471,7 +471,7 @@ public static class StreamingProxyEndpoints
     private static async ValueTask<StreamingProxyStreamSignal?> MapAndWriteEventAsync(EventEnvelope envelope, StreamingProxySseWriter writer)
     {
         var payload = envelope.Payload;
-        if (payload is null)
+        if (payload is null || !ShouldWriteToSse(envelope))
             return null;
 
         if (payload.Is(GroupChatTopicEvent.Descriptor))
@@ -499,6 +499,9 @@ public static class StreamingProxyEndpoints
 
         return null;
     }
+
+    private static bool ShouldWriteToSse(EventEnvelope envelope) =>
+        envelope.Route?.IsTopologyPublication() == true;
 
     private static async Task TryRollbackRoomCreationAsync(
         string roomId,
