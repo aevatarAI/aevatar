@@ -1,6 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
@@ -12,7 +10,6 @@ using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
-using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
@@ -337,7 +334,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, CreateProjectionPort(), EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         var groups = await store.GetAsync();
 
@@ -363,7 +360,7 @@ public sealed class ActorBackedStoreAdapterTests
         });
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
-        var store = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, CreateProjectionPort(), reader, logger);
+        var store = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var groups = await store.GetAsync();
 
@@ -384,7 +381,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, CreateProjectionPort(), EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         await store.AddActorAsync("MyGAgent", "actor-123");
 
@@ -411,7 +408,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, CreateProjectionPort(), EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         await store.RemoveActorAsync("MyGAgent", "actor-456");
 
@@ -548,11 +545,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-<<<<<<< HEAD
         var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
-=======
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, CreateProjectionPort(), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
->>>>>>> 778dad9b (Fix Studio actor-backed projection reads)
 
         await store.AddAsync("room-1", "agent-abc", "Alice");
 
@@ -570,11 +563,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-<<<<<<< HEAD
         var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
-=======
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, CreateProjectionPort(), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
->>>>>>> 778dad9b (Fix Studio actor-backed projection reads)
 
         await store.RemoveRoomAsync("room-1");
 
@@ -589,11 +578,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-<<<<<<< HEAD
         var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
-=======
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, CreateProjectionPort(), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
->>>>>>> 778dad9b (Fix Studio actor-backed projection reads)
 
         await store.RemoveParticipantAsync("room-1", "agent-abc");
 
@@ -609,11 +594,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-<<<<<<< HEAD
         var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
-=======
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, CreateProjectionPort(), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
->>>>>>> 778dad9b (Fix Studio actor-backed projection reads)
 
         var participants = await store.ListAsync("room-1");
 
@@ -642,11 +623,8 @@ public sealed class ActorBackedStoreAdapterTests
             StateRoot = Any.Pack(state),
         });
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-<<<<<<< HEAD
         var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), reader, logger);
-=======
-        var store = new ActorBackedStreamingProxyParticipantStore(runtime, CreateProjectionPort(), reader, logger);
->>>>>>> 778dad9b (Fix Studio actor-backed projection reads)
+        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), reader, logger);
 
         var participants = await store.ListAsync("room-1");
 
@@ -1599,19 +1577,11 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var scopeA = new FakeScopeResolver { ScopeIdToReturn = "scope-a" };
-<<<<<<< HEAD
         var storeA = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeA, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
         await storeA.AddActorAsync("MyAgent", "actor-1");
 
         var scopeB = new FakeScopeResolver { ScopeIdToReturn = "scope-b" };
         var storeB = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeB, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
-=======
-        var storeA = new ActorBackedGAgentActorStore(runtime, scopeA, CreateProjectionPort(), EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
-        await storeA.AddActorAsync("MyAgent", "actor-1");
-
-        var scopeB = new FakeScopeResolver { ScopeIdToReturn = "scope-b" };
-        var storeB = new ActorBackedGAgentActorStore(runtime, scopeB, CreateProjectionPort(), EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
->>>>>>> 778dad9b (Fix Studio actor-backed projection reads)
         await storeB.AddActorAsync("MyAgent", "actor-2");
 
         runtime.Actors.Should().ContainKey("gagent-registry-scope-a");
@@ -1689,22 +1659,4 @@ public sealed class ActorBackedStoreAdapterTests
         }
     }
 
-    private static StudioCurrentStateProjectionPort CreateProjectionPort() =>
-        new(new NoOpProjectionScopeActivationService());
-
-    private sealed class NoOpProjectionScopeActivationService
-        : IProjectionScopeActivationService<StudioMaterializationRuntimeLease>
-    {
-        public Task<StudioMaterializationRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            var context = new StudioMaterializationContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-            };
-            return Task.FromResult(new StudioMaterializationRuntimeLease(context));
-        }
-    }
 }
