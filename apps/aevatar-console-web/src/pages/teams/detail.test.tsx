@@ -744,7 +744,7 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "服务映射" })[0]);
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/explorer");
+      expect(window.location.pathname).toBe("/runtime/explorer/detail");
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("actorId")).toBe("actor-intake");
