@@ -51,6 +51,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
                 request.Parameters,
                 defaultSeconds: 3600);
+            var deliveryTargetId = WorkflowSuspensionRequestSupport.ResolveDeliveryTargetId(request);
 
             var state = WorkflowExecutionStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
             state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingApprovalState
@@ -59,6 +60,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 RunId = runId,
                 Input = request.Input ?? string.Empty,
                 OnReject = request.Parameters.GetValueOrDefault("on_reject", "fail"),
+                DeliveryTargetId = deliveryTargetId ?? string.Empty,
             };
             await SaveStateAsync(state, ctx, ct);
 
@@ -66,14 +68,18 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 "HumanApproval: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", timeout={Timeout}s",
                 runId, request.StepId, prompt, timeoutSeconds);
 
-            await ctx.PublishAsync(new WorkflowSuspendedEvent
+            var suspended = new WorkflowSuspendedEvent
             {
                 RunId = runId,
                 StepId = request.StepId,
                 SuspensionType = "human_approval",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
-            }, TopologyAudience.ParentAndChildren, ct);
+            };
+            WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
+            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
+
+            await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -93,15 +99,25 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     "HumanApproval: run={RunId} step={StepId} approved",
                     pending.RunId,
                     pending.StepId);
+                var approvedContent = ResolveApprovedContent(resumed) ?? pending.Input;
                 var approved = new StepCompletedEvent
                 {
                     StepId = pending.StepId,
                     RunId = pending.RunId,
                     Success = true,
-                    Output = string.IsNullOrEmpty(resumed.UserInput) ? pending.Input : resumed.UserInput,
+                    Output = approvedContent,
                     BranchKey = "true",
                 };
                 await ctx.PublishAsync(approved, TopologyAudience.Self, ct);
+                await PublishResolutionAsync(
+                    ctx,
+                    pending,
+                    approved: true,
+                    userInput: resumed.UserInput,
+                    editedContent: approvedContent,
+                    feedback: ResolveApprovalFeedback(resumed),
+                    resolvedContent: approved.Output,
+                    ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
@@ -113,8 +129,9 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     pending.StepId,
                     onReject);
 
-                var rejectionOutput = !string.IsNullOrEmpty(resumed.UserInput)
-                    ? $"[Previous content]\n{pending.Input}\n\n[User feedback]\n{resumed.UserInput}"
+                var feedback = ResolveFeedback(resumed);
+                var rejectionOutput = !string.IsNullOrEmpty(feedback)
+                    ? $"[Previous content]\n{pending.Input}\n\n[User feedback]\n{feedback}"
                     : pending.Input;
 
                 var rejected = new StepCompletedEvent
@@ -127,10 +144,76 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     BranchKey = "false",
                 };
                 await ctx.PublishAsync(rejected, TopologyAudience.Self, ct);
+                await PublishResolutionAsync(
+                    ctx,
+                    pending,
+                    approved: false,
+                    userInput: resumed.UserInput,
+                    editedContent: ResolveEditedContent(resumed),
+                    feedback: feedback,
+                    resolvedContent: rejected.Output,
+                    ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
         }
+    }
+
+    private static Task PublishResolutionAsync(
+        IWorkflowExecutionContext ctx,
+        PendingApprovalState pending,
+        bool approved,
+        string? userInput,
+        string? editedContent,
+        string? feedback,
+        string? resolvedContent,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(pending.DeliveryTargetId))
+            return Task.CompletedTask;
+
+        return ctx.PublishAsync(
+            new WorkflowHumanApprovalResolvedEvent
+            {
+                RunId = pending.RunId,
+                StepId = pending.StepId,
+                Approved = approved,
+                UserInput = userInput ?? string.Empty,
+                DeliveryTargetId = pending.DeliveryTargetId,
+                ResolvedContent = resolvedContent ?? string.Empty,
+                EditedContent = editedContent ?? string.Empty,
+                Feedback = feedback ?? string.Empty,
+            },
+            TopologyAudience.Self,
+            ct);
+    }
+
+    private static string? ResolveApprovedContent(WorkflowResumedEvent resumed)
+    {
+        var editedContent = NormalizeOptional(resumed.EditedContent);
+        if (editedContent is not null)
+            return editedContent;
+
+        return NormalizeOptional(resumed.UserInput);
+    }
+
+    private static string? ResolveEditedContent(WorkflowResumedEvent resumed) =>
+        NormalizeOptional(resumed.EditedContent);
+
+    private static string? ResolveApprovalFeedback(WorkflowResumedEvent resumed) =>
+        NormalizeOptional(resumed.Feedback);
+
+    private static string? ResolveFeedback(WorkflowResumedEvent resumed)
+    {
+        var feedback = NormalizeOptional(resumed.Feedback);
+        if (feedback is not null)
+            return feedback;
+
+        feedback = NormalizeOptional(resumed.UserInput);
+        if (feedback is not null)
+            return feedback;
+
+        return NormalizeOptional(resumed.EditedContent);
     }
 
     private bool TryResolvePending(
@@ -169,6 +252,12 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return normalized.Length == 0 ? null : normalized;
     }
 
 }

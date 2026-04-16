@@ -17,7 +17,7 @@ public sealed class ExecutionService
     private const string ExecutionStreamFailedCode = "EXECUTION_STREAM_FAILED";
 
     private readonly IStudioWorkspaceStore _store;
-    private readonly IUserConfigStore? _userConfigStore;
+    private readonly IUserConfigQueryPort? _userConfigStore;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IStudioBackendRequestAuthSnapshotProvider? _authSnapshotProvider;
     private readonly string _observationSessionId = Guid.NewGuid().ToString("N");
@@ -26,7 +26,7 @@ public sealed class ExecutionService
         IStudioWorkspaceStore store,
         IHttpClientFactory httpClientFactory,
         IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null,
-        IUserConfigStore? userConfigStore = null)
+        IUserConfigQueryPort? userConfigStore = null)
     {
         _store = store;
         _httpClientFactory = httpClientFactory;

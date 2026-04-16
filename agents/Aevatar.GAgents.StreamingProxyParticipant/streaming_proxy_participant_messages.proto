@@ -1,0 +1,40 @@
+syntax = "proto3";
+package aevatar.gagents.streaming_proxy_participant;
+option csharp_namespace = "Aevatar.GAgents.StreamingProxyParticipant";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── State ───
+
+message ParticipantEntry {
+  string agent_id = 1;
+  string display_name = 2;
+  google.protobuf.Timestamp joined_at = 3;
+}
+
+message ParticipantList {
+  repeated ParticipantEntry participants = 1;
+}
+
+message StreamingProxyParticipantGAgentState {
+  // roomId → participants
+  map<string, ParticipantList> rooms = 1;
+}
+
+// ─── Events ───
+
+message ParticipantAddedEvent {
+  string room_id = 1;
+  string agent_id = 2;
+  string display_name = 3;
+  google.protobuf.Timestamp joined_at = 4;
+}
+
+message ParticipantRemovedEvent {
+  string room_id = 1;
+  string agent_id = 2;
+}
+
+message RoomParticipantsRemovedEvent {
+  string room_id = 1;
+}

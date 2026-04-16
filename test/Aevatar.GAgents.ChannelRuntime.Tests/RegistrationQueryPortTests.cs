@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using NSubstitute;
 using Xunit;
 
@@ -329,5 +330,134 @@ public sealed class RegistrationQueryPortTests
         var result = await queryPort.QueryAllAsync();
 
         result.Should().BeEmpty();
+    }
+
+    // ─── AgentRegistryQueryPort ───
+
+    [Fact]
+    public async Task AgentRegistryQueryPort_GetAsync_ReturnsEntry_WhenDocumentExists()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
+        reader.GetAsync("agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryDocument?>(new AgentRegistryDocument
+            {
+                Id = "agent-1",
+                Platform = "lark",
+                ConversationId = "oc_chat_1",
+                NyxProviderSlug = "api-lark-bot",
+                NyxApiKey = "nyx-key-1",
+                OwnerNyxUserId = "user-1",
+                AgentType = "skill_runner",
+                TemplateName = "daily_report",
+                ScopeId = "scope-1",
+                ApiKeyId = "key-1",
+                ScheduleCron = "0 9 * * *",
+                ScheduleTimezone = "UTC",
+                Status = "running",
+                LastRunAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
+                NextRunAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)),
+                ErrorCount = 2,
+                LastError = "last-error",
+                StateVersion = 7,
+                ActorId = "agent-registry-store",
+            }));
+
+        var queryPort = new AgentRegistryQueryPort(reader);
+        var result = await queryPort.GetAsync("agent-1");
+
+        result.Should().NotBeNull();
+        result!.AgentId.Should().Be("agent-1");
+        result.Platform.Should().Be("lark");
+        result.ConversationId.Should().Be("oc_chat_1");
+        result.NyxProviderSlug.Should().Be("api-lark-bot");
+        result.NyxApiKey.Should().Be("nyx-key-1");
+        result.OwnerNyxUserId.Should().Be("user-1");
+        result.AgentType.Should().Be("skill_runner");
+        result.TemplateName.Should().Be("daily_report");
+        result.ScopeId.Should().Be("scope-1");
+        result.ApiKeyId.Should().Be("key-1");
+        result.ScheduleCron.Should().Be("0 9 * * *");
+        result.ScheduleTimezone.Should().Be("UTC");
+        result.Status.Should().Be("running");
+        result.LastRunAt.Should().NotBeNull();
+        result.NextRunAt.Should().NotBeNull();
+        result.ErrorCount.Should().Be(2);
+        result.LastError.Should().Be("last-error");
+    }
+
+    [Fact]
+    public async Task AgentRegistryQueryPort_GetAsync_ReturnsNull_WhenTombstoned()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
+        reader.GetAsync("agent-2", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryDocument?>(new AgentRegistryDocument
+            {
+                Id = "agent-2",
+                Tombstoned = true,
+                StateVersion = 8,
+            }));
+
+        var queryPort = new AgentRegistryQueryPort(reader);
+        var result = await queryPort.GetAsync("agent-2");
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task AgentRegistryQueryPort_QueryAllAsync_FiltersTombstonedEntries()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
+        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<AgentRegistryDocument>
+            {
+                Items =
+                [
+                    new AgentRegistryDocument
+                    {
+                        Id = "agent-a",
+                        Platform = "lark",
+                        ConversationId = "oc_a",
+                        NyxApiKey = "key-a",
+                        AgentType = "skill_runner",
+                        TemplateName = "daily_report",
+                        StateVersion = 1,
+                    },
+                    new AgentRegistryDocument
+                    {
+                        Id = "agent-b",
+                        Platform = "lark",
+                        ConversationId = "oc_b",
+                        NyxApiKey = "key-b",
+                        Tombstoned = true,
+                        StateVersion = 2,
+                    },
+                ],
+            }));
+
+        var queryPort = new AgentRegistryQueryPort(reader);
+        var result = await queryPort.QueryAllAsync();
+
+        result.Should().ContainSingle();
+        result[0].AgentId.Should().Be("agent-a");
+        result[0].NyxApiKey.Should().Be("key-a");
+        result[0].AgentType.Should().Be("skill_runner");
+        result[0].TemplateName.Should().Be("daily_report");
+    }
+
+    [Fact]
+    public async Task AgentRegistryQueryPort_GetStateVersionAsync_ReturnsVersion_WhenDocumentExists()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
+        reader.GetAsync("agent-3", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryDocument?>(new AgentRegistryDocument
+            {
+                Id = "agent-3",
+                StateVersion = 11,
+            }));
+
+        var queryPort = new AgentRegistryQueryPort(reader);
+        var result = await queryPort.GetStateVersionAsync("agent-3");
+
+        result.Should().Be(11);
     }
 }

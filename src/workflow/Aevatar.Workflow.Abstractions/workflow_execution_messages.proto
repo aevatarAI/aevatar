@@ -159,8 +159,30 @@ message WorkflowSuspendedEvent
   int32 timeout_seconds = 5;
   string variable_name = 6;
   map<string, string> metadata = 7;
+  string content = 8;
+  string delivery_target_id = 9;
 }
-message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
+message WorkflowResumedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  bool approved = 3;
+  string user_input = 4;
+  map<string, string> metadata = 5;
+  string edited_content = 6;
+  string feedback = 7;
+}
+message WorkflowHumanApprovalResolvedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  bool approved = 3;
+  string user_input = 4;
+  string delivery_target_id = 5;
+  string resolved_content = 6;
+  string edited_content = 7;
+  string feedback = 8;
+}
 message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
 message WorkflowRunStoppedEvent { string run_id = 1; string reason = 2; }
 message WorkflowRoleActorLinkedEvent

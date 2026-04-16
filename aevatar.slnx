@@ -2,7 +2,14 @@
   <Folder Name="/agents/">
     <Project Path="agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
     <Project Path="agents\Aevatar.GAgents.StreamingProxy\Aevatar.GAgents.StreamingProxy.csproj" />
+    <Project Path="agents/Aevatar.GAgents.Registry/Aevatar.GAgents.Registry.csproj" />
+    <Project Path="agents/Aevatar.GAgents.ConnectorCatalog/Aevatar.GAgents.ConnectorCatalog.csproj" />
+    <Project Path="agents/Aevatar.GAgents.RoleCatalog/Aevatar.GAgents.RoleCatalog.csproj" />
+    <Project Path="agents/Aevatar.GAgents.StreamingProxyParticipant/Aevatar.GAgents.StreamingProxyParticipant.csproj" />
+    <Project Path="agents/Aevatar.GAgents.UserConfig/Aevatar.GAgents.UserConfig.csproj" />
+    <Project Path="agents/Aevatar.GAgents.UserMemory/Aevatar.GAgents.UserMemory.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChatbotClassifier\Aevatar.GAgents.ChatbotClassifier.csproj" />
+    <Project Path="agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
   </Folder>
@@ -23,7 +30,6 @@
     <File Path="docs\PROJECT_SPLIT_STRATEGY.md" />
     <File Path="docs\STREAM_FORWARD_ARCHITECTURE.md" />
   </Folder>
-  <Folder Name="/docs/00-overview/" />
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
     <File Path="Directory.Build.props" />
@@ -103,6 +109,7 @@
     <Project Path="src/Aevatar.Studio.Application/Aevatar.Studio.Application.csproj" />
     <Project Path="src/Aevatar.Studio.Infrastructure/Aevatar.Studio.Infrastructure.csproj" />
     <Project Path="src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
+    <Project Path="src/Aevatar.Studio.Projection/Aevatar.Studio.Projection.csproj" />
   </Folder>
   <Folder Name="/src/platform/">
     <Project Path="src/platform/Aevatar.GAgentService.Governance.Abstractions/Aevatar.GAgentService.Governance.Abstractions.csproj" />

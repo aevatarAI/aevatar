@@ -11,7 +11,6 @@ public static class ServiceCollectionExtensions
     {
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
 
-        services.TryAddSingleton<NyxIdChatActorStore>();
         services.TryAddSingleton(BindRelayOptions(configuration));
 
         return services;

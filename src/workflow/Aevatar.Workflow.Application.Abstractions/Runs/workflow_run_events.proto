@@ -181,6 +181,8 @@ message WorkflowHumanInputRequestCustomPayload {
   string variable_name = 6;
   map<string, string> metadata = 7;
   repeated string options = 8;
+  string content = 9;
+  string delivery_target_id = 10;
 }
 
 message WorkflowHumanInputResponseCustomPayload {

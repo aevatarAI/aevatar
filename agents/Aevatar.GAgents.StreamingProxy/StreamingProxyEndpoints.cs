@@ -57,20 +57,6 @@ public static class StreamingProxyEndpoints
             roomName = "Group Chat";
 
         var roomId = StreamingProxyDefaults.GenerateRoomId();
-
-        // Create the actor and initialize it
-        var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(roomId, ct);
-
-        var initEvent = new GroupChatRoomInitializedEvent { RoomName = roomName };
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(initEvent),
-            Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
-        };
-        await actor.HandleEventAsync(envelope, ct);
-
         try
         {
             await actorStore.AddActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
@@ -78,8 +64,34 @@ public static class StreamingProxyEndpoints
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            // chrono-storage unavailable (timeout/403/network) — actor still usable via runtime
-            logger.LogWarning(ex, "Failed to persist room {RoomId} to actor store; room is usable via runtime", roomId);
+            logger.LogError(ex, "Failed to register room {RoomId} before activation", roomId);
+            return Results.Json(
+                new { error = "Failed to create room" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        try
+        {
+            var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(roomId, ct);
+
+            var initEvent = new GroupChatRoomInitializedEvent { RoomName = roomName };
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(initEvent),
+                Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
+            };
+            await actor.HandleEventAsync(envelope, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to activate room {RoomId}; rolling back registration", roomId);
+            await TryRollbackRoomCreationAsync(roomId, actorStore, actorRuntime, logger);
+            return Results.Json(
+                new { error = "Failed to create room" },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
 
         return Results.Ok(new { roomId, roomName });
@@ -398,8 +410,10 @@ public static class StreamingProxyEndpoints
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to list participants for room {RoomId}", roomId);
-            return Results.Ok(Array.Empty<object>());
+            logger.LogError(ex, "Failed to list participants for room {RoomId}", roomId);
+            return Results.Json(
+                new { error = "Failed to list participants" },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
     }
 
@@ -484,6 +498,34 @@ public static class StreamingProxyEndpoints
         }
 
         return null;
+    }
+
+    private static async Task TryRollbackRoomCreationAsync(
+        string roomId,
+        IGAgentActorStore actorStore,
+        IActorRuntime actorRuntime,
+        ILogger logger)
+    {
+        try
+        {
+            await actorRuntime.DestroyAsync(roomId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to destroy room actor {RoomId} during rollback", roomId);
+        }
+
+        try
+        {
+            await actorStore.RemoveActorAsync(
+                StreamingProxyDefaults.GAgentTypeName,
+                roomId,
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to remove room {RoomId} from actor store during rollback", roomId);
+        }
     }
 
     // ─── Request DTOs ───
