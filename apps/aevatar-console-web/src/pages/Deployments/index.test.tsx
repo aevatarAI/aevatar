@@ -299,8 +299,9 @@ describe("DeploymentsPage", () => {
     renderDeploymentsPage();
 
     expect(await screen.findByText("Aevatar / Platform")).toBeInTheDocument();
-    expect(await screen.findAllByText("Deployments")).toHaveLength(2);
-    expect(await screen.findByText("Select a deployment")).toBeInTheDocument();
+    expect(await screen.findByText("Deployments")).toBeInTheDocument();
+    expect(await screen.findByText("Deployments 负责解释谁在 serving、候选版本推进到了哪一个 stage，以及流量目前如何分配。它是从 Services drill-down 后进入的发布操作台。")).toBeInTheDocument();
+    expect(await screen.findByText("选择一个部署")).toBeInTheDocument();
     expect(screen.queryByText("Deployment Inventory")).toBeNull();
   });
 
@@ -310,12 +311,12 @@ describe("DeploymentsPage", () => {
     );
 
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看部署" }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Weights" }));
+    fireEvent.click(await screen.findByRole("button", { name: "调整权重" }));
 
-    expect(await screen.findByText("Deployment Controls")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Apply weights" })).toBeInTheDocument();
+    expect(await screen.findByText("Serving Controls")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "应用权重" })).toBeInTheDocument();
   });
 
   it("dispatches the candidate revision from the compare drawer", async () => {
@@ -324,11 +325,11 @@ describe("DeploymentsPage", () => {
     );
 
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看部署" }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Rollout" }));
+    fireEvent.click(await screen.findByRole("button", { name: "推进发布" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "Deploy candidate revision" }),
+      await screen.findByRole("button", { name: "发布候选版本" }),
     );
 
     await waitFor(() => {

@@ -76,6 +76,7 @@ import {
   buildStudioRoute,
   type StudioTab,
 } from '@/shared/studio/navigation';
+import { syncStudioHostBodyClass } from '@/shared/studio/studioLayout';
 import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
@@ -97,6 +98,7 @@ import type {
 } from '@/shared/studio/models';
 import { getStudioScopeBindingCurrentRevision } from '@/shared/studio/models';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
+import { describeError } from '@/shared/ui/errorText';
 import StudioBootstrapGate from './components/StudioBootstrapGate';
 import StudioInspectorPane from './components/StudioInspectorPane';
 import StudioShell, {
@@ -967,6 +969,7 @@ const StudioPage: React.FC = () => {
   );
   const isStudioLocation =
     typeof window !== 'undefined' && window.location.pathname === '/studio';
+  useEffect(() => syncStudioHostBodyClass(isStudioLocation), [isStudioLocation]);
   const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
   const [workspacePage, setWorkspacePage] = useState<StudioWorkspacePage>(
@@ -2053,7 +2056,17 @@ const StudioPage: React.FC = () => {
       ),
     [roleCatalogDraft, rolesQuery.data?.roles],
   );
-  const studioHostMode = appContextQuery.data?.mode ?? 'embedded';
+  const studioHostMode = appContextQuery.data?.mode ?? 'proxy';
+  const canAskAiGenerate =
+    studioHostMode === 'embedded' && !appContextQuery.isError;
+  const askAiUnavailableMessage = appContextQuery.isError
+    ? describeError(
+        appContextQuery.error,
+        '当前环境暂时无法连接 Studio 服务，请稍后再试。',
+      )
+    : studioHostMode !== 'embedded'
+      ? 'AI 辅助需要内嵌 Studio 环境，当前环境暂不支持。'
+      : '';
   const settingsDirty = useMemo(
     () =>
       JSON.stringify(
@@ -2921,6 +2934,15 @@ const StudioPage: React.FC = () => {
   };
 
   const handleAskAiGenerate = async () => {
+    if (!canAskAiGenerate) {
+      setAskAiNotice({
+        type: 'error',
+        message:
+          askAiUnavailableMessage || '当前环境暂不支持 AI 辅助，请稍后再试。',
+      });
+      return;
+    }
+
     if (!askAiPrompt.trim()) {
       setAskAiNotice({
         type: 'error',
@@ -2970,10 +2992,10 @@ const StudioPage: React.FC = () => {
     } catch (error) {
       setAskAiNotice({
         type: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to generate workflow YAML in Studio.',
+        message: describeError(
+          error,
+          '当前环境暂时无法完成 AI 辅助，请稍后再试。',
+        ),
       });
     } finally {
       setAskAiPending(false);
@@ -4641,6 +4663,8 @@ const StudioPage: React.FC = () => {
           askAiNotice={askAiNotice}
           askAiReasoning={askAiReasoning}
           askAiAnswer={askAiAnswer}
+          canAskAiGenerate={canAskAiGenerate}
+          askAiUnavailableMessage={askAiUnavailableMessage}
           runPrompt={runPrompt}
           recentPromptHistory={recentPromptHistory}
           promptHistoryCount={promptHistory.length}
@@ -4815,14 +4839,10 @@ const StudioPage: React.FC = () => {
             style={{
               display: 'flex',
               flexDirection: 'column',
-              gap: 8,
+              gap: 4,
             }}
           >
-            <strong>Scripts Studio is unavailable in the current host.</strong>
-            <span style={{ color: 'var(--ant-color-text-secondary)' }}>
-              The current Studio host does not expose the Scripts capability for
-              this session.
-            </span>
+            <strong>当前环境暂不支持脚本行为</strong>
           </div>
         </div>
       )

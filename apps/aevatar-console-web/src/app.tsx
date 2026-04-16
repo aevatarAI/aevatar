@@ -800,6 +800,8 @@ export const layout = ({
     ...initialState?.settings,
     menu: {
       ...(initialState?.settings.menu as Record<string, unknown> | undefined),
+      collapsedShowGroupTitle: false,
+      collapsedShowTitle: false,
       type: "group",
     },
     contentStyle: {

@@ -19,6 +19,11 @@ import {
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
+import {
+  buildPlatformDeploymentsHref,
+  buildPlatformGovernanceHref,
+  buildPlatformServicesHref,
+} from "@/shared/navigation/platformRoutes";
 import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
@@ -32,15 +37,34 @@ import {
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
 import {
+  buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
 import type { StudioWorkflowDocument } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
-  AevatarPageShell,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import {
+  TeamActionRail,
+  TeamDetailEmptyState,
+  TeamDetailShell,
+  type TeamTabOption,
+} from "./components/TeamDetailChrome";
+import {
+  DetailPill,
+  FactLine,
+  factValueFontFamily,
+  SignalCard,
+} from "./components/TeamDetailPrimitives";
+import TeamAdvancedTab from "./tabs/TeamAdvancedTab";
+import TeamAssetsTab, { teamAssetIcons } from "./tabs/TeamAssetsTab";
+import TeamBindingsTab from "./tabs/TeamBindingsTab";
+import TeamEventsTab from "./tabs/TeamEventsTab";
+import TeamMembersTab from "./tabs/TeamMembersTab";
+import TeamOverviewTab from "./tabs/TeamOverviewTab";
+import TeamTopologyTab from "./tabs/TeamTopologyTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
 import {
   deriveTeamIntegrationsSummary,
@@ -61,11 +85,6 @@ type TeamCompositionRow = {
   name: string;
   summary: string;
   kind: string;
-};
-
-type TeamTabOption = {
-  label: string;
-  value: TeamDetailTab;
 };
 
 type TopologyNodeKind = "actor" | "connector" | "service";
@@ -121,8 +140,10 @@ function formatTeamTabLabel(tab: TeamDetailTab): string {
       return "事件流";
     case "members":
       return "团队成员";
-    case "connectors":
-      return "连接器";
+    case "bindings":
+      return "Bindings";
+    case "assets":
+      return "Assets";
     case "advanced":
       return "配置";
     default:
@@ -820,122 +841,6 @@ function createObservedPlaybackEvents(
   return events;
 }
 
-const SignalCard: React.FC<{
-  caption?: React.ReactNode;
-  captionMonospace?: boolean;
-  captionTooltip?: React.ReactNode;
-  icon?: React.ReactNode;
-  label: React.ReactNode;
-  value: React.ReactNode;
-}> = ({ caption, captionMonospace = false, captionTooltip, icon, label, value }) => {
-  const { token } = theme.useToken();
-
-  return (
-    <div
-      style={{
-        background: token.colorFillAlter,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 22,
-        boxShadow: token.boxShadowSecondary,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        minHeight: 108,
-        padding: 18,
-      }}
-    >
-      <Space align="center" size={10}>
-        {icon ? <span style={{ color: token.colorPrimary }}>{icon}</span> : null}
-        <Typography.Text style={{ fontSize: 13 }} type="secondary">
-          {label}
-        </Typography.Text>
-      </Space>
-      <Typography.Title level={4} style={{ margin: 0 }}>
-        {value}
-      </Typography.Title>
-      {typeof caption === "string" ? (
-        <Tooltip
-          placement="topLeft"
-          title={typeof captionTooltip === "string" ? captionTooltip : caption}
-        >
-          <Typography.Text
-            ellipsis
-            style={{
-              display: "block",
-              fontFamily: captionMonospace ? factValueFontFamily : undefined,
-              fontSize: 13,
-              maxWidth: "100%",
-            }}
-            type="secondary"
-          >
-            {caption}
-          </Typography.Text>
-        </Tooltip>
-      ) : caption ? (
-        <Typography.Text style={{ fontSize: 13 }} type="secondary">
-          {caption}
-        </Typography.Text>
-      ) : null}
-    </div>
-  );
-};
-
-const DetailPill: React.FC<{
-  compact?: boolean;
-  style?: React.CSSProperties;
-  text: string;
-}> = ({ compact = false, style, text }) => (
-  <span
-    style={{
-      borderRadius: 999,
-      display: "inline-flex",
-      fontSize: compact ? 12 : 13,
-      fontWeight: 600,
-      lineHeight: 1,
-      padding: compact ? "7px 10px" : "10px 14px",
-      whiteSpace: "nowrap",
-      ...style,
-    }}
-  >
-    {text}
-  </span>
-);
-
-const factValueFontFamily =
-  '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-
-const FactLine: React.FC<{
-  monospace?: boolean;
-  rows?: number;
-  secondary?: boolean;
-  text: string;
-  tooltipText?: string;
-}> = ({ monospace = true, rows = 1, secondary = false, text, tooltipText }) => {
-  const normalized = text || "--";
-
-  return (
-    <Tooltip placement="topLeft" title={tooltipText || normalized}>
-      <Typography.Text
-        strong={!secondary}
-        style={{
-          display: "-webkit-box",
-          fontFamily: monospace ? factValueFontFamily : undefined,
-          overflow: "hidden",
-          overflowWrap: rows === 1 ? "normal" : "anywhere",
-          textOverflow: "ellipsis",
-          WebkitBoxOrient: "vertical",
-          WebkitLineClamp: rows,
-          whiteSpace: rows === 1 ? "nowrap" : undefined,
-          wordBreak: rows === 1 ? "normal" : "break-word",
-        }}
-        type={secondary ? "secondary" : undefined}
-      >
-        {normalized}
-      </Typography.Text>
-    </Tooltip>
-  );
-};
-
 const TopologyNodeCard: React.FC<{
   entity: TopologyEntitySummary;
 }> = ({ entity }) => {
@@ -1318,6 +1223,17 @@ const TeamDetailPage: React.FC = () => {
     lens.currentService?.serviceId ||
     lens.currentRun?.serviceId ||
     undefined;
+  const currentPlatformService =
+    focusedOperationalUnit?.matchedService || lens.currentService || servicesQuery.data?.[0] || null;
+  const platformRouteIdentity = React.useMemo(
+    () => ({
+      tenantId: trimText(currentPlatformService?.tenantId) || scopeId,
+      appId: trimText(currentPlatformService?.appId) || "default",
+      namespace: trimText(currentPlatformService?.namespace) || "default",
+      serviceId: runtimeServiceId,
+    }),
+    [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
+  );
 
   const teamBuilderRoute =
     trimText(activeWorkflowSummary?.workflowId).length > 0
@@ -1598,12 +1514,24 @@ const TeamDetailPage: React.FC = () => {
       {
         badgeText: currentServiceFriendly !== "--" ? "服务入口" : "待配置",
         badgeTone: currentServiceFriendly !== "--" ? ("success" as const) : ("neutral" as const),
-        label: "接入位置",
+        label: "默认绑定",
         note: runtimeServiceId || currentServiceKey || "--",
         value: currentServiceFriendly !== "--" ? currentServiceFriendly : "当前还没有主服务入口",
       },
+      {
+        badgeText: `${currentEndpointCount} 个入口`,
+        badgeTone: currentEndpointCount > 0 ? ("info" as const) : ("neutral" as const),
+        label: "Endpoint 暴露",
+        note: `${currentPolicyCount} 条策略`,
+        value:
+          currentEndpointCount > 0
+            ? `${currentEndpointCount} 个 endpoint 已暴露`
+            : "当前还没有可见 endpoint 暴露",
+      },
     ];
   }, [
+    currentEndpointCount,
+    currentPolicyCount,
     currentServiceFriendly,
     currentServiceKey,
     integrations.connectorCount,
@@ -1613,6 +1541,95 @@ const TeamDetailPage: React.FC = () => {
     runtimeServiceId,
     selectedConnector,
   ]);
+  const connectorSummaryCards = React.useMemo(
+    () => [
+      {
+        caption: runtimeServiceId || currentServiceKey || "--",
+        icon: <DeploymentUnitOutlined />,
+        label: "默认绑定",
+        value: currentServiceFriendly,
+      },
+      {
+        caption: `已绑定 ${integrations.linkedConnectorCount} 个 · 工作区可见 ${integrations.items.length} 个`,
+        icon: <BranchesOutlined />,
+        label: "连接能力",
+        value: enabledConnectorCount,
+      },
+      {
+        caption:
+          connectorHighlights.length > 0
+            ? connectorHighlights.join("、")
+            : "当前 workflow 还没有显式引用连接器",
+        label: "团队会用到",
+        value:
+          integrations.linkedConnectorCount > 0
+            ? `${integrations.linkedConnectorCount} 个连接器`
+            : "尚未显式引用",
+      },
+      {
+        caption: currentServiceFriendly !== "--" ? currentServiceFriendly : "等待服务入口",
+        icon: <DeploymentUnitOutlined />,
+        label: "治理摘要",
+        value: `${currentEndpointCount} / ${currentPolicyCount}`,
+      },
+    ],
+    [
+      connectorHighlights,
+      currentEndpointCount,
+      currentPolicyCount,
+      currentServiceFriendly,
+      currentServiceKey,
+      enabledConnectorCount,
+      integrations.items.length,
+      integrations.linkedConnectorCount,
+      runtimeServiceId,
+    ],
+  );
+  const connectorCatalogCards = React.useMemo(
+    () =>
+      integrations.items.map((connector) => ({
+        availabilityLabel: formatConnectorEnabledLabel(connector.enabled),
+        availabilityStyle: resolveTonePillStyle(
+          token,
+          connector.enabled ? "success" : "neutral",
+        ),
+        buttonStyle: resolveSelectionCardButtonStyle(
+          token,
+          connector.key === selectedConnector?.key,
+        ),
+        key: connector.key,
+        name: connector.name,
+        summary: connector.summary,
+        typeLabel: formatConnectorTypeLabel(connector.type),
+        typeStyle: resolveTonePillStyle(token, "info"),
+        usageLabel:
+          connector.usedByRoles.length > 0
+            ? `${connector.usedByRoles.length} 个角色在用`
+            : "团队未显式引用",
+        usageStyle: resolveTonePillStyle(
+          token,
+          connector.usedByRoles.length > 0 ? "info" : "neutral",
+        ),
+        usageSummary:
+          connector.usedByRoles.length > 0
+            ? `当前团队会用到：${connector.usedByRoles.join("、")}`
+            : "当前团队还没有显式引用这个连接器。",
+      })),
+    [integrations.items, selectedConnector?.key, token],
+  );
+  const connectorDetailRows = React.useMemo(
+    () =>
+      selectedConnectorRows.map((row) => ({
+        badgeStyle: resolveTonePillStyle(token, row.badgeTone),
+        badgeText: row.badgeText,
+        label: row.label,
+        note: row.note,
+        value: row.value,
+      })),
+    [selectedConnectorRows, token],
+  );
+  const connectorsEmptyDescription =
+    "一旦 scope binding、连接器目录或治理策略可见，这里会自动展开成 Bindings 视图。";
   const configurationDetailRows = React.useMemo(
     () => [
       {
@@ -1724,6 +1741,146 @@ const TeamDetailPage: React.FC = () => {
       lens.activeRevision?.implementationKind,
       teamTitle,
       workflowNameValue,
+    ],
+  );
+  const advancedSummaryCards = React.useMemo(
+    () => [
+      {
+        caption: activeWorkflowId || "--",
+        captionMonospace: true,
+        label: "团队流程",
+        value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
+      },
+      {
+        caption:
+          currentServiceFriendly !== "--"
+            ? `当前会落到 ${currentServiceFriendly}`
+            : "当前还没有匹配到主服务入口",
+        label: "绑定方式",
+        value: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
+      },
+      {
+        caption: currentDeploymentId,
+        captionMonospace: true,
+        label: "部署记录",
+        value: currentDeploymentFriendly,
+      },
+      {
+        caption:
+          connectorHighlights.length > 0
+            ? connectorHighlights.join("、")
+            : "当前 workflow 还没有显式引用连接器",
+        label: "连接器引用",
+        value:
+          integrations.linkedConnectorCount > 0
+            ? `${integrations.linkedConnectorCount} 个已引用`
+            : "未显式引用",
+      },
+    ],
+    [
+      activeWorkflowId,
+      connectorHighlights,
+      currentDeploymentFriendly,
+      currentDeploymentId,
+      currentServiceFriendly,
+      integrations.linkedConnectorCount,
+      lens.activeRevision?.implementationKind,
+      teamTitle,
+      workflowNameValue,
+    ],
+  );
+  const advancedTeamImpactSummary =
+    integrations.linkedConnectorCount > 0
+      ? ` ${integrations.linkedConnectorCount} 个已绑定连接器`
+      : " 当前还没有显式绑定的连接器";
+  const workflowAssetRows = React.useMemo(
+    () =>
+      (workflowsQuery.data ?? []).map((workflow) => {
+        const isCurrent =
+          trimText(workflow.workflowId) === trimText(activeWorkflowId) ||
+          trimText(workflow.workflowId) === trimText(activeWorkflowSummary?.workflowId);
+        const statusLabel = formatFriendlyStatus(workflow.deploymentStatus || "draft");
+        return {
+          actionLabel: "进入 Workflow Studio",
+          badgeLabel: isCurrent ? "当前团队流程" : statusLabel,
+          badgeStyle: resolveTonePillStyle(token, isCurrent ? "success" : "neutral"),
+          buttonStyle: resolveSelectionCardButtonStyle(token, isCurrent),
+          key: workflow.workflowId,
+          primaryMetaLabel: "Revision",
+          primaryMetaValue: workflow.activeRevisionId || "n/a",
+          secondaryMetaLabel: "Entrypoint",
+          secondaryMetaValue: workflow.serviceKey || "未绑定",
+          summary: workflow.displayName
+            ? `${workflow.displayName} 已绑定到 ${workflow.serviceKey || "待发布入口"}`
+            : "当前 workflow 已准备好进入 Studio。",
+          subtitle: workflow.workflowName || "Workflow capability",
+          title: workflow.displayName || workflow.workflowId,
+        };
+      }),
+    [activeWorkflowId, activeWorkflowSummary?.workflowId, token, workflowsQuery.data],
+  );
+  const scriptAssetRows = React.useMemo(
+    () =>
+      (scriptsQuery.data ?? []).map((script) => {
+        const isCurrent =
+          trimText(script.scriptId) === trimText(lens.activeRevision?.scriptId);
+        return {
+          actionLabel: "进入 Script Studio",
+          badgeLabel: isCurrent ? "当前绑定脚本" : script.activeRevision ? "已激活" : "草稿",
+          badgeStyle: resolveTonePillStyle(token, isCurrent ? "success" : "neutral"),
+          buttonStyle: resolveSelectionCardButtonStyle(token, isCurrent),
+          key: script.scriptId,
+          primaryMetaLabel: "Revision",
+          primaryMetaValue: trimText(script.activeRevision) || "n/a",
+          secondaryMetaLabel: "Catalog actor",
+          secondaryMetaValue: trimText(script.catalogActorId) || "n/a",
+          summary:
+            trimText(script.activeSourceHash).length > 0
+              ? `当前脚本 revision 已落在 ${trimText(script.activeSourceHash)}`
+              : "当前脚本已经进入 Team 资产目录。",
+          subtitle: "Script capability",
+          title: script.scriptId || "未命名 Script",
+        };
+      }),
+    [lens.activeRevision?.scriptId, scriptsQuery.data, token],
+  );
+  const assetSummaryCards = React.useMemo(
+    () => [
+      {
+        caption: activeWorkflowId || "--",
+        icon: teamAssetIcons.workflows,
+        label: "Workflow 资产",
+        value: workflowsQuery.data?.length ?? 0,
+      },
+      {
+        caption: trimText(lens.activeRevision?.scriptId) || "--",
+        icon: teamAssetIcons.scripts,
+        label: "Script 资产",
+        value: scriptsQuery.data?.length ?? 0,
+      },
+      {
+        caption: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
+        icon: teamAssetIcons.deployment,
+        label: "当前主流程",
+        value: activeWorkflowSummary?.displayName || workflowNameValue,
+      },
+      {
+        caption: currentServiceFriendly !== "--" ? currentServiceFriendly : "待绑定",
+        icon: <DeploymentUnitOutlined />,
+        label: "服务入口",
+        value: runtimeServiceId || "--",
+      },
+    ],
+    [
+      activeWorkflowId,
+      activeWorkflowSummary?.displayName,
+      currentServiceFriendly,
+      lens.activeRevision?.scriptId,
+      runtimeServiceId,
+      scriptsQuery.data?.length,
+      teamTitle,
+      workflowNameValue,
+      workflowsQuery.data?.length,
     ],
   );
   const topologyConnectors = React.useMemo(
@@ -2325,6 +2482,14 @@ const TeamDetailPage: React.FC = () => {
     topologyConnectors,
     topologyGraph.rootActorId,
   ]);
+  const topologyDetailRows = React.useMemo(
+    () =>
+      selectedTopologyRows.map((row) => ({
+        ...row,
+        badgeStyle: resolveTonePillStyle(token, "neutral"),
+      })),
+    [selectedTopologyRows, token],
+  );
   const compositionDisplayRows = React.useMemo(() => {
     if (teamCompositionRows.length > 0) {
       return teamCompositionRows;
@@ -2421,8 +2586,8 @@ const TeamDetailPage: React.FC = () => {
     {
       badge: `${integrations.linkedConnectorCount}`,
       badgeColor: integrations.linkedConnectorCount > 0 ? "success" : undefined,
-      key: "connectors",
-      label: "连接器",
+      key: "bindings",
+      label: "Bindings",
       note:
         connectorHighlights.length > 0
           ? connectorHighlights.join("、")
@@ -2434,6 +2599,24 @@ const TeamDetailPage: React.FC = () => {
           : "未配置",
     },
   ];
+  const overviewCompositionRows = React.useMemo(
+    () =>
+      compositionDisplayRows.map((row) => ({
+        key: row.key,
+        kindLabel: formatCompositionKind(row.kind),
+        kindStyle: resolveCompositionKindPillStyle(token, row.kind),
+        name: row.name,
+        summary: row.summary,
+      })),
+    [compositionDisplayRows, token],
+  );
+  const overviewRuntimeSummaryRows = runtimeSummaryRows.map((row) => ({
+    ...row,
+    badgeStyle:
+      row.badgeColor === "success"
+        ? resolveTonePillStyle(token, "success")
+        : resolveStatusPillStyle(token, row.badge),
+  }));
   const displayedRunId = lens.currentRun?.runId || preferredRunId || "";
   const runSwitchOptions = React.useMemo(
     () =>
@@ -2442,6 +2625,17 @@ const TeamDetailPage: React.FC = () => {
         runId: run.runId,
       })),
     [runsQuery.data?.runs],
+  );
+  const runSwitchDisplayOptions = React.useMemo(
+    () =>
+      runSwitchOptions.map((option) => ({
+        ...option,
+        buttonStyle: resolveSegmentedButtonStyle(
+          token,
+          option.runId === displayedRunId,
+        ),
+      })),
+    [displayedRunId, runSwitchOptions, token],
   );
   const playbackStepMap = React.useMemo(
     () => new Map(lens.playback.steps.map((step) => [step.stepId, step])),
@@ -2480,6 +2674,14 @@ const TeamDetailPage: React.FC = () => {
         };
       }),
     [actorLabelMap, lens.playback.events, playbackStepMap],
+  );
+  const eventStreamDisplayRows = React.useMemo(
+    () =>
+      eventStreamRows.map((row) => ({
+        ...row,
+        stageStyle: resolveTonePillStyle(token, row.stageTone),
+      })),
+    [eventStreamRows, token],
   );
   const memberMappingRows = React.useMemo(() => {
     const memberByActorId = new Map(lens.members.map((member) => [member.actorId, member]));
@@ -2579,16 +2781,27 @@ const TeamDetailPage: React.FC = () => {
     runtimeServiceId,
     teamCompositionRows,
   ]);
+  const memberMappingDisplayRows = React.useMemo(
+    () =>
+      memberMappingRows.map((row) => ({
+        ...row,
+        statusStyle: resolveTonePillStyle(token, row.statusTone),
+      })),
+    [memberMappingRows, token],
+  );
   const runtimeIdentityRows = React.useMemo(
     () =>
       lens.members.map((member) => {
         const graphNode =
           lens.graph.nodes.find((node) => node.actorId === member.actorId) ?? null;
+        const implementationKind = formatCompositionKind(
+          lens.activeRevision?.implementationKind || "runtime",
+        );
         return {
           actorId: member.actorId,
-          implementation:
-            trimText(member.actorType) ||
-            formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
+          implementationKind: trimText(member.actorType)
+            ? `${implementationKind} · ${trimText(member.actorType)}`
+            : implementationKind,
           key: member.actorId,
           member:
             trimText(actorLabelMap.get(member.actorId)) ||
@@ -2601,11 +2814,49 @@ const TeamDetailPage: React.FC = () => {
             graphNode != null
               ? `${graphNode.relationCount} 条可见关系`
               : "暂无可见关系",
+          serviceId: runtimeServiceId || currentServiceKey || "--",
           statusLabel: formatMemberPresenceLabel(member.isFocused ? "focus" : "visible"),
           statusTone: resolveMemberPresenceTone(member.isFocused ? "focus" : "visible"),
         };
       }),
-    [actorLabelMap, lens.activeRevision?.implementationKind, lens.graph.nodes, lens.members],
+    [
+      actorLabelMap,
+      currentServiceKey,
+      lens.activeRevision?.implementationKind,
+      lens.graph.nodes,
+      lens.members,
+      runtimeServiceId,
+    ],
+  );
+  const memberCompositionRows = React.useMemo(
+    () =>
+      teamCompositionRows.map((row) => ({
+        key: row.key,
+        kindLabel: formatCompositionKind(row.kind),
+        kindStyle: resolveCompositionKindPillStyle(token, row.kind),
+        name: row.name,
+        summary: row.summary,
+      })),
+    [teamCompositionRows, token],
+  );
+  const memberIdentityRows = React.useMemo(
+    () =>
+      runtimeIdentityRows.map((row) => ({
+        actorId: row.actorId,
+        cardStyle: resolveSelectionCardButtonStyle(
+          token,
+          row.actorId === effectiveActorId,
+        ),
+        implementationKind: row.implementationKind,
+        key: row.key,
+        member: row.member,
+        note: row.note,
+        relationLabel: row.relationLabel,
+        serviceId: row.serviceId,
+        statusLabel: row.statusLabel,
+        statusStyle: resolveTonePillStyle(token, row.statusTone),
+      })),
+    [effectiveActorId, runtimeIdentityRows, token],
   );
 
   const tabOptions: TeamTabOption[] = [
@@ -2613,7 +2864,8 @@ const TeamDetailPage: React.FC = () => {
     { label: "事件拓扑", value: "topology" },
     { label: "事件流", value: "events" },
     { label: "团队成员", value: "members" },
-    { label: "连接器", value: "connectors" },
+    { label: "Bindings", value: "bindings" },
+    { label: "Assets", value: "assets" },
     { label: "配置", value: "advanced" },
   ];
 
@@ -2691,7 +2943,10 @@ const TeamDetailPage: React.FC = () => {
   ]);
   const conversationActionLabel = lens.playback.currentRunId ? "本次对话" : "运行记录";
   const serviceMappingActionLabel = "服务映射";
-  const teamBuilderActionLabel = "Team Builder";
+  const teamBuilderActionLabel = "高级编辑";
+  const handleOpenTeamsList = React.useCallback(() => {
+    history.push(teamsListHref);
+  }, [teamsListHref]);
 
   const handleOpenServiceMapping = React.useCallback(() => {
     handleOpenPlaybackActor(
@@ -2710,1308 +2965,260 @@ const TeamDetailPage: React.FC = () => {
     lens.playback.currentRunId,
     lens.playback.rootActorId,
   ]);
+  const handleOpenServices = React.useCallback(() => {
+    history.push(buildPlatformServicesHref(platformRouteIdentity));
+  }, [platformRouteIdentity]);
+  const handleOpenGovernance = React.useCallback(() => {
+    history.push(
+      buildPlatformGovernanceHref({
+        ...platformRouteIdentity,
+        revisionId: currentRevisionId !== "--" ? currentRevisionId : undefined,
+        view: "bindings",
+      }),
+    );
+  }, [currentRevisionId, platformRouteIdentity]);
+  const handleOpenDeployments = React.useCallback(() => {
+    history.push(
+      buildPlatformDeploymentsHref({
+        ...platformRouteIdentity,
+        deploymentId: currentDeploymentId !== "--" ? currentDeploymentId : undefined,
+      }),
+    );
+  }, [currentDeploymentId, platformRouteIdentity]);
+  const handleOpenWorkflowAsset = React.useCallback(
+    (workflowId: string) => {
+      history.push(
+        buildStudioWorkflowEditorRoute({
+          scopeId,
+          workflowId,
+        }),
+      );
+    },
+    [scopeId],
+  );
+  const handleOpenScriptAsset = React.useCallback(
+    (scriptId: string) => {
+      history.push(
+        buildStudioScriptsWorkspaceRoute({
+          scopeId,
+          scriptId,
+        }),
+      );
+    },
+    [scopeId],
+  );
 
   const renderOverviewTab = () => {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        <div
-          style={{
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 24,
-            boxShadow: token.boxShadowSecondary,
-            display: "flex",
-            flexDirection: "column",
-            gap: 18,
-            padding: 24,
-          }}
-        >
-          <div
-            style={{
-              alignItems: "flex-start",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 12,
-              justifyContent: "space-between",
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <Space wrap size={8}>
-                <Typography.Text strong style={{ fontSize: 16 }}>
-                  当前态势
-                </Typography.Text>
-                <DetailPill
-                  style={resolveStatusPillStyle(token, currentHeaderStatus)}
-                  text={currentHeaderStatusFriendly}
-                />
-              </Space>
-            </div>
-            <Space wrap size={[8, 8]}>
-              <DetailPill
-                style={{
-                  background: token.colorInfoBg,
-                  border: `1px solid ${token.colorInfoBorder}`,
-                  color: token.colorInfo,
-                }}
-                text={currentServicePillText}
-              />
-              <DetailPill
-                style={resolveStatusPillStyle(token, currentDeploymentStatus)}
-                text={currentDeploymentPillText}
-              />
-              <DetailPill
-                style={resolveStatusPillStyle(token, currentRunStatus)}
-                text={currentRunPillText}
-              />
-            </Space>
-          </div>
-        <div
-          style={{
-            display: "grid",
-            gap: 14,
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            }}
-          >
-            <SignalCard
-              label="当前服务"
-              value={currentServiceFriendly}
-              caption={currentServiceCardCaption}
-              captionTooltip={currentServiceCardTooltip}
-            />
-            <SignalCard
-              label="最近运行"
-              value={currentRunFriendly}
-              caption={currentRunCardCaption}
-              captionTooltip={currentRunCardTooltip}
-            />
-            <SignalCard
-              label="最近一次更新"
-              value={formatCompactTimestamp(latestVisibleUpdate)}
-              caption={latestVisibleUpdateNote}
-            />
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gap: 18,
-            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-          }}
-        >
-          <div
-            style={{
-              background: token.colorBgContainer,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 24,
-              boxShadow: token.boxShadowSecondary,
-              display: "flex",
-              flexDirection: "column",
-              gap: 18,
-              padding: 24,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <div>
-                <Typography.Title level={3} style={{ margin: 0 }}>
-                  团队构成
-                </Typography.Title>
-              </div>
-            </div>
-            {compositionDisplayRows.length > 0 ? (
-              compositionDisplayRows.map((row, index) => (
-                <div
-                  key={row.key}
-                  style={{
-                    alignItems: "start",
-                    borderTop:
-                      index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                    display: "grid",
-                    gap: 12,
-                    gridTemplateColumns: "minmax(120px, 180px) minmax(0, 1fr) max-content",
-                    paddingTop: index === 0 ? 0 : 16,
-                  }}
-                >
-                  <Typography.Text strong>{row.name}</Typography.Text>
-                  <FactLine rows={3} secondary text={row.summary} />
-                  <DetailPill
-                    compact
-                    style={resolveCompositionKindPillStyle(token, row.kind)}
-                    text={formatCompositionKind(row.kind)}
-                  />
-                </div>
-              ))
-            ) : (
-              <AevatarInspectorEmpty
-                title="暂无团队构成"
-                description="当前还没有足够事实来生成团队构成。"
-              />
-            )}
-          </div>
-
-          <div
-            style={{
-              background: token.colorBgContainer,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 24,
-              boxShadow: token.boxShadowSecondary,
-              display: "flex",
-              flexDirection: "column",
-              gap: 18,
-              padding: 24,
-            }}
-          >
-            <div>
-              <Typography.Title level={3} style={{ margin: 0 }}>
-                运行摘要
-              </Typography.Title>
-            </div>
-            {runtimeSummaryRows.map((row, index) => (
-              <div
-                key={row.key}
-                style={{
-                  alignItems: "start",
-                  borderTop:
-                    index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "minmax(96px, 128px) minmax(0, 1fr) max-content",
-                  paddingTop: index === 0 ? 0 : 16,
-                }}
-              >
-                <Typography.Text style={{ paddingTop: 2 }} type="secondary">
-                  {row.label}
-                </Typography.Text>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                  <FactLine rows={2} text={String(row.value)} />
-                  <FactLine
-                    monospace={row.noteMonospace ?? false}
-                    rows={3}
-                    secondary
-                    text={String(row.note)}
-                    tooltipText={
-                      typeof row.noteTooltip === "string" ? row.noteTooltip : undefined
-                    }
-                  />
-                </div>
-                <div
-                  style={{
-                    alignSelf: "start",
-                    display: "flex",
-                    justifyContent: "flex-end",
-                    minWidth: 0,
-                    paddingTop: 2,
-                  }}
-                >
-                  <DetailPill
-                    compact
-                    style={
-                      row.badgeColor === "success"
-                        ? resolveTonePillStyle(token, "success")
-                        : resolveStatusPillStyle(token, row.badge)
-                    }
-                    text={row.badge}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      <TeamOverviewTab
+        compositionRows={overviewCompositionRows}
+        currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
+        currentDeploymentPillText={currentDeploymentPillText}
+        currentHeaderStatusFriendly={currentHeaderStatusFriendly}
+        currentHeaderStatusStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
+        currentRunCardCaption={currentRunCardCaption}
+        currentRunCardTooltip={currentRunCardTooltip}
+        currentRunFriendly={currentRunFriendly}
+        currentRunPillStyle={resolveStatusPillStyle(token, currentRunStatus)}
+        currentRunPillText={currentRunPillText}
+        currentServiceCardCaption={currentServiceCardCaption}
+        currentServiceCardTooltip={currentServiceCardTooltip}
+        currentServiceFriendly={currentServiceFriendly}
+        currentServicePillStyle={{
+          background: token.colorInfoBg,
+          border: `1px solid ${token.colorInfoBorder}`,
+          color: token.colorInfo,
+        }}
+        currentServicePillText={currentServicePillText}
+        latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
+        latestVisibleUpdateNote={latestVisibleUpdateNote}
+        runtimeSummaryRows={overviewRuntimeSummaryRows}
+      />
     );
   };
 
   const renderTopologyTab = () => {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-        <div
-          style={{
-            alignItems: "flex-start",
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 24,
-            boxShadow: token.boxShadowSecondary,
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 16,
-            justifyContent: "space-between",
-            padding: 20,
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <Space wrap size={8}>
-              <Typography.Text strong style={{ fontSize: 16 }}>
-                当前拓扑视角
-              </Typography.Text>
-              <DetailPill
-                compact
-                style={resolveObservationPillStyle(token, graphProvenance.status)}
-                text={graphProvenance.label}
-              />
-            </Space>
-            <Typography.Text style={{ fontSize: 13 }} type="secondary">
-              {selectedFocusReason || "围绕当前焦点成员展开团队消息路径。点击左侧节点即可切换视角。"}
-            </Typography.Text>
-          </div>
-          <Space size={10} wrap>
-            <div
-              aria-label="拓扑深度"
-              role="group"
-              style={{
-                alignItems: "center",
-                background: token.colorFillAlter,
-                border: `1px solid ${token.colorBorderSecondary}`,
-                borderRadius: 999,
-                display: "inline-flex",
-                gap: 4,
-                padding: 4,
-              }}
-            >
-              {[1, 2, 3].map((depth) => {
-                const active = graphDepth === depth;
-                return (
-                  <button
-                    key={depth}
-                    onClick={() => setGraphDepth(depth)}
-                    style={{
-                      background: active ? token.colorPrimaryBg : "transparent",
-                      border: "none",
-                      borderRadius: 999,
-                      color: active ? token.colorPrimary : token.colorTextSecondary,
-                      cursor: "pointer",
-                      fontSize: 13,
-                      fontWeight: active ? 700 : 500,
-                      height: 32,
-                      padding: "0 14px",
-                      transition: "all 140ms ease",
-                    }}
-                    type="button"
-                  >
-                    {formatTopologyDepthLabel(depth)}
-                  </button>
-                );
-              })}
-            </div>
-            <Button
-              onClick={handleOpenServiceMapping}
-              style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
-              type="primary"
-            >
-              打开平台拓扑
-            </Button>
-          </Space>
-        </div>
-        {actorGraphQuery.isLoading ? (
-          <AevatarInspectorEmpty description="正在加载团队拓扑。" />
-        ) : actorGraphQuery.isError ? (
-          <AevatarInspectorEmpty
-            title="拓扑暂不可用"
-            description="当前无法读取团队拓扑，请稍后重试。"
-          />
-        ) : (
-          <div
-            style={{
-              display: "grid",
-              gap: 18,
-              gridTemplateColumns: "minmax(0, 1.2fr) minmax(320px, 0.88fr)",
-            }}
-          >
-            <AevatarPanel title="团队事件路径">
-              {topologyGraph.nodes.length > 0 ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                  <div
-                    style={{
-                      alignItems: "flex-start",
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 12,
-                      justifyContent: "space-between",
-                    }}
-                  >
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <Typography.Text strong style={{ fontSize: 15 }}>
-                        从当前焦点成员出发，查看消息如何流向服务与连接器
-                      </Typography.Text>
-                      <Typography.Text style={{ fontSize: 13 }} type="secondary">
-                        {`当前视图包含 ${topologyGraph.nodes.length} 个节点，${topologyGraph.edges.length} 条连线。`}
-                      </Typography.Text>
-                    </div>
-                    <Typography.Text style={{ fontSize: 13 }} type="secondary">
-                      {`${formatTopologyDepthLabel(graphDepth)}视角 · 焦点 ${compactId(effectiveActorId)}`}
-                    </Typography.Text>
-                  </div>
-                  <GraphCanvas
-                    edges={topologyGraph.edges}
-                    height={384}
-                    nodes={topologyGraph.nodes}
-                    onCanvasSelect={() =>
-                      setSelectedTopologyNodeId(
-                        topologyGraph.entityMap.has(effectiveActorId)
-                          ? effectiveActorId
-                          : topologyGraph.nodes[0]?.id || "",
-                      )
-                    }
-                    onNodeSelect={(nodeId) => {
-                      setSelectedTopologyNodeId(nodeId);
-                      if (topologyGraph.entityMap.get(nodeId)?.kind === "actor") {
-                        setSelectedActorId(nodeId);
-                      }
-                    }}
-                    selectedNodeId={selectedTopologyNodeId || effectiveActorId}
-                  />
-                  <Space size={[8, 8]} wrap>
-                    <DetailPill
-                      compact
-                      style={resolveTonePillStyle(token, "info")}
-                      text="实线关系 = 运行事实"
-                    />
-                    <DetailPill
-                      compact
-                      style={resolveTonePillStyle(token, "warning")}
-                      text="虚线关系 = 配置推导"
-                    />
-                    <DetailPill
-                      compact
-                      style={resolveTonePillStyle(token, "neutral")}
-                      text="节点语义来自成员、服务、连接器的当前事实"
-                    />
-                  </Space>
-                </div>
-              ) : (
-                <AevatarInspectorEmpty
-                  title="暂无可见关系"
-                  description="当前没有更多可见的事件拓扑关系。"
-                />
-              )}
-            </AevatarPanel>
-            <AevatarPanel
-              title="当前选中节点"
-              extra={
-                selectedTopologyEntity ? (
-                  <DetailPill
-                    compact
-                    style={resolveTonePillStyle(token, selectedTopologyEntity.badgeTone)}
-                    text={selectedTopologyEntity.badgeText}
-                  />
-                ) : undefined
-              }
-            >
-              {selectedTopologyEntity ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <Space wrap size={8}>
-                      <Typography.Title level={3} style={{ margin: 0 }}>
-                        {selectedTopologyEntity.title}
-                      </Typography.Title>
-                      <DetailPill
-                        compact
-                        style={resolveTonePillStyle(token, "neutral")}
-                        text={formatTopologyNodeKindLabel(selectedTopologyEntity.kind)}
-                      />
-                    </Space>
-                    <Typography.Text type="secondary">
-                      {selectedTopologyEntity.summary}
-                    </Typography.Text>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    {selectedTopologyRows.map((row, index) => (
-                      <div
-                        key={`${row.label}-${index}`}
-                        style={{
-                          alignItems: "start",
-                          borderTop:
-                            index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                          display: "grid",
-                          gap: 12,
-                          gridTemplateColumns: "minmax(88px, 120px) minmax(0, 1fr) max-content",
-                          paddingTop: index === 0 ? 0 : 14,
-                        }}
-                      >
-                        <Typography.Text style={{ paddingTop: 2 }} type="secondary">
-                          {row.label}
-                        </Typography.Text>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                          <FactLine
-                            monospace={row.valueMonospace ?? false}
-                            rows={row.valueRows ?? 2}
-                            text={String(row.value)}
-                          />
-                          <FactLine
-                            monospace={row.noteMonospace ?? false}
-                            rows={row.noteRows ?? 2}
-                            secondary
-                            text={String(row.note)}
-                          />
-                        </div>
-                        <DetailPill
-                          compact
-                          style={resolveTonePillStyle(token, "neutral")}
-                          text={row.badge}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <AevatarInspectorEmpty
-                  title="当前还没有选中节点"
-                  description="请先从左侧团队事件路径里选择一个节点。"
-                />
-              )}
-            </AevatarPanel>
-          </div>
-        )}
-      </div>
+      <TeamTopologyTab
+        graphDepth={graphDepth}
+        graphEdgeCount={topologyGraph.edges.length}
+        graphFocusLabel={`${formatTopologyDepthLabel(graphDepth)}视角 · 焦点 ${compactId(effectiveActorId)}`}
+        graphNodeCount={topologyGraph.nodes.length}
+        isError={actorGraphQuery.isError}
+        isLoading={actorGraphQuery.isLoading}
+        onCanvasSelect={() =>
+          setSelectedTopologyNodeId(
+            topologyGraph.entityMap.has(effectiveActorId)
+              ? effectiveActorId
+              : topologyGraph.nodes[0]?.id || "",
+          )
+        }
+        onNodeSelect={(nodeId) => {
+          setSelectedTopologyNodeId(nodeId);
+          if (topologyGraph.entityMap.get(nodeId)?.kind === "actor") {
+            setSelectedActorId(nodeId);
+          }
+        }}
+        onOpenPlatformTopology={handleOpenServiceMapping}
+        onSetGraphDepth={setGraphDepth}
+        openPlatformTopologyButtonStyle={{
+          borderRadius: 16,
+          height: 40,
+          paddingInline: 18,
+        }}
+        provenanceLabel={graphProvenance.label}
+        provenanceStyle={resolveObservationPillStyle(token, graphProvenance.status)}
+        selectedEntityBadgeLabel={selectedTopologyEntity?.badgeText}
+        selectedEntityBadgeStyle={
+          selectedTopologyEntity
+            ? resolveTonePillStyle(token, selectedTopologyEntity.badgeTone)
+            : undefined
+        }
+        selectedEntityDetailRows={topologyDetailRows}
+        selectedEntityEmpty={!selectedTopologyEntity}
+        selectedEntityKindLabel={
+          selectedTopologyEntity
+            ? formatTopologyNodeKindLabel(selectedTopologyEntity.kind)
+            : undefined
+        }
+        selectedEntityKindStyle={
+          selectedTopologyEntity
+            ? resolveTonePillStyle(token, "neutral")
+            : undefined
+        }
+        selectedEntitySummary={selectedTopologyEntity?.summary}
+        selectedEntityTitle={selectedTopologyEntity?.title}
+        selectedFocusReason={
+          selectedFocusReason || "围绕当前焦点成员展开团队消息路径。点击左侧节点即可切换视角。"
+        }
+        selectedNodeId={selectedTopologyNodeId || effectiveActorId}
+        topologyEdges={topologyGraph.edges}
+        topologyNodes={topologyGraph.nodes}
+      />
     );
   };
 
   const renderEventsTab = () => {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <AevatarPanel
-          title="当前任务事件流"
-          extra={
-            <Space size={8} wrap>
-              <DetailPill
-                compact
-                style={resolveObservationPillStyle(token, playbackProvenance.status)}
-                text={playbackProvenance.label}
-              />
-              <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                {activeRunId ? `run · ${activeRunId}` : "暂无当前 run"}
-              </Typography.Text>
-            </Space>
-          }
-        >
-          {runsQuery.isLoading ? (
-            <AevatarInspectorEmpty description="正在加载最近运行。" />
-          ) : runsQuery.isError ? (
-            <AevatarInspectorEmpty
-              title="运行信号暂不可用"
-              description="当前无法读取最近运行。"
-            />
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div
-                style={{
-                  alignItems: "flex-start",
-                  background: token.colorBgContainerDisabled,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  borderRadius: 18,
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 12,
-                  justifyContent: "space-between",
-                  padding: 16,
-                }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
-                  <Space wrap>
-                    <Typography.Text strong>
-                      {lens.currentRun?.runId || "当前还没有可见运行"}
-                    </Typography.Text>
-                    {lens.currentRun?.completionStatus ? (
-                      <DetailPill
-                        compact
-                        style={resolveStatusPillStyle(token, lens.currentRun.completionStatus)}
-                        text={formatFriendlyStatus(lens.currentRun.completionStatus)}
-                      />
-                    ) : null}
-                  </Space>
-                  <Typography.Text type="secondary">
-                    {formatPlaybackSummary(lens.playback.summary)}
-                  </Typography.Text>
-                  {runSwitchOptions.length > 1 ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                        切换 Run
-                      </Typography.Text>
-                      <div
-                        style={{
-                          alignItems: "center",
-                          background: token.colorBgContainer,
-                          border: `1px solid ${token.colorBorderSecondary}`,
-                          borderRadius: 999,
-                          display: "inline-flex",
-                          flexWrap: "wrap",
-                          gap: 6,
-                          padding: 6,
-                        }}
-                      >
-                        {runSwitchOptions.map((option) => {
-                          const selected = option.runId === displayedRunId;
-                          return (
-                            <button
-                              aria-label={`切换到 ${option.runId}`}
-                              key={option.runId}
-                              onClick={() => handleSelectRun(option.runId)}
-                              style={{
-                                ...resolveSegmentedButtonStyle(token, selected),
-                              }}
-                              type="button"
-                            >
-                              {option.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-                {activeRunId ? (
-                  <Space wrap>
-                    <Button
-                      onClick={() =>
-                        handleOpenPlaybackActor(lens.currentRun?.actorId, activeRunId)
-                      }
-                      style={resolveActionButtonStyle(token)}
-                    >
-                      打开完整审计
-                    </Button>
-                  </Space>
-                ) : null}
-              </div>
-              {eventStreamRows.length > 0 ? (
-                <div
-                  style={{
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                    borderRadius: 18,
-                    overflow: "hidden",
-                  }}
-                >
-                  <div style={{ overflowX: "auto" }}>
-                    <div style={{ minWidth: 920 }}>
-                      <div
-                        style={{
-                          background: token.colorBgContainerDisabled,
-                          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                          color: token.colorTextSecondary,
-                          display: "grid",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          gap: 16,
-                          gridTemplateColumns:
-                            "96px 112px minmax(200px, 1.25fr) minmax(280px, 2fr)",
-                          padding: "12px 16px",
-                        }}
-                      >
-                        <span>时间</span>
-                        <span>事件</span>
-                        <span>流向</span>
-                        <span>说明</span>
-                      </div>
-                      {eventStreamRows.map((row, index) => (
-                        <div
-                          key={row.key}
-                          style={{
-                            borderTop:
-                              index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                            display: "grid",
-                            gap: 16,
-                            gridTemplateColumns:
-                              "96px 112px minmax(200px, 1.25fr) minmax(280px, 2fr)",
-                            padding: "14px 16px",
-                          }}
-                        >
-                          <Typography.Text
-                            strong
-                            style={{ fontFamily: factValueFontFamily, whiteSpace: "nowrap" }}
-                          >
-                            {row.timeLabel}
-                          </Typography.Text>
-                          <DetailPill
-                            compact
-                            style={resolveTonePillStyle(token, row.stageTone)}
-                            text={row.stageLabel}
-                          />
-                          <FactLine rows={2} text={row.flowLabel} />
-                          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                            <Typography.Text>{row.detail}</Typography.Text>
-                            {row.detailNote ? (
-                              <FactLine rows={2} secondary text={row.detailNote} />
-                            ) : null}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <Typography.Text type="secondary">
-                  当前还没有更多可见的事件事实。
-                </Typography.Text>
-              )}
-            </div>
-          )}
-        </AevatarPanel>
-        <AevatarPanel
-          title="本次 Run 成员映射"
-          extra={
-            <Typography.Text style={{ fontSize: 12 }} type="secondary">
-              仅展示当前 run 命中的成员、职责与关联服务
-            </Typography.Text>
-          }
-        >
-          {memberMappingRows.length > 0 ? (
-            <div
-              style={{
-                border: `1px solid ${token.colorBorderSecondary}`,
-                borderRadius: 18,
-                overflow: "hidden",
-              }}
-            >
-              <div style={{ overflowX: "auto" }}>
-                <div style={{ minWidth: 920 }}>
-                  <div
-                    style={{
-                      background: token.colorBgContainerDisabled,
-                      borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                      color: token.colorTextSecondary,
-                      display: "grid",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      gap: 16,
-                      gridTemplateColumns:
-                        "minmax(120px, 1fr) minmax(220px, 1.8fr) minmax(120px, 0.9fr) minmax(200px, 1.2fr) minmax(132px, 0.95fr)",
-                      padding: "12px 16px",
-                    }}
-                  >
-                    <span>成员</span>
-                    <span>职责</span>
-                    <span>实现</span>
-                    <span>关联服务</span>
-                    <span>状态</span>
-                  </div>
-                  {memberMappingRows.map((row, index) => (
-                    <div
-                      key={row.key}
-                      style={{
-                        alignItems: "center",
-                        borderTop:
-                          index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                        display: "grid",
-                        gap: 16,
-                        gridTemplateColumns:
-                          "minmax(120px, 1fr) minmax(220px, 1.8fr) minmax(120px, 0.9fr) minmax(200px, 1.2fr) minmax(132px, 0.95fr)",
-                        padding: "14px 16px",
-                      }}
-                    >
-                      <Typography.Text strong>{row.member}</Typography.Text>
-                      <FactLine rows={2} text={row.responsibility} />
-                      <Typography.Text style={{ fontFamily: factValueFontFamily }}>
-                        {row.implementation}
-                      </Typography.Text>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                        <Typography.Text strong>{row.serviceLabel}</Typography.Text>
-                        <FactLine rows={1} secondary text={row.serviceNote} />
-                      </div>
-                      <div
-                        style={{
-                          alignItems: "flex-start",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 4,
-                          minWidth: 0,
-                        }}
-                      >
-                        <DetailPill
-                          compact
-                          style={resolveTonePillStyle(token, row.statusTone)}
-                          text={row.statusLabel}
-                        />
-                        {row.statusNote ? (
-                          <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                            {row.statusNote}
-                          </Typography.Text>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <AevatarInspectorEmpty
-              compact
-              title="当前 run 还没有命中可见成员"
-              description="等这支团队产生运行步骤或事件后，这里才会显示本次 run 的参与成员。"
-            />
-          )}
-        </AevatarPanel>
-      </div>
+      <TeamEventsTab
+        activeRunLabel={lens.currentRun?.runId || "当前还没有可见运行"}
+        activeRunMetaLabel={activeRunId ? `run · ${activeRunId}` : "暂无当前 run"}
+        currentRunStatusLabel={
+          lens.currentRun?.completionStatus
+            ? formatFriendlyStatus(lens.currentRun.completionStatus)
+            : undefined
+        }
+        currentRunStatusStyle={
+          lens.currentRun?.completionStatus
+            ? resolveStatusPillStyle(token, lens.currentRun.completionStatus)
+            : undefined
+        }
+        eventRows={eventStreamDisplayRows}
+        isRunsError={runsQuery.isError}
+        isRunsLoading={runsQuery.isLoading}
+        memberMappingRows={memberMappingDisplayRows}
+        onOpenAudit={() =>
+          handleOpenPlaybackActor(lens.currentRun?.actorId, activeRunId)
+        }
+        onSelectRun={handleSelectRun}
+        openAuditButtonStyle={resolveActionButtonStyle(token)}
+        playbackSummary={formatPlaybackSummary(lens.playback.summary)}
+        provenanceLabel={playbackProvenance.label}
+        provenanceStyle={resolveObservationPillStyle(token, playbackProvenance.status)}
+        runSwitchOptions={runSwitchDisplayOptions}
+        showOpenAudit={Boolean(activeRunId)}
+      />
     );
   };
 
   const renderMembersTab = () => {
-    const showMembersOverviewEmpty =
-      teamCompositionRows.length === 0 && runtimeIdentityRows.length === 0;
-
-    if (showMembersOverviewEmpty) {
-      return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <AevatarPanel
-            title="成员视图"
-            extra={
-              <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                结构 · 运行时身份
-              </Typography.Text>
-            }
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                }}
-              >
-                <SignalCard
-                  label="团队结构"
-                  value="暂无角色定义"
-                  caption="当前还没有 workflow 角色定义或可见的团队结构信息。"
-                />
-                <SignalCard
-                  label="运行时身份"
-                  value="暂无可见 Actor"
-                  caption="当前还没有观察到这支团队的运行时实体身份。"
-                />
-              </div>
-              <Typography.Text style={{ fontSize: 13 }} type="secondary">
-                等团队开始运行后，这里会自动出现角色结构和可见 Actor。
-              </Typography.Text>
-            </div>
-          </AevatarPanel>
-        </div>
-      );
-    }
-
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <AevatarPanel
-          title="团队结构"
-          extra={
-            <Typography.Text style={{ fontSize: 12 }} type="secondary">
-              角色 · 职责 · 实现
-            </Typography.Text>
-          }
-        >
-          {teamCompositionRows.length > 0 ? (
-            <div
-              style={{
-                border: `1px solid ${token.colorBorderSecondary}`,
-                borderRadius: 18,
-                overflow: "hidden",
-              }}
-            >
-              <div style={{ overflowX: "auto" }}>
-                <div style={{ minWidth: 720 }}>
-                  <div
-                    style={{
-                      background: token.colorBgContainerDisabled,
-                      borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                      color: token.colorTextSecondary,
-                      display: "grid",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      gap: 16,
-                      gridTemplateColumns:
-                        "minmax(140px, 1fr) minmax(280px, 2fr) minmax(120px, 0.9fr)",
-                      padding: "12px 16px",
-                    }}
-                  >
-                    <span>角色</span>
-                    <span>职责</span>
-                    <span>实现</span>
-                  </div>
-                  {teamCompositionRows.map((row, index) => (
-                    <div
-                      key={row.key}
-                      style={{
-                        alignItems: "center",
-                        borderTop:
-                          index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                        display: "grid",
-                        gap: 16,
-                        gridTemplateColumns:
-                          "minmax(140px, 1fr) minmax(280px, 2fr) minmax(120px, 0.9fr)",
-                        padding: "14px 16px",
-                      }}
-                    >
-                      <Typography.Text strong>{row.name}</Typography.Text>
-                      <FactLine rows={2} text={row.summary} />
-                      <DetailPill
-                        compact
-                        style={resolveCompositionKindPillStyle(token, row.kind)}
-                        text={formatCompositionKind(row.kind)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <AevatarInspectorEmpty
-              compact
-              title="暂时还没有团队结构"
-              description="当前还没有 workflow 角色定义或可见的团队结构信息。"
-            />
-          )}
-        </AevatarPanel>
-        <AevatarPanel
-          title="可见 Actor 身份"
-          extra={
-            <Typography.Text style={{ fontSize: 12 }} type="secondary">
-              运行时实体 · actorId · 焦点状态
-            </Typography.Text>
-          }
-        >
-          {runtimeIdentityRows.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {runtimeIdentityRows.map((row) => (
-                <button
-                  aria-label={`选择成员 ${row.member} ${row.actorId}`}
-                  key={row.key}
-                  onClick={() => setSelectedActorId(row.actorId)}
-                  style={{
-                    ...resolveSelectionCardButtonStyle(
-                      token,
-                      row.actorId === effectiveActorId,
-                    ),
-                    alignItems: "center",
-                    display: "grid",
-                    gap: 16,
-                    gridTemplateColumns:
-                      "minmax(140px, 1fr) minmax(220px, 1.6fr) minmax(120px, 0.9fr) max-content",
-                    padding: "14px 16px",
-                    textAlign: "left",
-                  }}
-                  type="button"
-                >
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                    <Typography.Text strong>{row.member}</Typography.Text>
-                    <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                      {row.relationLabel}
-                    </Typography.Text>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                    <FactLine rows={1} text={row.actorId} />
-                    <FactLine rows={2} secondary text={row.note} />
-                  </div>
-                  <Typography.Text style={{ fontFamily: factValueFontFamily }}>
-                    {row.implementation}
-                  </Typography.Text>
-                  <DetailPill
-                    compact
-                    style={resolveTonePillStyle(token, row.statusTone)}
-                    text={row.statusLabel}
-                  />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <AevatarInspectorEmpty
-              compact
-              title="暂时还没有可见 Actor"
-              description="当前还没有观察到这支团队的运行时实体身份。"
-            />
-          )}
-        </AevatarPanel>
-      </div>
+      <TeamMembersTab
+        compositionRows={memberCompositionRows}
+        identityRows={memberIdentityRows}
+        onOpenRuntimeExplorer={handleOpenServiceMapping}
+        onOpenServices={handleOpenServices}
+        onSelectActor={setSelectedActorId}
+      />
     );
   };
 
-  const renderConnectorsTab = () => {
+  const renderBindingsTab = () => {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <AevatarPanel
-          title="当前连接方式"
-          extra={
-            <DetailPill
-              compact
-              style={resolveObservationPillStyle(token, integrationsProvenance.status)}
-              text={integrationsProvenance.label}
-            />
-          }
-        >
-          <div
-            style={{
-              display: "grid",
-              gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            }}
-          >
-            <SignalCard
-              icon={<DeploymentUnitOutlined />}
-              label="主服务入口"
-              value={currentServiceFriendly}
-              captionMonospace
-              caption={runtimeServiceId || currentServiceKey || "--"}
-            />
-            <SignalCard
-              icon={<BranchesOutlined />}
-              label="当前可用连接器"
-              value={enabledConnectorCount}
-              caption={`已绑定 ${integrations.linkedConnectorCount} 个 · 工作区可见 ${integrations.items.length} 个`}
-            />
-            <SignalCard
-              label="团队会用到"
-              value={
-                integrations.linkedConnectorCount > 0
-                  ? `${integrations.linkedConnectorCount} 个连接器`
-                  : "尚未显式引用"
-              }
-              caption={
-                connectorHighlights.length > 0
-                  ? connectorHighlights.join("、")
-                  : "当前 workflow 还没有显式引用连接器"
-              }
-            />
-          </div>
-        </AevatarPanel>
-        {integrations.items.length > 0 ? (
-          <div
-            style={{
-              display: "grid",
-              gap: 16,
-              gridTemplateColumns: "minmax(0, 1.2fr) minmax(320px, 0.8fr)",
-            }}
-          >
-            <AevatarPanel
-              title="连接器目录"
-              extra={
-                <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                  点击卡片查看这支团队如何使用它
-                </Typography.Text>
-              }
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gap: 10,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-                }}
-              >
-                {integrations.items.map((connector) => {
-                  const isSelected = connector.key === selectedConnector?.key;
-                  return (
-                    <button
-                      aria-label={`选择连接器 ${connector.name}`}
-                      key={connector.key}
-                      onClick={() => setSelectedConnectorKey(connector.key)}
-                      style={{
-                        ...resolveSelectionCardButtonStyle(token, isSelected),
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 10,
-                        padding: 16,
-                        textAlign: "left",
-                      }}
-                      type="button"
-                    >
-                      <div
-                        style={{
-                          alignItems: "flex-start",
-                          display: "flex",
-                          gap: 10,
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                          <Typography.Text strong>{connector.name}</Typography.Text>
-                          <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                            {connector.summary}
-                          </Typography.Text>
-                        </div>
-                        <DetailPill
-                          compact
-                          style={resolveTonePillStyle(token, "info")}
-                          text={formatConnectorTypeLabel(connector.type)}
-                        />
-                      </div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                        <DetailPill
-                          compact
-                          style={resolveTonePillStyle(
-                            token,
-                            connector.enabled ? "success" : "neutral",
-                          )}
-                          text={formatConnectorEnabledLabel(connector.enabled)}
-                        />
-                        <DetailPill
-                          compact
-                          style={resolveTonePillStyle(
-                            token,
-                            connector.usedByRoles.length > 0 ? "info" : "neutral",
-                          )}
-                          text={
-                            connector.usedByRoles.length > 0
-                              ? `${connector.usedByRoles.length} 个角色在用`
-                              : "团队未显式引用"
-                          }
-                        />
-                      </div>
-                      <Typography.Text type="secondary">
-                        {connector.usedByRoles.length > 0
-                          ? `当前团队会用到：${connector.usedByRoles.join("、")}`
-                          : "当前团队还没有显式引用这个连接器。"}
-                      </Typography.Text>
-                    </button>
-                  );
-                })}
-              </div>
-            </AevatarPanel>
-            <AevatarPanel
-              title="当前选中连接器"
-              extra={
-                selectedConnector ? (
-                  <DetailPill
-                    compact
-                    style={resolveTonePillStyle(
-                      token,
-                      selectedConnector.enabled ? "success" : "neutral",
-                    )}
-                    text={formatConnectorEnabledLabel(selectedConnector.enabled)}
-                  />
-                ) : null
-              }
-            >
-              {selectedConnector ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <Typography.Title level={3} style={{ margin: 0 }}>
-                      {selectedConnector.name}
-                    </Typography.Title>
-                    <Typography.Text type="secondary">
-                      {selectedConnector.summary}
-                    </Typography.Text>
-                  </div>
-                  {selectedConnectorRows.map((row) => (
-                    <div
-                      key={row.label}
-                      style={{
-                        borderTop: `1px solid ${token.colorBorderSecondary}`,
-                        display: "grid",
-                        gap: 12,
-                        gridTemplateColumns: "minmax(96px, 120px) minmax(0, 1fr) max-content",
-                        paddingTop: 14,
-                      }}
-                    >
-                      <Typography.Text type="secondary">{row.label}</Typography.Text>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                        <Typography.Text strong>{row.value}</Typography.Text>
-                        <FactLine rows={2} secondary text={row.note} />
-                      </div>
-                      <DetailPill
-                        compact
-                        style={resolveTonePillStyle(token, row.badgeTone)}
-                        text={row.badgeText}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <AevatarInspectorEmpty
-                  compact
-                  title="请选择一个连接器"
-                  description="点击左侧卡片，查看它在这支团队里的接入方式。"
-                />
-              )}
-            </AevatarPanel>
-          </div>
-        ) : (
-          <AevatarPanel
-            title="连接器视图"
-            extra={
-              <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                目录 · 团队引用
-              </Typography.Text>
-            }
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                }}
-              >
-                <SignalCard
-                  label="工作区目录"
-                  value="暂无连接器"
-                  caption="当前工作区还没有可见的连接器定义。"
-                />
-                <SignalCard
-                  label="团队引用"
-                  value="未显式引用"
-                  caption="等 workflow 开始绑定工具后，这里会显示团队实际会用到的连接器。"
-                />
-              </div>
-              <Typography.Text style={{ fontSize: 13 }} type="secondary">
-                连接器一旦出现在工作区或被团队引用，这里会自动展开成目录和选中详情。
-              </Typography.Text>
-            </div>
-          </AevatarPanel>
+      <TeamBindingsTab
+        catalogCards={connectorCatalogCards}
+        emptyDescription={connectorsEmptyDescription}
+        onOpenDeployments={handleOpenDeployments}
+        onOpenGovernance={handleOpenGovernance}
+        onOpenServices={handleOpenServices}
+        onSelectBinding={setSelectedConnectorKey}
+        provenanceLabel={integrationsProvenance.label}
+        provenanceStyle={resolveObservationPillStyle(token, integrationsProvenance.status)}
+        selectedBindingDetailRows={connectorDetailRows}
+        selectedBindingEmpty={!selectedConnector}
+        selectedBindingStatusLabel={
+          selectedConnector
+            ? formatConnectorEnabledLabel(selectedConnector.enabled)
+            : ""
+        }
+        selectedBindingStatusStyle={resolveTonePillStyle(
+          token,
+          selectedConnector?.enabled ? "success" : "neutral",
         )}
-      </div>
+        selectedBindingName={selectedConnector?.name || ""}
+        selectedBindingSummary={selectedConnector?.summary || ""}
+        summaryCards={connectorSummaryCards}
+      />
+    );
+  };
+
+  const renderAssetsTab = () => {
+    return (
+      <TeamAssetsTab
+        onOpenScriptAsset={handleOpenScriptAsset}
+        onOpenScriptsWorkspace={() =>
+          history.push(
+            buildStudioScriptsWorkspaceRoute({
+              scopeId,
+            }),
+          )
+        }
+        onOpenWorkflowAsset={handleOpenWorkflowAsset}
+        onOpenWorkflowWorkspace={() =>
+          history.push(
+            buildStudioWorkflowWorkspaceRoute({
+              scopeId,
+            }),
+          )
+        }
+        scriptRows={scriptAssetRows}
+        summaryCards={assetSummaryCards}
+        workflowRows={workflowAssetRows}
+      />
     );
   };
 
   const renderAdvancedTab = () => {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <AevatarPanel title="当前配置主线">
-          <div
-            style={{
-              display: "grid",
-              gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            }}
-          >
-            <SignalCard
-              label="团队流程"
-              value={workflowNameValue !== "--" ? workflowNameValue : teamTitle}
-              captionMonospace
-              caption={activeWorkflowId || "--"}
-            />
-            <SignalCard
-              label="绑定方式"
-              value={formatCompositionKind(lens.activeRevision?.implementationKind || "runtime")}
-              caption={
-                currentServiceFriendly !== "--"
-                  ? `当前会落到 ${currentServiceFriendly}`
-                  : "当前还没有匹配到主服务入口"
-              }
-            />
-            <SignalCard
-              label="部署记录"
-              value={currentDeploymentFriendly}
-              captionMonospace
-              caption={currentDeploymentId}
-            />
-            <SignalCard
-              label="连接器引用"
-              value={
-                integrations.linkedConnectorCount > 0
-                  ? `${integrations.linkedConnectorCount} 个已引用`
-                  : "未显式引用"
-              }
-              caption={
-                connectorHighlights.length > 0
-                  ? connectorHighlights.join("、")
-                  : "当前 workflow 还没有显式引用连接器"
-              }
-            />
-          </div>
-        </AevatarPanel>
-        <div
-          style={{
-            display: "grid",
-            gap: 16,
-            gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 0.78fr)",
-          }}
-        >
-          <AevatarPanel
-            title="当前配置明细"
-            extra={
-              <DetailPill
-                compact
-                style={resolveStatusPillStyle(token, currentDeploymentStatus)}
-                text={currentDeploymentFriendly}
-              />
-            }
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {configurationDetailRows.map((row) => (
-                <div
-                  key={row.label}
-                  style={{
-                    borderTop: `1px solid ${token.colorBorderSecondary}`,
-                    display: "grid",
-                    gap: 12,
-                    gridTemplateColumns: "minmax(96px, 120px) minmax(0, 1fr)",
-                    paddingTop: 14,
-                  }}
-                >
-                  <Typography.Text type="secondary">{row.label}</Typography.Text>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                    <Typography.Text strong>{row.value}</Typography.Text>
-                    <FactLine rows={2} secondary text={row.note} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </AevatarPanel>
-          <AevatarPanel title="继续调整这支团队">
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <Typography.Text strong>
-                  先确认这次要调整的是流程、服务映射，还是连接器引用。
-                </Typography.Text>
-                <Typography.Text type="secondary">
-                  当前会影响 {currentServiceFriendly}、{currentVersionFriendly}，以及
-                  {integrations.linkedConnectorCount > 0
-                    ? ` ${integrations.linkedConnectorCount} 个已绑定连接器`
-                    : " 当前还没有显式绑定的连接器"}
-                  。
-                </Typography.Text>
-              </div>
-              <div
-                style={{
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  borderRadius: 18,
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
-                }}
-              >
-                {configurationAdjustmentRows.map((row, index) => (
-                  <div
-                    key={row.label}
-                    style={{
-                      alignItems: "start",
-                      borderTop:
-                        index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                      display: "grid",
-                      gap: 12,
-                      gridTemplateColumns: "minmax(84px, 108px) minmax(0, 1fr) max-content",
-                      padding: "14px 16px",
-                    }}
-                  >
-                    <Typography.Text type="secondary">{row.label}</Typography.Text>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                      <Typography.Text strong>{row.value}</Typography.Text>
-                      <FactLine monospace={false} rows={2} secondary text={row.note} />
-                    </div>
-                    <DetailPill
-                      compact
-                      style={resolveTonePillStyle(token, "neutral")}
-                      text={row.badge}
-                    />
-                  </div>
-                ))}
-              </div>
-              <Space wrap>
-                <Button
-                  onClick={handleOpenServiceMapping}
-                  style={resolveActionButtonStyle(token, "primary")}
-                  type="primary"
-                >
-                  {serviceMappingActionLabel}
-                </Button>
-                <Button
-                  onClick={() => history.push(teamBuilderRoute)}
-                  style={resolveActionButtonStyle(token)}
-                >
-                  {teamBuilderActionLabel}
-                </Button>
-                <Button onClick={handleOpenConversation} style={resolveActionButtonStyle(token)}>
-                  {conversationActionLabel}
-                </Button>
-              </Space>
-            </div>
-          </AevatarPanel>
-        </div>
-      </div>
+      <TeamAdvancedTab
+        adjustmentBadgeStyle={resolveTonePillStyle(token, "neutral")}
+        configurationAdjustmentRows={configurationAdjustmentRows}
+        configurationDetailRows={configurationDetailRows}
+        conversationActionLabel={conversationActionLabel}
+        currentDeploymentBadgeStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
+        currentDeploymentFriendly={currentDeploymentFriendly}
+        currentServiceFriendly={currentServiceFriendly}
+        currentVersionFriendly={currentVersionFriendly}
+        onOpenConversation={handleOpenConversation}
+        onOpenServiceMapping={handleOpenServiceMapping}
+        onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
+        primaryActionButtonStyle={resolveActionButtonStyle(token, "primary")}
+        secondaryActionButtonStyle={resolveActionButtonStyle(token)}
+        serviceMappingActionLabel={serviceMappingActionLabel}
+        summaryCards={advancedSummaryCards}
+        teamBuilderActionLabel={teamBuilderActionLabel}
+        teamImpactSummary={advancedTeamImpactSummary}
+      />
     );
   };
 
@@ -4026,8 +3233,11 @@ const TeamDetailPage: React.FC = () => {
     case "members":
       tabContent = renderMembersTab();
       break;
-    case "connectors":
-      tabContent = renderConnectorsTab();
+    case "bindings":
+      tabContent = renderBindingsTab();
+      break;
+    case "assets":
+      tabContent = renderAssetsTab();
       break;
     case "advanced":
       tabContent = renderAdvancedTab();
@@ -4038,146 +3248,38 @@ const TeamDetailPage: React.FC = () => {
   }
 
   if (!scopeId) {
-    return (
-      <AevatarPageShell
-        title="团队详情"
-        content="请先进入一个具体团队，再查看详情。"
-      >
-        <AevatarPanel title="未选择团队">
-          <AevatarInspectorEmpty description="当前需要一个明确的 scope 才能渲染团队详情。" />
-        </AevatarPanel>
-      </AevatarPageShell>
-    );
+    return <TeamDetailEmptyState />;
   }
 
   return (
-    <AevatarPageShell
-      breadcrumbRender={false}
-      title={
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Typography.Text
-            style={{
-              color: token.colorTextTertiary,
-              fontSize: 13,
-              fontWeight: 500,
-              lineHeight: 1.4,
-            }}
-          >
-            <Typography.Link
-              href={teamsListHref}
-              onClick={(event) => {
-                event.preventDefault();
-                history.push(teamsListHref);
-              }}
-              style={{
-                color: token.colorTextTertiary,
-                fontSize: "inherit",
-                fontWeight: "inherit",
-              }}
-            >
-              Aevatar
-            </Typography.Link>
-            {" / "}
-            <Typography.Link
-              href={teamsListHref}
-              onClick={(event) => {
-                event.preventDefault();
-                history.push(teamsListHref);
-              }}
-              style={{
-                color: token.colorTextTertiary,
-                fontSize: "inherit",
-                fontWeight: "inherit",
-              }}
-            >
-              Teams
-            </Typography.Link>
-            {` / 团队详情 / ${formatTeamTabLabel(activeTab)}`}
-          </Typography.Text>
-          <Space align="center" wrap size={12}>
-            <Typography.Title level={1} style={{ margin: 0 }}>
-              {teamTitle}
-            </Typography.Title>
-            <DetailPill
-              style={resolveStatusPillStyle(token, currentHeaderStatus)}
-              text={currentHeaderStatusFriendly}
-            />
-          </Space>
-        </div>
+    <TeamDetailShell
+      actionRail={
+        <TeamActionRail
+          conversationActionLabel={conversationActionLabel}
+          onOpenConversation={handleOpenConversation}
+          onOpenServiceMapping={handleOpenServiceMapping}
+          onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
+          serviceMappingActionLabel={serviceMappingActionLabel}
+          teamBuilderActionLabel={teamBuilderActionLabel}
+        />
       }
-      extra={
-        <Space key="team-detail-actions" wrap>
-          <Button
-            onClick={handleOpenServiceMapping}
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
-            type="primary"
-          >
-            {serviceMappingActionLabel}
-          </Button>
-          <Button
-            onClick={handleOpenConversation}
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
-          >
-            {conversationActionLabel}
-          </Button>
-          <Button
-            onClick={() => history.push(teamBuilderRoute)}
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
-          >
-            {teamBuilderActionLabel}
-          </Button>
-        </Space>
+      activeTab={activeTab}
+      activeTabLabel={formatTeamTabLabel(activeTab)}
+      initialLoading={initialLoading}
+      onOpenTeamsList={handleOpenTeamsList}
+      onSelectTab={pushTeamTab}
+      statusBadge={
+        <DetailPill
+          style={resolveStatusPillStyle(token, currentHeaderStatus)}
+          text={currentHeaderStatusFriendly}
+        />
       }
+      tabOptions={tabOptions}
+      teamTitle={teamTitle}
+      teamsListHref={teamsListHref}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div
-          role="tablist"
-          aria-label="团队详情标签"
-          style={{
-            alignItems: "center",
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 20,
-            boxShadow: token.boxShadowSecondary,
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 10,
-            padding: 8,
-          }}
-        >
-          {tabOptions.map((option) => {
-            const active = option.value === activeTab;
-            return (
-              <button
-                aria-current={active ? "page" : undefined}
-                key={option.value}
-                onClick={() => pushTeamTab(option.value)}
-                style={{
-                  background: active ? token.colorPrimary : "transparent",
-                  border: `1px solid ${
-                    active ? token.colorPrimary : "transparent"
-                  }`,
-                  borderRadius: 999,
-                  color: active ? token.colorWhite : token.colorTextSecondary,
-                  cursor: "pointer",
-                  fontSize: 14,
-                  fontWeight: active ? 700 : 500,
-                  padding: "10px 16px",
-                  transition: "all 160ms ease",
-                }}
-                type="button"
-              >
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-        {tabContent}
-        {initialLoading ? (
-          <Typography.Text type="secondary">正在加载团队详情...</Typography.Text>
-        ) : null}
-      </div>
-    </AevatarPageShell>
+      {tabContent}
+    </TeamDetailShell>
   );
 };
 

@@ -87,6 +87,38 @@ body,
   width: 100%;
 }
 
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed {
+  padding-inline: 8px;
+}
+
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item,
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-submenu-title {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  margin-inline: 0;
+  padding-inline: 0 !important;
+  width: 100%;
+}
+
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item .ant-menu-item-icon,
+.ant-pro-sider
+  .ant-menu-inline.ant-menu-inline-collapsed
+  .ant-menu-submenu-title
+  .ant-menu-item-icon,
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item .anticon,
+.ant-pro-sider
+  .ant-menu-inline.ant-menu-inline-collapsed
+  .ant-menu-submenu-title
+  .anticon {
+  margin-inline-end: 0 !important;
+}
+
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-title-content,
+.ant-pro-sider .ant-menu-inline.ant-menu-inline-collapsed .ant-menu-item-group-title {
+  display: none !important;
+}
+
 .ant-pro-sider .ant-menu-inline .ant-menu-item-group {
   margin: 0;
 }
@@ -108,6 +140,74 @@ body,
 .ant-pro-sider .ant-menu-inline .ant-pro-base-menu-inline-divider {
   margin: 10px 10px 12px !important;
   border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+body.aevatar-studio-host
+  .ant-design-pro
+  > .ant-layout
+  > div:first-child:has(
+      + .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+    ) {
+  flex: 0 0 40px !important;
+  max-width: 40px !important;
+  min-width: 40px !important;
+  width: 40px !important;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed {
+  background: linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
+  border-inline-end: 1px solid rgba(148, 163, 184, 0.18);
+  flex: 0 0 40px !important;
+  max-width: 40px !important;
+  min-width: 40px !important;
+  overflow: visible !important;
+  width: 40px !important;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+  .ant-layout-sider-children {
+  overflow: hidden;
+  padding-inline: 0 !important;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+  .ant-layout-sider-children
+  > * {
+  display: none;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+  .ant-pro-sider-collapsed-button {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  box-shadow:
+    0 16px 32px rgba(15, 23, 42, 0.14),
+    0 2px 6px rgba(15, 23, 42, 0.08);
+  display: flex;
+  height: 24px;
+  inset-block-start: 18px;
+  inset-inline-end: auto;
+  inset-inline-start: 8px;
+  justify-content: center;
+  min-width: 24px;
+  position: absolute;
+  width: 24px !important;
+  z-index: 140;
+}
+
+body.aevatar-studio-host
+  .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
+  .ant-pro-sider-collapsed-button:hover {
+  background: #ffffff;
+  box-shadow:
+    0 18px 36px rgba(15, 23, 42, 0.18),
+    0 4px 10px rgba(15, 23, 42, 0.1);
 }
 
 .aevatar-console-shell .ant-pro-page-container,

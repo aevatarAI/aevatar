@@ -95,11 +95,11 @@ type GovernanceViewActionConfig = {
 const governanceViewMeta: Record<GovernanceWorkbenchView, GovernanceViewMeta> = {
   activation: {
     path: "/governance/activation",
-    title: "Activation",
+    title: "Activation 判定",
   },
   audit: {
     path: "/governance",
-    title: "Audit",
+    title: "治理审计",
   },
   bindings: {
     path: "/governance/bindings",
@@ -755,7 +755,7 @@ const GovernanceWorkbench: React.FC = () => {
         value: String(bindingsQuery.data?.bindings.length ?? 0),
       },
       {
-        label: "Public endpoints",
+        label: "公开 Endpoints",
         tone: "success" as const,
         value: String(
           endpointsQuery.data?.endpoints.filter(
@@ -764,7 +764,7 @@ const GovernanceWorkbench: React.FC = () => {
         ),
       },
       {
-        label: "Missing policies",
+        label: "缺失 Policies",
         tone:
           (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
             ? ("warning" as const)
@@ -792,7 +792,7 @@ const GovernanceWorkbench: React.FC = () => {
         activationQuery.data != null
           ? {
               icon: <DeploymentUnitOutlined />,
-              label: "Open diagnostic",
+              label: "打开诊断",
               onClick: () =>
                 setDrawerTarget({
                   kind: "activation",
@@ -802,7 +802,7 @@ const GovernanceWorkbench: React.FC = () => {
           : undefined,
       policies: {
         icon: <PlusOutlined />,
-        label: "New policy",
+        label: "新建策略",
         onClick: () =>
           setDrawerTarget({
             kind: "policy",
@@ -821,7 +821,7 @@ const GovernanceWorkbench: React.FC = () => {
         render: (_, record) => [
           openDrawerButton(
             `policy-${record.policyId}`,
-            "Configure",
+            "配置策略",
             () =>
               setDrawerTarget({
                 kind: "policy",
@@ -897,7 +897,7 @@ const GovernanceWorkbench: React.FC = () => {
         render: (_, record) => [
           openDrawerButton(
             `binding-${record.bindingId}`,
-            "Inspect",
+            "查看绑定",
             () =>
               setDrawerTarget({
                 kind: "binding",
@@ -970,7 +970,7 @@ const GovernanceWorkbench: React.FC = () => {
         render: (_, record) => [
           openDrawerButton(
             `endpoint-${record.endpointId}`,
-            "Manage",
+            "查看 Endpoint",
             () =>
               setDrawerTarget({
                 kind: "endpoint",
@@ -1235,7 +1235,7 @@ const GovernanceWorkbench: React.FC = () => {
     if (!hasSelectedServiceContext) {
       return (
         <GovernanceSelectionNotice
-          title="Select a service"
+          title="选择一个服务"
         />
       );
     }
@@ -1243,7 +1243,7 @@ const GovernanceWorkbench: React.FC = () => {
     if (targetView === "activation" && !activeDraft.revisionId.trim()) {
       return (
         <GovernanceSelectionNotice
-          title="Select a revision"
+          title="选择一个版本"
         />
       );
     }
@@ -1547,6 +1547,7 @@ const GovernanceWorkbench: React.FC = () => {
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
+      description="Governance 负责解释一个 Team 为什么能调用、为什么会被拦截，以及缺了哪些 binding、policy 或 endpoint。它是从 Services 或 Teams drill-down 后进入的治理判定台。"
       title="Governance"
     >
       <div style={buildAevatarViewportStyle(surfaceToken)}>
@@ -1564,7 +1565,7 @@ const GovernanceWorkbench: React.FC = () => {
           draft={draft}
           includeRevision={view === "activation"}
           loadLabel={
-            view === "activation" ? "Load activation capability" : "Load governance"
+            view === "activation" ? "加载 Activation 判定" : "加载治理视图"
           }
           onChange={setDraft}
           onLoad={() => {
@@ -1655,7 +1656,7 @@ const GovernanceWorkbench: React.FC = () => {
                   boxShadow: "none",
                 }}
               >
-                <Typography.Text strong>Select a service</Typography.Text>
+                <Typography.Text strong>选择一个服务</Typography.Text>
               </div>
             )}
           </div>

@@ -310,7 +310,7 @@ export const TeamContextUnavailable: React.FC<{
   return (
     <AevatarPageShell
       title="Teams"
-      content="Open a current team when one is available, or start the first team from Team Builder."
+      content="Open a current team when one is available, or start the first team from Studio."
     >
       <AevatarPanel
         extra={
@@ -325,7 +325,7 @@ export const TeamContextUnavailable: React.FC<{
         <Space orientation="vertical" size={16} style={{ width: "100%" }}>
           <Typography.Paragraph style={{ margin: 0 }}>
             The console could not resolve a current team from the active session.
-            Open Settings, retry, or start the first team from Team Builder.
+            Open Settings, retry, or start the first team from Studio.
           </Typography.Paragraph>
           {authSessionErrored ? (
             <Alert
@@ -352,7 +352,7 @@ export const TeamContextUnavailable: React.FC<{
                 }
                 type="primary"
               >
-                Build first team
+                Open Studio
               </Button>
             )}
             {authSessionErrored ? (
@@ -365,7 +365,7 @@ export const TeamContextUnavailable: React.FC<{
                   )
                 }
               >
-                Build first team
+                Open Studio
               </Button>
             ) : null}
             <Button onClick={() => history.push("/settings")}>Open Settings</Button>

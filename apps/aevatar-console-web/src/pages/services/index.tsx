@@ -16,6 +16,10 @@ import {
 import { servicesApi } from "@/shared/api/servicesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
+import {
+  buildPlatformDeploymentsHref,
+  buildPlatformGovernanceHref,
+} from "@/shared/navigation/platformRoutes";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
 import { studioApi } from "@/shared/studio/api";
 import {
@@ -236,6 +240,7 @@ const ServicesPage: React.FC = () => {
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
+      description="Services 是 Platform 的 authority 视图。这里回答当前范围内有哪些服务、它们挂在哪个 deployment 上、暴露了哪些入口，以及应该继续跳到 Governance、Deployments 还是 Topology。"
       title="Services"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -281,7 +286,7 @@ const ServicesPage: React.FC = () => {
         <AevatarPanel
           layoutMode="document"
           padding={0}
-          title="Services"
+          title="Service Authority"
         >
           {servicesQuery.error ? (
             <Alert
@@ -307,7 +312,7 @@ const ServicesPage: React.FC = () => {
               >
                 <thead>
                   <tr>
-                    {["Status", "Name", "Identity", "Deployment", "Endpoints", "Updated", "Actions"].map(
+                    {["状态", "服务", "身份", "部署", "入口", "更新时间", "动作"].map(
                       (label) => (
                         <th
                           key={label}
@@ -416,23 +421,23 @@ const ServicesPage: React.FC = () => {
                             onClick={() => setSelectedServiceId(service.serviceId)}
                             size="small"
                           >
-                            Details
+                            查看服务
                           </Button>
                           <Button
                             onClick={() =>
                               history.push(
-                                `/governance/bindings?tenantId=${encodeURIComponent(
-                                  service.tenantId,
-                                )}&appId=${encodeURIComponent(
-                                  service.appId,
-                                )}&namespace=${encodeURIComponent(
-                                  service.namespace,
-                                )}&serviceId=${encodeURIComponent(service.serviceId)}`,
+                                buildPlatformGovernanceHref({
+                                  appId: service.appId,
+                                  namespace: service.namespace,
+                                  serviceId: service.serviceId,
+                                  tenantId: service.tenantId,
+                                  view: "bindings",
+                                }),
                               )
                             }
                             size="small"
                           >
-                            Governance
+                            打开治理
                           </Button>
                         </Space>
                       </td>
@@ -443,7 +448,7 @@ const ServicesPage: React.FC = () => {
             </div>
           ) : (
             <Empty
-              description="No services"
+              description="当前范围没有服务"
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               style={{ padding: 24 }}
             />
@@ -458,17 +463,16 @@ const ServicesPage: React.FC = () => {
               <Button
                 onClick={() =>
                   history.push(
-                    `/deployments?tenantId=${encodeURIComponent(
-                      selectedService.tenantId,
-                    )}&appId=${encodeURIComponent(
-                      selectedService.appId,
-                    )}&namespace=${encodeURIComponent(
-                      selectedService.namespace,
-                    )}&serviceId=${encodeURIComponent(selectedService.serviceId)}`,
+                    buildPlatformDeploymentsHref({
+                      appId: selectedService.appId,
+                      namespace: selectedService.namespace,
+                      serviceId: selectedService.serviceId,
+                      tenantId: selectedService.tenantId,
+                    }),
                   )
                 }
               >
-                Rollout
+                查看部署
               </Button>
               {selectedService.primaryActorId ? (
                 <Button
@@ -480,7 +484,7 @@ const ServicesPage: React.FC = () => {
                     )
                   }
                 >
-                  Runtime
+                  打开拓扑
                 </Button>
               ) : null}
             </Space>
@@ -492,15 +496,15 @@ const ServicesPage: React.FC = () => {
         subtitle={
           selectedService
             ? `${selectedService.namespace}/${selectedService.serviceId}`
-            : "Services"
+            : "Service Authority"
         }
         title={selectedService?.displayName || selectedServiceId || "Service"}
       >
         {!selectedService ? (
-          <AevatarInspectorEmpty description="Select a service" />
+          <AevatarInspectorEmpty description="选择一个服务" />
         ) : (
           <>
-            <AevatarPanel title="Summary">
+            <AevatarPanel title="服务摘要">
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
                   <Typography.Text style={summaryFieldLabelStyle}>
@@ -520,7 +524,7 @@ const ServicesPage: React.FC = () => {
 
                 <div style={summaryFieldGridStyle}>
                   <SummaryField
-                    label="Serving revision"
+                    label="当前 serving 版本"
                     value={
                       selectedService.activeServingRevisionId ||
                       selectedService.defaultServingRevisionId ||
@@ -528,22 +532,22 @@ const ServicesPage: React.FC = () => {
                     }
                   />
                   <SummaryField
-                    label="Deployment"
+                    label="当前部署"
                     value={selectedService.deploymentId || "n/a"}
                   />
                   <SummaryField
-                    label="Primary actor"
+                    label="主 Actor"
                     value={selectedService.primaryActorId || "n/a"}
                   />
                   <SummaryField
-                    label="Updated"
+                    label="最近更新"
                     value={formatDateTime(selectedService.updatedAt)}
                   />
                 </div>
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Endpoints">
+            <AevatarPanel title="入口能力">
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {selectedService.endpoints.length > 0 ? (
                   selectedService.endpoints.map((endpoint) => (
@@ -551,14 +555,14 @@ const ServicesPage: React.FC = () => {
                   ))
                 ) : (
                   <Empty
-                    description="No endpoints"
+                    description="当前服务没有公开入口"
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 )}
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Deployments">
+            <AevatarPanel title="部署与版本">
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <RolloutDigestSection
                   activeDeployment={activeDeployment}
@@ -605,7 +609,7 @@ const RevisionDigestCard: React.FC<{
       {revision.artifactHash || "n/a"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Published {formatDateTime(revision.publishedAt)}
+      已发布 {formatDateTime(revision.publishedAt)}
     </Typography.Text>
   </div>
 );
@@ -620,13 +624,13 @@ const DeploymentDigestCard: React.FC<{
       <AevatarStatusTag domain="governance" status={deployment.status || "pending"} />
     </Space>
     <Typography.Text type="secondary">
-      Revision {deployment.revisionId || "n/a"}
+      版本 {deployment.revisionId || "n/a"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Actor {deployment.primaryActorId || "n/a"}
+      主 Actor {deployment.primaryActorId || "n/a"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Activated {formatDateTime(deployment.activatedAt)}
+      激活于 {formatDateTime(deployment.activatedAt)}
     </Typography.Text>
   </div>
 );
@@ -653,15 +657,15 @@ const RolloutDigestSection: React.FC<{
       }}
     >
       <DrawerMetric
-        label="Active deployment"
+        label="当前部署"
         value={activeDeployment?.deploymentId || "n/a"}
       />
       <DrawerMetric
-        label="Latest revision"
+        label="最新版本"
         value={latestRevision?.revisionId || "n/a"}
       />
-      <DrawerMetric label="Traffic" value={traffic.length} />
-      <DrawerMetric label="Weights" value={`${dominantTrafficWeight}%`} />
+      <DrawerMetric label="流量入口" value={traffic.length} />
+      <DrawerMetric label="最高权重" value={`${dominantTrafficWeight}%`} />
     </div>
   );
 };

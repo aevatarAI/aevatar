@@ -39,35 +39,44 @@ const StudioBootstrapGate: React.FC<StudioBootstrapGateProps> = ({
   const issues: string[] = [];
 
   if (appContextError) {
-    issues.push(`App context: ${renderErrorMessage(appContextError)}`);
+    issues.push(`团队上下文：${renderErrorMessage(appContextError)}`);
   }
 
   if (workspaceError) {
-    issues.push(`Workspace settings: ${renderErrorMessage(workspaceError)}`);
+    issues.push(`工作区设置：${renderErrorMessage(workspaceError)}`);
   }
 
   if (authError) {
-    issues.push(`Authentication: ${renderErrorMessage(authError)}`);
+    issues.push(`登录状态：${renderErrorMessage(authError)}`);
   }
 
+  const authOnlyIssue =
+    Boolean(authError) &&
+    !appContextError &&
+    !workspaceError &&
+    !appContextLoading &&
+    !workspaceLoading;
+
   const notice: StudioBootstrapNoticeProps | null = issues.length > 0
-    ? {
+    ? authOnlyIssue
+      ? null
+      : {
         type: appContextError || workspaceError ? 'error' : 'warning',
         title:
           issues.length > 1
-            ? 'Studio setup needs attention'
+            ? 'Studio 当前有部分能力暂时不可用'
             : appContextError
-              ? 'App context unavailable'
+              ? '团队上下文暂时不可用'
               : workspaceError
-                ? 'Workspace settings unavailable'
-                : 'Authentication needs attention',
+                ? '工作区设置暂时不可用'
+                : '登录状态待确认',
         description: issues.join(' · '),
       }
     : loading
       ? {
           type: 'info',
-          title: 'Preparing Studio',
-          description: 'Loading session, app context, and workspace settings.',
+          title: '正在准备 Studio',
+          description: '正在加载团队上下文、登录状态和工作区设置。',
         }
       : null;
 
