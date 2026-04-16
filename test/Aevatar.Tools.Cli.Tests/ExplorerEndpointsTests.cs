@@ -60,6 +60,34 @@ public sealed class ExplorerEndpointsTests
     }
 
     [Fact]
+    public async Task GetFileAsync_WhenWorkflowLivesUnderConfiguredPrefixOutsideTypeHeuristic_ShouldStillLoadFile()
+    {
+        // Legacy deployments that configured Cli:App:Connectors:ChronoStorage:Prefix
+        // may have uploaded workflow / script / media blobs under that prefix. The
+        // explorer must still resolve them via the prefix fallback even after the
+        // actor-backed catalog migration — role/connector catalogs are out of
+        // chrono-storage, but this generic blob prefix is not.
+        await using var host = await ExplorerTestHost.StartAsync(
+            "scope-a",
+            new ConnectorCatalogStorageOptions
+            {
+                Enabled = true,
+                UseNyxProxy = false,
+                BaseUrl = "http://chrono-storage.test",
+                Bucket = "aevatar-studio",
+                Prefix = "shared-prefix",
+                UserConfigPrefix = "user-prefix",
+            });
+        host.StorageServer.StoreText("aevatar-studio", "shared-prefix/scope-a/workflows/draft.yaml", "name: draft");
+
+        var response = await host.Client.GetAsync("/api/explorer/files/workflows/draft.yaml");
+        var content = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        content.Should().Be("name: draft");
+    }
+
+    [Fact]
     public async Task GetFileAsync_WhenDirectDownloadReturnsNotFound_ShouldFallbackToPresignedUrl()
     {
         await using var host = await ExplorerTestHost.StartAsync(

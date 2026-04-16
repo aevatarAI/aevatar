@@ -452,7 +452,10 @@ public static class ExplorerEndpoints
         if (seen.Add(preferred))
             yield return preferred;
 
-        foreach (var candidate in new[] { string.Empty, opts.UserConfigPrefix })
+        // Legacy deployments may have uploaded workflow/script/media objects under
+        // opts.Prefix before the actor-backed catalog migration. Keep it in the
+        // fallback chain so /api/explorer/files/{key} can still read those blobs.
+        foreach (var candidate in new[] { string.Empty, opts.Prefix, opts.UserConfigPrefix })
         {
             if (seen.Add(candidate ?? string.Empty))
                 yield return candidate ?? string.Empty;
