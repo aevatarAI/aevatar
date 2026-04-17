@@ -147,4 +147,31 @@ public sealed class WorkspaceController : ControllerBase
 
         return Ok(await _workspaceService.SaveWorkflowAsync(request, cancellationToken));
     }
+
+    [HttpDelete("workflows/{workflowId}")]
+    public async Task<IActionResult> DeleteWorkflow(string workflowId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var scopeContext = _scopeResolver.Resolve(HttpContext);
+            if (scopeContext != null)
+            {
+                await _scopeWorkflowService.DeleteDraftAsync(scopeContext.ScopeId, workflowId, cancellationToken);
+            }
+            else
+            {
+                await _workspaceService.DeleteDraftAsync(workflowId, cancellationToken);
+            }
+
+            return NoContent();
+        }
+        catch (AppApiException exception)
+        {
+            return StatusCode(exception.StatusCode, AppApiErrors.CreatePayload(exception));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+    }
 }

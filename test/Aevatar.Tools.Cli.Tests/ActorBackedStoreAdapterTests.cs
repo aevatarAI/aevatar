@@ -1621,6 +1621,8 @@ public sealed class ActorBackedStoreAdapterTests
             Task.FromResult<StoredWorkflowFile?>(null);
         public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile f, CancellationToken ct = default) =>
             Task.FromResult(f);
+        public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken ct = default) =>
+            Task.CompletedTask;
         public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<StoredExecutionRecord>>([]);
         public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken ct = default) =>

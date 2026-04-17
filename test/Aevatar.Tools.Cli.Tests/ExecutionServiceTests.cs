@@ -403,6 +403,9 @@ public sealed class ExecutionServiceTests
         public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default)
         {
             lock (_sync)
