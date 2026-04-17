@@ -109,6 +109,37 @@ if [[ -z "${DOTNET_CMD}" ]]; then
   fi
 fi
 
+ensure_neo4j_env() {
+  local environment_name="${1:-}"
+  local neo4j_enabled="${2:-}"
+
+  if [[ "${neo4j_enabled}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ "${environment_name}" != "Distributed" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${AEVATAR_Projection__Graph__Providers__Neo4j__Username:-}" && -n "${NEO4J_USERNAME:-}" ]]; then
+    export AEVATAR_Projection__Graph__Providers__Neo4j__Username="${NEO4J_USERNAME}"
+  fi
+
+  if [[ -z "${AEVATAR_Projection__Graph__Providers__Neo4j__Password:-}" && -n "${NEO4J_PASSWORD:-}" ]]; then
+    export AEVATAR_Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}"
+  fi
+
+  if [[ -z "${AEVATAR_Projection__Graph__Providers__Neo4j__Password:-}" ]]; then
+    cat >&2 <<'EOF'
+Distributed mode with Neo4j enabled requires an explicit Neo4j password.
+Set one of:
+  export NEO4J_PASSWORD="<password>"
+  export AEVATAR_Projection__Graph__Providers__Neo4j__Password="<password>"
+EOF
+    exit 1
+  fi
+}
+
 list_listening_pids() {
   lsof -tiTCP:"${1}" -sTCP:LISTEN 2>/dev/null | sort -u || true
 }
@@ -220,9 +251,13 @@ launch_env=(
 )
 
 unset_env=()
+effective_environment_name=""
+effective_neo4j_enabled=""
 
 case "${APP_MODE}" in
   local)
+    effective_environment_name="Development"
+    effective_neo4j_enabled="false"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Development"
       "DOTNET_ENVIRONMENT=Development"
@@ -249,21 +284,29 @@ case "${APP_MODE}" in
     )
     ;;
   persistent-local)
+    effective_environment_name="PersistentLocal"
+    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=PersistentLocal"
     )
     ;;
   distributed)
+    effective_environment_name="Distributed"
+    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-true}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Distributed"
     )
     ;;
 esac
 
+ensure_neo4j_env "${effective_environment_name}" "${effective_neo4j_enabled}"
+
 env_cmd=(env)
-for name in "${unset_env[@]}"; do
-  env_cmd+=(-u "${name}")
-done
+if (( ${#unset_env[@]} > 0 )); then
+  for name in "${unset_env[@]}"; do
+    env_cmd+=(-u "${name}")
+  done
+fi
 env_cmd+=("${launch_env[@]}")
 
 nohup "${env_cmd[@]}" "${DOTNET_CMD}" run \

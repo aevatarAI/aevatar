@@ -42,6 +42,7 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             context => new StudioMaterializationRuntimeLease(context));
+        services.TryAddSingleton<StudioCurrentStateProjectionPort>();
 
         // ── Projectors ──
 

@@ -36,6 +36,7 @@ public sealed class UserConfigProjectionAndControllerTests
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
         services.AddSingleton<IActorRuntime>(actorRuntime);
         services.AddSingleton<IAppScopeResolver>(scopeResolver);
+        services.AddSingleton<IUserConfigDefaults>(new StubUserConfigDefaults());
         services.AddSingleton<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>(
             new StubUserConfigDocumentReader());
         services.AddStudioProjectionComponents();
@@ -164,7 +165,14 @@ public sealed class UserConfigProjectionAndControllerTests
     {
         var reader = new StubUserConfigDocumentReader();
         var scopeResolver = new StubScopeResolver();
-        var port = new ProjectionUserConfigQueryPort(reader, scopeResolver);
+        var port = new ProjectionUserConfigQueryPort(
+            reader,
+            scopeResolver,
+            new StubUserConfigDefaults
+            {
+                LocalRuntimeBaseUrl = "http://127.0.0.1:6100/",
+                RemoteRuntimeBaseUrl = "https://runtime.example.cn/",
+            });
 
         var result = await port.GetAsync();
 
@@ -172,8 +180,8 @@ public sealed class UserConfigProjectionAndControllerTests
         result.DefaultModel.Should().BeEmpty();
         result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         result.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.LocalMode);
-        result.LocalRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
-        result.RemoteRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
+        result.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:6100");
+        result.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.cn");
         result.MaxToolRounds.Should().Be(0);
     }
 
@@ -195,7 +203,14 @@ public sealed class UserConfigProjectionAndControllerTests
             },
         };
         var scopeResolver = new StubScopeResolver { ScopeIdToReturn = "scope-2" };
-        var port = new ProjectionUserConfigQueryPort(reader, scopeResolver);
+        var port = new ProjectionUserConfigQueryPort(
+            reader,
+            scopeResolver,
+            new StubUserConfigDefaults
+            {
+                LocalRuntimeBaseUrl = "http://127.0.0.1:6200/",
+                RemoteRuntimeBaseUrl = "https://runtime.example.net/",
+            });
 
         var result = await port.GetAsync();
 
@@ -203,8 +218,8 @@ public sealed class UserConfigProjectionAndControllerTests
         result.DefaultModel.Should().Be("gpt-4.1");
         result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         result.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.LocalMode);
-        result.LocalRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
-        result.RemoteRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
+        result.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:6200");
+        result.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.net");
         result.MaxToolRounds.Should().Be(7);
     }
 
@@ -453,6 +468,13 @@ public sealed class UserConfigProjectionAndControllerTests
 
         public AppScopeContext? Resolve(HttpContext? httpContext = null) =>
             ScopeIdToReturn is null ? null : new AppScopeContext(ScopeIdToReturn, "test");
+    }
+
+    private sealed class StubUserConfigDefaults : IUserConfigDefaults
+    {
+        public string LocalRuntimeBaseUrl { get; init; } = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl;
+
+        public string RemoteRuntimeBaseUrl { get; init; } = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl;
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort

@@ -1,6 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
@@ -12,7 +10,6 @@ using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
-using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
@@ -401,6 +398,26 @@ public sealed class ActorBackedStoreAdapterTests
         var evt = envelope.Payload.Unpack<Aevatar.GAgents.Registry.ActorRegisteredEvent>();
         evt.GagentType.Should().Be("MyGAgent");
         evt.ActorId.Should().Be("actor-123");
+    }
+
+    [Fact]
+    public async Task GAgentActorStore_AddActorAsync_WithExplicitScope_UsesRouteScope()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ambient-scope" };
+        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+
+        var store = new ActorBackedGAgentActorStore(
+            new FakeStudioActorBootstrap(runtime),
+            new FakeActorDispatchPort(runtime),
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        await store.AddActorAsync("route-scope", "MyGAgent", "actor-789");
+
+        runtime.Actors.Should().ContainKey("gagent-registry-route-scope");
+        runtime.Actors.Should().NotContainKey("gagent-registry-ambient-scope");
     }
 
     [Fact]
@@ -1662,4 +1679,5 @@ public sealed class ActorBackedStoreAdapterTests
             return Task.CompletedTask;
         }
     }
+
 }
