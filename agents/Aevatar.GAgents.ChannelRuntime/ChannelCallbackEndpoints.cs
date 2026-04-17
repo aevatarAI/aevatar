@@ -298,6 +298,7 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
@@ -377,6 +378,34 @@ public static class ChannelCallbackEndpoints
         };
 
         await actor.HandleEventAsync(cmdEnvelope);
+
+        // Wait for projection to materialize the registration document.
+        // Without this, webhooks arriving immediately after registration
+        // (e.g. Lark URL verification) see 404 because the read model
+        // has not caught up. Mirrors the pattern in HandleUpdateTokenAsync.
+        var materialized = false;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            await Task.Delay(250, ct);
+            if (await queryPort.GetAsync(registrationId, ct) is not null)
+            {
+                materialized = true;
+                break;
+            }
+        }
+
+        if (!materialized)
+        {
+            logger.LogError(
+                "Registration {RegistrationId} dispatched but not materialized within 5s — projection pipeline may be unhealthy",
+                registrationId);
+            return Results.Json(new
+            {
+                status = "error",
+                error = "Registration dispatched but projection did not materialize within timeout. Check projection pipeline health.",
+                registration_id = registrationId,
+            }, statusCode: 500);
+        }
 
         return Results.Accepted(value: new
         {
