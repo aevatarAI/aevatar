@@ -1139,9 +1139,6 @@ const TeamsHomePage: React.FC = () => {
                 首页按这个 Scope 汇总已经形成入口的团队，Scope 只做上下文，不再直接当团队名展示。
               </Typography.Text>
             </div>
-            <Space wrap>
-              <Button onClick={() => setShowScopePicker(true)}>切换 Scope</Button>
-            </Space>
           </div>
         ) : null}
 
