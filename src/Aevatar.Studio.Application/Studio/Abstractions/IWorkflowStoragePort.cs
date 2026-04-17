@@ -10,6 +10,8 @@ public interface IWorkflowStoragePort
     Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(CancellationToken ct);
 
     Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string workflowId, CancellationToken ct);
+
+    Task DeleteWorkflowYamlAsync(string workflowId, CancellationToken ct);
 }
 
 public sealed record StoredWorkflowYaml(

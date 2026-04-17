@@ -149,6 +149,28 @@ public sealed class WorkspaceService
         return ToWorkflowFileResponse(stored);
     }
 
+    public async Task DeleteDraftAsync(string workflowId, CancellationToken cancellationToken = default)
+    {
+        var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+        string filePath;
+
+        try
+        {
+            filePath = DecodeStableId(normalizedWorkflowId);
+        }
+        catch (FormatException exception)
+        {
+            throw new InvalidOperationException($"{nameof(workflowId)} is invalid.", exception);
+        }
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new InvalidOperationException($"{nameof(workflowId)} is invalid.");
+        }
+
+        await _store.DeleteWorkflowFileAsync(CreateStableId(filePath), cancellationToken);
+    }
+
     private string AlignWorkflowYamlName(string yaml, string workflowName)
     {
         if (string.IsNullOrWhiteSpace(yaml) || string.IsNullOrWhiteSpace(workflowName))
@@ -242,6 +264,17 @@ public sealed class WorkspaceService
         }
 
         return Path.GetFullPath(Environment.ExpandEnvironmentVariables(path));
+    }
+
+    private static string NormalizeRequired(string value, string fieldName)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+        {
+            throw new InvalidOperationException($"{fieldName} is required.");
+        }
+
+        return normalized;
     }
 
     private static string EnsureYamlExtension(string fileName)

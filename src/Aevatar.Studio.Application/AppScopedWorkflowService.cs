@@ -253,6 +253,28 @@ public sealed class AppScopedWorkflowService
             parsed);
     }
 
+    public async Task DeleteDraftAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+
+        try
+        {
+            if (_workflowStoragePort != null)
+            {
+                await _workflowStoragePort.DeleteWorkflowYamlAsync(normalizedWorkflowId, ct);
+            }
+        }
+        catch
+        {
+        }
+
+        DeletePersistedLayout(normalizedScopeId, normalizedWorkflowId);
+    }
+
     private string AlignWorkflowYamlName(string yaml, string workflowName)
     {
         if (string.IsNullOrWhiteSpace(yaml) || string.IsNullOrWhiteSpace(workflowName))
@@ -601,6 +623,13 @@ public sealed class AppScopedWorkflowService
 
         var json = JsonSerializer.Serialize(layout, JsonOptions);
         File.WriteAllText(path, json);
+    }
+
+    private static void DeletePersistedLayout(string scopeId, string workflowId)
+    {
+        var path = BuildLayoutCachePath(scopeId, workflowId);
+        if (File.Exists(path))
+            File.Delete(path);
     }
 
     private static string BuildLayoutCachePath(string scopeId, string workflowId) =>

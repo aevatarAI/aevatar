@@ -14,6 +14,8 @@ public interface IStudioWorkspaceStore
 
     Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default);
 
+    Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default);
 
     Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken cancellationToken = default);
