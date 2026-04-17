@@ -36,6 +36,9 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     public IEventSourcingBehaviorFactory<TState>? EventSourcingBehaviorFactory { get; set; }
 
     /// <summary>Activates agent, replays events to restore state, then calls OnActivateAsync.</summary>
+    protected override bool DeferLifecycleAwareModuleInitialization => true;
+
+    /// <summary>Activates agent, replays events to restore state, then calls OnActivateAsync.</summary>
     public override async Task ActivateAsync(CancellationToken ct = default)
     {
         await base.ActivateAsync(ct); // Restore modules
@@ -44,6 +47,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         var replayed = await eventSourcing.ReplayAsync(Id, ct);
         _state = replayed ?? new TState();
         await OnStateChangedAsync(_state, ct);
+        await InitializeLifecycleAwareModulesAsync(ct);
         await OnActivateAsync(ct);
     }
 

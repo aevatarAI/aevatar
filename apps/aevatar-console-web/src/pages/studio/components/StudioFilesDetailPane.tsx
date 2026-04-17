@@ -1053,9 +1053,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     workflows.data?.find((workflow) => workflow.workflowId === selectedWorkflowId) ??
     null;
   const workflowFile = useQuery({
-    queryKey: ['studio-files-workflow', selectedWorkflowId],
+    queryKey: ['studio-files-workflow', scopeId || 'workspace', selectedWorkflowId],
     enabled: Boolean(selectedWorkflowId),
-    queryFn: () => studioApi.getWorkflow(selectedWorkflowId),
+    queryFn: () => studioApi.getWorkflow(selectedWorkflowId, scopeId || undefined),
   });
 
   const selectedScriptId = selectedFile.startsWith('script:')
@@ -1127,7 +1127,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
 
       queryClient.setQueryData(['studio-settings'], saveSettingsResult);
       queryClient.setQueryData(
-        ['studio-workspace-settings'],
+        ['studio-workspace-settings', scopeId || 'workspace'],
         (current: StudioWorkspaceSettings | undefined) =>
           current
             ? {

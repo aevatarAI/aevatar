@@ -4,6 +4,7 @@ import {
   CloseOutlined,
   DownOutlined,
   ExperimentOutlined,
+  FileAddOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
   PlayCircleOutlined,
@@ -2568,6 +2569,22 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                   <span style={{ marginLeft: 6 }}>{validationSummary}</span>
                 </span>
               ) : null}
+              <Tooltip
+                title="Create a fresh local draft without changing the current scope catalog"
+                placement="bottom"
+              >
+                <span className="console-scripts-tooltip-anchor">
+                  <button
+                    type="button"
+                    className="console-scripts-ghost-action console-scripts-header-text-action"
+                    onClick={createNewDraft}
+                    aria-label="New draft"
+                  >
+                    <FileAddOutlined />
+                    <span>New draft</span>
+                  </button>
+                </span>
+              </Tooltip>
               <Tooltip
                 title={scopeBacked ? 'Save the active draft into the current scope catalog' : 'Requires the current scope'}
                 placement="bottom"

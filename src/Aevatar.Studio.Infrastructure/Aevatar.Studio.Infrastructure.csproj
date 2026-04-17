@@ -11,6 +11,15 @@
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Registry\Aevatar.GAgents.Registry.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ConnectorCatalog\Aevatar.GAgents.ConnectorCatalog.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.RoleCatalog\Aevatar.GAgents.RoleCatalog.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxyParticipant\Aevatar.GAgents.StreamingProxyParticipant.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserConfig\Aevatar.GAgents.UserConfig.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserMemory\Aevatar.GAgents.UserMemory.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
   </ItemGroup>
 
   <ItemGroup>

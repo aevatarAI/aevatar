@@ -5,7 +5,8 @@ using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Hosting.Controllers;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
+using Aevatar.Studio.Projection.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,6 +30,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         services.AddStudioInfrastructure(configuration);
+        services.AddStudioProjectionComponents();
         return services;
     }
 
@@ -38,7 +40,6 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
             sp.GetService<IScopeWorkflowQueryPort>(),
-            sp.GetService<IScopeWorkflowCommandPort>(),
             sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceRevisionArtifactStore>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>(),

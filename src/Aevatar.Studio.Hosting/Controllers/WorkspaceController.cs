@@ -1,8 +1,10 @@
 using Aevatar.Studio.Application;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Aevatar.Studio.Hosting.Controllers;
@@ -14,22 +16,31 @@ public sealed class WorkspaceController : ControllerBase
     private readonly WorkspaceService _workspaceService;
     private readonly AppScopedWorkflowService _scopeWorkflowService;
     private readonly IAppScopeResolver _scopeResolver;
+    private readonly IAuthenticationSchemeProvider _authenticationSchemeProvider;
 
     public WorkspaceController(
         WorkspaceService workspaceService,
         AppScopedWorkflowService scopeWorkflowService,
-        IAppScopeResolver scopeResolver)
+        IAppScopeResolver scopeResolver,
+        IAuthenticationSchemeProvider authenticationSchemeProvider)
     {
         _workspaceService = workspaceService;
         _scopeWorkflowService = scopeWorkflowService;
         _scopeResolver = scopeResolver;
+        _authenticationSchemeProvider = authenticationSchemeProvider;
     }
 
     [HttpGet]
-    public async Task<ActionResult<WorkspaceSettingsResponse>> GetSettings(CancellationToken cancellationToken)
+    public async Task<ActionResult<WorkspaceSettingsResponse>> GetSettings(
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
     {
         var settings = await _workspaceService.GetSettingsAsync(cancellationToken);
-        var scopeContext = _scopeResolver.Resolve(HttpContext);
+        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        if (scopeResolution.Failure != null)
+            return scopeResolution.Failure;
+
+        var scopeContext = scopeResolution.Context;
         if (scopeContext == null)
             return Ok(settings);
 
@@ -46,9 +57,14 @@ public sealed class WorkspaceController : ControllerBase
     [HttpPost("directories")]
     public async Task<ActionResult<WorkspaceSettingsResponse>> AddDirectory(
         [FromBody] AddWorkflowDirectoryRequest request,
+        [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        if (_scopeResolver.Resolve(HttpContext) != null)
+        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        if (scopeResolution.Failure != null)
+            return scopeResolution.Failure;
+
+        if (scopeResolution.Context != null)
             return BadRequest(new { message = "Workflow directories are unavailable when workflows are scoped to the current login." });
 
         try
@@ -64,18 +80,29 @@ public sealed class WorkspaceController : ControllerBase
     [HttpDelete("directories/{directoryId}")]
     public async Task<ActionResult<WorkspaceSettingsResponse>> RemoveDirectory(
         string directoryId,
+        [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        if (_scopeResolver.Resolve(HttpContext) != null)
+        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        if (scopeResolution.Failure != null)
+            return scopeResolution.Failure;
+
+        if (scopeResolution.Context != null)
             return BadRequest(new { message = "Workflow directories are unavailable when workflows are scoped to the current login." });
 
         return Ok(await _workspaceService.RemoveDirectoryAsync(directoryId, cancellationToken));
     }
 
     [HttpGet("workflows")]
-    public async Task<ActionResult<IReadOnlyList<WorkflowSummary>>> ListWorkflows(CancellationToken cancellationToken)
+    public async Task<ActionResult<IReadOnlyList<WorkflowSummary>>> ListWorkflows(
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
     {
-        var scopeContext = _scopeResolver.Resolve(HttpContext);
+        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        if (scopeResolution.Failure != null)
+            return scopeResolution.Failure;
+
+        var scopeContext = scopeResolution.Context;
         if (scopeContext != null)
         {
             try
@@ -96,9 +123,16 @@ public sealed class WorkspaceController : ControllerBase
     }
 
     [HttpGet("workflows/{workflowId}")]
-    public async Task<ActionResult<WorkflowFileResponse>> GetWorkflow(string workflowId, CancellationToken cancellationToken)
+    public async Task<ActionResult<WorkflowFileResponse>> GetWorkflow(
+        string workflowId,
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
     {
-        var scopeContext = _scopeResolver.Resolve(HttpContext);
+        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        if (scopeResolution.Failure != null)
+            return scopeResolution.Failure;
+
+        var scopeContext = scopeResolution.Context;
         WorkflowFileResponse? workflow;
         if (scopeContext != null)
         {
@@ -126,9 +160,14 @@ public sealed class WorkspaceController : ControllerBase
     [HttpPost("workflows")]
     public async Task<ActionResult<WorkflowFileResponse>> SaveWorkflow(
         [FromBody] SaveWorkflowFileRequest request,
+        [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeContext = _scopeResolver.Resolve(HttpContext);
+        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        if (scopeResolution.Failure != null)
+            return scopeResolution.Failure;
+
+        var scopeContext = scopeResolution.Context;
         if (scopeContext != null)
         {
             try
@@ -146,5 +185,45 @@ public sealed class WorkspaceController : ControllerBase
         }
 
         return Ok(await _workspaceService.SaveWorkflowAsync(request, cancellationToken));
+    }
+
+    private async Task<(AppScopeContext? Context, ActionResult? Failure)> ResolveScopeContextAsync(string? requestedScopeId)
+    {
+        var ambientScopeContext = _scopeResolver.Resolve(HttpContext);
+        var normalizedRequestedScopeId = requestedScopeId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedRequestedScopeId))
+            return (ambientScopeContext, null);
+
+        if (ambientScopeContext != null)
+        {
+            if (string.Equals(
+                    ambientScopeContext.ScopeId,
+                    normalizedRequestedScopeId,
+                    StringComparison.Ordinal))
+            {
+                return (ambientScopeContext, null);
+            }
+
+            return (null, StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "Requested scope does not match the authenticated Studio scope.",
+            }));
+        }
+
+        if (await IsAuthenticationEnabledAsync())
+        {
+            return (null, Unauthorized(new
+            {
+                message = "Studio authentication is required before accessing a scoped workflow workspace.",
+            }));
+        }
+
+        return (new AppScopeContext(normalizedRequestedScopeId, "query:scopeId"), null);
+    }
+
+    private async Task<bool> IsAuthenticationEnabledAsync()
+    {
+        var schemes = await _authenticationSchemeProvider.GetAllSchemesAsync();
+        return schemes.Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
     }
 }

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
+import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
@@ -519,6 +520,25 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
   });
 
+  it("demotes machine-generated long scope ids into compact team metadata", async () => {
+    const longScopeId = "1626c177-917b-4fcc-a5ee-aa74a171b0d6";
+
+    window.history.replaceState(
+      {},
+      "",
+      `/teams/${longScopeId}?scopeId=${longScopeId}`,
+    );
+    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "团队详情" })).toBeTruthy();
+    expect(screen.queryByText(`Team ${longScopeId}`)).toBeNull();
+    expect(screen.getByText("scopeId")).toBeTruthy();
+    expect(screen.getByText("1626c177...71b0d6")).toBeTruthy();
+  });
+
   it("shows full raw identifiers inside overview tooltips", async () => {
     const longRevisionId =
       "rev-20260414154556-4d89bc2a3bf347f8b3bde41d716964f3";
@@ -652,8 +672,10 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("运行时参与者身份")).toBeTruthy();
     expect(screen.getByText("当前焦点")).toBeTruthy();
     expect(screen.getByText("可见 Actor")).toBeTruthy();
-    expect(screen.getByText("actorId · actor-intake")).toBeTruthy();
-    expect(screen.getAllByText("serviceId · default").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("actorId").length).toBeGreaterThan(0);
+    expect(screen.getByText("actor-intake")).toBeTruthy();
+    expect(screen.getAllByText("serviceId").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("default").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "打开 Services" })).toBeTruthy();
   });
 

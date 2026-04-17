@@ -281,7 +281,11 @@ body.aevatar-studio-host
 .aevatar-console-shell .ant-pro-page-container,
 .aevatar-console-shell .ant-pro-grid-content,
 .aevatar-console-shell .ant-pro-grid-content-children,
-.aevatar-console-shell .ant-pro-page-container-children-container {
+.aevatar-console-shell .ant-pro-page-container-children-container,
+.aevatar-console-shell .ant-pro-page-container-children-content {
+  // Ant Pro inserts these wrappers between StudioShell and the editor/workflows
+  // panes. If any layer stops stretching, the workbench body collapses and loses
+  // its scrollable area.
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -295,7 +299,8 @@ body.aevatar-studio-host
 .aevatar-console-shell .aevatar-page-shell-document.ant-pro-page-container,
 .aevatar-console-shell .aevatar-page-shell-document .ant-pro-grid-content,
 .aevatar-console-shell .aevatar-page-shell-document .ant-pro-grid-content-children,
-.aevatar-console-shell .aevatar-page-shell-document .ant-pro-page-container-children-container {
+.aevatar-console-shell .aevatar-page-shell-document .ant-pro-page-container-children-container,
+.aevatar-console-shell .aevatar-page-shell-document .ant-pro-page-container-children-content {
   display: block;
   flex: 0 0 auto;
   height: auto;

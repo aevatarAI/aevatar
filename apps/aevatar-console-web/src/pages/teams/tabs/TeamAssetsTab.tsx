@@ -10,6 +10,7 @@ import {
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import {
+  CompactFactValue,
   DetailPill,
   FactLine,
   SignalCard,
@@ -150,13 +151,13 @@ const TeamAssetsTab: React.FC<TeamAssetsTabProps> = ({
                       <Typography.Text style={{ fontSize: 12 }} type="secondary">
                         {row.primaryMetaLabel}
                       </Typography.Text>
-                      <FactLine rows={1} text={row.primaryMetaValue} />
+                      <CompactFactValue value={row.primaryMetaValue} />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <Typography.Text style={{ fontSize: 12 }} type="secondary">
                         {row.secondaryMetaLabel}
                       </Typography.Text>
-                      <FactLine monospace={false} rows={1} text={row.secondaryMetaValue} />
+                      <CompactFactValue value={row.secondaryMetaValue} />
                     </div>
                   </div>
                   <Typography.Text strong style={{ color: "var(--ant-colorPrimary)" }}>
@@ -226,13 +227,13 @@ const TeamAssetsTab: React.FC<TeamAssetsTabProps> = ({
                       <Typography.Text style={{ fontSize: 12 }} type="secondary">
                         {row.primaryMetaLabel}
                       </Typography.Text>
-                      <FactLine rows={1} text={row.primaryMetaValue} />
+                      <CompactFactValue value={row.primaryMetaValue} />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <Typography.Text style={{ fontSize: 12 }} type="secondary">
                         {row.secondaryMetaLabel}
                       </Typography.Text>
-                      <FactLine monospace={false} rows={1} text={row.secondaryMetaValue} />
+                      <CompactFactValue value={row.secondaryMetaValue} />
                     </div>
                   </div>
                   <Typography.Text strong style={{ color: "var(--ant-colorPrimary)" }}>

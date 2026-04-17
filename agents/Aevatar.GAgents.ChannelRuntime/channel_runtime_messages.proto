@@ -171,6 +171,300 @@ message ChannelBotRegistrationDocument {
   string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
 }
 
+// ─── Agent Registry (actor-backed delivery target store) ───
+
+message AgentRegistryEntry {
+  string agent_id = 1;
+  string platform = 2;
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  string nyx_api_key = 5;
+  string owner_nyx_user_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  bool tombstoned = 9;
+  string agent_type = 10;
+  string template_name = 11;
+  string scope_id = 12;
+  string api_key_id = 13;
+  string schedule_cron = 14;
+  string schedule_timezone = 15;
+  string status = 16;
+  google.protobuf.Timestamp last_run_at = 17;
+  google.protobuf.Timestamp next_run_at = 18;
+  int32 error_count = 19;
+  string last_error = 20;
+}
+
+message AgentRegistryState {
+  repeated AgentRegistryEntry entries = 1;
+}
+
+message AgentRegistryUpsertCommand {
+  string agent_id = 1;
+  string platform = 2;
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  string nyx_api_key = 5;
+  string owner_nyx_user_id = 6;
+  string agent_type = 7;
+  string template_name = 8;
+  string scope_id = 9;
+  string api_key_id = 10;
+  string schedule_cron = 11;
+  string schedule_timezone = 12;
+  string status = 13;
+}
+
+message AgentRegistryTombstoneCommand {
+  string agent_id = 1;
+}
+
+message AgentRegistryExecutionUpdateCommand {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
+}
+
+message AgentRegistryUpsertedEvent {
+  AgentRegistryEntry entry = 1;
+}
+
+message AgentRegistryTombstonedEvent {
+  string agent_id = 1;
+}
+
+message AgentRegistryExecutionUpdatedEvent {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
+}
+
+message AgentRegistryDocument {
+  string id = 1;
+  string platform = 2;
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  string nyx_api_key = 5;
+  string owner_nyx_user_id = 6;
+  bool tombstoned = 7;
+  int64 state_version = 8;
+  string last_event_id = 9;
+  google.protobuf.Timestamp updated_at_utc = 10;
+  string actor_id = 11;
+  google.protobuf.Timestamp created_at_utc = 12;
+  string agent_type = 13;
+  string template_name = 14;
+  string scope_id = 15;
+  string api_key_id = 16;
+  string schedule_cron = 17;
+  string schedule_timezone = 18;
+  string status = 19;
+  google.protobuf.Timestamp last_run_at_utc = 20;
+  google.protobuf.Timestamp next_run_at_utc = 21;
+  int32 error_count = 22;
+  string last_error = 23;
+}
+
+// ─── Skill Runner (persistent scheduled agent) ───
+
+message SkillRunnerOutboundConfig {
+  string conversation_id = 1;
+  string nyx_provider_slug = 2;
+  string nyx_api_key = 3;
+  string owner_nyx_user_id = 4;
+  string api_key_id = 5;
+}
+
+message SkillRunnerState {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  google.protobuf.Timestamp last_run_at = 8;
+  google.protobuf.Timestamp next_run_at = 9;
+  int32 error_count = 10;
+  string last_output = 11;
+  string last_error = 12;
+  bool enabled = 13;
+  string scope_id = 14;
+  string provider_name = 15;
+  string model = 16;
+  optional double temperature = 17;
+  optional int32 max_tokens = 18;
+  optional int32 max_tool_rounds = 19;
+  optional int32 max_history_messages = 20;
+}
+
+message InitializeSkillRunnerCommand {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message SkillRunnerInitializedEvent {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message TriggerSkillRunnerExecutionCommand {
+  string reason = 1;
+}
+
+message SkillRunnerNextRunScheduledEvent {
+  google.protobuf.Timestamp next_run_at = 1;
+}
+
+message SkillRunnerExecutionCompletedEvent {
+  google.protobuf.Timestamp completed_at = 1;
+  string output = 2;
+}
+
+message SkillRunnerExecutionFailedEvent {
+  google.protobuf.Timestamp failed_at = 1;
+  string error = 2;
+}
+
+message DisableSkillRunnerCommand {
+  string reason = 1;
+}
+
+message EnableSkillRunnerCommand {
+  string reason = 1;
+}
+
+message SkillRunnerDisabledEvent {
+  string reason = 1;
+}
+
+message SkillRunnerEnabledEvent {
+  string reason = 1;
+}
+
+// ─── Workflow Agent (persistent scheduled workflow trigger) ───
+
+message WorkflowAgentState {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  string owner_nyx_user_id = 10;
+  string api_key_id = 11;
+  google.protobuf.Timestamp last_run_at = 12;
+  google.protobuf.Timestamp next_run_at = 13;
+  int32 error_count = 14;
+  string last_error = 15;
+  bool enabled = 16;
+  string scope_id = 17;
+}
+
+message InitializeWorkflowAgentCommand {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  string owner_nyx_user_id = 10;
+  string api_key_id = 11;
+  bool enabled = 12;
+  string scope_id = 13;
+}
+
+message WorkflowAgentInitializedEvent {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  string owner_nyx_user_id = 10;
+  string api_key_id = 11;
+  bool enabled = 12;
+  string scope_id = 13;
+}
+
+message TriggerWorkflowAgentExecutionCommand {
+  string reason = 1;
+  string revision_feedback = 2;
+}
+
+message WorkflowAgentNextRunScheduledEvent {
+  google.protobuf.Timestamp next_run_at = 1;
+}
+
+message WorkflowAgentExecutionDispatchedEvent {
+  google.protobuf.Timestamp dispatched_at = 1;
+  string workflow_run_actor_id = 2;
+  string command_id = 3;
+}
+
+message WorkflowAgentExecutionFailedEvent {
+  google.protobuf.Timestamp failed_at = 1;
+  string error = 2;
+}
+
+message DisableWorkflowAgentCommand {
+  string reason = 1;
+}
+
+message EnableWorkflowAgentCommand {
+  string reason = 1;
+}
+
+message WorkflowAgentDisabledEvent {
+  string reason = 1;
+}
+
+message WorkflowAgentEnabledEvent {
+  string reason = 1;
+}
+
 // ─── Channel Chat Lifecycle (continuation pattern) ───
 
 // Domain event: chat session requested — carries full replay context
@@ -190,6 +484,12 @@ message ChannelChatRequestedEvent {
 message ChannelInboundDispatchedEvent {
   string session_id = 1;
   string message_id = 2;
+}
+
+// Domain event: inbound message was handled synchronously by the channel actor
+// (for example deterministic card/tool flows) and can be durably deduplicated.
+message ChannelInboundHandledEvent {
+  string message_id = 1;
 }
 
 // Domain event: chat session completed (reply sent or timed out)
@@ -215,4 +515,5 @@ message ChannelInboundEvent {
   string registration_token = 9;      // fallback token from registration
   string registration_scope_id = 10;
   string nyx_provider_slug = 11;
+  map<string, string> extra = 12;
 }

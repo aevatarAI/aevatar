@@ -523,6 +523,8 @@ public sealed class ChatEndpointsInternalTests
                 CommandId = "cmd-1",
                 Approved = true,
                 UserInput = "approved",
+                EditedContent = "approved edited",
+                Feedback = "looks good",
                 Metadata = new Dictionary<string, string>
                 {
                     ["source"] = "host",
@@ -542,6 +544,8 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().Approved.Should().BeTrue();
         service.Commands.Single().UserInput.Should().Be("approved");
+        service.Commands.Single().EditedContent.Should().Be("approved edited");
+        service.Commands.Single().Feedback.Should().Be("looks good");
         service.Commands.Single().Metadata.Should().ContainKey("source").WhoseValue.Should().Be("host");
     }
 

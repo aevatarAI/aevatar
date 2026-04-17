@@ -53,6 +53,22 @@ public static class WorkflowParameterValueParser
         return fallback;
     }
 
+    public static string? GetOptionalString(
+        IReadOnlyDictionary<string, string> parameters,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            if (parameters.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
+
     public static int GetBoundedInt(
         IReadOnlyDictionary<string, string> parameters,
         int fallback,

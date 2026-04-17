@@ -184,6 +184,9 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             }
 
             var eventType = header.TryGetProperty("event_type", out var et) ? et.GetString() : null;
+            if (eventType == "card.action.trigger")
+                return ParseCardAction(root, header);
+
             if (eventType != "im.message.receive_v1")
             {
                 _logger.LogDebug("Lark event type {EventType} is not a message receive, skipping", eventType);
@@ -277,12 +280,16 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         NyxIdApiClient nyxClient,
         CancellationToken ct)
     {
+        var isInteractive = IsInteractiveCardPayload(replyText);
+
         // Lark Send Message API: POST /open-apis/im/v1/messages?receive_id_type=chat_id
         var body = JsonSerializer.Serialize(new
         {
             receive_id = inbound.ConversationId,
-            msg_type = "text",
-            content = JsonSerializer.Serialize(new { text = replyText }),
+            msg_type = isInteractive ? "interactive" : "text",
+            content = isInteractive
+                ? replyText
+                : JsonSerializer.Serialize(new { text = replyText }),
         });
 
         var result = await nyxClient.ProxyRequestAsync(
@@ -318,6 +325,130 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             "Lark outbound reply sent: chat={ChatId}, slug={Slug}, detail={Detail}",
             inbound.ConversationId, registration.NyxProviderSlug, successDetail);
         return new PlatformReplyDeliveryResult(true, successDetail);
+    }
+
+    private InboundMessage? ParseCardAction(JsonElement root, JsonElement header)
+    {
+        if (!root.TryGetProperty("event", out var eventObj))
+            return null;
+
+        var senderId =
+            TryGetNestedString(eventObj, "operator", "open_id") ??
+            TryGetNestedString(eventObj, "operator", "operator_id", "open_id") ??
+            string.Empty;
+        var chatId =
+            TryGetNestedString(eventObj, "context", "open_chat_id") ??
+            TryGetNestedString(eventObj, "context", "chat_id");
+        var messageId =
+            TryGetString(header, "event_id") ??
+            TryGetNestedString(eventObj, "context", "open_message_id") ??
+            TryGetNestedString(eventObj, "context", "message_id");
+
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            _logger.LogWarning("Lark card action missing open_chat_id");
+            return null;
+        }
+
+        var extra = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (eventObj.TryGetProperty("action", out var action))
+        {
+            CopyScalarValues(action, extra);
+
+            if (action.TryGetProperty("value", out var value))
+                CopyScalarValues(value, extra);
+
+            if (action.TryGetProperty("form_value", out var formValue))
+                CopyScalarValues(formValue, extra);
+        }
+
+        if (!string.IsNullOrWhiteSpace(messageId))
+            extra["event_id"] = messageId;
+
+        _logger.LogInformation("Lark card action inbound: chat={ChatId}, sender={SenderId}", chatId, senderId);
+
+        return new InboundMessage
+        {
+            Platform = Platform,
+            ConversationId = chatId,
+            SenderId = senderId,
+            SenderName = string.Empty,
+            Text = eventObj.GetRawText(),
+            MessageId = messageId,
+            ChatType = "card_action",
+            Extra = extra,
+        };
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static string? TryGetNestedString(JsonElement element, params string[] path)
+    {
+        var current = element;
+        foreach (var segment in path)
+        {
+            if (!current.TryGetProperty(segment, out current))
+                return null;
+        }
+
+        return current.ValueKind switch
+        {
+            JsonValueKind.String => current.GetString(),
+            JsonValueKind.Number => current.GetRawText(),
+            JsonValueKind.True => bool.TrueString,
+            JsonValueKind.False => bool.FalseString,
+            _ => null,
+        };
+    }
+
+    private static void CopyScalarValues(JsonElement element, IDictionary<string, string> target)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var property in element.EnumerateObject())
+        {
+            switch (property.Value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    target[property.Name] = property.Value.GetString() ?? string.Empty;
+                    break;
+                case JsonValueKind.Number:
+                    target[property.Name] = property.Value.GetRawText();
+                    break;
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    target[property.Name] = property.Value.GetBoolean().ToString();
+                    break;
+            }
+        }
+    }
+
+    internal static bool IsInteractiveCardPayload(string replyText)
+    {
+        if (string.IsNullOrWhiteSpace(replyText))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(replyText);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            var root = doc.RootElement;
+            return root.TryGetProperty("header", out _) ||
+                   root.TryGetProperty("elements", out _) ||
+                   root.TryGetProperty("i18n_elements", out _) ||
+                   root.TryGetProperty("config", out _) ||
+                   root.TryGetProperty("card", out _);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool TryBuildLarkErrorDetail(string? result, out string detail)

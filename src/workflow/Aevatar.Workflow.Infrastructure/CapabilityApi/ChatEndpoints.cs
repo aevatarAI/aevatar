@@ -193,7 +193,9 @@ public static class WorkflowCapabilityEndpoints
                     commandId,
                     input.Approved,
                     input.UserInput,
-                    NormalizeMetadata(input.Metadata)),
+                    NormalizeMetadata(input.Metadata),
+                    input.EditedContent,
+                    input.Feedback),
                 ct);
             if (!dispatch.Succeeded || dispatch.Receipt == null)
             {

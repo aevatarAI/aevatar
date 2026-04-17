@@ -42,6 +42,7 @@ import {
   AevatarPanel,
   AevatarStatusTag,
 } from "@/shared/ui/aevatarPageShells";
+import { AevatarCompactText, aevatarMonoFontFamily } from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import {
   codeBlockStyle,
@@ -57,7 +58,7 @@ const defaultScopeServiceAppId = "default";
 const defaultScopeServiceNamespace = "default";
 const serviceDisplayFontFamily =
   '"Avenir Next", "SF Pro Display", "Segoe UI", sans-serif';
-const serviceMonoFontFamily = '"IBM Plex Mono", "SF Mono", monospace';
+const serviceMonoFontFamily = aevatarMonoFontFamily;
 const servicesSurfaceShadow = "0 12px 28px rgba(15, 23, 42, 0.05)";
 
 function buildServiceDigestMetrics(services: readonly ServiceCatalogSnapshot[]) {
@@ -714,23 +715,39 @@ const ServicesPage: React.FC = () => {
                                 fontSize: 10.5,
                               }}
                             >
-                              {service.serviceKey}
+                              <AevatarCompactText
+                                head={4}
+                                maxWidth={220}
+                                monospace
+                                tail={4}
+                                value={service.serviceKey}
+                              />
                             </Typography.Text>
                           </div>
                         </td>
                         <td style={tableCellStyle}>
-                          <Typography.Text
-                            style={{
-                              color: token.colorTextSecondary,
-                              fontFamily: serviceMonoFontFamily,
-                              fontSize: 11,
-                            }}
-                          >
-                            {buildServiceSubtitle(service)}
-                          </Typography.Text>
+                          <AevatarCompactText
+                            color={token.colorTextSecondary}
+                            head={4}
+                            maxWidth={220}
+                            monospace
+                            style={{ fontSize: 11 }}
+                            tail={4}
+                            value={buildServiceSubtitle(service)}
+                          />
                         </td>
                         <td style={tableCellStyle}>
-                          <Typography.Text>{service.primaryActorId || "未声明"}</Typography.Text>
+                          {service.primaryActorId ? (
+                            <AevatarCompactText
+                              head={4}
+                              maxWidth={180}
+                              monospace
+                              tail={4}
+                              value={service.primaryActorId}
+                            />
+                          ) : (
+                            <Typography.Text>未声明</Typography.Text>
+                          )}
                         </td>
                         <td style={tableCellStyle}>
                           <Tag
@@ -912,19 +929,55 @@ const ServicesPage: React.FC = () => {
                 <div style={summaryFieldGridStyle}>
                   <SummaryField
                     label="当前 serving 版本"
-                    value={
-                      selectedService.activeServingRevisionId ||
-                      selectedService.defaultServingRevisionId ||
-                      "未发布"
-                    }
+                    value={(() => {
+                      const revisionId =
+                        selectedService.activeServingRevisionId ||
+                        selectedService.defaultServingRevisionId;
+
+                      return revisionId ? (
+                        <AevatarCompactText
+                          head={4}
+                          maxWidth="100%"
+                          monospace
+                          tail={4}
+                          value={revisionId}
+                        />
+                      ) : (
+                        "未发布"
+                      );
+                    })()}
                   />
                   <SummaryField
                     label="当前部署"
-                    value={selectedService.deploymentId || "未挂 Serving"}
+                    value={
+                      selectedService.deploymentId ? (
+                        <AevatarCompactText
+                          head={4}
+                          maxWidth="100%"
+                          monospace
+                          tail={4}
+                          value={selectedService.deploymentId}
+                        />
+                      ) : (
+                        "未挂 Serving"
+                      )
+                    }
                   />
                   <SummaryField
                     label="主 Actor"
-                    value={selectedService.primaryActorId || "未声明"}
+                    value={
+                      selectedService.primaryActorId ? (
+                        <AevatarCompactText
+                          head={4}
+                          maxWidth="100%"
+                          monospace
+                          tail={4}
+                          value={selectedService.primaryActorId}
+                        />
+                      ) : (
+                        "未声明"
+                      )
+                    }
                   />
                   <SummaryField
                     label="最近更新"

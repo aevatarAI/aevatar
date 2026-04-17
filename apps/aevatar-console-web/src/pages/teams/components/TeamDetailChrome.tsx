@@ -39,7 +39,8 @@ type TeamDetailShellProps = {
   readonly onSelectTab: (tab: TeamDetailTab) => void;
   readonly statusBadge: React.ReactNode;
   readonly tabOptions: readonly TeamTabOption[];
-  readonly teamTitle: string;
+  readonly teamMeta?: React.ReactNode;
+  readonly teamTitle: React.ReactNode;
   readonly teamsListHref: string;
 };
 
@@ -148,6 +149,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
   onSelectTab,
   statusBadge,
   tabOptions,
+  teamMeta,
   teamTitle,
   teamsListHref,
 }) => {
@@ -203,6 +205,19 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
             </Typography.Title>
             {statusBadge}
           </Space>
+          {teamMeta ? (
+            <div
+              style={{
+                color: token.colorTextTertiary,
+                fontSize: 13,
+                fontWeight: 500,
+                lineHeight: 1.4,
+                minWidth: 0,
+              }}
+            >
+              {teamMeta}
+            </div>
+          ) : null}
         </div>
       }
       extra={actionRail}

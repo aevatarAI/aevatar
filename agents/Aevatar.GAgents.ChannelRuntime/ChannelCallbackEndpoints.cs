@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -129,6 +131,41 @@ public static class ChannelCallbackEndpoints
             cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
         }
 
+        if (ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand))
+        {
+            var resumeService = http.RequestServices
+                .GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+            if (resumeService is null)
+            {
+                logger.LogError(
+                    "Workflow resume service unavailable for card action: registrationId={RegistrationId}",
+                    registration.Id);
+                RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registration.Id, "workflow_resume_service_unavailable");
+                return Results.Json(
+                    new { status = "workflow_resume_service_unavailable" },
+                    statusCode: StatusCodes.Status500InternalServerError);
+            }
+
+            var dispatch = await resumeService.DispatchAsync(resumeCommand!, ct);
+            if (!dispatch.Succeeded || dispatch.Receipt is null)
+            {
+                var failure = MapWorkflowResumeDispatchFailure(dispatch.Error, inbound, registration.Id, diagnostics);
+                return failure;
+            }
+
+            ExtendDedupeTtl(cache, inbound, registration.Id);
+            RecordDiagnostic(diagnostics, "Callback:workflow_resume", inbound.Platform, registration.Id,
+                $"actorId={dispatch.Receipt.ActorId} runId={dispatch.Receipt.RunId}");
+            return Results.Ok(new
+            {
+                status = "resume_dispatched",
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
+                commandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
+            });
+        }
+
         // Dispatch to ChannelUserGAgent. HandleEventAsync enqueues the event into the
         // actor's inbox (stream publish) and returns immediately. The actor handles the
         // full continuation flow: identity tracking → chat dispatch → stream forwarding →
@@ -184,6 +221,8 @@ public static class ChannelCallbackEndpoints
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
+        foreach (var pair in inbound.Extra)
+            inboundEvent.Extra[pair.Key] = pair.Value;
 
         var envelope = new EventEnvelope
         {
@@ -198,12 +237,55 @@ public static class ChannelCallbackEndpoints
 
         await userActor.HandleEventAsync(envelope);
 
-        // Extend dedup TTL after successful dispatch.
-        if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
+        ExtendDedupeTtl(cache, inbound, registration.Id);
+    }
+
+    private static void ExtendDedupeTtl(IMemoryCache? cache, InboundMessage inbound, string registrationId)
+    {
+        if (cache == null || string.IsNullOrEmpty(inbound.MessageId))
+            return;
+
+        var dedupeKey = $"channel-dedup:{inbound.Platform}:{registrationId}:{inbound.MessageId}";
+        cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
+    }
+
+    private static IResult MapWorkflowResumeDispatchFailure(
+        WorkflowRunControlStartError error,
+        InboundMessage inbound,
+        string registrationId,
+        IChannelRuntimeDiagnostics? diagnostics)
+    {
+        var (statusCode, message) = error.Code switch
         {
-            var dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
-            cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
-        }
+            WorkflowRunControlStartErrorCode.InvalidActorId => (
+                StatusCodes.Status400BadRequest,
+                "actorId is required."),
+            WorkflowRunControlStartErrorCode.InvalidRunId => (
+                StatusCodes.Status400BadRequest,
+                "runId is required."),
+            WorkflowRunControlStartErrorCode.InvalidStepId => (
+                StatusCodes.Status400BadRequest,
+                "stepId is required."),
+            WorkflowRunControlStartErrorCode.ActorNotFound => (
+                StatusCodes.Status404NotFound,
+                $"Actor '{error.ActorId}' not found."),
+            WorkflowRunControlStartErrorCode.ActorNotWorkflowRun => (
+                StatusCodes.Status400BadRequest,
+                $"Actor '{error.ActorId}' is not a workflow run actor."),
+            WorkflowRunControlStartErrorCode.RunBindingMissing => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' does not have a bound run id."),
+            WorkflowRunControlStartErrorCode.RunBindingMismatch => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' is bound to run '{error.BoundRunId}', not '{error.RequestedRunId}'."),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Workflow control dispatch failed."),
+        };
+
+        RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registrationId,
+            $"workflow_resume_failed:{error.Code}");
+        return Results.Json(new { error = message }, statusCode: statusCode);
     }
 
     // ─── Registration CRUD ───

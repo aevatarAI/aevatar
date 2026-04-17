@@ -630,6 +630,8 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                         Prompt = evt.Prompt,
                         TimeoutSeconds = evt.TimeoutSeconds,
                         VariableName = evt.VariableName,
+                        Content = evt.Content,
+                        DeliveryTargetId = evt.DeliveryTargetId,
                         Metadata = { metadata },
                     }),
                 },

@@ -1,27 +1,21 @@
-import { UserOutlined } from "@ant-design/icons";
-import { Menu, Space, Typography } from "antd";
+import { Typography, theme } from "antd";
 import React from "react";
-import { history } from "@/shared/navigation/history";
 import {
   buildAevatarMetricCardStyle,
   resolveAevatarMetricVisual,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
-import {
-  AevatarPanel,
-  AevatarTwoPaneLayout,
-} from "@/shared/ui/aevatarPageShells";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import {
   summaryFieldLabelStyle,
   summaryFieldStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
-import { theme } from "antd";
 
 type SettingsPageShellProps = {
   children: React.ReactNode;
-  content?: string;
+  content?: React.ReactNode;
+  extra?: React.ReactNode;
   title?: string;
 };
 
@@ -35,15 +29,6 @@ type SummaryMetricProps = {
   tone?: "default" | "error" | "info" | "success" | "warning";
   value: React.ReactNode;
 };
-
-const settingsTabs = [
-  {
-    icon: <UserOutlined />,
-    key: "account",
-    label: "账号",
-    path: "/settings",
-  },
-] as const;
 
 function renderSummaryFieldValue(value: React.ReactNode): React.ReactNode {
   if (typeof value === "string" || typeof value === "number") {
@@ -91,35 +76,17 @@ export const SummaryMetric: React.FC<SummaryMetricProps> = ({
 export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
   children,
   content,
-  title = "Settings",
+  extra,
+  title = "Account Settings",
 }) => (
   <ConsoleMenuPageShell
     breadcrumb="Aevatar / Settings"
     description={content}
+    extra={extra}
     title={title}
   >
-    <AevatarTwoPaneLayout
-      layoutMode="document"
-      rail={
-        <AevatarPanel
-          layoutMode="document"
-          title="设置"
-        >
-          <Menu
-            items={[...settingsTabs]}
-            mode="inline"
-            onClick={({ key }) => {
-              const target = settingsTabs.find((item) => item.key === key);
-              if (target) {
-                history.push(target.path);
-              }
-            }}
-            selectedKeys={["account"]}
-            style={{ background: "transparent", borderInlineEnd: "none" }}
-          />
-        </AevatarPanel>
-      }
-      stage={<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>}
-    />
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {children}
+    </div>
   </ConsoleMenuPageShell>
 );

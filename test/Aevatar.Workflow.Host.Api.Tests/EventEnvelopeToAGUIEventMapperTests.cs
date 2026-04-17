@@ -316,8 +316,10 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             StepId = "get_context",
             SuspensionType = "human_input",
             Prompt = "请提供补充信息",
+            Content = "已有上下文",
             TimeoutSeconds = 1800,
             VariableName = "user_context",
+            DeliveryTargetId = "agent-delivery-1",
         }));
         var waiting = CreateMapper().Map(WrapCommitted(new WaitingForSignalEvent
         {
@@ -332,6 +334,8 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         suspended[0].Custom.Name.Should().Be("aevatar.human_input.request");
         var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
         request.VariableName.Should().Be("user_context");
+        request.Content.Should().Be("已有上下文");
+        request.DeliveryTargetId.Should().Be("agent-delivery-1");
         request.Metadata.Should().NotContainKey("variable");
 
         waiting.Should().ContainSingle();

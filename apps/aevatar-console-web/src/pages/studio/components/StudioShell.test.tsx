@@ -84,4 +84,25 @@ describe('StudioShell', () => {
       padding: '16px',
     });
   });
+
+  it('keeps the shell content as a flex column so the studio editor can stretch', () => {
+    render(
+      React.createElement(StudioShell, {
+        currentPage: 'studio',
+        navItems,
+        onSelectPage: jest.fn(),
+        pageTitle: 'Studio page',
+        children: React.createElement('div', null, 'Studio content'),
+      }),
+    );
+
+    expect(screen.getByTestId('studio-shell-content')).toHaveStyle({
+      display: 'flex',
+      flex: '1',
+      flexDirection: 'column',
+      minHeight: '0',
+      minWidth: '0',
+      overflow: 'hidden',
+    });
+  });
 });

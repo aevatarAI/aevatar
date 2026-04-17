@@ -5,6 +5,7 @@ import {
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import {
+  CompactFactValue,
   DetailPill,
   FactLine,
   factValueFontFamily,
@@ -114,7 +115,7 @@ const TeamEventsTab: React.FC<TeamEventsTabProps> = ({
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
                 <Space wrap>
-                  <Typography.Text strong>{activeRunLabel}</Typography.Text>
+                  <CompactFactValue value={activeRunLabel} />
                   {currentRunStatusLabel && currentRunStatusStyle ? (
                     <DetailPill
                       compact
@@ -124,6 +125,13 @@ const TeamEventsTab: React.FC<TeamEventsTabProps> = ({
                   ) : null}
                 </Space>
                 <Typography.Text type="secondary">{playbackSummary}</Typography.Text>
+                <div style={{ minWidth: 0 }}>
+                  <CompactFactValue
+                    color="var(--ant-color-text-secondary)"
+                    strong={false}
+                    value={activeRunMetaLabel}
+                  />
+                </div>
                 {runSwitchOptions.length > 1 ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <Typography.Text style={{ fontSize: 12 }} type="secondary">

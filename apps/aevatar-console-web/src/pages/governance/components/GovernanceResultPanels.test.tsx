@@ -8,6 +8,8 @@ import {
 
 describe('GovernanceResultPanels', () => {
   it('renders the selected governance scope and summary metrics', () => {
+    const formattedSnapshot = formatGovernanceTimestamp('2026-03-25T08:00:00Z');
+
     render(
       <GovernanceSummaryPanel
         title="绑定目录"
@@ -22,7 +24,7 @@ describe('GovernanceResultPanels', () => {
         extraFields={[
           {
             label: '目录更新时间',
-            value: formatGovernanceTimestamp('2026-03-25T08:00:00Z'),
+            value: formattedSnapshot,
           },
         ]}
         metrics={[
@@ -37,7 +39,7 @@ describe('GovernanceResultPanels', () => {
     expect(screen.getByText('svc-payments')).toBeInTheDocument();
     expect(screen.getByText('tenant-a')).toBeInTheDocument();
     expect(screen.getByText('app-main')).toBeInTheDocument();
-    expect(screen.getByText('2026-03-25 08:00:00 UTC')).toBeInTheDocument();
+    expect(screen.getByText(formattedSnapshot)).toBeInTheDocument();
     expect(screen.getByText('绑定')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(screen.getByText('已加载')).toBeInTheDocument();
@@ -52,6 +54,8 @@ describe('GovernanceResultPanels', () => {
   });
 
   it('can omit default identity fields when the context is already shown elsewhere', () => {
+    const formattedSnapshot = formatGovernanceTimestamp('2026-03-25T08:00:00Z');
+
     render(
       <GovernanceSummaryPanel
         title="治理总览"
@@ -67,7 +71,7 @@ describe('GovernanceResultPanels', () => {
         extraFields={[
           {
             label: '最近治理快照',
-            value: formatGovernanceTimestamp('2026-03-25T08:00:00Z'),
+            value: formattedSnapshot,
           },
         ]}
         metrics={[{ label: '缺失策略', value: '0', tone: 'success' }]}
@@ -78,6 +82,6 @@ describe('GovernanceResultPanels', () => {
     expect(screen.queryByText('svc-payments')).not.toBeInTheDocument();
     expect(screen.queryByText('tenant-a')).not.toBeInTheDocument();
     expect(screen.getByText('最近治理快照')).toBeInTheDocument();
-    expect(screen.getByText('2026-03-25 08:00:00 UTC')).toBeInTheDocument();
+    expect(screen.getByText(formattedSnapshot)).toBeInTheDocument();
   });
 });

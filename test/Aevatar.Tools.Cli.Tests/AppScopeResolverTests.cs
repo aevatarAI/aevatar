@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
