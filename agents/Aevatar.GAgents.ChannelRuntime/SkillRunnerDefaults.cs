@@ -12,6 +12,9 @@ internal static class SkillRunnerDefaults
     public const string StatusError = "error";
     public const string StatusDisabled = "disabled";
     public const string TriggerCallbackId = "skill-runner-next-fire";
+    public const string RetryCallbackId = "skill-runner-retry";
+    public const int MaxRetryAttempts = 1;
+    public static readonly TimeSpan RetryBackoff = TimeSpan.FromSeconds(30);
 
     public static string GenerateActorId() => $"{ActorIdPrefix}-{Guid.NewGuid():N}";
 }
