@@ -72,6 +72,38 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         File.Exists(layoutPath).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task DeleteDraftAsync_WhenStoragePortThrows_ShouldPropagateAndLeaveLayoutIntact()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var storagePort = new ThrowingWorkflowStoragePort(
+            new InvalidOperationException("chrono-storage is unavailable"));
+        var service = environment.CreateService(workflowStoragePort: storagePort);
+        var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
+        Directory.CreateDirectory(Path.GetDirectoryName(layoutPath)!);
+        await File.WriteAllTextAsync(layoutPath, "{}");
+
+        var act = () => service.DeleteDraftAsync("scope-1", "workflow-1");
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("chrono-storage is unavailable");
+        File.Exists(layoutPath).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DeleteDraftAsync_WhenCancelled_ShouldPropagateOperationCanceledException()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var storagePort = new ThrowingWorkflowStoragePort(new OperationCanceledException(cts.Token));
+        var service = environment.CreateService(workflowStoragePort: storagePort);
+
+        var act = () => service.DeleteDraftAsync("scope-1", "workflow-1", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     private sealed class ScopedWorkflowEnvironment : IDisposable
     {
         private readonly string? _previousHome;
@@ -154,6 +186,28 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             DeletedWorkflowIds.Add(workflowId);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class ThrowingWorkflowStoragePort : IWorkflowStoragePort
+    {
+        private readonly Exception _exception;
+
+        public ThrowingWorkflowStoragePort(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public Task UploadWorkflowYamlAsync(string workflowId, string workflowName, string yaml, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<StoredWorkflowYaml>>([]);
+
+        public Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string workflowId, CancellationToken ct) =>
+            Task.FromResult<StoredWorkflowYaml?>(null);
+
+        public Task DeleteWorkflowYamlAsync(string workflowId, CancellationToken ct) =>
+            Task.FromException(_exception);
     }
 
     private sealed class RuntimePortSpies

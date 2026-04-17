@@ -261,15 +261,9 @@ public sealed class AppScopedWorkflowService
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
 
-        try
+        if (_workflowStoragePort != null)
         {
-            if (_workflowStoragePort != null)
-            {
-                await _workflowStoragePort.DeleteWorkflowYamlAsync(normalizedWorkflowId, ct);
-            }
-        }
-        catch
-        {
+            await _workflowStoragePort.DeleteWorkflowYamlAsync(normalizedWorkflowId, ct);
         }
 
         DeletePersistedLayout(normalizedScopeId, normalizedWorkflowId);

@@ -93,6 +93,52 @@ public sealed class WorkspaceServiceDeleteDraftTests
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
+    [Fact]
+    public async Task DeleteDraftAsync_WhenPathIsOutsideRegisteredDirectory_ShouldRejectAndNotDelete()
+    {
+        using var environment = new WorkspaceEnvironment();
+        var outsidePath = Path.Combine(Path.GetTempPath(), $"studio-delete-draft-outside-{Guid.NewGuid():N}.yaml");
+        await File.WriteAllTextAsync(outsidePath, "name: outside\nsteps: []\n");
+        var outsideWorkflowId = WorkspaceService.CreateStableId(outsidePath);
+
+        try
+        {
+            var act = () => environment.Service.DeleteDraftAsync(outsideWorkflowId);
+
+            await act.Should().ThrowAsync<InvalidOperationException>();
+            File.Exists(outsidePath).Should().BeTrue();
+        }
+        finally
+        {
+            if (File.Exists(outsidePath))
+                File.Delete(outsidePath);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteDraftAsync_WhenPathTraversesOutsideRegisteredDirectory_ShouldRejectAndNotDelete()
+    {
+        using var environment = new WorkspaceEnvironment();
+        var settings = await environment.Store.GetSettingsAsync();
+        var registeredDirectory = settings.Directories.Single().Path;
+        var escapePath = Path.GetFullPath(Path.Combine(registeredDirectory, "..", $"studio-delete-draft-escape-{Guid.NewGuid():N}.yaml"));
+        await File.WriteAllTextAsync(escapePath, "name: escape\nsteps: []\n");
+        var traversalWorkflowId = WorkspaceService.CreateStableId(Path.Combine(registeredDirectory, "..", Path.GetFileName(escapePath)));
+
+        try
+        {
+            var act = () => environment.Service.DeleteDraftAsync(traversalWorkflowId);
+
+            await act.Should().ThrowAsync<InvalidOperationException>();
+            File.Exists(escapePath).Should().BeTrue();
+        }
+        finally
+        {
+            if (File.Exists(escapePath))
+                File.Delete(escapePath);
+        }
+    }
+
     private sealed class WorkspaceEnvironment : IDisposable
     {
         private readonly string? _previousHome;
