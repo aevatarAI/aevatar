@@ -12,7 +12,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Adapters;
 /// Handles URL verification challenges and im.message.receive_v1 events.
 /// Outbound replies go through Nyx's api-lark-bot provider.
 /// </summary>
-public sealed class LarkPlatformAdapter : IPlatformAdapter
+public sealed class LarkPlatformAdapter : IStreamingPlatformAdapter
 {
     private readonly ILogger<LarkPlatformAdapter> _logger;
 
@@ -325,6 +325,139 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             "Lark outbound reply sent: chat={ChatId}, slug={Slug}, detail={Detail}",
             inbound.ConversationId, registration.NyxProviderSlug, successDetail);
         return new PlatformReplyDeliveryResult(true, successDetail);
+    }
+
+    public async Task<string?> PostStreamingPlaceholderAsync(
+        string initialText,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        NyxIdApiClient nyxClient,
+        CancellationToken ct)
+    {
+        // Interactive-card placeholders are not supported: the LLM can't stream
+        // partial cards, and rewriting a text message into a card via PATCH
+        // changes the message type. Interactive payloads take the SendReplyAsync
+        // path; streaming is for plain-text deltas only.
+        if (IsInteractiveCardPayload(initialText))
+            return null;
+
+        var body = JsonSerializer.Serialize(new
+        {
+            receive_id = inbound.ConversationId,
+            msg_type = "text",
+            content = JsonSerializer.Serialize(new { text = initialText }),
+        });
+
+        var result = await nyxClient.ProxyRequestAsync(
+            registration.NyxUserToken,
+            registration.NyxProviderSlug,
+            "open-apis/im/v1/messages?receive_id_type=chat_id",
+            "POST",
+            body,
+            extraHeaders: null,
+            ct);
+
+        if (result != null && result.Contains("\"error\"", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "Lark streaming placeholder post failed: slug={Slug}, result={Result}",
+                registration.NyxProviderSlug, result);
+            return null;
+        }
+
+        if (TryBuildLarkErrorDetail(result, out var errorDetail))
+        {
+            _logger.LogWarning(
+                "Lark streaming placeholder rejected: slug={Slug}, detail={Detail}",
+                registration.NyxProviderSlug, errorDetail);
+            return null;
+        }
+
+        var messageId = TryExtractLarkMessageId(result);
+        if (string.IsNullOrEmpty(messageId))
+        {
+            _logger.LogWarning(
+                "Lark streaming placeholder succeeded but no message_id in response: slug={Slug}",
+                registration.NyxProviderSlug);
+            return null;
+        }
+
+        return messageId;
+    }
+
+    public async Task<PlatformReplyDeliveryResult> UpdateStreamingMessageAsync(
+        string messageId,
+        string replyText,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        NyxIdApiClient nyxClient,
+        CancellationToken ct)
+    {
+        // Lark PATCH accepts the same content shape as send; msg_type is fixed
+        // at message creation time. Rewriting to a card payload would violate
+        // the text-message contract, so surface it as a non-retryable failure.
+        if (IsInteractiveCardPayload(replyText))
+            return new PlatformReplyDeliveryResult(false, "cannot_patch_to_interactive");
+
+        var body = JsonSerializer.Serialize(new
+        {
+            content = JsonSerializer.Serialize(new { text = replyText }),
+        });
+
+        var result = await nyxClient.ProxyRequestAsync(
+            registration.NyxUserToken,
+            registration.NyxProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(messageId)}",
+            "PATCH",
+            body,
+            extraHeaders: null,
+            ct);
+
+        if (result != null && result.Contains("\"error\"", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "Lark streaming update failed: messageId={MessageId}, slug={Slug}, result={Result}",
+                messageId, registration.NyxProviderSlug, result);
+            return new PlatformReplyDeliveryResult(false, $"proxy_error: {TrimForLog(result)}");
+        }
+
+        if (TryBuildLarkErrorDetail(result, out var errorDetail))
+        {
+            _logger.LogWarning(
+                "Lark streaming update rejected: messageId={MessageId}, slug={Slug}, detail={Detail}",
+                messageId, registration.NyxProviderSlug, errorDetail);
+            return new PlatformReplyDeliveryResult(false, errorDetail);
+        }
+
+        return new PlatformReplyDeliveryResult(true, $"message_id={messageId}");
+    }
+
+    private static string? TryExtractLarkMessageId(string? result)
+    {
+        if (string.IsNullOrWhiteSpace(result))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("data", out var dataProp))
+                return null;
+            if (!dataProp.TryGetProperty("message_id", out var idProp))
+                return null;
+            return idProp.ValueKind == JsonValueKind.String ? idProp.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string TrimForLog(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+        return value.Length > 200 ? value[..200] + "…" : value;
     }
 
     private InboundMessage? ParseCardAction(JsonElement root, JsonElement header)

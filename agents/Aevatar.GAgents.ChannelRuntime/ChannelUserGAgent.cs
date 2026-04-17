@@ -37,9 +37,20 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     private static readonly TimeSpan ChatTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan RecoveryTimeoutDelay = TimeSpan.FromMilliseconds(1);
 
+    // Progressive reply pacing. On first delta the adapter posts a placeholder
+    // message; subsequent deltas PATCH it at most once per throttle interval to
+    // keep platform rate limits happy while still feeling responsive. Final
+    // HandleChatEnd always flushes regardless of throttle.
+    private static readonly TimeSpan StreamingEditThrottle = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan StreamingHttpTimeout = TimeSpan.FromSeconds(10);
+
     // Non-persisted accumulator for streaming text deltas.
     // Actor is single-threaded — plain Dictionary is correct (no locks).
     private readonly Dictionary<string, StringBuilder> _responseBuilders = new();
+
+    // Per-session progressive-delivery state. Lost on restart — recovery
+    // falls back to posting a fresh final reply via the non-streaming path.
+    private readonly Dictionary<string, StreamingDeliveryState> _streamingDeliveries = new();
 
     // Timeout leases keyed by sessionId — needed to cancel on completion.
     private readonly Dictionary<string, RuntimeCallbackLease> _timeoutLeases = new();
@@ -230,29 +241,29 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     // ─── Turn 2+: Accumulate streaming text deltas ───
 
     [EventHandler]
-    public Task HandleChatContent(TextMessageContentEvent evt)
+    public async Task HandleChatContent(TextMessageContentEvent evt)
     {
-        // Only record first delta per session to avoid flooding diagnostics
-        if (!string.IsNullOrEmpty(evt.SessionId) &&
-            State.PendingSessions.TryGetValue(evt.SessionId, out var contentSession) &&
-            !_responseBuilders.ContainsKey(evt.SessionId))
+        if (string.IsNullOrEmpty(evt.SessionId) ||
+            !State.PendingSessions.TryGetValue(evt.SessionId, out var session))
         {
-            RecordDiagnostic("Chat:content:first", contentSession.Platform, contentSession.RegistrationId,
-                $"sessionId={evt.SessionId} delta_length={evt.Delta?.Length ?? 0}");
+            return;
         }
-
-        if (string.IsNullOrEmpty(evt.SessionId) || !State.PendingSessions.ContainsKey(evt.SessionId))
-            return Task.CompletedTask;
 
         if (!_responseBuilders.TryGetValue(evt.SessionId, out var builder))
         {
             builder = new StringBuilder();
             _responseBuilders[evt.SessionId] = builder;
+            RecordDiagnostic("Chat:content:first", session.Platform, session.RegistrationId,
+                $"sessionId={evt.SessionId} delta_length={evt.Delta?.Length ?? 0}");
         }
         if (!string.IsNullOrEmpty(evt.Delta))
             builder.Append(evt.Delta);
 
-        return Task.CompletedTask;
+        var accumulated = builder.ToString();
+        if (string.IsNullOrWhiteSpace(accumulated))
+            return;
+
+        await TryStreamingUpdateAsync(session, accumulated, isFinal: false);
     }
 
     // ─── Turn N: Chat complete → send reply ───
@@ -321,23 +332,41 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         RecordDiagnostic("Reply:sending", session.Platform, session.RegistrationId,
             $"sessionId={session.SessionId} reply_length={replyText.Length} forceComplete={forceComplete}");
 
-        // Send reply via platform adapter.
+        // If the progressive path already posted a placeholder, the user is
+        // looking at that message — finalize by PATCHing it. Posting a fresh
+        // message would leave a duplicate visible reply.
+        var streamingActive = _streamingDeliveries.TryGetValue(session.SessionId, out var streamState)
+                              && streamState is { MessageId: not null, Disabled: false };
+
         var replySucceeded = false;
         try
         {
-            var delivery = await SendPlatformReplyAsync(session, replyText);
-            if (delivery.Succeeded)
+            if (streamingActive)
             {
-                replySucceeded = true;
-                RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, delivery.Detail);
+                replySucceeded = await TryStreamingUpdateAsync(session, replyText, isFinal: true);
+                if (replySucceeded)
+                    RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId,
+                        $"stream message_id={streamState!.MessageId} edits={streamState.EditCount}");
+                else
+                    RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId,
+                        $"stream final PATCH failed messageId={streamState!.MessageId}");
             }
             else
             {
-                Logger.LogWarning("SendReply rejected: platform={Platform}, session={SessionId}, detail={Detail}",
-                    session.Platform,
-                    session.SessionId,
-                    delivery.Detail);
-                RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId, delivery.Detail);
+                var delivery = await SendPlatformReplyAsync(session, replyText);
+                if (delivery.Succeeded)
+                {
+                    replySucceeded = true;
+                    RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, delivery.Detail);
+                }
+                else
+                {
+                    Logger.LogWarning("SendReply rejected: platform={Platform}, session={SessionId}, detail={Detail}",
+                        session.Platform,
+                        session.SessionId,
+                        delivery.Detail);
+                    RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId, delivery.Detail);
+                }
             }
         }
         catch (Exception ex)
@@ -356,6 +385,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         // Persist completion (removes from pending_sessions via state transition)
         await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = session.SessionId });
         _responseBuilders.Remove(session.SessionId);
+        _streamingDeliveries.Remove(session.SessionId);
 
         RecordDiagnostic("Session:completed", session.Platform, session.RegistrationId,
             $"sessionId={session.SessionId} reply_succeeded={replySucceeded}");
@@ -390,15 +420,123 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     private async Task<PlatformReplyDeliveryResult> SendPlatformReplyAsync(
         ChannelPendingChatSession session, string replyText)
     {
-        var adapters = Services.GetRequiredService<IEnumerable<IPlatformAdapter>>();
-        var adapter = adapters.FirstOrDefault(a =>
-            string.Equals(a.Platform, session.Platform, StringComparison.OrdinalIgnoreCase));
-
+        var adapter = ResolvePlatformAdapter(session.Platform);
         if (adapter is null)
             return new PlatformReplyDeliveryResult(false, $"No adapter for platform: {session.Platform}");
 
         var nyxClient = Services.GetRequiredService<NyxIdApiClient>();
-        var inbound = new InboundMessage
+        var inbound = BuildInboundFromSession(session);
+        var registration = BuildRegistrationFromSession(session);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
+    }
+
+    // ─── Progressive reply: post placeholder, PATCH as deltas stream in ───
+
+    /// <summary>
+    /// If the session's platform supports streaming replies, post the placeholder
+    /// (first call) or PATCH it with the accumulated text (throttled). When
+    /// <paramref name="isFinal"/>, bypass the throttle — used by HandleChatEnd /
+    /// HandleChatTimeout to flush the last state. Returns true iff the placeholder
+    /// exists AND the latest HTTP call (if any) succeeded.
+    /// </summary>
+    private async Task<bool> TryStreamingUpdateAsync(
+        ChannelPendingChatSession session, string accumulated, bool isFinal)
+    {
+        var adapter = ResolvePlatformAdapter(session.Platform) as IStreamingPlatformAdapter;
+        if (adapter is null)
+            return false;
+
+        if (!_streamingDeliveries.TryGetValue(session.SessionId, out var state))
+        {
+            state = new StreamingDeliveryState();
+            _streamingDeliveries[session.SessionId] = state;
+        }
+        if (state.Disabled)
+            return false;
+
+        var nyxClient = Services.GetRequiredService<NyxIdApiClient>();
+        var inbound = BuildInboundFromSession(session);
+        var registration = BuildRegistrationFromSession(session);
+
+        using var cts = new CancellationTokenSource(StreamingHttpTimeout);
+
+        if (state.MessageId is null)
+        {
+            try
+            {
+                var messageId = await adapter.PostStreamingPlaceholderAsync(
+                    accumulated, inbound, registration, nyxClient, cts.Token);
+                if (string.IsNullOrEmpty(messageId))
+                {
+                    state.Disabled = true;
+                    RecordDiagnostic("Stream:placeholder:failed", session.Platform, session.RegistrationId,
+                        $"sessionId={session.SessionId}");
+                    return false;
+                }
+                state.MessageId = messageId;
+                state.LastEditAt = DateTimeOffset.UtcNow;
+                state.EditCount = 1;
+                RecordDiagnostic("Stream:placeholder:posted", session.Platform, session.RegistrationId,
+                    $"sessionId={session.SessionId} messageId={messageId}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                state.Disabled = true;
+                Logger.LogWarning(ex, "Streaming placeholder post failed for session {SessionId}", session.SessionId);
+                RecordDiagnostic("Stream:placeholder:error", session.Platform, session.RegistrationId,
+                    $"{ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        // Intermediate deltas: honour throttle so we don't hammer the platform.
+        // Still report the placeholder as "active" so callers treat the session
+        // as streamed — the next delta or the final flush will catch up.
+        if (!isFinal && DateTimeOffset.UtcNow - state.LastEditAt < StreamingEditThrottle)
+            return true;
+
+        try
+        {
+            var delivery = await adapter.UpdateStreamingMessageAsync(
+                state.MessageId!, accumulated, inbound, registration, nyxClient, cts.Token);
+            state.LastEditAt = DateTimeOffset.UtcNow;
+            state.EditCount++;
+            if (!delivery.Succeeded)
+            {
+                if (isFinal)
+                {
+                    Logger.LogWarning(
+                        "Streaming final PATCH rejected: session={SessionId}, detail={Detail}",
+                        session.SessionId, delivery.Detail);
+                }
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Streaming update error for session {SessionId}", session.SessionId);
+            if (isFinal)
+            {
+                RecordDiagnostic("Stream:final:error", session.Platform, session.RegistrationId,
+                    $"{ex.GetType().Name}: {ex.Message}");
+            }
+            return false;
+        }
+    }
+
+    private IPlatformAdapter? ResolvePlatformAdapter(string platform)
+    {
+        var adapters = Services.GetRequiredService<IEnumerable<IPlatformAdapter>>();
+        return adapters.FirstOrDefault(a =>
+            string.Equals(a.Platform, platform, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static InboundMessage BuildInboundFromSession(ChannelPendingChatSession session) =>
+        new()
         {
             Platform = session.Platform,
             ConversationId = session.ConversationId,
@@ -409,7 +547,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ChatType = session.ChatType,
         };
 
-        var registration = new ChannelBotRegistrationEntry
+    private static ChannelBotRegistrationEntry BuildRegistrationFromSession(ChannelPendingChatSession session) =>
+        new()
         {
             Id = session.RegistrationId,
             Platform = session.Platform,
@@ -418,8 +557,12 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ScopeId = session.RegistrationScopeId,
         };
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
+    private sealed class StreamingDeliveryState
+    {
+        public string? MessageId;
+        public DateTimeOffset LastEditAt;
+        public bool Disabled;
+        public int EditCount;
     }
 
     private async Task<bool> TryHandleAgentBuilderAsync(

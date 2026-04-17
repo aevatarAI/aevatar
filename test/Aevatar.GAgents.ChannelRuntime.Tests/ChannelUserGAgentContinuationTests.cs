@@ -27,6 +27,105 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public class ChannelUserGAgentContinuationTests
 {
     [Fact]
+    public async Task StreamingAdapter_ShouldPostPlaceholder_AndFinalizeViaUpdate()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingStreamingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(BuildInboundEvent());
+
+        var request = runtime.SingleChatRequest();
+
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "hello ",
+            }));
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "world",
+            }));
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageEndEvent
+            {
+                SessionId = request.SessionId,
+                Content = "hello world",
+            }));
+
+        adapter.Placeholders.Should().ContainSingle().Which.InitialText.Should().Be("hello ");
+        adapter.Updates.Should().ContainSingle()
+            .Which.ReplyText.Should().Be("hello world");
+        adapter.Updates[0].MessageId.Should().Be("om_stream_1");
+        adapter.Replies.Should().BeEmpty("streaming finalize via PATCH must not also post a fresh message");
+        agent.State.PendingSessions.Should().BeEmpty();
+        scheduler.Canceled.Should().ContainSingle(x => x.CallbackId == $"chat-timeout-{request.SessionId}");
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_WhenPlaceholderFails_ShouldFallBackToSendReplyAtEnd()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingStreamingPlatformAdapter("lark")
+        {
+            PlaceholderMessageId = null,
+        };
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(BuildInboundEvent());
+
+        var request = runtime.SingleChatRequest();
+
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "hello ",
+            }));
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "world",
+            }));
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageEndEvent
+            {
+                SessionId = request.SessionId,
+                Content = "hello world",
+            }));
+
+        adapter.Placeholders.Should().ContainSingle("first delta should try to post placeholder once");
+        adapter.Updates.Should().BeEmpty("streaming is disabled after placeholder failure");
+        adapter.Replies.Should().ContainSingle()
+            .Which.ReplyText.Should().Be("hello world");
+        agent.State.PendingSessions.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleChatEnd_ShouldSendReply_AndCompletePendingSession()
     {
         var runtime = new RecordingActorRuntime();
@@ -1707,6 +1806,16 @@ public class ChannelUserGAgentContinuationTests
         RecordingPlatformAdapter adapter,
         IEventStore eventStore,
         IChannelRuntimeDiagnostics? diagnostics = null,
+        Action<IServiceCollection>? configure = null) =>
+        BuildServices(runtime, streams, scheduler, (IPlatformAdapter)adapter, eventStore, diagnostics, configure);
+
+    private static ServiceProvider BuildServices(
+        IActorRuntime runtime,
+        RecordingStreamProvider streams,
+        RecordingCallbackScheduler scheduler,
+        IPlatformAdapter adapter,
+        IEventStore eventStore,
+        IChannelRuntimeDiagnostics? diagnostics = null,
         Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection()
@@ -1952,6 +2061,74 @@ public class ChannelUserGAgentContinuationTests
     }
 
     private sealed record ReplyRecord(
+        string ReplyText,
+        InboundMessage Inbound,
+        ChannelBotRegistrationEntry Registration);
+
+    private sealed class RecordingStreamingPlatformAdapter(string platform) : IStreamingPlatformAdapter
+    {
+        public string Platform { get; } = platform;
+        public List<ReplyRecord> Replies { get; } = [];
+        public List<StreamingPlaceholderRecord> Placeholders { get; } = [];
+        public List<StreamingUpdateRecord> Updates { get; } = [];
+
+        /// <summary>
+        /// When null, simulate a platform rejection on the first placeholder post so the
+        /// agent falls back to SendReplyAsync at HandleChatEnd.
+        /// </summary>
+        public string? PlaceholderMessageId { get; set; } = "om_stream_1";
+
+        public Task<IResult?> TryHandleVerificationAsync(HttpContext http, ChannelBotRegistrationEntry registration) =>
+            Task.FromResult<IResult?>(null);
+
+        public Task<InboundMessage?> ParseInboundAsync(HttpContext http, ChannelBotRegistrationEntry registration) =>
+            Task.FromResult<InboundMessage?>(null);
+
+        public Task<PlatformReplyDeliveryResult> SendReplyAsync(
+            string replyText,
+            InboundMessage inbound,
+            ChannelBotRegistrationEntry registration,
+            NyxIdApiClient nyxClient,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Replies.Add(new ReplyRecord(replyText, inbound, registration));
+            return Task.FromResult(new PlatformReplyDeliveryResult(true, "ok"));
+        }
+
+        public Task<string?> PostStreamingPlaceholderAsync(
+            string initialText,
+            InboundMessage inbound,
+            ChannelBotRegistrationEntry registration,
+            NyxIdApiClient nyxClient,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Placeholders.Add(new StreamingPlaceholderRecord(initialText, inbound, registration));
+            return Task.FromResult(PlaceholderMessageId);
+        }
+
+        public Task<PlatformReplyDeliveryResult> UpdateStreamingMessageAsync(
+            string messageId,
+            string replyText,
+            InboundMessage inbound,
+            ChannelBotRegistrationEntry registration,
+            NyxIdApiClient nyxClient,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Updates.Add(new StreamingUpdateRecord(messageId, replyText, inbound, registration));
+            return Task.FromResult(new PlatformReplyDeliveryResult(true, $"message_id={messageId}"));
+        }
+    }
+
+    private sealed record StreamingPlaceholderRecord(
+        string InitialText,
+        InboundMessage Inbound,
+        ChannelBotRegistrationEntry Registration);
+
+    private sealed record StreamingUpdateRecord(
+        string MessageId,
         string ReplyText,
         InboundMessage Inbound,
         ChannelBotRegistrationEntry Registration);

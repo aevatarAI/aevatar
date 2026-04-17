@@ -37,6 +37,39 @@ public interface IPlatformAdapter
         CancellationToken ct);
 }
 
+/// <summary>
+/// Optional capability: platforms that support progressive reply delivery.
+/// The caller posts an initial placeholder message when the first LLM delta arrives,
+/// then patches it as deltas accumulate. Reduces perceived latency for long
+/// LLM responses (user sees text stream in, ChatGPT-style) instead of staring
+/// at silence until the full response is ready.
+/// </summary>
+public interface IStreamingPlatformAdapter : IPlatformAdapter
+{
+    /// <summary>
+    /// Post a placeholder message carrying the first partial text.
+    /// Returns the platform-assigned message id used for subsequent updates,
+    /// or null if the post failed — caller should fall back to <see cref="IPlatformAdapter.SendReplyAsync"/>.
+    /// </summary>
+    Task<string?> PostStreamingPlaceholderAsync(
+        string initialText,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        NyxIdApiClient nyxClient,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Replace the content of an existing placeholder message with the accumulated text.
+    /// </summary>
+    Task<PlatformReplyDeliveryResult> UpdateStreamingMessageAsync(
+        string messageId,
+        string replyText,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        NyxIdApiClient nyxClient,
+        CancellationToken ct);
+}
+
 public readonly record struct PlatformReplyDeliveryResult(
     bool Succeeded,
     string? Detail = null);
