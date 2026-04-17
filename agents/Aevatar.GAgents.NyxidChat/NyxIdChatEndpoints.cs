@@ -78,30 +78,27 @@ public static class NyxIdChatEndpoints
         HttpContext http,
         string scopeId,
         [FromServices] IGAgentActorStore actorStore,
-        [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
-        var entry = await CreateConversationAsync(scopeId, actorStore, chatHistoryStore, ct);
-        return Results.Ok(new { actorId = entry.ActorId, createdAt = entry.CreatedAt });
+        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
+        await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        return Results.Ok(new { actorId });
     }
 
     private static async Task<IResult> HandleListConversationsAsync(
         HttpContext http,
         string scopeId,
         [FromServices] IGAgentActorStore actorStore,
-        [FromServices] IChatHistoryStore chatHistoryStore,
-        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         try
         {
-            var conversations = await ListConversationsAsync(
-                scopeId,
-                actorStore,
-                chatHistoryStore,
-                loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints"),
-                ct);
-            return Results.Ok(conversations.Select(entry => new { actorId = entry.ActorId, createdAt = entry.CreatedAt }));
+            var groups = await actorStore.GetAsync(scopeId, ct);
+            var actorIds = groups
+                .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
+                ?.ActorIds
+                ?? [];
+            return Results.Ok(actorIds.Select(actorId => new { actorId }));
         }
         catch (InvalidOperationException)
         {
@@ -324,88 +321,6 @@ public static class NyxIdChatEndpoints
         await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
         return Results.Ok();
     }
-
-    private static async Task<NyxIdConversationEntry> CreateConversationAsync(
-        string scopeId,
-        IGAgentActorStore actorStore,
-        IChatHistoryStore chatHistoryStore,
-        CancellationToken ct)
-    {
-        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
-        var createdAt = DateTimeOffset.UtcNow;
-
-        await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
-
-        await chatHistoryStore.SaveMessagesAsync(
-            scopeId,
-            actorId,
-            BuildConversationMeta(actorId, createdAt),
-            [],
-            ct);
-        return new NyxIdConversationEntry(actorId, createdAt);
-    }
-
-    private static async Task<IReadOnlyList<NyxIdConversationEntry>> ListConversationsAsync(
-        string scopeId,
-        IGAgentActorStore actorStore,
-        IChatHistoryStore chatHistoryStore,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var groups = await actorStore.GetAsync(scopeId, ct);
-        var actorIds = groups
-            .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
-            ?.ActorIds
-            ?.ToHashSet(StringComparer.Ordinal)
-            ?? [];
-
-        if (actorIds.Count == 0)
-            return [];
-
-        var index = await chatHistoryStore.GetIndexAsync(scopeId, ct);
-        var entries = index.Conversations
-            .Where(meta => actorIds.Contains(meta.Id))
-            .Select(meta => new NyxIdConversationEntry(meta.Id, meta.CreatedAt))
-            .OrderByDescending(static entry => entry.CreatedAt)
-            .ThenBy(static entry => entry.ActorId, StringComparer.Ordinal)
-            .ToList();
-
-        if (entries.Count == actorIds.Count)
-            return entries.AsReadOnly();
-
-        foreach (var actorId in actorIds)
-        {
-            if (entries.Any(entry => string.Equals(entry.ActorId, actorId, StringComparison.Ordinal)))
-                continue;
-
-            logger.LogDebug(
-                "NyxId conversation metadata missing from chat history index. scopeId={ScopeId}, actorId={ActorId}",
-                scopeId,
-                actorId);
-
-            entries.Add(new NyxIdConversationEntry(actorId, DateTimeOffset.UnixEpoch));
-        }
-
-        return entries
-            .OrderByDescending(static entry => entry.CreatedAt)
-            .ThenBy(static entry => entry.ActorId, StringComparer.Ordinal)
-            .ToList()
-            .AsReadOnly();
-    }
-
-    private static ConversationMeta BuildConversationMeta(string actorId, DateTimeOffset createdAt) =>
-        new(
-            Id: actorId,
-            Title: NyxIdChatServiceDefaults.DisplayName,
-            ServiceId: NyxIdChatServiceDefaults.ServiceId,
-            ServiceKind: "chat",
-            CreatedAt: createdAt,
-            UpdatedAt: createdAt,
-            MessageCount: 0,
-            LlmRoute: null,
-            LlmModel: null);
-
-    private sealed record NyxIdConversationEntry(string ActorId, DateTimeOffset CreatedAt);
 
     /// <summary>
     /// Handles tool approval decisions from the frontend.

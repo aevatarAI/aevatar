@@ -52,34 +52,27 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleCreateConversationAsync_ShouldReturnCreatedConversation()
+    public async Task HandleCreateConversationAsync_ShouldReturnConversationReceipt()
     {
         var actorStore = new StubGAgentActorStore();
-        var historyStore = new StubChatHistoryStore();
         var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
             actorStore,
-            historyStore,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         using var doc = JsonDocument.Parse(response.Body);
         doc.RootElement.TryGetProperty("actorId", out var actorId).Should().BeTrue();
-        doc.RootElement.TryGetProperty("createdAt", out var createdAt).Should().BeTrue();
+        doc.RootElement.TryGetProperty("createdAt", out _).Should().BeFalse();
         var createdActorId = actorId.GetString();
         createdActorId.Should().NotBeNullOrWhiteSpace();
-        createdAt.GetDateTimeOffset().Should().NotBe(default);
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
             entry.ActorId == createdActorId);
-        historyStore.SavedConversations.Should().ContainSingle(entry =>
-            entry.ScopeId == "scope-a" &&
-            entry.ConversationId == createdActorId &&
-            entry.Meta.CreatedAt == createdAt.GetDateTimeOffset());
     }
 
     [Fact]
@@ -89,23 +82,20 @@ public class NyxIdChatEndpointsCoverageTests
         {
             AddActorException = new InvalidOperationException("actor store unavailable"),
         };
-        var historyStore = new StubChatHistoryStore();
 
         var act = async () => await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
             actorStore,
-            historyStore,
             CancellationToken.None);
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("actor store unavailable");
-        historyStore.SavedConversations.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleListConversationsAsync_ShouldReturnList()
+    public async Task HandleListConversationsAsync_ShouldReturnRegisteredActors()
     {
         var actorStore = new StubGAgentActorStore
         {
@@ -115,27 +105,11 @@ public class NyxIdChatEndpointsCoverageTests
                 new GAgentActorGroup("other-agent", ["actor-2"]),
             ],
         };
-        var historyStore = new StubChatHistoryStore
-        {
-            IndexToReturn = new ChatHistoryIndex(
-            [
-                new ConversationMeta(
-                    Id: "actor-1",
-                    Title: NyxIdChatServiceDefaults.DisplayName,
-                    ServiceId: NyxIdChatServiceDefaults.ServiceId,
-                    ServiceKind: "chat",
-                    CreatedAt: DateTimeOffset.Parse("2026-04-16T10:20:30Z"),
-                    UpdatedAt: DateTimeOffset.Parse("2026-04-16T10:20:30Z"),
-                    MessageCount: 0),
-            ]),
-        };
         var result = await InvokeResultAsync(
             "HandleListConversationsAsync",
             new DefaultHttpContext(),
             "scope-a",
             actorStore,
-            historyStore,
-            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -143,8 +117,7 @@ public class NyxIdChatEndpointsCoverageTests
         using var doc = JsonDocument.Parse(response.Body);
         doc.RootElement.GetArrayLength().Should().Be(1);
         doc.RootElement[0].GetProperty("actorId").GetString().Should().Be("actor-1");
-        doc.RootElement[0].GetProperty("createdAt").GetDateTimeOffset()
-            .Should().Be(DateTimeOffset.Parse("2026-04-16T10:20:30Z"));
+        doc.RootElement[0].TryGetProperty("createdAt", out _).Should().BeFalse();
         actorStore.LastRequestedScopeId.Should().Be("scope-a");
     }
 
@@ -1190,6 +1163,7 @@ public class NyxIdChatEndpointsCoverageTests
         public ChatHistoryIndex IndexToReturn { get; init; } = new([]);
         public List<(string ScopeId, string ConversationId, ConversationMeta Meta)> SavedConversations { get; } = [];
         public List<(string ScopeId, string ConversationId)> DeletedConversations { get; } = [];
+        public Exception? SaveMessagesException { get; init; }
 
         public Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
         {
@@ -1215,6 +1189,8 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken ct = default)
         {
             _ = messages;
+            if (SaveMessagesException is not null)
+                throw SaveMessagesException;
             SavedConversations.Add((scopeId, conversationId, meta));
             return Task.CompletedTask;
         }

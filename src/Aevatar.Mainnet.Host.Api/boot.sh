@@ -110,11 +110,8 @@ if [[ -z "${DOTNET_CMD}" ]]; then
 fi
 
 ensure_neo4j_env() {
-  local environment_name="${ASPNETCORE_ENVIRONMENT:-${DOTNET_ENVIRONMENT:-}}"
-  if [[ -z "${environment_name}" && "${APP_MODE}" == "distributed" ]]; then
-    environment_name="Distributed"
-  fi
-  local neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-}"
+  local environment_name="${1:-}"
+  local neo4j_enabled="${2:-}"
 
   if [[ "${environment_name}" != "Distributed" && "${neo4j_enabled}" != "true" ]]; then
     return 0
@@ -234,7 +231,6 @@ wait_for_port_ready() {
 }
 
 kill_existing_processes
-ensure_neo4j_env
 
 if [[ -n "$(list_listening_pids "${API_PORT}")" ]]; then
   echo "Port ${API_PORT} is still occupied after cleanup." >&2
@@ -251,9 +247,13 @@ launch_env=(
 )
 
 unset_env=()
+effective_environment_name="${ASPNETCORE_ENVIRONMENT:-${DOTNET_ENVIRONMENT:-}}"
+effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-}"
 
 case "${APP_MODE}" in
   local)
+    effective_environment_name="Development"
+    effective_neo4j_enabled="false"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Development"
       "DOTNET_ENVIRONMENT=Development"
@@ -280,16 +280,20 @@ case "${APP_MODE}" in
     )
     ;;
   persistent-local)
+    effective_environment_name="PersistentLocal"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=PersistentLocal"
     )
     ;;
   distributed)
+    effective_environment_name="Distributed"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Distributed"
     )
     ;;
 esac
+
+ensure_neo4j_env "${effective_environment_name}" "${effective_neo4j_enabled}"
 
 env_cmd=(env)
 if (( ${#unset_env[@]} > 0 )); then
