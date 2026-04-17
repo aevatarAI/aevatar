@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
-public sealed class WorkspaceServiceDeleteDraftTests
+public sealed partial class WorkspaceServiceDeleteDraftTests
 {
     [Fact]
     public async Task DeleteDraftAsync_DeleteThenList_ShouldRemoveStoredWorkflow()
