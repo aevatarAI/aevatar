@@ -399,12 +399,6 @@ public static class ChannelCallbackEndpoints
             logger.LogError(
                 "Registration {RegistrationId} dispatched but not materialized within 5s — projection pipeline may be unhealthy",
                 registrationId);
-            return Results.Json(new
-            {
-                status = "error",
-                error = "Registration dispatched but projection did not materialize within timeout. Check projection pipeline health.",
-                registration_id = registrationId,
-            }, statusCode: 500);
         }
 
         return Results.Accepted(value: new
@@ -414,6 +408,10 @@ public static class ChannelCallbackEndpoints
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
             callback_url = $"{callbackPath}/{registrationId}",
+            projection_ready = materialized,
+            projection_warning = materialized
+                ? null
+                : "Registration dispatched but projection did not materialize within timeout. Callbacks may 404 briefly; check projection pipeline health if this persists.",
         });
     }
 
