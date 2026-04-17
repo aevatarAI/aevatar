@@ -345,28 +345,23 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             {
                 replySucceeded = await TryStreamingUpdateAsync(session, replyText, isFinal: true);
                 if (replySucceeded)
+                {
                     RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId,
                         $"stream message_id={streamState!.MessageId} edits={streamState.EditCount}");
+                }
                 else
+                {
                     RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId,
                         $"stream final PATCH failed messageId={streamState!.MessageId}");
+                    replySucceeded = await TrySendDirectReplyAsync(
+                        session,
+                        replyText,
+                        "stream_fallback");
+                }
             }
             else
             {
-                var delivery = await SendPlatformReplyAsync(session, replyText);
-                if (delivery.Succeeded)
-                {
-                    replySucceeded = true;
-                    RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, delivery.Detail);
-                }
-                else
-                {
-                    Logger.LogWarning("SendReply rejected: platform={Platform}, session={SessionId}, detail={Detail}",
-                        session.Platform,
-                        session.SessionId,
-                        delivery.Detail);
-                    RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId, delivery.Detail);
-                }
+                replySucceeded = await TrySendDirectReplyAsync(session, replyText);
             }
         }
         catch (Exception ex)
@@ -508,6 +503,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             {
                 if (isFinal)
                 {
+                    state.Disabled = true;
                     Logger.LogWarning(
                         "Streaming final PATCH rejected: session={SessionId}, detail={Detail}",
                         session.SessionId, delivery.Detail);
@@ -521,11 +517,36 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             Logger.LogWarning(ex, "Streaming update error for session {SessionId}", session.SessionId);
             if (isFinal)
             {
+                state.Disabled = true;
                 RecordDiagnostic("Stream:final:error", session.Platform, session.RegistrationId,
                     $"{ex.GetType().Name}: {ex.Message}");
             }
             return false;
         }
+    }
+
+    private async Task<bool> TrySendDirectReplyAsync(
+        ChannelPendingChatSession session,
+        string replyText,
+        string? detailPrefix = null)
+    {
+        var delivery = await SendPlatformReplyAsync(session, replyText);
+        var detail = string.IsNullOrWhiteSpace(detailPrefix)
+            ? delivery.Detail
+            : $"{detailPrefix} {delivery.Detail}";
+
+        if (delivery.Succeeded)
+        {
+            RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, detail);
+            return true;
+        }
+
+        Logger.LogWarning("SendReply rejected: platform={Platform}, session={SessionId}, detail={Detail}",
+            session.Platform,
+            session.SessionId,
+            detail);
+        RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId, detail);
+        return false;
     }
 
     private IPlatformAdapter? ResolvePlatformAdapter(string platform)

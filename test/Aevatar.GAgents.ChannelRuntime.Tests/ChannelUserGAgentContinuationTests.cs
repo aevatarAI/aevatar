@@ -126,6 +126,101 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
+    public async Task StreamingAdapter_WhenFinalUpdateFails_ShouldFallBackToSendReplyAtEnd()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingStreamingPlatformAdapter("lark")
+        {
+            UpdateDeliveryResult = new PlatformReplyDeliveryResult(false, "cannot_patch_to_interactive"),
+        };
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(BuildInboundEvent());
+
+        var request = runtime.SingleChatRequest();
+
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "hello ",
+            }));
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "world",
+            }));
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageEndEvent
+            {
+                SessionId = request.SessionId,
+                Content = "hello world",
+            }));
+
+        adapter.Placeholders.Should().ContainSingle();
+        adapter.Updates.Should().ContainSingle()
+            .Which.ReplyText.Should().Be("hello world");
+        adapter.Replies.Should().ContainSingle("final PATCH rejection should downgrade to send-once")
+            .Which.ReplyText.Should().Be("hello world");
+        agent.State.PendingSessions.Should().BeEmpty();
+        scheduler.Canceled.Should().ContainSingle(x => x.CallbackId == $"chat-timeout-{request.SessionId}");
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_WhenTimeoutFinalUpdateFails_ShouldFallBackToSendReply()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingStreamingPlatformAdapter("lark")
+        {
+            UpdateDeliveryResult = new PlatformReplyDeliveryResult(false, "cannot_patch_to_interactive"),
+        };
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(BuildInboundEvent());
+
+        var request = runtime.SingleChatRequest();
+
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "partial reply",
+            }));
+
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-user-lark-reg-1-ou_123",
+            TopologyAudience.Self,
+            new ChannelChatTimeoutEvent
+            {
+                SessionId = request.SessionId,
+            }));
+
+        adapter.Placeholders.Should().ContainSingle();
+        adapter.Updates.Should().ContainSingle()
+            .Which.ReplyText.Should().Be("partial reply");
+        adapter.Replies.Should().ContainSingle("timeout should still deliver a direct reply after final PATCH rejection")
+            .Which.ReplyText.Should().Be("partial reply");
+        agent.State.PendingSessions.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleChatEnd_ShouldSendReply_AndCompletePendingSession()
     {
         var runtime = new RecordingActorRuntime();
@@ -2077,6 +2172,8 @@ public class ChannelUserGAgentContinuationTests
         /// agent falls back to SendReplyAsync at HandleChatEnd.
         /// </summary>
         public string? PlaceholderMessageId { get; set; } = "om_stream_1";
+        public PlatformReplyDeliveryResult UpdateDeliveryResult { get; set; } =
+            new(true, "ok");
 
         public Task<IResult?> TryHandleVerificationAsync(HttpContext http, ChannelBotRegistrationEntry registration) =>
             Task.FromResult<IResult?>(null);
@@ -2118,7 +2215,7 @@ public class ChannelUserGAgentContinuationTests
         {
             ct.ThrowIfCancellationRequested();
             Updates.Add(new StreamingUpdateRecord(messageId, replyText, inbound, registration));
-            return Task.FromResult(new PlatformReplyDeliveryResult(true, $"message_id={messageId}"));
+            return Task.FromResult(UpdateDeliveryResult);
         }
     }
 
