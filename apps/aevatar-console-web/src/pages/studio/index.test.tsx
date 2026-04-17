@@ -1914,7 +1914,7 @@ describe("StudioPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "编辑草稿" }));
 
-    expect(await screen.findByText("行为画布")).toBeTruthy();
+    expect(await screen.findByText("当前定义")).toBeTruthy();
     expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveAttribute(
       "aria-pressed",
       "true"
@@ -1938,7 +1938,7 @@ describe("StudioPage", () => {
       )
     );
 
-    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(await screen.findByText("行为画布")).toBeTruthy();
     expect(screen.getByTestId("location-snapshot-probe")).toHaveTextContent(
       "/studio?workflow=workflow-1&tab=studio"
     );
@@ -2196,6 +2196,44 @@ describe("StudioPage", () => {
       expect(searchParams.get("teamDraftWorkflowName")).toBe("workspace-demo");
       expect(searchParams.get("workflow")).toBe("workflow-1");
       expect(searchParams.get("entryName")).toBe("订单入口");
+    });
+  });
+
+  it("clears the create-team draft pointer when the route switches to a different workflow", async () => {
+    renderStudioPage(
+      "/studio?workflow=workflow-1&tab=studio&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-1&teamDraftWorkflowName=workspace-demo"
+    );
+
+    expect(await screen.findByText("行为画布")).toBeTruthy();
+
+    await replaceStudioRoute(
+      "/studio?workflow=workflow-2&tab=studio&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-1&teamDraftWorkflowName=workspace-demo"
+    );
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("workflow")).toBe("workflow-2");
+      expect(searchParams.get("teamDraftWorkflowId")).toBeNull();
+      expect(searchParams.get("teamDraftWorkflowName")).toBeNull();
+    });
+  });
+
+  it("clears the create-team draft pointer when starting a blank draft", async () => {
+    renderStudioPage(
+      "/studio?tab=workflows&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-1&teamDraftWorkflowName=workspace-demo"
+    );
+
+    expect(await screen.findByPlaceholderText("搜索定义")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "新建定义" }));
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("studio");
+      expect(searchParams.get("draft")).toBe("new");
+      expect(searchParams.get("workflow")).toBeNull();
+      expect(searchParams.get("teamDraftWorkflowId")).toBeNull();
+      expect(searchParams.get("teamDraftWorkflowName")).toBeNull();
     });
   });
 

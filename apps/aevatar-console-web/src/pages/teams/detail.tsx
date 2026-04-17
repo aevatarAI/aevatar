@@ -124,25 +124,56 @@ function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
-function resolveMachineGeneratedTeamId(
-  title: string | null | undefined,
-  scopeId: string | null | undefined,
-): string {
-  const normalizedTitle = trimText(title);
-  const normalizedScopeId = trimText(scopeId);
+function resolveTeamHeading(input: {
+  displayName?: string | null;
+  lensTitle?: string | null;
+  scopeId: string | null | undefined;
+  workflowId?: string | null;
+  workflowName?: string | null;
+}): {
+  metaScopeId?: string;
+  title: string;
+} {
+  const normalizedScopeId = trimText(input.scopeId);
+  const normalizedDisplayName = trimText(input.displayName);
+  const normalizedWorkflowId = trimText(input.workflowId);
+  const normalizedWorkflowName = trimText(input.workflowName);
+  const normalizedLensTitle = trimText(input.lensTitle);
 
-  if (!normalizedTitle || !normalizedScopeId) {
-    return "";
+  if (
+    normalizedDisplayName &&
+    normalizedDisplayName !== normalizedWorkflowId
+  ) {
+    return {
+      title: normalizedDisplayName,
+    };
   }
 
   if (
-    normalizedTitle === normalizedScopeId ||
-    normalizedTitle === `Team ${normalizedScopeId}`
+    normalizedWorkflowName &&
+    normalizedWorkflowName !== normalizedWorkflowId
   ) {
-    return normalizedScopeId;
+    return {
+      title: normalizedWorkflowName,
+    };
   }
 
-  return "";
+  const genericLensTitle =
+    normalizedScopeId ? `Team ${normalizedScopeId}` : "";
+  if (
+    normalizedLensTitle &&
+    normalizedLensTitle !== normalizedScopeId &&
+    normalizedLensTitle !== genericLensTitle
+  ) {
+    return {
+      title: normalizedLensTitle,
+    };
+  }
+
+  return {
+    metaScopeId: normalizedScopeId || undefined,
+    title: "团队详情",
+  };
 }
 
 function compactId(value: string | null | undefined): string {
@@ -1350,26 +1381,27 @@ const TeamDetailPage: React.FC = () => {
     [lens.playback.currentRunId, lens.playback.rootActorId, runtimeServiceId, scopeId],
   );
 
-  const rawTeamTitle = activeWorkflowSummary?.displayName || lens.title;
-  const machineGeneratedTeamId = resolveMachineGeneratedTeamId(rawTeamTitle, scopeId);
-  const teamTitle =
-    machineGeneratedTeamId && machineGeneratedTeamId.length > 18
-      ? "团队详情"
-      : rawTeamTitle;
-  const teamTitleMeta =
-    machineGeneratedTeamId && machineGeneratedTeamId.length > 18 ? (
-      <Space size={6} wrap>
-        <span style={{ textTransform: "none" }}>scopeId</span>
-        <AevatarCompactText
-          color="inherit"
-          head={8}
-          maxWidth={320}
-          monospace
-          tail={6}
-          value={machineGeneratedTeamId}
-        />
-      </Space>
-    ) : null;
+  const teamHeading = resolveTeamHeading({
+    scopeId,
+    workflowId: activeWorkflowSummary?.workflowId,
+    workflowName: activeWorkflowSummary?.workflowName,
+    displayName: activeWorkflowSummary?.displayName,
+    lensTitle: lens.title,
+  });
+  const teamTitle = teamHeading.title;
+  const teamTitleMeta = teamHeading.metaScopeId ? (
+    <Space size={6} wrap>
+      <span style={{ textTransform: "none" }}>scopeId</span>
+      <AevatarCompactText
+        color="inherit"
+        head={8}
+        maxWidth={320}
+        monospace
+        tail={6}
+        value={teamHeading.metaScopeId}
+      />
+    </Space>
+  ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
   const teamCompositionRows = React.useMemo(

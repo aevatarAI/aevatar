@@ -9,7 +9,7 @@ import {
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from '@/shared/ui/proComponents';
-import { formatDateTime } from '@/shared/datetime/dateTime';
+import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { AevatarCompactText } from '@/shared/ui/compactText';
 import type { GovernanceDraft } from './governanceQuery';
 
@@ -145,7 +145,7 @@ function GovernanceMetric({
 }
 
 export function formatGovernanceTimestamp(value: string | undefined): string {
-  return formatDateTime(value, '待更新');
+  return formatUtcDateTime(value, '待更新');
 }
 
 export const GovernanceSelectionNotice: React.FC<
@@ -313,7 +313,7 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
         {metrics.length > 0 ? (
           <div style={summaryMetricGridStyle}>
             {metrics.map((metric) => (
-      <GovernanceMetric key={metric.label} {...metric} />
+              <GovernanceMetric key={metric.label} {...metric} />
             ))}
           </div>
         ) : null}

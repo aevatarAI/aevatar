@@ -7,6 +7,12 @@ import {
 } from './GovernanceResultPanels';
 
 describe('GovernanceResultPanels', () => {
+  it('formats governance timestamps in UTC for consistent audit reading', () => {
+    expect(formatGovernanceTimestamp('2026-03-25T08:00:00Z')).toBe(
+      '2026-03-25 08:00:00 UTC',
+    );
+  });
+
   it('renders the selected governance scope and summary metrics', () => {
     const formattedSnapshot = formatGovernanceTimestamp('2026-03-25T08:00:00Z');
 
