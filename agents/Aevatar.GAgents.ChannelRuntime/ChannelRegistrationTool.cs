@@ -182,28 +182,35 @@ public sealed class ChannelRegistrationTool : IAgentTool
         await actor.HandleEventAsync(envelope);
 
         // Projection scope is now activated. Poll for the document to appear.
-        // The projector runs async via the materialization scope agent.
-        string? confirmedId = null;
+        // Mirrors HandleRegisterAsync: keep the register-accepted response even
+        // when the projection wait times out (5xx would cause caller retries
+        // that duplicate-write fresh registrationIds), but surface the degraded
+        // state via projection_ready + projection_warning so the caller can
+        // warn the user before they paste a potentially-zombie callback URL
+        // into the platform developer console.
+        var projectionReady = false;
         for (var attempt = 0; attempt < 10; attempt++)
         {
             await Task.Delay(500, ct);
-            var entry = await queryPort.GetAsync(registrationId, ct);
-            if (entry != null)
+            if (await queryPort.GetAsync(registrationId, ct) != null)
             {
-                confirmedId = entry.Id;
+                projectionReady = true;
                 break;
             }
         }
 
         return JsonSerializer.Serialize(new
         {
-            status = confirmedId != null ? "registered" : "accepted",
+            status = "registered",
             registration_id = registrationId,
             platform = cmd.Platform,
             nyx_provider_slug = cmd.NyxProviderSlug,
             callback_url = $"{callbackPath}/{registrationId}",
             webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
-            note = confirmedId == null ? "Registration submitted but projection not yet confirmed. Try 'list' after a few seconds." : "",
+            projection_ready = projectionReady,
+            projection_warning = projectionReady
+                ? null
+                : "Registration dispatched but projection did not materialize within timeout. Callbacks may 404 briefly; check projection pipeline health if this persists.",
         });
     }
 
