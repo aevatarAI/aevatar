@@ -510,6 +510,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(headerScope.getByText(/^draft-/)).toBeTruthy();
     expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
     expect(headerScope.getByText('Scope 1626c177…b0d6')).toBeTruthy();
+    expect(headerScope.getByRole('button', { name: 'New draft' })).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'Save' })).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'Bind scope' })).toBeTruthy();
     fireEvent.click(
@@ -518,6 +519,29 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(await screen.findByText('Validate')).toBeTruthy();
     expect(screen.getByText('Promote')).toBeTruthy();
     expect(screen.getByText('Test Run')).toBeTruthy();
+  });
+
+  it('creates a new draft directly from the header without opening the panels drawer', async () => {
+    const { container } = renderPage({
+      mode: 'embedded',
+    });
+
+    const scriptIdInput = (await screen.findByLabelText('Script ID')) as HTMLInputElement;
+    expect(scriptIdInput.value).toBe('script-1');
+
+    const header = container.querySelector('.console-scripts-header');
+    expect(header).toBeTruthy();
+
+    fireEvent.click(
+      within(header as HTMLElement).getByRole('button', { name: 'New draft' }),
+    );
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText('Script ID') as HTMLInputElement).value,
+      ).toBe('script-2');
+    });
+    expect(await screen.findByText('Created script-2.')).toBeTruthy();
   });
 
   it('keeps proxy mode gated for testing and AI actions', async () => {

@@ -23,7 +23,6 @@ public sealed class AppScopedWorkflowService
     };
 
     private readonly IScopeWorkflowQueryPort? _workflowQueryPort;
-    private readonly IScopeWorkflowCommandPort? _workflowCommandPort;
     private readonly IWorkflowActorBindingReader? _workflowActorBindingReader;
     private readonly IServiceRevisionArtifactStore? _artifactStore;
     private readonly IServiceLifecycleQueryPort? _serviceLifecycleQueryPort;
@@ -35,7 +34,6 @@ public sealed class AppScopedWorkflowService
         IHttpClientFactory httpClientFactory,
         IWorkflowYamlDocumentService yamlDocumentService,
         IScopeWorkflowQueryPort? workflowQueryPort = null,
-        IScopeWorkflowCommandPort? workflowCommandPort = null,
         IWorkflowActorBindingReader? workflowActorBindingReader = null,
         IServiceRevisionArtifactStore? artifactStore = null,
         IServiceLifecycleQueryPort? serviceLifecycleQueryPort = null,
@@ -44,7 +42,6 @@ public sealed class AppScopedWorkflowService
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
         _workflowQueryPort = workflowQueryPort;
-        _workflowCommandPort = workflowCommandPort;
         _workflowActorBindingReader = workflowActorBindingReader;
         _artifactStore = artifactStore;
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort;
@@ -64,12 +61,18 @@ public sealed class AppScopedWorkflowService
                 body: null,
                 ct) ?? [];
 
+        var storedWorkflowsById = await ListStoredWorkflowsByIdAsync(ct);
         var summaries = workflows
             .OrderByDescending(static item => item.UpdatedAt)
-            .Select(workflow => ToWorkflowSummary(normalizedScopeId, workflow))
+            .Select(workflow => ToWorkflowSummary(
+                normalizedScopeId,
+                workflow,
+                storedWorkflowsById.TryGetValue(workflow.WorkflowId, out var storedWorkflow)
+                    ? storedWorkflow
+                    : null))
             .ToList();
 
-        return await MergeStoredWorkflowSummariesAsync(normalizedScopeId, summaries, ct);
+        return MergeStoredWorkflowSummaries(normalizedScopeId, summaries, storedWorkflowsById);
     }
 
     public async Task<WorkflowFileResponse?> GetAsync(
@@ -79,6 +82,15 @@ public sealed class AppScopedWorkflowService
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+        var storedWorkflow = await TryGetStoredWorkflowAsync(normalizedWorkflowId, ct);
+
+        if (storedWorkflow != null)
+        {
+            return ToStoredWorkflowFileResponse(
+                normalizedScopeId,
+                storedWorkflow,
+                TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId));
+        }
 
         if (_workflowQueryPort != null && _workflowActorBindingReader != null)
         {
@@ -137,15 +149,6 @@ public sealed class AppScopedWorkflowService
                     findingsFallbackMessage: "Workflow YAML is not available yet.");
             }
 
-            var storedWorkflow = await TryGetStoredWorkflowAsync(normalizedWorkflowId, ct);
-            if (storedWorkflow != null)
-            {
-                return ToStoredWorkflowFileResponse(
-                    normalizedScopeId,
-                    storedWorkflow,
-                    TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId));
-            }
-
             return null;
         }
 
@@ -157,15 +160,7 @@ public sealed class AppScopedWorkflowService
             allowNotFound: true);
 
         if (detail == null || detail.Workflow == null)
-        {
-            var storedWorkflow = await TryGetStoredWorkflowAsync(normalizedWorkflowId, ct);
-            return storedWorkflow == null
-                ? null
-                : ToStoredWorkflowFileResponse(
-                    normalizedScopeId,
-                    storedWorkflow,
-                    TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId));
-        }
+            return null;
 
         return ToWorkflowFileResponse(
             normalizedScopeId,
@@ -201,56 +196,22 @@ public sealed class AppScopedWorkflowService
         var workflowId = string.IsNullOrWhiteSpace(request.WorkflowId)
             ? StudioDocumentIdNormalizer.Normalize(workflowName, "workflow")
             : NormalizeRequired(request.WorkflowId, nameof(request.WorkflowId));
-        var displayName = string.IsNullOrWhiteSpace(requestedWorkflowName)
-            ? workflowId
-            : requestedWorkflowName;
+        var storagePort = _workflowStoragePort
+            ?? throw new InvalidOperationException("Scoped workflow draft storage is not configured.");
+        var savedAtUtc = DateTimeOffset.UtcNow;
 
-        ScopeWorkflowUpsertResult upsert;
-        if (_workflowCommandPort != null)
-        {
-            upsert = await _workflowCommandPort.UpsertAsync(
-                new ScopeWorkflowUpsertRequest(
-                    normalizedScopeId,
-                    workflowId,
-                    normalizedYaml,
-                    workflowName,
-                    displayName),
-                ct);
-        }
-        else
-        {
-            upsert = await SendAsync<ScopeWorkflowUpsertResult>(
-                HttpMethod.Put,
-                $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/workflows/{Uri.EscapeDataString(workflowId)}",
-                new RemoteUpsertRequest(
-                    normalizedYaml,
-                    workflowName,
-                    displayName,
-                    InlineWorkflowYamls: null,
-                    RevisionId: null),
-                ct) ?? throw new InvalidOperationException("Workflow save returned an empty response.");
-        }
+        await storagePort.UploadWorkflowYamlAsync(workflowId, workflowName, normalizedYaml, ct);
 
         PersistLayout(normalizedScopeId, workflowId, request.Layout);
 
-        try
-        {
-            if (_workflowStoragePort != null)
-            {
-                await _workflowStoragePort.UploadWorkflowYamlAsync(workflowId, workflowName, normalizedYaml, ct);
-            }
-        }
-        catch
-        {
-            // Don't fail the save if chrono-storage upload fails
-        }
-
-        return ToWorkflowFileResponse(
+        return ToStoredWorkflowFileResponse(
             normalizedScopeId,
-            upsert.Workflow,
-            normalizedYaml,
-            request.Layout,
-            parsed);
+            new StoredWorkflowYaml(
+                workflowId,
+                workflowName,
+                normalizedYaml,
+                savedAtUtc),
+            request.Layout);
     }
 
     private string AlignWorkflowYamlName(string yaml, string workflowName)
@@ -319,20 +280,26 @@ public sealed class AppScopedWorkflowService
             workflow.UpdatedAt);
     }
 
-    private static WorkflowSummary ToWorkflowSummary(string scopeId, ScopeWorkflowSummary workflow)
+    private WorkflowSummary ToWorkflowSummary(
+        string scopeId,
+        ScopeWorkflowSummary workflow,
+        StoredWorkflowYaml? storedWorkflow)
     {
+        var parse = !string.IsNullOrWhiteSpace(storedWorkflow?.Yaml)
+            ? _yamlDocumentService.Parse(storedWorkflow.Yaml)
+            : null;
         var scopeDirectory = CreateScopeDirectory(scopeId);
         return new WorkflowSummary(
             workflow.WorkflowId,
-            ResolveWorkflowDisplayName(workflow),
-            string.Empty,
+            ResolveWorkflowSummaryName(workflow, storedWorkflow, parse),
+            parse?.Document?.Description ?? string.Empty,
             $"{workflow.WorkflowId}.yaml",
             $"{scopeDirectory.Path}/{workflow.WorkflowId}.yaml",
             scopeDirectory.DirectoryId,
             scopeDirectory.Label,
-            0,
-            false,
-            workflow.UpdatedAt);
+            parse?.Document?.Steps.Count ?? 0,
+            TryReadPersistedLayout(scopeId, workflow.WorkflowId) != null,
+            ResolveWorkflowSummaryUpdatedAt(workflow, storedWorkflow));
     }
 
     private static string ResolveWorkflowDisplayName(ScopeWorkflowSummary workflow)
@@ -345,29 +312,16 @@ public sealed class AppScopedWorkflowService
         return workflow.WorkflowId;
     }
 
-    private async Task<IReadOnlyList<WorkflowSummary>> MergeStoredWorkflowSummariesAsync(
+    private IReadOnlyList<WorkflowSummary> MergeStoredWorkflowSummaries(
         string scopeId,
         IReadOnlyList<WorkflowSummary> runtimeSummaries,
-        CancellationToken ct)
+        IReadOnlyDictionary<string, StoredWorkflowYaml> storedWorkflowsById)
     {
-        if (_workflowStoragePort == null)
-            return runtimeSummaries;
-
-        IReadOnlyList<StoredWorkflowYaml> storedWorkflows;
-        try
-        {
-            storedWorkflows = await _workflowStoragePort.ListWorkflowYamlsAsync(ct);
-        }
-        catch
-        {
-            return runtimeSummaries;
-        }
-
-        if (storedWorkflows.Count == 0)
+        if (storedWorkflowsById.Count == 0)
             return runtimeSummaries;
 
         var merged = runtimeSummaries.ToDictionary(summary => summary.WorkflowId, StringComparer.Ordinal);
-        foreach (var storedWorkflow in storedWorkflows)
+        foreach (var storedWorkflow in storedWorkflowsById.Values)
         {
             if (merged.ContainsKey(storedWorkflow.WorkflowId))
                 continue;
@@ -378,6 +332,29 @@ public sealed class AppScopedWorkflowService
         return merged.Values
             .OrderByDescending(static item => item.UpdatedAtUtc)
             .ToList();
+    }
+
+    private async Task<IReadOnlyDictionary<string, StoredWorkflowYaml>> ListStoredWorkflowsByIdAsync(
+        CancellationToken ct)
+    {
+        if (_workflowStoragePort == null)
+            return new Dictionary<string, StoredWorkflowYaml>(StringComparer.Ordinal);
+
+        try
+        {
+            return (await _workflowStoragePort.ListWorkflowYamlsAsync(ct))
+                .GroupBy(static workflow => workflow.WorkflowId, StringComparer.Ordinal)
+                .ToDictionary(
+                    static group => group.Key,
+                    static group => group
+                        .OrderByDescending(static workflow => workflow.UpdatedAtUtc ?? DateTimeOffset.MinValue)
+                        .First(),
+                    StringComparer.Ordinal);
+        }
+        catch
+        {
+            return new Dictionary<string, StoredWorkflowYaml>(StringComparer.Ordinal);
+        }
     }
 
     private async Task<StoredWorkflowYaml?> TryGetStoredWorkflowAsync(string workflowId, CancellationToken ct)
@@ -448,6 +425,35 @@ public sealed class AppScopedWorkflowService
             return storedName;
 
         return storedWorkflow.WorkflowId;
+    }
+
+    private static string ResolveWorkflowSummaryName(
+        ScopeWorkflowSummary workflow,
+        StoredWorkflowYaml? storedWorkflow,
+        WorkflowParseResult? parseResult)
+    {
+        var parsedName = parseResult?.Document?.Name?.Trim();
+        if (!string.IsNullOrWhiteSpace(parsedName))
+            return parsedName;
+
+        var storedName = storedWorkflow?.WorkflowName?.Trim();
+        if (!string.IsNullOrWhiteSpace(storedName))
+            return storedName;
+
+        return ResolveWorkflowDisplayName(workflow);
+    }
+
+    private static DateTimeOffset ResolveWorkflowSummaryUpdatedAt(
+        ScopeWorkflowSummary workflow,
+        StoredWorkflowYaml? storedWorkflow)
+    {
+        if (storedWorkflow?.UpdatedAtUtc is { } storedUpdatedAtUtc &&
+            storedUpdatedAtUtc > workflow.UpdatedAt)
+        {
+            return storedUpdatedAtUtc;
+        }
+
+        return workflow.UpdatedAt;
     }
 
     private async Task<T?> SendAsync<T>(
@@ -643,13 +649,6 @@ public sealed class AppScopedWorkflowService
         !string.IsNullOrWhiteSpace(mediaType) &&
         (mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
          mediaType.Contains("application/xhtml+xml", StringComparison.OrdinalIgnoreCase));
-
-    private sealed record RemoteUpsertRequest(
-        string WorkflowYaml,
-        string? WorkflowName,
-        string? DisplayName,
-        Dictionary<string, string>? InlineWorkflowYamls,
-        string? RevisionId);
 
     private sealed record RemoteErrorResponse(string? Code, string? Message);
 }

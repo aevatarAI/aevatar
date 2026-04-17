@@ -6,6 +6,7 @@ import {
   subscribeToLocationChanges,
 } from '@/shared/navigation/history';
 import {
+  buildTeamCreateHref,
   buildTeamDetailHref,
   buildTeamsHref,
 } from '@/shared/navigation/teamRoutes';
@@ -18,6 +19,7 @@ import {
   Button,
   Modal,
   Space,
+  message,
 } from 'antd';
 import React, {
   useCallback,
@@ -92,6 +94,7 @@ import type {
   StudioRuntimeTestResult,
   StudioValidationFinding,
   StudioWorkflowDocument,
+  StudioWorkflowFile,
   StudioWorkflowDirectory,
   StudioWorkspaceSettings,
 } from '@/shared/studio/models';
@@ -126,10 +129,16 @@ type StudioRouteState = {
   scopeLabel: string;
   memberId: string;
   memberLabel: string;
+  teamMode: '' | 'create';
+  teamName: string;
+  entryName: string;
+  teamDraftWorkflowId: string;
+  teamDraftWorkflowName: string;
   workflowId: string;
   scriptId: string;
   templateWorkflow: string;
   tab: StudioTab;
+  tabExplicit: boolean;
   draftMode: '' | 'new';
   prompt: string;
   legacySource: '' | 'playground';
@@ -138,6 +147,7 @@ type StudioRouteState = {
 };
 
 type StudioViewMode = 'editor' | 'execution';
+type WorkflowWorkspaceSection = 'browser' | 'editor';
 type StudioInspectorTab = 'node' | 'roles' | 'yaml';
 type StudioSelectedGraphEdge = {
   readonly edgeId: string;
@@ -204,6 +214,23 @@ function trimOptional(value: string | null | undefined): string {
 
 function normalizeComparableText(value: string | null | undefined): string {
   return trimOptional(value).toLowerCase();
+}
+
+function describeSavedWorkflowLocation(
+  workflow: Pick<StudioWorkflowFile, 'directoryLabel' | 'fileName' | 'filePath'>,
+): string {
+  const directoryLabel = trimOptional(workflow.directoryLabel);
+  const fileName = trimOptional(workflow.fileName);
+  if (directoryLabel && fileName) {
+    return `${directoryLabel}/${fileName}`;
+  }
+
+  const filePath = trimOptional(workflow.filePath);
+  if (filePath) {
+    return filePath;
+  }
+
+  return directoryLabel || fileName || '当前工作区';
 }
 
 function describeScopeBindingTarget(result: {
@@ -323,6 +350,10 @@ function parseStudioTab(value: string | null): StudioTab {
 
 function parseDraftMode(value: string | null): '' | 'new' {
   return value === 'new' ? 'new' : '';
+}
+
+function parseTeamMode(value: string | null): '' | 'create' {
+  return value === 'create' ? 'create' : '';
 }
 
 function parseLegacySource(value: string | null): '' | 'playground' {
@@ -826,10 +857,16 @@ function readStudioRouteState(search?: string): StudioRouteState {
       scopeLabel: '',
       memberId: '',
       memberLabel: '',
+      teamMode: '',
+      teamName: '',
+      entryName: '',
+      teamDraftWorkflowId: '',
+      teamDraftWorkflowName: '',
       workflowId: '',
       scriptId: '',
       templateWorkflow: '',
       tab: 'workflows',
+      tabExplicit: false,
       draftMode: '',
       prompt: '',
       legacySource: '',
@@ -850,10 +887,16 @@ function readStudioRouteState(search?: string): StudioRouteState {
     scopeLabel: trimOptional(params.get('scopeLabel')),
     memberId: trimOptional(params.get('memberId')),
     memberLabel: trimOptional(params.get('memberLabel')),
+    teamMode: parseTeamMode(params.get('teamMode')),
+    teamName: trimOptional(params.get('teamName')),
+    entryName: trimOptional(params.get('entryName')),
+    teamDraftWorkflowId: trimOptional(params.get('teamDraftWorkflowId')),
+    teamDraftWorkflowName: trimOptional(params.get('teamDraftWorkflowName')),
     workflowId: trimOptional(params.get('workflow')),
     scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
     tab: parseStudioTab(params.get('tab')),
+    tabExplicit: params.has('tab'),
     draftMode: parseDraftMode(params.get('draft')),
     prompt: trimOptional(params.get('prompt')),
     legacySource: parseLegacySource(params.get('legacy')),
@@ -882,7 +925,7 @@ function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage 
         state.templateWorkflow ||
         state.draftMode === 'new' ||
         state.executionId ||
-        state.prompt
+        (!state.tabExplicit && state.prompt)
         ? 'studio'
         : 'workflows';
 }
@@ -999,6 +1042,15 @@ const StudioPage: React.FC = () => {
   );
   const [draftYaml, setDraftYaml] = useState('');
   const [draftWorkflowName, setDraftWorkflowName] = useState('');
+  const [teamEntryName, setTeamEntryName] = useState(
+    () => readStudioRouteState().entryName,
+  );
+  const [teamDraftWorkflowId, setTeamDraftWorkflowId] = useState(
+    () => readStudioRouteState().teamDraftWorkflowId,
+  );
+  const [teamDraftWorkflowName, setTeamDraftWorkflowName] = useState(
+    () => readStudioRouteState().teamDraftWorkflowName,
+  );
   const [draftFileName, setDraftFileName] = useState('');
   const [draftDirectoryId, setDraftDirectoryId] = useState('');
   const [draftWorkflowLayout, setDraftWorkflowLayout] = useState<unknown | null>(
@@ -1150,16 +1202,34 @@ const StudioPage: React.FC = () => {
         ? currentLegacySource
         : routeState.legacySource,
     );
+    setTeamEntryName((currentEntryName) =>
+      trimOptional(currentEntryName) === routeState.entryName
+        ? currentEntryName
+        : routeState.entryName,
+    );
+    setTeamDraftWorkflowId((currentWorkflowId) =>
+      trimOptional(currentWorkflowId) === routeState.teamDraftWorkflowId
+        ? currentWorkflowId
+        : routeState.teamDraftWorkflowId,
+    );
+    setTeamDraftWorkflowName((currentWorkflowName) =>
+      trimOptional(currentWorkflowName) === routeState.teamDraftWorkflowName
+        ? currentWorkflowName
+        : routeState.teamDraftWorkflowName,
+    );
     setRunPrompt((currentPrompt) =>
       currentPrompt === routeState.prompt ? currentPrompt : routeState.prompt,
     );
   }, [
     locationSnapshot,
     routeState.draftMode,
+    routeState.entryName,
     routeState.executionId,
     routeState.legacySource,
     routeState.prompt,
     routeState.scriptId,
+    routeState.teamDraftWorkflowId,
+    routeState.teamDraftWorkflowName,
     routeState.templateWorkflow,
     routeState.workflowId,
     routeStudioView,
@@ -1238,15 +1308,16 @@ const StudioPage: React.FC = () => {
     trimOptional(appContextQuery.data?.scopeId) ||
     trimOptional(authSessionQuery.data?.scopeId) ||
     '';
+  const workflowWorkspaceContextKey = resolvedStudioScopeId || 'workspace';
   const workspaceSettingsQuery = useQuery({
-    queryKey: ['studio-workspace-settings'],
+    queryKey: ['studio-workspace-settings', workflowWorkspaceContextKey],
     enabled: studioHostReady,
-    queryFn: () => studioApi.getWorkspaceSettings(),
+    queryFn: () => studioApi.getWorkspaceSettings(resolvedStudioScopeId),
   });
   const workflowsQuery = useQuery({
-    queryKey: ['studio-workspace-workflows'],
+    queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
     enabled: studioHostReady,
-    queryFn: () => studioApi.listWorkflows(),
+    queryFn: () => studioApi.listWorkflows(resolvedStudioScopeId),
   });
   const executionsQuery = useQuery({
     queryKey: ['studio-executions'],
@@ -1279,9 +1350,9 @@ const StudioPage: React.FC = () => {
     queryFn: () => studioApi.getSettings(),
   });
   const selectedWorkflowQuery = useQuery({
-    queryKey: ['studio-workflow', selectedWorkflowId],
+    queryKey: ['studio-workflow', workflowWorkspaceContextKey, selectedWorkflowId],
     enabled: studioHostReady && Boolean(selectedWorkflowId),
-    queryFn: () => studioApi.getWorkflow(selectedWorkflowId),
+    queryFn: () => studioApi.getWorkflow(selectedWorkflowId, resolvedStudioScopeId),
   });
   const selectedExecutionQuery = useQuery({
     queryKey: ['studio-execution', selectedExecutionId],
@@ -1385,8 +1456,11 @@ const StudioPage: React.FC = () => {
     () => readDefaultDirectoryId(workspaceSettingsQuery.data?.directories),
     [workspaceSettingsQuery.data?.directories],
   );
+  const isTeamCreateMode = routeState.teamMode === 'create';
+  const createModeSeedName =
+    trimOptional(routeState.entryName) || trimOptional(routeState.teamName);
   const activeWorkflowSourceKey = selectedWorkflowId
-    ? `workspace:${selectedWorkflowId}`
+    ? `workflow:${workflowWorkspaceContextKey}:${selectedWorkflowId}`
     : templateWorkflow
       ? `template:${templateWorkflow}`
       : draftMode === 'new' && legacySource === 'playground'
@@ -1413,13 +1487,14 @@ const StudioPage: React.FC = () => {
         : buildBlankDraftYaml(legacyPlaygroundDraft.sourceWorkflow || 'draft');
     }
     if (draftMode === 'new') {
-      return buildBlankDraftYaml('draft');
+      return buildBlankDraftYaml(createModeSeedName || 'draft');
     }
 
     return '';
   }, [
     activeTemplate?.yaml,
     activeWorkflowFile?.yaml,
+    createModeSeedName,
     draftMode,
     legacyPlaygroundDraft.sourceWorkflow,
     legacyPlaygroundDraft.yaml,
@@ -1431,7 +1506,7 @@ const StudioPage: React.FC = () => {
     (draftMode === 'new' && legacySource === 'playground'
       ? legacyPlaygroundDraft.sourceWorkflow || 'draft'
       : draftMode === 'new'
-        ? 'draft'
+        ? createModeSeedName || 'draft'
         : '');
   const sourceFileName = activeWorkflowFile?.fileName || '';
   const sourceDirectoryId = activeWorkflowFile?.directoryId || defaultDirectoryId;
@@ -1694,57 +1769,95 @@ const StudioPage: React.FC = () => {
         : workspacePage === 'execution'
           ? 'executions'
           : workspacePage;
+    const persistWorkflowDraftRoute = workspacePage === 'studio';
+    const persistExecutionRoute =
+      workspacePage === 'studio' && studioView === 'execution';
+    const persistScriptRoute = workspacePage === 'scripts';
 
-    window.history.replaceState(null, '', buildStudioRoute({
+    history.replace(buildStudioRoute({
       scopeId: resolvedStudioScopeId || undefined,
       scopeLabel: routeState.scopeLabel || undefined,
       memberId: routeState.memberId || undefined,
       memberLabel: routeState.memberLabel || undefined,
-      workflowId: selectedWorkflowId || undefined,
-      scriptId: selectedScriptId || undefined,
-      template: !selectedWorkflowId ? templateWorkflow || undefined : undefined,
+      teamMode: routeState.teamMode || undefined,
+      teamName: routeState.teamName || undefined,
+      entryName:
+        routeState.teamMode === 'create'
+          ? teamEntryName.trim() ||
+            routeState.teamName ||
+            undefined
+          : undefined,
+      teamDraftWorkflowId:
+        routeState.teamMode === 'create'
+          ? trimOptional(teamDraftWorkflowId) || undefined
+          : undefined,
+      teamDraftWorkflowName:
+        routeState.teamMode === 'create'
+          ? trimOptional(teamDraftWorkflowName) || undefined
+          : undefined,
+      workflowId: persistWorkflowDraftRoute ? selectedWorkflowId || undefined : undefined,
+      scriptId: persistScriptRoute ? selectedScriptId || undefined : undefined,
+      template:
+        persistWorkflowDraftRoute && !selectedWorkflowId
+          ? templateWorkflow || undefined
+          : undefined,
       tab,
       draftMode:
+        persistWorkflowDraftRoute &&
         !selectedWorkflowId &&
         !templateWorkflow &&
         draftMode === 'new'
           ? 'new'
           : undefined,
-      prompt: runPrompt || undefined,
+      prompt:
+        workspacePage === 'studio' || workspacePage === 'workflows'
+          ? runPrompt || undefined
+          : undefined,
       legacySource:
+        persistWorkflowDraftRoute &&
         !selectedWorkflowId &&
         !templateWorkflow &&
         draftMode === 'new' &&
         legacySource === 'playground'
           ? 'playground'
           : undefined,
-      executionId: selectedExecutionId || undefined,
+      executionId: persistExecutionRoute ? selectedExecutionId || undefined : undefined,
       logsMode: logsPopoutMode === 'popout' ? 'popout' : undefined,
     }));
   }, [
     appliedRouteSnapshot,
     draftMode,
+    draftWorkflowName,
     isStudioLocation,
     legacySource,
     locationSnapshot,
     logsPopoutMode,
     resolvedStudioScopeId,
     runPrompt,
+    routeState.entryName,
     routeState.memberId,
     routeState.memberLabel,
     routeState.scopeLabel,
+    routeState.teamDraftWorkflowId,
+    routeState.teamDraftWorkflowName,
+    routeState.teamMode,
+    routeState.teamName,
     selectedExecutionId,
     selectedScriptId,
     selectedWorkflowId,
     studioView,
+    teamDraftWorkflowId,
+    teamDraftWorkflowName,
+    teamEntryName,
     templateWorkflow,
     workspacePage,
   ]);
 
   const activeWorkflowName = draftWorkflowName || sourceWorkflowName;
+  const resolvedDraftDirectoryId = draftDirectoryId || defaultDirectoryId;
   const activeDirectoryLabel =
     workspaceSettingsQuery.data?.directories.find(
-      (item) => item.directoryId === draftDirectoryId,
+      (item) => item.directoryId === resolvedDraftDirectoryId,
     )?.label ||
     activeWorkflowFile?.directoryLabel ||
     'No directory';
@@ -1799,11 +1912,12 @@ const StudioPage: React.FC = () => {
     (draftYaml !== sourceYaml ||
       draftWorkflowName !== sourceWorkflowName ||
       draftFileName !== sourceFileName ||
-      draftDirectoryId !== sourceDirectoryId);
+      resolvedDraftDirectoryId !== sourceDirectoryId);
   const canSaveWorkflow =
+    studioHostReady &&
     Boolean(draftYaml.trim()) &&
     Boolean(draftWorkflowName.trim()) &&
-    Boolean(draftDirectoryId) &&
+    Boolean(resolvedDraftDirectoryId) &&
     !savePending;
   const canOpenRunWorkflow =
     Boolean(draftYaml.trim()) &&
@@ -1874,7 +1988,10 @@ const StudioPage: React.FC = () => {
           );
         }
 
-        const workflowFile = await studioApi.getWorkflow(workflowId);
+        const workflowFile = await studioApi.getWorkflow(
+          workflowId,
+          resolvedStudioScopeId,
+        );
         const childDocument =
           workflowFile.document ??
           (
@@ -1901,6 +2018,7 @@ const StudioPage: React.FC = () => {
     availableStepTypes,
     draftWorkflowName,
     draftYaml,
+    resolvedStudioScopeId,
     visibleWorkflowSummaries,
   ]);
   const recentPromptHistory = useMemo(
@@ -2245,8 +2363,22 @@ const StudioPage: React.FC = () => {
     [ensureActiveWorkflowDraftLoaded],
   );
 
+  const handleSelectWorkflowWorkspaceSection = useCallback(
+    (section: WorkflowWorkspaceSection) => {
+      if (section === 'browser') {
+        setWorkspacePage('workflows');
+        return;
+      }
+
+      ensureActiveWorkflowDraftLoaded();
+      setWorkspacePage('studio');
+      setStudioView('editor');
+    },
+    [ensureActiveWorkflowDraftLoaded],
+  );
+
   const handleSaveDraft = async () => {
-    const directoryId = draftDirectoryId || defaultDirectoryId;
+    const directoryId = resolvedDraftDirectoryId;
     if (!directoryId) {
       setSaveNotice({
         type: 'error',
@@ -2270,6 +2402,7 @@ const StudioPage: React.FC = () => {
     try {
       const savedWorkflow = await studioApi.saveWorkflow({
         workflowId: activeWorkflowFile?.workflowId || undefined,
+        scopeId: resolvedStudioScopeId || undefined,
         directoryId,
         workflowName,
         fileName: draftFileName,
@@ -2281,18 +2414,20 @@ const StudioPage: React.FC = () => {
       });
 
       queryClient.setQueryData(
-        ['studio-workflow', savedWorkflow.workflowId],
+        ['studio-workflow', workflowWorkspaceContextKey, savedWorkflow.workflowId],
         savedWorkflow,
       );
       await queryClient.invalidateQueries({
-        queryKey: ['studio-workspace-workflows'],
+        queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
       });
 
       setSelectedWorkflowId(savedWorkflow.workflowId);
       setTemplateWorkflow('');
       setDraftMode('');
       setLegacySource('');
-      setDraftSourceKey(`workspace:${savedWorkflow.workflowId}`);
+      setDraftSourceKey(
+        `workflow:${workflowWorkspaceContextKey}:${savedWorkflow.workflowId}`,
+      );
       setDraftYaml(savedWorkflow.yaml);
       setDraftWorkflowName(savedWorkflow.name);
       setDraftFileName(savedWorkflow.fileName);
@@ -2302,10 +2437,14 @@ const StudioPage: React.FC = () => {
           draftWorkflowLayout ||
           buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
       );
-      setSaveNotice({
-        type: 'success',
-        message: `Saved ${savedWorkflow.name} to ${savedWorkflow.directoryLabel}.`,
-      });
+      if (isTeamCreateMode) {
+        setTeamDraftWorkflowId(savedWorkflow.workflowId);
+        setTeamDraftWorkflowName(savedWorkflow.name);
+      }
+      setSaveNotice(null);
+      void message.success(
+        `已保存到 ${describeSavedWorkflowLocation(savedWorkflow)}。`,
+      );
     } catch (error) {
       setSaveNotice({
         type: 'error',
@@ -2430,11 +2569,14 @@ const StudioPage: React.FC = () => {
 
   const handlePublishWorkflow = async () => {
     const workflowName = activeWorkflowName.trim();
+    const entryName = isTeamCreateMode ? teamCreateEntryLabel : workflowName;
     const scopeId = resolvedStudioScopeId;
-    if (!workflowName) {
+    if (!entryName) {
       setPublishNotice({
         type: 'error',
-        message: 'Workflow name is required before binding the current scope.',
+        message: isTeamCreateMode
+          ? 'Entry name is required before binding the current scope.'
+          : 'Workflow name is required before binding the current scope.',
       });
       return;
     }
@@ -2470,7 +2612,7 @@ const StudioPage: React.FC = () => {
       const workflowYamls = await buildWorkflowYamlBundle();
       const result = await studioApi.bindScopeWorkflow({
         scopeId,
-        displayName: workflowName,
+        displayName: entryName,
         workflowYamls,
       });
       await queryClient.invalidateQueries({
@@ -3480,7 +3622,7 @@ const StudioPage: React.FC = () => {
       });
       queryClient.setQueryData(['studio-settings'], response);
       queryClient.setQueryData(
-        ['studio-workspace-settings'],
+        ['studio-workspace-settings', workflowWorkspaceContextKey],
         (current: StudioWorkspaceSettings | undefined) =>
           current
             ? {
@@ -4339,7 +4481,89 @@ const StudioPage: React.FC = () => {
           ? 'Agent 角色'
           : workspacePage === 'connectors'
             ? '集成'
-            : '编辑器设置';
+          : '编辑器设置';
+  const teamCreateTeamLabel =
+    trimOptional(routeState.teamName) ||
+    trimOptional(teamEntryName) ||
+    trimOptional(routeState.entryName) ||
+    '未命名团队';
+  const teamCreateEntryLabel =
+    trimOptional(teamEntryName) ||
+    trimOptional(routeState.entryName) ||
+    trimOptional(routeState.teamName) ||
+    '未命名入口';
+  const teamCreateSavedDraftWorkflowId =
+    trimOptional(teamDraftWorkflowId) ||
+    trimOptional(routeState.teamDraftWorkflowId);
+  const teamCreateSavedDraftWorkflowName =
+    trimOptional(teamDraftWorkflowName) ||
+    trimOptional(routeState.teamDraftWorkflowName);
+
+  const workflowWorkspaceSection =
+    !isTeamCreateMode && workspacePage === 'workflows'
+      ? 'browser'
+      : !isTeamCreateMode &&
+          workspacePage === 'studio' &&
+          studioView === 'editor'
+        ? 'editor'
+        : null;
+  const workflowWorkspaceSwitcher =
+    workflowWorkspaceSection ? (
+      <div
+        role="tablist"
+        aria-label="行为定义页面切换"
+        style={{
+          alignItems: 'center',
+          background: '#f5f5f5',
+          border: '1px solid #e5e7eb',
+          borderRadius: 10,
+          display: 'inline-flex',
+          gap: 4,
+          padding: 3,
+        }}
+      >
+        {(
+          [
+            {
+              key: 'browser',
+              label: '定义列表',
+            },
+            {
+              key: 'editor',
+              label: '编辑草稿',
+            },
+          ] as const
+        ).map((item) => {
+          const active = workflowWorkspaceSection === item.key;
+
+          return (
+            <button
+              key={item.key}
+              type="button"
+              aria-current={active ? 'page' : undefined}
+              aria-pressed={active}
+              onClick={() => handleSelectWorkflowWorkspaceSection(item.key)}
+              style={{
+                background: active ? '#ffffff' : 'transparent',
+                border: 'none',
+                borderRadius: 8,
+                boxShadow: active ? '0 1px 2px rgba(15, 23, 42, 0.12)' : 'none',
+                color: active ? '#1d2129' : '#8c8c8c',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: active ? 600 : 500,
+                lineHeight: '18px',
+                padding: '6px 10px',
+                transition:
+                  'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
+              }}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
 
   const studioContextActions =
     workspacePage === 'studio' && studioView === 'execution' ? (
@@ -4364,30 +4588,82 @@ const StudioPage: React.FC = () => {
           onClick={() => void handleSaveDraft()}
           type="primary"
         >
-          保存
+          {isTeamCreateMode ? '保存草稿' : '保存'}
         </Button>
       </Space>
     ) : undefined;
 
   const studioContextScopeLabel =
-    routeState.scopeLabel ||
-    scopeBindingQuery.data?.displayName ||
-    resolvedStudioScopeId;
-  const studioContextMemberLabel =
-    routeState.memberLabel || activeWorkflowName || templateWorkflow;
+    isTeamCreateMode
+      ? routeState.teamName || routeState.scopeLabel || resolvedStudioScopeId
+      : routeState.scopeLabel ||
+        scopeBindingQuery.data?.displayName ||
+        resolvedStudioScopeId;
+  const studioContextPrimaryTitle =
+    isTeamCreateMode && workspacePage === 'studio' && studioView === 'editor'
+      ? teamCreateTeamLabel
+      : workspacePage === 'studio' && studioView === 'editor'
+      ? activeWorkflowName || templateWorkflow || '未命名草稿'
+      : workspacePage === 'studio' && studioView === 'execution'
+        ? activeWorkflowName || templateWorkflow || '测试运行'
+        : pageTitle;
+  const studioContextDescriptor =
+    isTeamCreateMode && workspacePage === 'studio' && studioView === 'editor'
+      ? '创建团队入口'
+      : workspacePage === 'studio' && studioView === 'editor'
+      ? '行为定义草稿'
+      : workspacePage === 'studio' && studioView === 'execution'
+        ? '测试运行'
+        : workspacePage === 'workflows'
+          ? '浏览团队内的行为定义'
+          : workspacePage === 'scripts'
+            ? '编写与发布 scope 感知脚本'
+            : workspacePage === 'roles'
+              ? '管理当前团队的 Agent 角色'
+              : workspacePage === 'connectors'
+                ? '管理团队可用集成'
+                : '管理 Studio 编辑器设置';
+  const studioContextMetaParts = (
+    isTeamCreateMode && workspacePage === 'studio' && studioView === 'editor'
+      ? [
+          studioContextDescriptor,
+          `入口草稿：${teamCreateEntryLabel}`,
+          resolvedStudioScopeId ? `Scope：${resolvedStudioScopeId}` : '',
+        ]
+      : [
+          studioContextDescriptor,
+          studioContextScopeLabel,
+          routeState.memberLabel &&
+          routeState.memberLabel !== studioContextPrimaryTitle &&
+          routeState.memberLabel !== studioContextScopeLabel
+            ? routeState.memberLabel
+            : '',
+          scopeBindingQuery.data?.serviceId || '',
+        ]
+  )
+    .map((value) => trimOptional(value))
+    .filter(Boolean);
+  const studioReturnHref = isTeamCreateMode
+    ? buildTeamCreateHref({
+        teamName: routeState.teamName || undefined,
+        entryName: teamCreateEntryLabel || undefined,
+        teamDraftWorkflowId: teamCreateSavedDraftWorkflowId || undefined,
+        teamDraftWorkflowName: teamCreateSavedDraftWorkflowName || undefined,
+      })
+    : resolvedStudioScopeId
+      ? buildTeamDetailHref({
+          scopeId: resolvedStudioScopeId,
+          tab: 'advanced',
+          serviceId: scopeBindingQuery.data?.serviceId || undefined,
+        })
+      : buildTeamsHref();
+  const studioReturnLabel = isTeamCreateMode ? '返回创建页' : '返回团队';
   const currentStudioReturnTo =
     typeof window === 'undefined'
       ? ''
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
-  const studioContextCode = [
-    resolvedStudioScopeId,
-    scopeBindingQuery.data?.serviceId,
-  ]
-    .map((value) => trimOptional(value))
-    .filter(Boolean)
-    .join(' · ');
   const studioContextBar = (
     <div
       style={{
@@ -4396,23 +4672,14 @@ const StudioPage: React.FC = () => {
         borderBottom: '1px solid #f0f0f0',
         display: 'flex',
         gap: 12,
-        minHeight: 44,
-        padding: '0 16px',
+        minHeight: 64,
+        padding: '10px 16px',
       }}
     >
       <button
+        aria-label={studioReturnLabel}
         type="button"
-        onClick={() =>
-          history.push(
-            resolvedStudioScopeId
-              ? buildTeamDetailHref({
-                  scopeId: resolvedStudioScopeId,
-                  tab: 'advanced',
-                  serviceId: scopeBindingQuery.data?.serviceId || undefined,
-                })
-              : buildTeamsHref(),
-          )
-        }
+        onClick={() => history.push(studioReturnHref)}
         style={{
           alignItems: 'center',
           background: 'transparent',
@@ -4426,39 +4693,39 @@ const StudioPage: React.FC = () => {
           padding: 0,
         }}
       >
-        ← {studioContextScopeLabel || '返回团队'}
+        ← {studioReturnLabel}
       </button>
       <div
         style={{
-          alignItems: 'center',
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
+          display: 'grid',
+          gap: 4,
           minWidth: 0,
         }}
       >
-        <span
+        <div
+          data-testid="studio-context-title"
           style={{
-            color: '#8c8c8c',
-            fontSize: 13,
-            lineHeight: '20px',
+            color: '#1d2129',
+            fontSize: 14,
+            fontWeight: 700,
+            lineHeight: '22px',
+            minWidth: 0,
           }}
         >
-          / <b style={{ color: '#1d2129' }}>
-            {studioContextMemberLabel || studioContextScopeLabel || '当前团队'}
-          </b>{' '}
-          / {pageTitle}
-        </span>
-        {studioContextCode ? (
-          <code
+          {studioContextPrimaryTitle}
+        </div>
+        {studioContextMetaParts.length > 0 ? (
+          <div
+            data-testid="studio-context-meta"
             style={{
               color: '#8c8c8c',
-              fontFamily: '"SF Mono", "JetBrains Mono", monospace',
-              fontSize: 11,
+              fontSize: 12,
+              lineHeight: '18px',
+              minWidth: 0,
             }}
           >
-            {studioContextCode}
-          </code>
+            {studioContextMetaParts.join(' · ')}
+          </div>
         ) : null}
       </div>
       {studioContextActions ? (
@@ -4470,7 +4737,19 @@ const StudioPage: React.FC = () => {
             marginLeft: 'auto',
           }}
         >
+          {workflowWorkspaceSwitcher}
           {studioContextActions}
+        </div>
+      ) : workflowWorkspaceSwitcher ? (
+        <div
+          style={{
+            alignItems: 'center',
+            display: 'flex',
+            gap: 8,
+            marginLeft: 'auto',
+          }}
+        >
+          {workflowWorkspaceSwitcher}
         </div>
       ) : null}
     </div>
@@ -4536,8 +4815,12 @@ const StudioPage: React.FC = () => {
         data-testid="studio-workflows-viewport"
         style={{
           display: 'flex',
+          flex: 1,
           flexDirection: 'column',
+          height: '100%',
+          minHeight: 0,
           minWidth: 0,
+          overflow: 'hidden',
         }}
       >
         <StudioWorkflowsPage
@@ -4673,6 +4956,15 @@ const StudioPage: React.FC = () => {
           publishPending={publishPending}
           canPublishWorkflow={canPublishWorkflow}
           publishNotice={publishNotice}
+          teamCreation={
+            isTeamCreateMode
+              ? {
+                  teamName: teamCreateTeamLabel,
+                  entryName: teamCreateEntryLabel,
+                  workflowName: activeWorkflowName,
+                }
+              : null
+          }
           scopeBinding={scopeBindingQuery.data}
           scopeBindingLoading={scopeBindingQuery.isLoading}
           scopeBindingError={scopeBindingQuery.isError ? scopeBindingQuery.error : null}
@@ -4716,6 +5008,10 @@ const StudioPage: React.FC = () => {
           onSetDraftWorkflowName={(value) => {
             setDraftWorkflowName(value);
             setSaveNotice(null);
+          }}
+          onSetTeamEntryName={(value) => {
+            setTeamEntryName(value);
+            setPublishNotice(null);
           }}
           onSetDraftDirectoryId={(value) => {
             setDraftDirectoryId(value);
@@ -5027,6 +5323,7 @@ const StudioPage: React.FC = () => {
           currentPageContent
         ) : (
           <StudioShell
+            contentOverflow={workspacePage === 'workflows' ? 'hidden' : 'auto'}
             contextBar={studioContextBar}
             currentPage={
               workspacePage === 'studio'

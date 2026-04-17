@@ -110,9 +110,14 @@ const shellMainStyle: React.CSSProperties = {
 };
 
 const shellContentStyle: React.CSSProperties = {
+  // Keep this as a flex column so StudioEditorPage can own the remaining height
+  // and its internal panes can scroll instead of collapsing to a blank canvas.
   background: '#fafafa',
+  display: 'flex',
   flex: 1,
+  flexDirection: 'column',
   minHeight: 0,
+  minWidth: 0,
   overflow: 'hidden',
 };
 
@@ -284,6 +289,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
         {contextBar}
         {alerts ? <div style={shellAlertsStyle}>{alerts}</div> : null}
         <div
+          data-testid="studio-shell-content"
           style={{
             ...shellContentStyle,
           }}
