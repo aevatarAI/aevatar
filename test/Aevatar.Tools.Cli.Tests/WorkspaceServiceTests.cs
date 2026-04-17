@@ -115,6 +115,9 @@ public class WorkspaceServiceTests
             return Task.FromResult(workflowFile);
         }
 
+        public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
         public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<StoredExecutionRecord>>([]);
 

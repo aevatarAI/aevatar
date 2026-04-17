@@ -149,6 +149,64 @@ public sealed class WorkspaceService
         return ToWorkflowFileResponse(stored);
     }
 
+    public async Task DeleteDraftAsync(string workflowId, CancellationToken cancellationToken = default)
+    {
+        var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+        string filePath;
+
+        try
+        {
+            filePath = DecodeStableId(normalizedWorkflowId);
+        }
+        catch (FormatException exception)
+        {
+            throw new InvalidOperationException($"{nameof(workflowId)} is invalid.", exception);
+        }
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new InvalidOperationException($"{nameof(workflowId)} is invalid.");
+        }
+
+        var settings = await _store.GetSettingsAsync(cancellationToken);
+        if (!IsInsideRegisteredDirectory(filePath, settings.Directories))
+        {
+            throw new InvalidOperationException($"{nameof(workflowId)} does not point to a registered workspace directory.");
+        }
+
+        await _store.DeleteWorkflowFileAsync(CreateStableId(filePath), cancellationToken);
+    }
+
+    private static bool IsInsideRegisteredDirectory(
+        string filePath,
+        IReadOnlyList<StudioWorkspaceDirectory> directories)
+    {
+        string fullFile;
+        try
+        {
+            fullFile = Path.GetFullPath(filePath);
+        }
+        catch (Exception exception) when (exception is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            return false;
+        }
+
+        foreach (var directory in directories)
+        {
+            if (string.IsNullOrWhiteSpace(directory.Path))
+                continue;
+
+            var fullDir = directory.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (fullDir.Length == 0)
+                continue;
+
+            if (fullFile.StartsWith(fullDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
     private string AlignWorkflowYamlName(string yaml, string workflowName)
     {
         if (string.IsNullOrWhiteSpace(yaml) || string.IsNullOrWhiteSpace(workflowName))
@@ -242,6 +300,17 @@ public sealed class WorkspaceService
         }
 
         return Path.GetFullPath(Environment.ExpandEnvironmentVariables(path));
+    }
+
+    private static string NormalizeRequired(string value, string fieldName)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+        {
+            throw new InvalidOperationException($"{fieldName} is required.");
+        }
+
+        return normalized;
     }
 
     private static string EnsureYamlExtension(string fileName)

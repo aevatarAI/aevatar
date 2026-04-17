@@ -76,6 +76,19 @@ internal sealed class ChronoStorageWorkflowStoragePort : IWorkflowStoragePort
             UpdatedAtUtc: null);
     }
 
+    public async Task DeleteWorkflowYamlAsync(string workflowId, CancellationToken ct)
+    {
+        var normalizedWorkflowId = workflowId?.Trim() ?? string.Empty;
+        if (normalizedWorkflowId.Length == 0)
+            return;
+
+        var context = _blobClient.TryResolveContext(string.Empty, $"{WorkflowDirectory}/{normalizedWorkflowId}.yaml");
+        if (context == null)
+            return;
+
+        await _blobClient.DeleteIfExistsAsync(context, ct);
+    }
+
     private ChronoStorageCatalogBlobClient.RemoteScopeContext? ResolveWorkflowDirectoryContext() =>
         _blobClient.TryResolveContext(string.Empty, $"{WorkflowDirectory}/.index");
 

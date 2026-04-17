@@ -343,5 +343,11 @@ public sealed class AppScopedWorkflowServiceTests
                 _storedWorkflows.TryGetValue(workflowId, out var storedWorkflow)
                     ? storedWorkflow
                     : null);
+
+        public Task DeleteWorkflowYamlAsync(string workflowId, CancellationToken ct)
+        {
+            _storedWorkflows.Remove(workflowId);
+            return Task.CompletedTask;
+        }
     }
 }

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Domain.Studio.Models;
 using Microsoft.Extensions.Options;
 
@@ -167,6 +168,25 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
             Layout = workflowFile.Layout ?? await ReadJsonAsync<WorkflowLayoutDocument>(GetLayoutFilePath(workflowFile.FilePath), cancellationToken),
             UpdatedAtUtc = new DateTimeOffset(updatedAtUtc, TimeSpan.Zero),
         };
+    }
+
+    public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var filePath = WorkspaceService.DecodeStableId(workflowId);
+        if (File.Exists(filePath))
+        {
+            File.Delete(filePath);
+        }
+
+        var layoutFilePath = GetLayoutFilePath(filePath);
+        if (File.Exists(layoutFilePath))
+        {
+            File.Delete(layoutFilePath);
+        }
+
+        return Task.CompletedTask;
     }
 
     public async Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default)
