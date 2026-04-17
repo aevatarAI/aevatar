@@ -111,6 +111,9 @@ fi
 
 ensure_neo4j_env() {
   local environment_name="${ASPNETCORE_ENVIRONMENT:-${DOTNET_ENVIRONMENT:-}}"
+  if [[ -z "${environment_name}" && "${APP_MODE}" == "distributed" ]]; then
+    environment_name="Distributed"
+  fi
   local neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-}"
 
   if [[ "${environment_name}" != "Distributed" && "${neo4j_enabled}" != "true" ]]; then
@@ -289,9 +292,11 @@ case "${APP_MODE}" in
 esac
 
 env_cmd=(env)
-for name in "${unset_env[@]}"; do
-  env_cmd+=(-u "${name}")
-done
+if (( ${#unset_env[@]} > 0 )); then
+  for name in "${unset_env[@]}"; do
+    env_cmd+=(-u "${name}")
+  done
+fi
 env_cmd+=("${launch_env[@]}")
 
 nohup "${env_cmd[@]}" "${DOTNET_CMD}" run \
