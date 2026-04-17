@@ -408,7 +408,11 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            runtime, scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime),
+            new FakeActorDispatchPort(runtime),
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
 
         await store.AddActorAsync("route-scope", "MyGAgent", "actor-789");
 
@@ -639,7 +643,6 @@ public sealed class ActorBackedStoreAdapterTests
             StateRoot = Any.Pack(state),
         });
         var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), reader, logger);
         var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), reader, logger);
 
         var participants = await store.ListAsync("room-1");

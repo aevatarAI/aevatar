@@ -2,7 +2,15 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.ChatHistory;
+using Aevatar.GAgents.ConnectorCatalog;
+using Aevatar.GAgents.Registry;
+using Aevatar.GAgents.RoleCatalog;
+using Aevatar.GAgents.StreamingProxyParticipant;
+using Aevatar.GAgents.UserConfig;
+using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Projection.ReadModels;
+using Google.Protobuf.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -46,23 +54,25 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
 
         if (elasticsearchEnabled)
         {
-            RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration, d => d.Id);
-            RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration, d => d.Id);
-            RegisterElasticsearch<ChatHistoryIndexCurrentStateDocument>(services, configuration, d => d.Id);
-            RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration, d => d.Id);
-            RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration, d => d.Id);
-            RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration, d => d.Id);
-            RegisterElasticsearch<StreamingProxyParticipantCurrentStateDocument>(services, configuration, d => d.Id);
+            RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<ChatHistoryIndexCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<StreamingProxyParticipantCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
         }
         else
         {
-            RegisterInMemory<RoleCatalogCurrentStateDocument>(services, d => d.Id, d => d.UpdatedAt);
-            RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services, d => d.Id, d => d.UpdatedAt);
-            RegisterInMemory<ChatHistoryIndexCurrentStateDocument>(services, d => d.Id, d => d.UpdatedAt);
-            RegisterInMemory<ChatConversationCurrentStateDocument>(services, d => d.Id, d => d.UpdatedAt);
-            RegisterInMemory<GAgentRegistryCurrentStateDocument>(services, d => d.Id, d => d.UpdatedAt);
-            RegisterInMemory<UserMemoryCurrentStateDocument>(services, d => d.Id, d => d.UpdatedAt);
-            RegisterInMemory<StreamingProxyParticipantCurrentStateDocument>(services, d => d.Id, d => d.UpdatedAt);
+            RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
+            RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
+            RegisterInMemory<ChatHistoryIndexCurrentStateDocument>(services);
+            RegisterInMemory<ChatConversationCurrentStateDocument>(services);
+            RegisterInMemory<GAgentRegistryCurrentStateDocument>(services);
+            RegisterInMemory<UserMemoryCurrentStateDocument>(services);
+            RegisterInMemory<StreamingProxyParticipantCurrentStateDocument>(services);
+            RegisterInMemory<UserConfigCurrentStateDocument>(services);
         }
 
         return services;
@@ -70,27 +80,25 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
 
     private static void RegisterElasticsearch<TDoc>(
         IServiceCollection services,
-        IConfiguration configuration,
-        Func<TDoc, string> keySelector)
+        IConfiguration configuration)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
         services.AddElasticsearchDocumentProjectionStore<TDoc, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TDoc>>().Metadata,
-            keySelector: keySelector,
-            keyFormatter: key => key);
+            keySelector: readModel => readModel.ActorId,
+            keyFormatter: key => key,
+            typeRegistry: BuildStudioStateTypeRegistry());
     }
 
     private static void RegisterInMemory<TDoc>(
-        IServiceCollection services,
-        Func<TDoc, string> keySelector,
-        Func<TDoc, object?> defaultSortSelector)
+        IServiceCollection services)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
         services.AddInMemoryDocumentProjectionStore<TDoc, string>(
-            keySelector: keySelector,
+            keySelector: readModel => readModel.ActorId,
             keyFormatter: key => key,
-            defaultSortSelector: defaultSortSelector);
+            defaultSortSelector: readModel => readModel.UpdatedAt);
     }
 
     private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
@@ -127,5 +135,18 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
 
         return parsed;
+    }
+
+    private static TypeRegistry BuildStudioStateTypeRegistry()
+    {
+        return TypeRegistry.FromMessages(
+            UserConfigGAgentState.Descriptor,
+            GAgentRegistryState.Descriptor,
+            ConnectorCatalogState.Descriptor,
+            RoleCatalogState.Descriptor,
+            UserMemoryState.Descriptor,
+            StreamingProxyParticipantGAgentState.Descriptor,
+            ChatHistoryIndexState.Descriptor,
+            ChatConversationState.Descriptor);
     }
 }
