@@ -101,6 +101,7 @@ public class NyxIdChatEndpointsCoverageTests
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("actor store unavailable");
+        historyStore.SavedConversations.Should().BeEmpty();
     }
 
     [Fact]
@@ -170,6 +171,29 @@ public class NyxIdChatEndpointsCoverageTests
         historyStore.DeletedConversations.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.ConversationId == "actor-1");
+    }
+
+    [Fact]
+    public async Task HandleDeleteConversationAsync_ShouldBubbleFailure_WhenActorRemovalFails()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            RemoveActorException = new InvalidOperationException("actor store unavailable"),
+        };
+        var historyStore = new StubChatHistoryStore();
+
+        var act = async () => await InvokeResultAsync(
+            "HandleDeleteConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            "actor-1",
+            actorStore,
+            historyStore,
+            CancellationToken.None);
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.Which.Message.Should().Be("actor store unavailable");
+        historyStore.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
@@ -1098,6 +1122,7 @@ public class NyxIdChatEndpointsCoverageTests
     {
         public IReadOnlyList<GAgentActorGroup> GroupsToReturn { get; init; } = [];
         public Exception? AddActorException { get; init; }
+        public Exception? RemoveActorException { get; init; }
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
         public string? LastRequestedScopeId { get; private set; }
@@ -1141,6 +1166,8 @@ public class NyxIdChatEndpointsCoverageTests
             string actorId,
             CancellationToken cancellationToken = default)
         {
+            if (RemoveActorException is not null)
+                throw RemoveActorException;
             RemovedActors.Add((string.Empty, gagentType, actorId));
             return Task.CompletedTask;
         }
@@ -1151,6 +1178,8 @@ public class NyxIdChatEndpointsCoverageTests
             string actorId,
             CancellationToken cancellationToken = default)
         {
+            if (RemoveActorException is not null)
+                throw RemoveActorException;
             RemovedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }

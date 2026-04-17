@@ -320,15 +320,8 @@ public static class NyxIdChatEndpoints
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
-        try
-        {
-            await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
-            await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
-        }
-        catch (InvalidOperationException)
-        {
-            // chrono-storage unavailable
-        }
+        await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
         return Results.Ok();
     }
 
@@ -341,14 +334,14 @@ public static class NyxIdChatEndpoints
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
         var createdAt = DateTimeOffset.UtcNow;
 
+        await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+
         await chatHistoryStore.SaveMessagesAsync(
             scopeId,
             actorId,
             BuildConversationMeta(actorId, createdAt),
             [],
             ct);
-
-        await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
         return new NyxIdConversationEntry(actorId, createdAt);
     }
 
