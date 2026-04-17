@@ -68,6 +68,41 @@ public sealed class MainnetBootScriptTests
         stdout.Should().Contain("==> Mode: distributed");
     }
 
+    [Fact]
+    public async Task BootScript_DistributedMode_ShouldRequireNeo4jPassword_ByDefault()
+    {
+        var repoRoot = FindRepoRoot();
+        var sourceDir = Path.Combine(repoRoot, "src", "Aevatar.Mainnet.Host.Api");
+
+        using var tempDir = new TemporaryDirectory();
+        var scriptPath = Path.Combine(tempDir.Path, "boot.sh");
+        var projectPath = Path.Combine(tempDir.Path, "Aevatar.Mainnet.Host.Api.csproj");
+        File.Copy(Path.Combine(sourceDir, "boot.sh"), scriptPath);
+        File.Copy(Path.Combine(sourceDir, "Aevatar.Mainnet.Host.Api.csproj"), projectPath);
+
+        using var process = Process.Start(CreateProcessStartInfo(
+            scriptPath,
+            tempDir.Path,
+            "distributed",
+            new Dictionary<string, string?>
+            {
+                ["AEVATAR_Projection__Graph__Providers__Neo4j__Enabled"] = null,
+            }));
+        process.Should().NotBeNull();
+
+        var stdoutTask = process!.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        process.ExitCode.Should().NotBe(0);
+        stderr.Should().Contain("Distributed mode with Neo4j enabled requires an explicit Neo4j password.");
+        stderr.Should().NotContain("Aevatar.Mainnet.Host.Api failed to start.");
+        stdout.Should().Contain("==> Mode: distributed");
+    }
+
     private static ProcessStartInfo CreateProcessStartInfo(
         string scriptPath,
         string workingDirectory,

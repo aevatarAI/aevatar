@@ -251,8 +251,8 @@ launch_env=(
 )
 
 unset_env=()
-effective_environment_name="${ASPNETCORE_ENVIRONMENT:-${DOTNET_ENVIRONMENT:-}}"
-effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-}"
+effective_environment_name=""
+effective_neo4j_enabled=""
 
 case "${APP_MODE}" in
   local)
@@ -285,12 +285,14 @@ case "${APP_MODE}" in
     ;;
   persistent-local)
     effective_environment_name="PersistentLocal"
+    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=PersistentLocal"
     )
     ;;
   distributed)
     effective_environment_name="Distributed"
+    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-true}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Distributed"
     )
