@@ -80,6 +80,9 @@ public static class NyxIdChatEndpoints
         [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
+        // Conversation creation is fail-fast on IGAgentActorStore persistence.
+        // NyxId chat depends on the registry being available; there is no
+        // degraded mode where a conversation can run without being registered.
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
         await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
         return Results.Ok(new { actorId });
@@ -317,8 +320,8 @@ public static class NyxIdChatEndpoints
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
-        await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
         await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
+        await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
         return Results.Ok();
     }
 
@@ -785,16 +788,12 @@ public static class NyxIdChatEndpoints
                 platform, conversationId, message.Sender?.DisplayName);
 
             // ─── Get or create actor ───
+            // Relay follows the same strict lifecycle contract as create:
+            // registry persistence via IGAgentActorStore is mandatory, and
+            // registry failures must surface instead of silently degrading.
             var actor = await actorRuntime.GetAsync(actorId)
                         ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-            try
-            {
-                await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
-            }
-            catch (InvalidOperationException)
-            {
-                // chrono-storage unavailable — actor still usable via runtime
-            }
+            await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
 
             // ─── Subscribe and collect response ───
             var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -918,6 +917,10 @@ public static class NyxIdChatEndpoints
         catch (OperationCanceledException)
         {
             return FriendlyReply("The request was cancelled. Please try again.");
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

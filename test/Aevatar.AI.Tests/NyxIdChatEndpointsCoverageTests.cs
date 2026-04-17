@@ -166,7 +166,32 @@ public class NyxIdChatEndpointsCoverageTests
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("actor store unavailable");
-        historyStore.DeletedConversations.Should().BeEmpty();
+        historyStore.DeletedConversations.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.ConversationId == "actor-1");
+    }
+
+    [Fact]
+    public async Task HandleDeleteConversationAsync_ShouldNotRemoveActor_WhenHistoryDeleteFails()
+    {
+        var actorStore = new StubGAgentActorStore();
+        var historyStore = new StubChatHistoryStore
+        {
+            DeleteConversationException = new InvalidOperationException("history unavailable"),
+        };
+
+        var act = async () => await InvokeResultAsync(
+            "HandleDeleteConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            "actor-1",
+            actorStore,
+            historyStore,
+            CancellationToken.None);
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.Which.Message.Should().Be("history unavailable");
+        actorStore.RemovedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -629,6 +654,45 @@ public class NyxIdChatEndpointsCoverageTests
         response.Body.Should().Contain("Route: gateway");
         response.Body.Should().Contain("Token: present");
         response.Body.Should().Contain("Scope: scope-b");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldBubbleFailure_WhenActorRegistrationFails()
+    {
+        var payload = """
+            {
+              "message_id":"msg-3",
+              "platform":"slack",
+              "agent":{"api_key_id":"scope-c"},
+              "conversation":{"platform_id":"room-3"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = "not-a-jwt";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var act = async () => await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            new StubActorRuntime(),
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore
+            {
+                AddActorException = new InvalidOperationException("actor store unavailable"),
+            },
+            new NyxIdRelayOptions(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.Which.Message.Should().Be("actor store unavailable");
     }
 
     [Fact]
@@ -1164,6 +1228,7 @@ public class NyxIdChatEndpointsCoverageTests
         public List<(string ScopeId, string ConversationId, ConversationMeta Meta)> SavedConversations { get; } = [];
         public List<(string ScopeId, string ConversationId)> DeletedConversations { get; } = [];
         public Exception? SaveMessagesException { get; init; }
+        public Exception? DeleteConversationException { get; init; }
 
         public Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
         {
@@ -1197,6 +1262,8 @@ public class NyxIdChatEndpointsCoverageTests
 
         public Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
         {
+            if (DeleteConversationException is not null)
+                throw DeleteConversationException;
             DeletedConversations.Add((scopeId, conversationId));
             return Task.CompletedTask;
         }

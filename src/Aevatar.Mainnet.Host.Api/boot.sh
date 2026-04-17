@@ -113,7 +113,11 @@ ensure_neo4j_env() {
   local environment_name="${1:-}"
   local neo4j_enabled="${2:-}"
 
-  if [[ "${environment_name}" != "Distributed" && "${neo4j_enabled}" != "true" ]]; then
+  if [[ "${neo4j_enabled}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ "${environment_name}" != "Distributed" ]]; then
     return 0
   fi
 
