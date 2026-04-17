@@ -511,13 +511,25 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Aevatar" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Teams" })).toBeTruthy();
-    expect(screen.getByText("Team scope-1")).toBeTruthy();
+    expect(screen.getByText("scopeId")).toBeTruthy();
+    expect(screen.getByText("scope-1")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("运行摘要")).toBeTruthy();
     expect(screen.getByText("当前态势")).toBeTruthy();
     expect(screen.getByRole("button", { name: "运行记录" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
+  });
+
+  it("prefers the explicit workflow display name for the team heading", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Support Escalation Triage",
+      }),
+    ).toBeTruthy();
   });
 
   it("demotes machine-generated long scope ids into compact team metadata", async () => {
@@ -537,6 +549,59 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText(`Team ${longScopeId}`)).toBeNull();
     expect(screen.getByText("scopeId")).toBeTruthy();
     expect(screen.getByText("1626c177...71b0d6")).toBeTruthy();
+  });
+
+  it("falls back to workflowName when the scope display name is only the workflow id", async () => {
+    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        scopeId: "scope-1",
+        workflowId: "workflow-opaque-id",
+        displayName: "workflow-opaque-id",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage",
+        actorId: "actor-intake",
+        activeRevisionId: "rev-2",
+        deploymentId: "dep-2",
+        deploymentStatus: "Active",
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ]);
+    (scopesApi.getWorkflowDetail as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: "scope-1",
+      workflow: {
+        scopeId: "scope-1",
+        workflowId: "workflow-opaque-id",
+        displayName: "workflow-opaque-id",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage",
+        actorId: "actor-intake",
+        activeRevisionId: "rev-2",
+        deploymentId: "dep-2",
+        deploymentStatus: "Active",
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+      source: {
+        workflowYaml: "name: support-triage",
+        definitionActorId: "definition://support-triage",
+        inlineWorkflowYamls: null,
+      },
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "support-triage",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", {
+        level: 1,
+        name: "workflow-opaque-id",
+      }),
+    ).toBeNull();
   });
 
   it("shows full raw identifiers inside overview tooltips", async () => {

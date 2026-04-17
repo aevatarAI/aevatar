@@ -1085,6 +1085,24 @@ const StudioPage: React.FC = () => {
   const [inspectorNotice, setInspectorNotice] = useState<InspectorNotice | null>(
     null,
   );
+  const resolvedTeamDraftWorkflowId =
+    trimOptional(teamDraftWorkflowId) || trimOptional(routeState.teamDraftWorkflowId);
+  const resolvedTeamDraftWorkflowName =
+    trimOptional(teamDraftWorkflowName) || trimOptional(routeState.teamDraftWorkflowName);
+  const normalizedSelectedWorkflowId = trimOptional(selectedWorkflowId);
+  const hasSwitchedAwayFromSavedTeamDraft =
+    Boolean(resolvedTeamDraftWorkflowId) &&
+    ((normalizedSelectedWorkflowId &&
+      normalizedSelectedWorkflowId !== resolvedTeamDraftWorkflowId) ||
+      (!normalizedSelectedWorkflowId && (templateWorkflow || draftMode === 'new')));
+  const shouldPersistTeamDraftWorkflowPointer =
+    routeState.teamMode === 'create' &&
+    Boolean(resolvedTeamDraftWorkflowId) &&
+    !hasSwitchedAwayFromSavedTeamDraft;
+  const clearTeamDraftWorkflowPointer = useCallback(() => {
+    setTeamDraftWorkflowId('');
+    setTeamDraftWorkflowName('');
+  }, []);
   const [executionStopPending, setExecutionStopPending] = useState(false);
   const [executionNotice, setExecutionNotice] = useState<StudioNotice | null>(null);
   const [connectorCatalogDraft, setConnectorCatalogDraft] = useState<
@@ -1236,6 +1254,14 @@ const StudioPage: React.FC = () => {
     routeWorkspacePage,
     isStudioLocation,
   ]);
+
+  useEffect(() => {
+    if (!hasSwitchedAwayFromSavedTeamDraft) {
+      return;
+    }
+
+    clearTeamDraftWorkflowPointer();
+  }, [clearTeamDraftWorkflowPointer, hasSwitchedAwayFromSavedTeamDraft]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1788,12 +1814,12 @@ const StudioPage: React.FC = () => {
             undefined
           : undefined,
       teamDraftWorkflowId:
-        routeState.teamMode === 'create'
-          ? trimOptional(teamDraftWorkflowId) || undefined
+        shouldPersistTeamDraftWorkflowPointer
+          ? resolvedTeamDraftWorkflowId || undefined
           : undefined,
       teamDraftWorkflowName:
-        routeState.teamMode === 'create'
-          ? trimOptional(teamDraftWorkflowName) || undefined
+        shouldPersistTeamDraftWorkflowPointer
+          ? resolvedTeamDraftWorkflowName || undefined
           : undefined,
       workflowId: persistWorkflowDraftRoute ? selectedWorkflowId || undefined : undefined,
       scriptId: persistScriptRoute ? selectedScriptId || undefined : undefined,
@@ -1845,9 +1871,12 @@ const StudioPage: React.FC = () => {
     selectedExecutionId,
     selectedScriptId,
     selectedWorkflowId,
+    shouldPersistTeamDraftWorkflowPointer,
     studioView,
     teamDraftWorkflowId,
     teamDraftWorkflowName,
+    resolvedTeamDraftWorkflowId,
+    resolvedTeamDraftWorkflowName,
     teamEntryName,
     templateWorkflow,
     workspacePage,
@@ -2234,7 +2263,15 @@ const StudioPage: React.FC = () => {
   }, [selectedGraphRole, selectedGraphStep]);
 
   const openWorkspaceWorkflow = (workflowId: string) => {
-    setSelectedWorkflowId(workflowId);
+    const normalizedWorkflowId = trimOptional(workflowId);
+    if (
+      resolvedTeamDraftWorkflowId &&
+      normalizedWorkflowId &&
+      normalizedWorkflowId !== resolvedTeamDraftWorkflowId
+    ) {
+      clearTeamDraftWorkflowPointer();
+    }
+    setSelectedWorkflowId(normalizedWorkflowId);
     setTemplateWorkflow('');
     setDraftMode('');
     setLegacySource('');
@@ -2249,6 +2286,7 @@ const StudioPage: React.FC = () => {
   };
 
   const startBlankDraft = () => {
+    clearTeamDraftWorkflowPointer();
     setSelectedWorkflowId('');
     setTemplateWorkflow('');
     setDraftMode('new');
@@ -2284,6 +2322,7 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    clearTeamDraftWorkflowPointer();
     setSelectedWorkflowId('');
     setTemplateWorkflow(normalizedWorkflowName);
     setDraftMode('');
@@ -3004,6 +3043,7 @@ const StudioPage: React.FC = () => {
       availableStepTypes,
     });
 
+    clearTeamDraftWorkflowPointer();
     setSelectedWorkflowId('');
     setTemplateWorkflow('');
     setDraftMode('new');
@@ -4492,12 +4532,12 @@ const StudioPage: React.FC = () => {
     trimOptional(routeState.entryName) ||
     trimOptional(routeState.teamName) ||
     '未命名入口';
-  const teamCreateSavedDraftWorkflowId =
-    trimOptional(teamDraftWorkflowId) ||
-    trimOptional(routeState.teamDraftWorkflowId);
-  const teamCreateSavedDraftWorkflowName =
-    trimOptional(teamDraftWorkflowName) ||
-    trimOptional(routeState.teamDraftWorkflowName);
+  const teamCreateSavedDraftWorkflowId = shouldPersistTeamDraftWorkflowPointer
+    ? resolvedTeamDraftWorkflowId
+    : '';
+  const teamCreateSavedDraftWorkflowName = shouldPersistTeamDraftWorkflowPointer
+    ? resolvedTeamDraftWorkflowName
+    : '';
 
   const workflowWorkspaceSection =
     !isTeamCreateMode && workspacePage === 'workflows'

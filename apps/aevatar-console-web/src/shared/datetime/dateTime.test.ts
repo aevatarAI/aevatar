@@ -2,9 +2,11 @@ import {
   CLOCK_TIME_DISPLAY_FORMAT,
   COMPACT_DATE_TIME_DISPLAY_FORMAT,
   DATE_TIME_DISPLAY_FORMAT,
+  UTC_DATE_TIME_DISPLAY_FORMAT,
   formatCompactDateTime,
   formatDateTime,
   formatTimeOnly,
+  formatUtcDateTime,
 } from './dateTime';
 
 describe('formatDateTime', () => {
@@ -26,6 +28,12 @@ describe('formatDateTime', () => {
     expect(formatTimeOnly('2026-03-12T08:30:45')).toBe('08:30:45');
   });
 
+  it('formats UTC date time strings through the shared UTC format', () => {
+    expect(formatUtcDateTime('2026-03-12T08:30:45Z')).toBe(
+      '2026-03-12 08:30:45 UTC',
+    );
+  });
+
   it('returns the fallback for missing or invalid values', () => {
     expect(formatDateTime(undefined)).toBe('n/a');
     expect(formatDateTime('', 'none')).toBe('none');
@@ -36,5 +44,6 @@ describe('formatDateTime', () => {
     expect(DATE_TIME_DISPLAY_FORMAT).toBe('YYYY-MM-DD HH:mm:ss');
     expect(COMPACT_DATE_TIME_DISPLAY_FORMAT).toBe('MM-DD HH:mm');
     expect(CLOCK_TIME_DISPLAY_FORMAT).toBe('HH:mm:ss');
+    expect(UTC_DATE_TIME_DISPLAY_FORMAT).toBe('YYYY-MM-DD HH:mm:ss [UTC]');
   });
 });
