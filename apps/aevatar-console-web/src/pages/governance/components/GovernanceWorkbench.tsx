@@ -43,6 +43,7 @@ import {
   resolveAevatarSemanticTone,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import { AevatarCompactText } from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import GovernanceAuditTimeline, {
   type GovernanceAuditEvent,
@@ -53,6 +54,7 @@ import GovernanceInspectorDrawer, {
 import GovernanceQueryCard from "./GovernanceQueryCard";
 import type { GovernanceRevisionOption } from "./GovernanceQueryCard";
 import {
+  buildGovernanceCompactValue,
   formatGovernanceTimestamp,
   GovernanceSelectionNotice,
   GovernanceSummaryPanel,
@@ -922,7 +924,11 @@ const GovernanceWorkbench: React.FC = () => {
             <Typography.Text strong>
               {record.displayName || record.policyId}
             </Typography.Text>
-            <Typography.Text type="secondary">{record.policyId}</Typography.Text>
+            <AevatarCompactText
+              color="var(--ant-color-text-secondary)"
+              monospace
+              value={record.policyId}
+            />
           </Space>
         ),
       },
@@ -989,7 +995,11 @@ const GovernanceWorkbench: React.FC = () => {
             <Typography.Text strong>
               {record.displayName || record.bindingId}
             </Typography.Text>
-            <Typography.Text type="secondary">{record.bindingId}</Typography.Text>
+            <AevatarCompactText
+              color="var(--ant-color-text-secondary)"
+              monospace
+              value={record.bindingId}
+            />
           </Space>
         ),
       },
@@ -1003,7 +1013,13 @@ const GovernanceWorkbench: React.FC = () => {
       {
         key: "target",
         title: "目标",
-        render: (_, record) => buildBindingTargetLabel(record),
+        render: (_, record) => (
+          <AevatarCompactText
+            maxWidth={240}
+            monospace
+            value={buildBindingTargetLabel(record)}
+          />
+        ),
       },
       {
         key: "policies",
@@ -1055,7 +1071,11 @@ const GovernanceWorkbench: React.FC = () => {
             <Typography.Text strong>
               {record.displayName || record.endpointId}
             </Typography.Text>
-            <Typography.Text type="secondary">{record.endpointId}</Typography.Text>
+            <AevatarCompactText
+              color="var(--ant-color-text-secondary)"
+              monospace
+              value={record.endpointId}
+            />
           </Space>
         ),
       },
@@ -1086,7 +1106,17 @@ const GovernanceWorkbench: React.FC = () => {
       {
         key: "requestTypeUrl",
         title: "请求契约",
-        render: (_, record) => record.requestTypeUrl || "未声明",
+        render: (_, record) =>
+          record.requestTypeUrl ? (
+            <AevatarCompactText
+              maxChars={28}
+              mode="tail"
+              monospace
+              value={record.requestTypeUrl}
+            />
+          ) : (
+            "未声明"
+          ),
       },
       {
         key: "actions",
@@ -1423,7 +1453,13 @@ const GovernanceWorkbench: React.FC = () => {
             extraFields={[
               {
                 label: "服务 Key",
-                value: selectedService?.serviceKey ?? "待选择",
+                value:
+                  selectedService?.serviceKey?.trim()
+                    ? buildGovernanceCompactValue(selectedService.serviceKey, {
+                        head: 10,
+                        tail: 10,
+                      })
+                    : "待选择",
               },
               {
                 label: "最近治理快照",
@@ -1504,7 +1540,9 @@ const GovernanceWorkbench: React.FC = () => {
               highlights={[
                 {
                   label: "当前版本",
-                  value: activationRevisionId || "待选择",
+                  value: activationRevisionId
+                    ? buildGovernanceCompactValue(activationRevisionId)
+                    : "待选择",
                 },
                 {
                   label: "建议动作",
@@ -1721,7 +1759,8 @@ const GovernanceWorkbench: React.FC = () => {
             highlights={
               (activationQuery.data?.missingPolicyIds ?? []).length > 0
                 ? activationQuery.data?.missingPolicyIds.map((policyId) => ({
-                    label: policyId,
+                    key: policyId,
+                    label: buildGovernanceCompactValue(policyId),
                     value: "缺失",
                   })) ?? []
                 : [{ label: "状态", value: "无缺失策略" }]
@@ -1733,7 +1772,8 @@ const GovernanceWorkbench: React.FC = () => {
             highlights={
               (activationQuery.data?.bindings ?? []).length > 0
                 ? (activationQuery.data?.bindings ?? []).slice(0, 4).map((binding) => ({
-                    label: binding.bindingId,
+                    key: binding.bindingId,
+                    label: buildGovernanceCompactValue(binding.bindingId),
                     value: `${binding.displayName || binding.bindingId} · ${formatAevatarStatusLabel(binding.bindingKind)}`,
                   }))
                 : [{ label: "状态", value: "当前没有可见绑定" }]
@@ -1745,7 +1785,8 @@ const GovernanceWorkbench: React.FC = () => {
             highlights={
               (activationQuery.data?.endpoints ?? []).length > 0
                 ? (activationQuery.data?.endpoints ?? []).slice(0, 4).map((endpoint) => ({
-                    label: endpoint.endpointId,
+                    key: endpoint.endpointId,
+                    label: buildGovernanceCompactValue(endpoint.endpointId),
                     value: `${endpoint.displayName || endpoint.endpointId} · ${formatAevatarStatusLabel(endpoint.exposureKind)}`,
                   }))
                 : [{ label: "状态", value: "当前没有可见入口" }]

@@ -1,11 +1,29 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { message } from 'antd';
 import React from 'react';
+import { studioApi } from '@/shared/studio/api';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import TeamCreatePage from './new';
+
+jest.mock('antd', () => {
+  const actual = jest.requireActual('antd');
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
+    },
+  };
+});
 
 describe('TeamCreatePage', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/teams/new');
+    jest.clearAllMocks();
   });
 
   it('renders the create-team page with the same summary-plus-main-card rhythm as teams home', async () => {
@@ -19,6 +37,8 @@ describe('TeamCreatePage', () => {
     expect(screen.getByText('新增后端流')).toBeTruthy();
     expect(screen.getByText('Start Building')).toBeTruthy();
     expect(screen.getByRole('heading', { level: 3, name: 'Studio' })).toBeTruthy();
+    expect(screen.getByLabelText('团队名称')).toBeTruthy();
+    expect(screen.getByLabelText('入口名称')).toBeTruthy();
     expect(
       screen.getAllByRole('button', { name: 'Open Studio' }).length,
     ).toBeGreaterThan(0);
@@ -35,5 +55,96 @@ describe('TeamCreatePage', () => {
     expect(screen.queryByText('默认入口')).toBeNull();
     expect(screen.queryByText('后续页')).toBeNull();
     expect(screen.queryByText('数据源')).toBeNull();
+  });
+
+  it('opens Studio in create-team mode and carries the entered names into the route', async () => {
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    const openStudioButtons = await screen.findAllByRole('button', {
+      name: 'Open Studio',
+    });
+
+    expect(openStudioButtons[0]).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('团队名称'), {
+      target: { value: '订单助手团队' },
+    });
+    fireEvent.change(screen.getByLabelText('入口名称'), {
+      target: { value: '订单入口' },
+    });
+
+    expect(openStudioButtons[0]).toBeEnabled();
+    fireEvent.click(openStudioButtons[0]);
+
+    expect(window.location.pathname).toBe('/studio');
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('teamMode')).toBe('create');
+    expect(params.get('teamName')).toBe('订单助手团队');
+    expect(params.get('entryName')).toBe('订单入口');
+    expect(params.get('tab')).toBe('studio');
+    expect(params.get('draft')).toBe('new');
+  });
+
+  it('shows the saved draft summary and resumes that draft in Studio', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
+    );
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    expect(await screen.findByText('Saved Draft')).toBeTruthy();
+    expect(screen.getByText('已保存草稿')).toBeTruthy();
+    expect(screen.getByText('order-entry-draft')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Delete Draft 会删除当前创建流程关联的行为草稿；团队名称和入口名称会保留在这个页面。',
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Draft' }));
+
+    expect(window.location.pathname).toBe('/studio');
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('teamMode')).toBe('create');
+    expect(params.get('teamName')).toBe('订单助手团队');
+    expect(params.get('entryName')).toBe('订单入口');
+    expect(params.get('teamDraftWorkflowId')).toBe('workflow-7');
+    expect(params.get('teamDraftWorkflowName')).toBe('order-entry-draft');
+    expect(params.get('workflow')).toBe('workflow-7');
+    expect(params.get('draft')).toBeNull();
+  });
+
+  it('deletes the saved draft and keeps the team form values in place', async () => {
+    const deleteWorkflowSpy = jest
+      .spyOn(studioApi, 'deleteWorkflow')
+      .mockResolvedValue(undefined);
+
+    window.history.replaceState(
+      {},
+      '',
+      '/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
+    );
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Draft' }));
+
+    await waitFor(() => {
+      expect(deleteWorkflowSpy).toHaveBeenCalledWith('workflow-7');
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Saved Draft')).toBeNull();
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe('/teams/new');
+    expect(params.get('teamName')).toBe('订单助手团队');
+    expect(params.get('entryName')).toBe('订单入口');
+    expect(params.get('teamDraftWorkflowId')).toBeNull();
+    expect(params.get('teamDraftWorkflowName')).toBeNull();
+    expect(message.success).toHaveBeenCalledWith('已删除当前团队草稿。');
   });
 });

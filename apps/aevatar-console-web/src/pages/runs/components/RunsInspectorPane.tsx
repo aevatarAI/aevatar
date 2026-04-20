@@ -289,7 +289,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="A compact summary of the current run state, identifiers, and latest visible output."
-            title="Run digest"
+            title="Run summary"
           />
           <div
             style={{
@@ -393,7 +393,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="The currently selected timeline item and its raw event payload."
-            title="Selection"
+            title="Selected event"
             action={
               selectedTraceItem ? (
                 <Space wrap size={[6, 6]}>
@@ -466,14 +466,14 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="Operator interactions, route profile, and the latest actor-owned state."
-            title="Runtime sidecars"
+            title="Context"
           />
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
               <SectionHeader
                 action={
                   showInteractionAction && onOpenInspector ? (
-                    <Button onClick={onOpenInspector}>Open inspector</Button>
+                    <Button onClick={onOpenInspector}>Open details</Button>
                   ) : undefined
                 }
                 title="Interaction"
@@ -484,7 +484,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
             </div>
 
             <div style={sectionDividerStyle}>
-              <SectionHeader title="Route snapshot" />
+              <SectionHeader title="Route" />
               {selectedRouteRecord ? (
                 <>
                   <Space wrap size={[6, 6]}>
@@ -521,7 +521,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
             </div>
 
             <div style={sectionDividerStyle}>
-              <SectionHeader title="Actor snapshot" />
+              <SectionHeader title="Actor state" />
               {actorSnapshotLoading ? (
                 <Typography.Text type="secondary">
                   Loading actor snapshot...
@@ -573,7 +573,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                 </>
               ) : (
                 <Typography.Text type="secondary">
-                  Actor snapshot will appear after the run binds to an actor.
+                  Actor state will appear after the run binds to an actor.
                 </Typography.Text>
               )}
             </div>
@@ -589,7 +589,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
 
   return (
     <ProCard
-      title="Inspector"
+      title="Details"
       hoverable
       {...moduleCardProps}
       style={workbenchCardStyle}

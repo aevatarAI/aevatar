@@ -67,4 +67,25 @@ describe("RunsTracePane", () => {
     expect(queryByText("timeline panel")).toBeNull();
     expect(queryByText("events panel")).toBeNull();
   });
+
+  it("prioritizes conversation first for chat-style traces", () => {
+    render(
+      <RunsTracePane
+        consoleView="messages"
+        eventConsoleView={<div>events</div>}
+        eventCount={1}
+        hasPendingInteraction={false}
+        messageConsoleView={<div>conversation panel</div>}
+        messageCount={1}
+        messagesLabel="Conversation"
+        onConsoleViewChange={() => undefined}
+        timelineView={<div>timeline</div>}
+      />,
+    );
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs[0]).toHaveTextContent("Conversation");
+    expect(tabs[1]).toHaveTextContent("Timeline");
+    expect(tabs[2]).toHaveTextContent("Events");
+  });
 });

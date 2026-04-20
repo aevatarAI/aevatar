@@ -363,7 +363,7 @@ function isScopeDirectoryPath(path: string): boolean {
 }
 
 const workflowWorkspaceRowStyle: React.CSSProperties = {
-  flex: 1,
+  flex: '1 1 0',
   minHeight: 0,
   height: '100%',
   overflow: 'hidden',
@@ -377,8 +377,12 @@ const workflowSidebarStackStyle: React.CSSProperties = {
 
 const workflowColumnStretchStyle: React.CSSProperties = {
   ...stretchColumnStyle,
+  flex: '1 1 0',
   flexDirection: 'column',
+  height: '100%',
   minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
 };
 
 const workflowSectionShellStyle: React.CSSProperties = {
@@ -615,7 +619,8 @@ const workflowSolidActionStyle: React.CSSProperties = {
 };
 
 const workflowResultsBodyStyle: React.CSSProperties = {
-  flex: 1,
+  flex: '1 1 0',
+  height: 0,
   minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
@@ -1038,10 +1043,111 @@ const studioStatusPillStyle: React.CSSProperties = {
 const studioCanvasViewportStyle: React.CSSProperties = {
   background: '#F2F1EE',
   borderRadius: 24,
-  flex: 1,
-  minHeight: 'calc(100vh - 278px)',
+  display: 'flex',
+  flex: '1 1 0',
+  flexDirection: 'column',
+  minHeight: 0,
   overflow: 'hidden',
   position: 'relative',
+};
+
+const studioEditorPageRootStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  flex: '1 1 0',
+  minHeight: 0,
+};
+
+const studioEditorShellStyle: React.CSSProperties = {
+  background: '#F2F1EE',
+  border: '1px solid #E6E3DE',
+  borderRadius: 36,
+  boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
+  display: 'flex',
+  flex: '1 1 0',
+  flexDirection: 'column',
+  minHeight: 0,
+  overflow: 'hidden',
+};
+
+const studioDefinitionListScrollStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: '1 1 0',
+  flexDirection: 'column',
+  height: 0,
+  minHeight: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto',
+};
+
+const studioEditorHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255,255,255,0.96)',
+  borderBottom: '1px solid #E8E2D9',
+  display: 'flex',
+  gap: 16,
+  justifyContent: 'space-between',
+  padding: '12px 16px',
+};
+
+const studioEditorToolbarStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-end',
+  minWidth: 0,
+};
+
+const studioCanvasEmptyStateStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: '#6B7280',
+  display: 'flex',
+  inset: 12,
+  justifyContent: 'center',
+  pointerEvents: 'none',
+  position: 'absolute',
+  textAlign: 'center',
+  zIndex: 1,
+};
+
+const studioCanvasEmptyCardStyle: React.CSSProperties = {
+  alignItems: 'center',
+  backdropFilter: 'blur(10px)',
+  background: 'rgba(255,255,255,0.94)',
+  border: '1px solid #E8E2D9',
+  borderRadius: 24,
+  boxShadow: '0 18px 38px rgba(17, 24, 39, 0.08)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  maxWidth: 380,
+  padding: '24px 24px 20px',
+  pointerEvents: 'auto',
+};
+
+const studioCanvasEmptyActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'center',
+};
+
+const studioInspectorEmptyStateStyle: React.CSSProperties = {
+  alignItems: 'stretch',
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  justifyContent: 'center',
+  minHeight: 0,
+  padding: 20,
+  textAlign: 'center',
+};
+
+const studioInspectorQuickActionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  marginTop: 16,
 };
 
 const studioToolDrawerSectionStyle: React.CSSProperties = {
@@ -1336,10 +1442,19 @@ function formatScopeBindingRevisionTimestamp(
 type StudioScopeBindingPanelProps = {
   readonly scopeId?: string;
   readonly binding?: StudioScopeBindingStatus;
+  readonly teamCreation?: {
+    readonly teamName: string;
+    readonly entryName: string;
+    readonly workflowName: string;
+  } | null;
   readonly loading: boolean;
   readonly error: unknown;
   readonly pendingRevisionId: string;
   readonly pendingRetirementRevisionId: string;
+  readonly canPublishWorkflow?: boolean;
+  readonly publishPending?: boolean;
+  readonly onPublishWorkflow?: () => void;
+  readonly onOpenBinding?: () => void;
   readonly onActivateRevision: (revisionId: string) => void;
   readonly onRetireRevision: (revisionId: string) => void;
 };
@@ -1347,10 +1462,15 @@ type StudioScopeBindingPanelProps = {
 const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   scopeId,
   binding,
+  teamCreation,
   loading,
   error,
   pendingRevisionId,
   pendingRetirementRevisionId,
+  canPublishWorkflow,
+  publishPending,
+  onPublishWorkflow,
+  onOpenBinding,
   onActivateRevision,
   onRetireRevision,
 }) => {
@@ -1367,6 +1487,11 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
     binding?.primaryActorId ||
     '';
   const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const isTeamCreationMode = Boolean(teamCreation);
+  const teamCreationTeamName =
+    teamCreation?.teamName.trim() || teamCreation?.entryName.trim() || '未命名团队';
+  const teamCreationEntryName =
+    teamCreation?.entryName.trim() || teamCreation?.teamName.trim() || '未命名入口';
   const bindingStateColor = loading
     ? 'processing'
     : error
@@ -1382,12 +1507,31 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
         ? '已发布'
         : '未发布';
   const bindingSummary = loading
-    ? '正在读取当前团队入口状态。'
+    ? isTeamCreationMode
+      ? '正在读取当前 scope 默认入口状态。'
+      : '正在读取当前团队入口状态。'
     : error
-      ? '暂时无法读取当前团队入口。'
+      ? isTeamCreationMode
+        ? '暂时无法读取当前 scope 默认入口。'
+        : '暂时无法读取当前团队入口。'
       : binding?.available
-        ? `当前默认入口指向 ${currentTarget || binding.displayName || binding.serviceId}。`
-        : `团队 ${scopeId} 还没有发布默认入口。`;
+        ? isTeamCreationMode
+          ? `当前 scope 默认入口仍指向 ${currentTarget || binding.displayName || binding.serviceId}。发布后会更新为 ${teamCreationEntryName}。`
+          : `默认入口指向 ${currentTarget || binding.displayName || binding.serviceId}。`
+        : isTeamCreationMode
+          ? `当前 scope 还没有默认入口。发布后会创建入口 ${teamCreationEntryName}。`
+          : '当前还没有发布默认入口。';
+  const canShowBindingDetails = Boolean(binding?.available) && !isTeamCreationMode;
+  const publishActionLabel = isTeamCreationMode
+    ? '发布团队入口'
+    : binding?.available
+      ? '更新团队入口'
+      : '绑定团队入口';
+  const canInspectPublishedMembers = Boolean(
+    currentRevision?.primaryActorId ||
+      currentRevision?.staticActorTypeName ||
+      binding?.primaryActorId,
+  );
   const detailsContent = loading ? (
     <StudioNoticeCard
       title="正在加载团队入口"
@@ -1627,74 +1771,155 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   return (
     <div
       style={{
-        ...workflowSectionShellStyle,
-        gap: detailsOpen ? 18 : 12,
-        padding: detailsOpen ? 20 : 16,
+        background: 'rgba(255, 255, 255, 0.84)',
+        border: '1px solid #E6E3DE',
+        borderRadius: 20,
+        boxShadow: '0 10px 24px rgba(17, 24, 39, 0.04)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: detailsOpen ? 14 : 8,
+        padding: detailsOpen ? 14 : 12,
       }}
     >
-      <div style={workflowSectionHeaderStyle}>
-        <div style={workflowDirectoryTextStackStyle}>
-          <Typography.Text style={workflowSectionHeadingStyle}>
-            团队入口
-          </Typography.Text>
+      <div
+        style={{
+          alignItems: 'center',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          justifyContent: 'space-between',
+        }}
+      >
+        <div
+          style={{
+            ...cardStackStyle,
+            flex: '1 1 320px',
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
           <Space wrap size={[8, 8]}>
-            <Typography.Title
-              level={5}
-              style={{ margin: 0 }}
-            >
-              {binding?.available
-                ? binding.displayName || binding.serviceId
-                : '未发布默认入口'}
-            </Typography.Title>
+            <Typography.Text style={workflowSectionHeadingStyle}>
+              {isTeamCreationMode ? '创建团队入口' : '发布到团队'}
+            </Typography.Text>
+            <Typography.Text strong style={{ fontSize: 16, color: '#1F2937' }}>
+              {isTeamCreationMode
+                ? teamCreationTeamName
+                : binding?.available
+                  ? binding.displayName || binding.serviceId
+                  : '未发布默认入口'}
+            </Typography.Text>
             <Tag color={bindingStateColor}>{bindingStateLabel}</Tag>
             {binding?.available ? (
               <Tag color="success">
                 {binding.defaultServingRevisionId || 'default pending'}
               </Tag>
             ) : null}
+            <code
+              style={{
+                color: '#8C8C8C',
+                fontFamily: '"SF Mono", "JetBrains Mono", monospace',
+                fontSize: 11,
+              }}
+            >
+              {scopeId}
+            </code>
           </Space>
           <Typography.Text
             type="secondary"
-            style={{ display: 'block' }}
+            style={{ display: 'block', fontSize: 12 }}
             ellipsis={{ tooltip: bindingSummary }}
           >
             {bindingSummary}
           </Typography.Text>
+          {isTeamCreationMode ? (
+            <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+              入口草稿：{teamCreationEntryName}
+            </Typography.Text>
+          ) : null}
         </div>
         <Space wrap size={[8, 8]}>
-          <Tag color="processing">{scopeId}</Tag>
-          <Button
-            onClick={() =>
-              history.push(
-                buildRuntimeGAgentsHref({
-                  scopeId,
-                  actorId: currentRevision?.primaryActorId || undefined,
-                  actorTypeName: currentRevision?.staticActorTypeName || undefined,
-                }),
-              )
-            }
-          >
-            查看成员
-          </Button>
-          <Button
-            type="text"
-            size="small"
-            aria-expanded={detailsOpen}
-            onClick={() => setDetailsOpen((current) => !current)}
-            icon={
-              <DownOutlined
-                style={{
-                  transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.2s ease',
-                }}
-              />
-            }
-          >
-            {detailsOpen ? '收起详情' : '查看详情'}
-          </Button>
+          {onPublishWorkflow ? (
+            <Button
+              size="small"
+              type={binding?.available ? 'default' : 'primary'}
+              icon={<SafetyCertificateOutlined />}
+              loading={publishPending}
+              disabled={!canPublishWorkflow}
+              onClick={onPublishWorkflow}
+            >
+              {publishActionLabel}
+            </Button>
+          ) : onOpenBinding && !isTeamCreationMode ? (
+            <Button
+              size="small"
+              type="default"
+              icon={<SafetyCertificateOutlined />}
+              onClick={onOpenBinding}
+            >
+              {publishActionLabel}
+            </Button>
+          ) : null}
+          {onPublishWorkflow && onOpenBinding && !isTeamCreationMode ? (
+            <Button size="small" type="text" onClick={onOpenBinding}>
+              高级设置
+            </Button>
+          ) : null}
+          {canShowBindingDetails ? (
+            <Button
+              type="text"
+              size="small"
+              aria-expanded={detailsOpen}
+              onClick={() => setDetailsOpen((current) => !current)}
+              icon={
+                <DownOutlined
+                  style={{
+                    transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s ease',
+                  }}
+                />
+              }
+            >
+              {detailsOpen ? '收起详情' : '查看详情'}
+            </Button>
+          ) : null}
         </Space>
       </div>
-      {detailsOpen ? detailsContent : null}
+      {canShowBindingDetails && detailsOpen ? (
+        <div
+          style={{
+            borderTop: '1px solid #F1EEE8',
+            display: 'grid',
+            gap: 12,
+            paddingTop: 12,
+          }}
+        >
+          {canInspectPublishedMembers ? (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+              }}
+            >
+              <Button
+                size="small"
+                onClick={() =>
+                  history.push(
+                    buildRuntimeGAgentsHref({
+                      scopeId,
+                      actorId: currentRevision?.primaryActorId || undefined,
+                      actorTypeName: currentRevision?.staticActorTypeName || undefined,
+                    }),
+                  )
+                }
+              >
+                查看成员
+              </Button>
+            </div>
+          ) : null}
+          {detailsContent}
+        </div>
+      ) : null}
     </div>
   );
 };
@@ -2003,22 +2228,13 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
   });
   const workflowViewportMaxWidth = isScopeMode ? undefined : 1080;
   const resolvedWorkspaceRowStyle: React.CSSProperties = isScopeMode
-    ? { width: '100%' }
+    ? {
+        ...workflowWorkspaceRowStyle,
+        width: '100%',
+      }
     : workflowWorkspaceRowStyle;
-  const resolvedWorkflowBrowserStyle: React.CSSProperties = isScopeMode
-    ? {
-        ...workflowBrowserStyle,
-        flex: '0 0 auto',
-        height: 'auto',
-      }
-    : workflowBrowserStyle;
-  const resolvedWorkflowResultsBodyStyle: React.CSSProperties = isScopeMode
-    ? {
-        ...workflowResultsBodyStyle,
-        flex: '0 0 auto',
-        overflowY: 'visible',
-      }
-    : workflowResultsBodyStyle;
+  const resolvedWorkflowBrowserStyle: React.CSSProperties = workflowBrowserStyle;
+  const resolvedWorkflowResultsBodyStyle: React.CSSProperties = workflowResultsBodyStyle;
 
   const scopeSummaryDescription = workspaceSettings.isLoading
     ? '正在解析团队上下文。'
@@ -2343,7 +2559,10 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
             </div>
           </div>
 
-          <div style={resolvedWorkflowResultsBodyStyle}>
+          <div
+            data-testid="studio-workflows-results"
+            style={resolvedWorkflowResultsBodyStyle}
+          >
             {workflows.isLoading ? (
               <Typography.Text type="secondary">
                 正在加载定义...
@@ -3792,6 +4011,11 @@ export type StudioEditorPageProps = {
   readonly publishPending: boolean;
   readonly canPublishWorkflow: boolean;
   readonly publishNotice: StudioNoticeLike | null;
+  readonly teamCreation?: {
+    readonly teamName: string;
+    readonly entryName: string;
+    readonly workflowName: string;
+  } | null;
   readonly scopeBinding?: StudioScopeBindingStatus;
   readonly scopeBindingLoading: boolean;
   readonly scopeBindingError: unknown;
@@ -3818,6 +4042,7 @@ export type StudioEditorPageProps = {
   readonly onSetWorkflowDescription: (value: string) => void;
   readonly onSetDraftYaml: (value: string) => void;
   readonly onSetDraftWorkflowName: (value: string) => void;
+  readonly onSetTeamEntryName: (value: string) => void;
   readonly onSetDraftDirectoryId: (value: string) => void;
   readonly onSetDraftFileName: (value: string) => void;
   readonly onSetInspectorTab: (tab: StudioInspectorTab) => void;
@@ -3875,6 +4100,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   draftYaml,
   draftWorkflowName,
   draftDirectoryId,
+  draftFileName,
+  draftMode,
   selectedWorkflowId,
   templateWorkflowName,
   activeWorkflowDescription,
@@ -3909,6 +4136,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   publishPending,
   canPublishWorkflow,
   publishNotice,
+  teamCreation,
   scopeBinding,
   scopeBindingLoading,
   scopeBindingError,
@@ -3928,6 +4156,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   onDeleteSelectedGraphEdge,
   onSetWorkflowDescription,
   onSetDraftWorkflowName,
+  onSetTeamEntryName,
   onSetInspectorTab,
   onWorkflowImportChange,
   onSaveDraft,
@@ -4130,6 +4359,22 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     setToolDrawerMode(null);
   };
 
+  const openPaletteFromEditor = React.useCallback(() => {
+    setPendingAddPosition({
+      x: 420,
+      y: 220,
+    });
+    setToolDrawerMode('palette');
+  }, []);
+
+  const openAskAiFromEditor = React.useCallback(() => {
+    if (!canAskAiGenerate) {
+      return;
+    }
+
+    setToolDrawerMode('ask-ai');
+  }, [canAskAiGenerate]);
+
   const openGAgentModal = React.useCallback(() => {
     const defaultDescriptor = gAgentTypes[0] ?? null;
     const defaultActorTypeName =
@@ -4259,6 +4504,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     activeWorkflowFile?.name ||
     templateWorkflowName ||
     'draft';
+  const teamEntryDisplayName = teamCreation?.entryName.trim() || '';
+  const teamWorkflowLabel =
+    teamCreation?.workflowName.trim() || workflowDisplayName;
+  const showTeamWorkflowLabel =
+    Boolean(teamCreation) &&
+    Boolean(teamWorkflowLabel.trim()) &&
+    teamWorkflowLabel.trim() !== teamEntryDisplayName;
   const visibleWorkflowDefinitions = React.useMemo(
     () => dedupeStudioWorkflowSummaries(workflows.data ?? []),
     [workflows.data],
@@ -4281,6 +4533,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     setToolDrawerMode(null);
   };
 
+  const hasEditableDraftContext = Boolean(
+    draftMode === 'new' ||
+      selectedWorkflowId.trim() ||
+      templateWorkflowName.trim() ||
+      draftWorkflowName.trim() ||
+      draftFileName.trim() ||
+      activeWorkflowFile?.workflowId?.trim(),
+  );
+
   const askAiStatusText = !canAskAiGenerate
     ? askAiUnavailableMessage || '当前环境暂不支持 AI 辅助。'
     : askAiPending
@@ -4288,7 +4549,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       : askAiAnswer.trim()
         ? '校验通过的 YAML 已写回当前草稿。'
         : '返回格式仅限 workflow YAML。';
-  const toolDrawerVisible = Boolean(draftYaml) && toolDrawerMode !== null;
+  const toolDrawerVisible = hasEditableDraftContext && toolDrawerMode !== null;
   const toolDrawerTitle =
     toolDrawerMode === 'palette' ? '添加步骤' : 'AI 辅助';
   const nodePaletteDrawerContent = (
@@ -4540,16 +4801,12 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
   const editorStatusItems: React.ReactNode[] = [];
 
-  if (saveNotice) {
+  if (saveNotice && saveNotice.type === 'error') {
     editorStatusItems.push(
       <StudioNoticeCard
         key="save-notice"
         type={saveNotice.type}
-        title={
-          saveNotice.type === 'success'
-            ? '定义已保存'
-            : '定义保存失败'
-        }
+        title="定义保存失败"
         description={saveNotice.message}
         compact
       />,
@@ -4604,6 +4861,22 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     );
   }
 
+  const teamCreationNotice = teamCreation ? (
+    <StudioNoticeCard
+      key="team-creation-notice"
+      type={scopeBinding?.available ? 'warning' : 'info'}
+      title={`你正在创建团队「${teamCreation.teamName}」`}
+      description={
+        <Typography.Text type="secondary">
+          {scopeBinding?.available
+            ? `保存只会写草稿。点击“发布团队入口”后，当前 scope 的默认入口会切换成 ${teamCreation.entryName}。`
+            : `保存只会写草稿。点击“发布团队入口”后，当前 scope 会创建默认入口 ${teamCreation.entryName}。`}
+        </Typography.Text>
+      }
+      compact
+    />
+  ) : null;
+
   const editorFatalNotice = selectedWorkflow.isError ? (
     <StudioNoticeCard
       key="selected-workflow-error"
@@ -4647,12 +4920,38 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       {inspectorContent}
     </div>
   );
+  const canvasIsEmpty = workflowGraph.nodes.length === 0;
+  const inspectorShowsNodeEmptyState =
+    inspectorTab === 'node' && !hasSelectedGraphNode;
+  const inspectorPanelWidth = inspectorShowsNodeEmptyState ? 272 : 320;
+  const inspectorPanelSurface = inspectorShowsNodeEmptyState ? (
+    <div
+      data-testid="studio-inspector-empty-state"
+      style={studioInspectorEmptyStateStyle}
+    >
+      <Typography.Text strong>先选一个步骤</Typography.Text>
+      <Typography.Text type="secondary">
+        当前先把画布搭起来。你也可以直接切去角色或 YAML 继续完善草稿。
+      </Typography.Text>
+      <div style={studioInspectorQuickActionsStyle}>
+        <Button icon={<PlusOutlined />} type="primary" onClick={openPaletteFromEditor}>
+          打开步骤库
+        </Button>
+        <Button onClick={() => onSetInspectorTab('roles')}>管理角色</Button>
+        <Button icon={<CodeOutlined />} onClick={() => onSetInspectorTab('yaml')}>
+          查看 YAML 草稿
+        </Button>
+      </div>
+    </div>
+  ) : (
+    inspectorPanelBody
+  );
 
   return (
-    <div style={cardStackStyle}>
+    <div style={studioEditorPageRootStyle}>
       {editorFatalNotice ? (
         <div style={studioNoticeStripStyle}>{editorFatalNotice}</div>
-      ) : draftYaml ? (
+      ) : hasEditableDraftContext ? (
         <>
           <input
             ref={workflowImportInputRef}
@@ -4664,28 +4963,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
           <div
             data-testid="studio-editor-shell"
-            style={{
-              background: '#F2F1EE',
-              border: '1px solid #E6E3DE',
-              borderRadius: 36,
-              boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
-              display: 'flex',
-              flexDirection: 'column',
-              height: 'calc(100vh - 176px)',
-              overflow: 'hidden',
-            }}
+            style={studioEditorShellStyle}
           >
-            <div
-              style={{
-                alignItems: 'center',
-                background: 'rgba(255,255,255,0.96)',
-                borderBottom: '1px solid #E8E2D9',
-                display: 'flex',
-                gap: 16,
-                justifyContent: 'space-between',
-                padding: '12px 16px',
-              }}
-            >
+            <div style={studioEditorHeaderStyle}>
               <div
                 style={{
                   alignItems: 'center',
@@ -4697,13 +4977,30 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               >
                 <div style={studioTitleBarStyle}>
                   <div style={studioTitleGroupStyle}>
-                    <input
-                      aria-label="Studio workflow title"
-                      placeholder={workflowDisplayName}
-                      value={draftWorkflowName}
-                      onChange={(event) => onSetDraftWorkflowName(event.target.value)}
-                      style={studioTitleInputStyle}
-                    />
+                    {teamCreation ? (
+                      <>
+                        <input
+                          aria-label="Studio team entry name"
+                          placeholder="入口名称"
+                          value={teamEntryDisplayName}
+                          onChange={(event) => onSetTeamEntryName(event.target.value)}
+                          style={studioTitleInputStyle}
+                        />
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {showTeamWorkflowLabel
+                            ? `当前行为定义：${teamWorkflowLabel}`
+                            : '当前正在编辑团队入口草稿。'}
+                        </Typography.Text>
+                      </>
+                    ) : (
+                      <input
+                        aria-label="Studio workflow title"
+                        placeholder={workflowDisplayName}
+                        value={draftWorkflowName}
+                        onChange={(event) => onSetDraftWorkflowName(event.target.value)}
+                        style={studioTitleInputStyle}
+                      />
+                    )}
                     <StudioInfoPopover
                       open={descriptionEditorOpen}
                       ariaLabel="编辑定义说明"
@@ -4752,38 +5049,23 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               </div>
 
               <div
-                style={{
-                  alignItems: 'center',
-                  display: 'flex',
-                  gap: 8,
-                  justifyContent: 'flex-end',
-                  minWidth: 0,
-                }}
+                style={studioEditorToolbarStyle}
               >
                 <Button
-                  size="small"
-                  icon={<AppstoreOutlined />}
-                  onClick={() => setToolDrawerMode('palette')}
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={openPaletteFromEditor}
                 >
                   添加步骤
                 </Button>
                 <Button
-                  size="small"
                   icon={<RobotOutlined />}
                   type={toolDrawerMode === 'ask-ai' ? 'primary' : 'default'}
                   disabled={!canAskAiGenerate}
-                  onClick={() => setToolDrawerMode('ask-ai')}
+                  onClick={openAskAiFromEditor}
                   title={!canAskAiGenerate ? askAiUnavailableMessage : undefined}
                 >
                   AI 辅助
-                </Button>
-                <Button
-                  size="small"
-                  icon={<RobotOutlined />}
-                  onClick={openGAgentModal}
-                  disabled={!resolvedScopeId}
-                >
-                  绑定团队入口
                 </Button>
               </div>
             </div>
@@ -4825,13 +5107,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   </Typography.Text>
                 </div>
                 <div
-                  style={{
-                    display: 'flex',
-                    flex: 1,
-                    flexDirection: 'column',
-                    minHeight: 0,
-                    overflowY: 'auto',
-                  }}
+                  data-testid="studio-editor-definition-list"
+                  style={studioDefinitionListScrollStyle}
                 >
                   {workflows.isLoading ? (
                     <div style={{ padding: 14 }}>
@@ -4901,13 +5178,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   display: 'flex',
                   flex: 1,
                   gap: 12,
+                  minHeight: 0,
                   minWidth: 0,
                 }}
               >
                 <div
+                  data-testid="studio-editor-canvas-viewport"
                   style={{
                     ...studioCanvasViewportStyle,
-                    flex: 1,
                     minWidth: 0,
                   }}
                 >
@@ -4959,27 +5237,31 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     </div>
                   ) : null}
 
-                  {workflowGraph.nodes.length === 0 ? (
-                    <div
-                      style={{
-                        alignItems: 'center',
-                        color: '#6B7280',
-                        display: 'flex',
-                        inset: 12,
-                        justifyContent: 'center',
-                        pointerEvents: 'none',
-                        position: 'absolute',
-                        textAlign: 'center',
-                        zIndex: 1,
-                      }}
-                    >
-                      <div>
+                  {canvasIsEmpty ? (
+                    <div style={studioCanvasEmptyStateStyle}>
+                      <div style={studioCanvasEmptyCardStyle}>
                         <Typography.Text strong style={{ display: 'block' }}>
                           当前定义还没有步骤。
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          在画布中添加第一个处理步骤。
+                          先把第一个处理步骤放进画布，再继续补角色、连接和运行方式。
                         </Typography.Text>
+                        <div style={studioCanvasEmptyActionsStyle}>
+                          <Button
+                            icon={<PlusOutlined />}
+                            type="primary"
+                            onClick={openPaletteFromEditor}
+                          >
+                            添加第一个步骤
+                          </Button>
+                          <Button
+                            icon={<RobotOutlined />}
+                            disabled={!canAskAiGenerate}
+                            onClick={openAskAiFromEditor}
+                          >
+                            用 AI 生成初稿
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -4987,7 +5269,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   <GraphCanvas
                     nodes={workflowGraph.nodes}
                     edges={workflowGraph.edges}
-                    height="calc(100vh - 278px)"
+                    height="100%"
                     variant="studio"
                     selectedNodeId={selectedGraphNodeId}
                     selectedEdgeId={selectedGraphEdge?.edgeId}
@@ -5013,6 +5295,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 </div>
 
                 <div
+                  data-testid="studio-inspector-shell"
                   style={{
                     background: '#FFFFFF',
                     border: '1px solid #E8E2D9',
@@ -5022,7 +5305,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     flexShrink: 0,
                     minHeight: 0,
                     overflow: 'hidden',
-                    width: 320,
+                    transition: 'width 0.18s ease',
+                    width: inspectorPanelWidth,
                   }}
                 >
                   <div
@@ -5068,13 +5352,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       {inspectorTab === 'node'
                         ? hasSelectedGraphNode
                           ? `选中: ${selectedGraphNodeId}`
-                          : '选择一个步骤后可在这里编辑属性'
+                          : '先选步骤，或切到角色 / YAML 继续编辑'
                         : inspectorTab === 'roles'
                           ? '管理当前定义的 Agent 角色'
                           : '查看和校验当前 YAML'}
                     </Typography.Text>
                   </div>
-                  {inspectorPanelBody}
+                  {inspectorPanelSurface}
                 </div>
               </div>
             </div>
@@ -5488,6 +5772,10 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             </div>
           </Modal>
 
+          {teamCreationNotice ? (
+            <div style={studioNoticeStripStyle}>{teamCreationNotice}</div>
+          ) : null}
+
           {editorStatusItems.length > 0 ? (
             <div style={studioNoticeStripStyle}>{editorStatusItems}</div>
           ) : null}
@@ -5495,10 +5783,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           <StudioScopeBindingPanel
             scopeId={resolvedScopeId}
             binding={scopeBinding}
+            teamCreation={teamCreation}
             loading={scopeBindingLoading}
             error={scopeBindingError}
             pendingRevisionId={bindingActivationRevisionId}
             pendingRetirementRevisionId={bindingRetirementRevisionId}
+            canPublishWorkflow={canPublishWorkflow}
+            publishPending={publishPending}
+            onPublishWorkflow={onPublishWorkflow}
+            onOpenBinding={openGAgentModal}
             onActivateRevision={onActivateBindingRevision}
             onRetireRevision={onRetireBindingRevision}
           />

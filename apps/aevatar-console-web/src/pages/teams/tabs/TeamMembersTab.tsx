@@ -7,6 +7,7 @@ import {
 import {
   DetailPill,
   FactLine,
+  CompactFactValue,
   SignalCard,
   factValueFontFamily,
 } from "../components/TeamDetailPrimitives";
@@ -215,8 +216,36 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   </Typography.Text>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                  <FactLine rows={1} text={`actorId · ${row.actorId}`} />
-                  <FactLine rows={1} secondary text={`serviceId · ${row.serviceId}`} />
+                  <div
+                    style={{
+                      alignItems: "center",
+                      display: "flex",
+                      gap: 6,
+                      minWidth: 0,
+                    }}
+                  >
+                    <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                      actorId
+                    </Typography.Text>
+                    <CompactFactValue value={row.actorId} />
+                  </div>
+                  <div
+                    style={{
+                      alignItems: "center",
+                      display: "flex",
+                      gap: 6,
+                      minWidth: 0,
+                    }}
+                  >
+                    <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                      serviceId
+                    </Typography.Text>
+                    <CompactFactValue
+                      color="var(--ant-color-text-secondary)"
+                      strong={false}
+                      value={row.serviceId}
+                    />
+                  </div>
                   <FactLine rows={2} secondary text={row.note} />
                 </div>
                 <div

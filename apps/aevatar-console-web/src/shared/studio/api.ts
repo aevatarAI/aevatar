@@ -102,6 +102,19 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
+function withOptionalScopeId(
+  path: string,
+  scopeId?: string | null
+): string {
+  const normalizedScopeId = trimOptional(scopeId);
+  if (!normalizedScopeId) {
+    return path;
+  }
+
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}scopeId=${encodeURIComponent(normalizedScopeId)}`;
+}
+
 function normalizeOrnnBaseUrl(baseUrl?: string | null): string {
   return trimOptional(baseUrl)?.replace(/\/+$/, "") ?? "";
 }
@@ -807,12 +820,12 @@ export const studioApi = {
     return requestJson("/api/auth/me");
   },
 
-  getWorkspaceSettings(): Promise<StudioWorkspaceSettings> {
-    return requestJson("/api/workspace/");
+  getWorkspaceSettings(scopeId?: string | null): Promise<StudioWorkspaceSettings> {
+    return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
   },
 
-  listWorkflows(): Promise<StudioWorkflowSummary[]> {
-    return requestJson("/api/workspace/workflows");
+  listWorkflows(scopeId?: string | null): Promise<StudioWorkflowSummary[]> {
+    return requestJson(withOptionalScopeId("/api/workspace/workflows", scopeId));
   },
 
   getTemplateWorkflow(
@@ -824,14 +837,20 @@ export const studioApi = {
     );
   },
 
-  getWorkflow(workflowId: string): Promise<StudioWorkflowFile> {
+  getWorkflow(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<StudioWorkflowFile> {
     return requestJson(
-      `/api/workspace/workflows/${encodeURIComponent(workflowId)}`
+      withOptionalScopeId(
+        `/api/workspace/workflows/${encodeURIComponent(workflowId)}`,
+        scopeId
+      )
     );
   },
 
   saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
-    return requestJson("/api/workspace/workflows", {
+    return requestJson(withOptionalScopeId("/api/workspace/workflows", input.scopeId), {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(
@@ -845,6 +864,21 @@ export const studioApi = {
         })
       ),
     });
+  },
+
+  deleteWorkflow(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<void> {
+    return requestJson(
+      withOptionalScopeId(
+        `/api/workspace/workflows/${encodeURIComponent(workflowId)}`,
+        scopeId
+      ),
+      {
+        method: "DELETE",
+      }
+    );
   },
 
   parseYaml(input: {

@@ -81,12 +81,10 @@ export function buildRuntimeExplorerHref(options?: {
   scopeId?: string;
   serviceId?: string;
   serviceOverrideId?: string;
-  mode?: "sample" | "live";
 }): string {
   const pathname = options?.actorId ? runtimePaths.explorerDetail : runtimePaths.explorer;
   return buildHref(pathname, {
     actorId: options?.actorId,
-    mode: options?.mode === "sample" ? "sample" : undefined,
     runId: options?.runId,
     scopeId: options?.scopeId,
     serviceId: options?.serviceId ?? options?.serviceOverrideId,

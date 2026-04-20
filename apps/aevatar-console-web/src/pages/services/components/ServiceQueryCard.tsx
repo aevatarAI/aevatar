@@ -41,45 +41,15 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           ? 'transparent'
           : `linear-gradient(145deg, ${token.colorBgElevated} 0%, ${token.colorFillAlter} 100%)`,
         border: inline ? 'none' : `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: inline ? 0 : 22,
+        borderRadius: inline ? 0 : 20,
         boxShadow: inline ? 'none' : token.boxShadowTertiary,
-        padding: inline ? 0 : 18,
+        padding: inline ? 0 : 16,
       }}
     >
-      {!inline ? (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            marginBottom: 12,
-          }}
-        >
-          <Typography.Text
-            style={{
-              color: token.colorTextHeading,
-              fontSize: 14,
-              fontWeight: 700,
-            }}
-          >
-            Scope
-          </Typography.Text>
-          <Typography.Text
-            style={{
-              color: token.colorTextSecondary,
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          >
-            先筛选范围，再查看服务详情。
-          </Typography.Text>
-        </div>
-      ) : null}
-
       <div
         style={{
           display: 'grid',
-          gap: 12,
+          gap: 14,
           gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
         }}
       >
@@ -133,7 +103,10 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
             display: 'flex',
             flexDirection: 'column',
             gap: 6,
+            justifySelf: inline ? 'stretch' : 'end',
+            maxWidth: inline ? '100%' : 180,
             minWidth: 0,
+            width: '100%',
           }}
         >
           <Typography.Text style={fieldLabelStyle}>Result window</Typography.Text>
@@ -155,18 +128,15 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
 
         <div
           style={{
-            alignItems: inline ? 'stretch' : 'center',
+            alignItems: 'center',
             display: 'flex',
             flexWrap: 'wrap',
             gap: 8,
             gridColumn: '1 / -1',
-            justifyContent: inline ? 'flex-start' : 'space-between',
+            justifyContent: 'flex-end',
+            marginTop: 2,
           }}
         >
-          {!inline ? (
-            <span />
-          ) : null}
-
           <Button onClick={onLoad} type="primary">
             {loadLabel}
           </Button>
