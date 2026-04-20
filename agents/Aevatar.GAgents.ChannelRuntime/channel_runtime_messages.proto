@@ -16,10 +16,19 @@ message ChannelBotRegistrationEntry {
   google.protobuf.Timestamp created_at = 7;
   string webhook_url = 8;  // Full callback URL configured via setWebhook
   string encrypt_key = 9;  // Lark Encrypt Key — used for signature verification AND event decryption
-  // Late-bound credential reference (Channel RFC §17.3). When non-empty, overrides
-  // the raw encrypt_key above and is resolved via ICredentialProvider at the provider
-  // boundary. The raw encrypt_key field is retained through the migration window
-  // and will be removed once all registrations carry credential_ref.
+  // Late-bound credential reference (Channel RFC §17.3).
+  //
+  // Phase 0 status (this PR): the field is persisted end-to-end (command →
+  // entry → event → state → projector → document → query port). NO caller
+  // surface exposes it yet (ChannelCallbackEndpoints / ChannelRegistrationTool
+  // do not accept credential_ref), and NO consumer reads it yet
+  // (LarkPlatformAdapter still uses EncryptKey). Setting credential_ref by
+  // protobuf-level dispatch today persists through state but has no runtime
+  // effect.
+  //
+  // Phase 1 (main Channel RFC PR): host surfaces accept credential_ref,
+  // LarkPlatformAdapter resolves it via ICredentialProvider at callback time,
+  // raw encrypt_key becomes optional, then removed.
   string credential_ref = 10;
 }
 
