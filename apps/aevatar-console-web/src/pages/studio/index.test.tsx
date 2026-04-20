@@ -5,11 +5,16 @@ import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
+import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import {
   getLocationSnapshot,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
+import {
+  loadTeamCreateDraftPointers,
+  saveTeamCreateDraftPointer,
+} from "@/shared/navigation/teamCreateDraftPointer";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -381,6 +386,38 @@ jest.mock("@/shared/api/servicesApi", () => ({
   },
 }));
 
+jest.mock("@/shared/api/scopesApi", () => ({
+  scopesApi: {
+    upsertWorkflow: jest.fn(
+      async (
+        scopeId: string,
+        workflowId: string,
+        input: {
+          workflowYaml: string;
+          workflowName?: string;
+          displayName?: string;
+        },
+      ) => ({
+        workflow: {
+          scopeId,
+          workflowId,
+          displayName: input.displayName || input.workflowName || workflowId,
+          serviceKey: `${scopeId}:default:workflow:${workflowId}`,
+          workflowName: input.workflowName || workflowId,
+          actorId: `scope-workflow:${scopeId}:${workflowId}:dep-workflow-1`,
+          activeRevisionId: "rev-workflow-1",
+          deploymentId: "dep-workflow-1",
+          deploymentStatus: "Active",
+          updatedAt: "2026-03-18T00:05:00Z",
+        },
+        revisionId: "rev-workflow-1",
+        definitionActorIdPrefix: `scope-workflow:${scopeId}:${workflowId}`,
+        expectedActorId: `scope-workflow:${scopeId}:${workflowId}:dep-workflow-1`,
+      }),
+    ),
+  },
+}));
+
 const mockEnsureActiveAuthSession =
   ensureActiveAuthSession as jest.MockedFunction<
     (_config?: unknown) => Promise<Record<string, unknown> | null>
@@ -394,6 +431,9 @@ const mockRuntimeGAgentApi = runtimeGAgentApi as unknown as {
 };
 const mockServicesApi = servicesApi as unknown as {
   listServices: jest.Mock;
+};
+const mockScopesApi = scopesApi as unknown as {
+  upsertWorkflow: jest.Mock;
 };
 
 jest.mock("@/shared/studio/api", () => ({
@@ -525,11 +565,17 @@ jest.mock("@/shared/studio/api", () => ({
         fileName?: string | null;
         yaml: string;
       }) => {
+        const nextWorkflowId =
+          input.workflowId ||
+          `generated-${input.workflowName.trim() || "workflow"}`;
+        const nextFileName =
+          input.fileName ||
+          `${input.workflowName.trim() || "workflow"}.yaml`;
         mockWorkflowFile = {
           ...mockWorkflowFile,
-          workflowId: input.workflowId || mockWorkflowFile.workflowId,
+          workflowId: nextWorkflowId,
           name: input.workflowName,
-          fileName: input.fileName || mockWorkflowFile.fileName,
+          fileName: nextFileName,
           directoryId: input.directoryId,
           yaml: input.yaml,
           updatedAtUtc: "2026-03-18T00:05:00Z",
@@ -1116,8 +1162,8 @@ jest.mock("./components/StudioWorkbenchSections", () => {
 
   const StudioWorkflowsPage = (props: any) =>
     React.createElement("div", null, [
-      React.createElement("h2", { key: "title" }, "行为定义"),
-      React.createElement("div", { key: "draft" }, "当前定义"),
+      React.createElement("h2", { key: "title" }, "workflow"),
+      React.createElement("div", { key: "draft" }, "当前 workflow"),
       React.createElement(
         "button",
         {
@@ -1130,7 +1176,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
       ),
       React.createElement("input", {
         key: "search",
-        placeholder: "搜索定义",
+        placeholder: "搜索 workflow",
         value: props.workflowSearch ?? "",
         onChange: (event: MockValueEvent) =>
           props.onSetWorkflowSearch?.(event.target.value),
@@ -1153,7 +1199,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           type: "button",
           onClick: () => props.onStartBlankDraft?.(),
         },
-        "新建定义"
+        "新建 workflow"
       ),
     ]);
 
@@ -1166,20 +1212,43 @@ jest.mock("./components/StudioWorkbenchSections", () => {
         : props.draftMode === "new"
         ? "新建草稿"
         : props.templateWorkflowName
-        ? "模板定义"
-        : "当前定义";
+        ? "模板 workflow"
+        : "当前 workflow";
     const publishLabel = props.teamCreation
       ? "发布团队入口"
       : props.scopeBinding?.available
       ? "更新团队入口"
       : "绑定团队入口";
+    const bindingStateLabel = props.teamCreation
+      ? "草稿中"
+      : props.scopeBinding?.available
+      ? "已发布"
+      : "未发布";
 
     return React.createElement(
       "div",
       null,
       [
         React.createElement("div", { key: "title" }, title),
-        React.createElement("div", { key: "graph-title" }, "行为画布"),
+        props.teamCreation
+          ? React.createElement(
+              "div",
+              {
+                key: "team-workflow-label",
+                "data-testid": "studio-team-workflow-label",
+              },
+              props.teamCreation.workflowName || ""
+            )
+          : null,
+        React.createElement(
+          "div",
+          {
+            key: "binding-state-label",
+            "data-testid": "studio-binding-state-label",
+          },
+          bindingStateLabel
+        ),
+        React.createElement("div", { key: "graph-title" }, "workflow 画布"),
         React.createElement(
           "div",
           {
@@ -1191,8 +1260,8 @@ jest.mock("./components/StudioWorkbenchSections", () => {
         renderNoticeTitle(
           "save-notice",
           props.saveNotice,
-          "定义已保存",
-          "定义保存失败"
+          "workflow 已保存",
+          "workflow 保存失败"
         ),
         renderNoticeTitle(
           "run-notice",
@@ -1223,14 +1292,25 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           : null,
         React.createElement("input", {
           key: "workflow-name",
-          "aria-label": "定义名称",
+          "aria-label": "workflow 名称",
           value: props.draftWorkflowName ?? "",
           onChange: (event: MockValueEvent) =>
             props.onSetDraftWorkflowName?.(event.target.value),
         }),
+        ...dedupeStudioWorkflowSummaries(props.workflows.data ?? []).map((workflow: any) =>
+          React.createElement(
+            "button",
+            {
+              key: `editor-workflow-${workflow.workflowId}`,
+              type: "button",
+              onClick: () => props.onOpenWorkflow?.(workflow.workflowId),
+            },
+            workflow.name
+          )
+        ),
         React.createElement("textarea", {
           key: "workflow-yaml",
-          "aria-label": "定义 YAML",
+          "aria-label": "workflow YAML",
           value: props.draftYaml ?? "",
           onChange: (event: MockValueEvent) =>
             props.onSetDraftYaml?.(event.target.value),
@@ -1242,7 +1322,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
             type: "button",
             onClick: () => props.onSaveDraft?.(),
           },
-          "保存定义"
+          "保存 workflow"
         ),
         React.createElement(
           "button",
@@ -1271,7 +1351,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
               ),
               React.createElement("textarea", {
                 key: "yaml-view",
-                "aria-label": "行为定义 YAML",
+                "aria-label": "workflow YAML",
                 readOnly: true,
                 value: props.draftYaml ?? "",
               }),
@@ -1671,6 +1751,34 @@ describe("StudioPage", () => {
         ],
       },
     ]);
+    mockScopesApi.upsertWorkflow.mockReset();
+    mockScopesApi.upsertWorkflow.mockImplementation(
+      async (
+        scopeId: string,
+        workflowId: string,
+        input: {
+          workflowYaml: string;
+          workflowName?: string;
+          displayName?: string;
+        },
+      ) => ({
+        workflow: {
+          scopeId,
+          workflowId,
+          displayName: input.displayName || input.workflowName || workflowId,
+          serviceKey: `${scopeId}:default:workflow:${workflowId}`,
+          workflowName: input.workflowName || workflowId,
+          actorId: `scope-workflow:${scopeId}:${workflowId}:dep-workflow-1`,
+          activeRevisionId: "rev-workflow-1",
+          deploymentId: "dep-workflow-1",
+          deploymentStatus: "Active",
+          updatedAt: "2026-03-18T00:05:00Z",
+        },
+        revisionId: "rev-workflow-1",
+        definitionActorIdPrefix: `scope-workflow:${scopeId}:${workflowId}`,
+        expectedActorId: `scope-workflow:${scopeId}:${workflowId}:dep-workflow-1`,
+      }),
+    );
     (studioApi.getAuthSession as jest.Mock).mockReset();
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue(
       mockCreateDefaultStudioAuthSession()
@@ -1707,10 +1815,10 @@ describe("StudioPage", () => {
 
     expect(await screen.findByText("workspace-demo")).toBeTruthy();
     expect(screen.getByText("Workbench")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "行为定义" })).toBeTruthy();
-    expect(screen.getByText("当前定义")).toBeTruthy();
-    expect(screen.getByPlaceholderText("搜索定义")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "定义列表" })).toHaveAttribute(
+    expect(screen.getByRole("heading", { name: "workflow" })).toBeTruthy();
+    expect(screen.getByText("当前 workflow")).toBeTruthy();
+    expect(screen.getByPlaceholderText("搜索 workflow")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "workflow 列表" })).toHaveAttribute(
       "aria-pressed",
       "true"
     );
@@ -1738,7 +1846,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-title")).toHaveTextContent("workspace-demo");
     });
-    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("行为定义草稿");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("workflow 草稿");
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("团队 A");
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("成员 Alpha");
     expect(screen.getAllByRole("button", { name: "测试运行" }).length).toBeGreaterThan(0);
@@ -1770,14 +1878,14 @@ describe("StudioPage", () => {
     );
 
     expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
-    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("行为定义");
-    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("浏览团队内的行为定义");
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("workflow");
+    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("浏览团队内的 workflow");
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("团队 B");
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("成员 Beta");
-    expect(screen.getByRole("heading", { name: "行为定义" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "workflow" })).toBeTruthy();
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "行为定义" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "workflow" })).toBeTruthy();
       expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-b");
     });
 
@@ -1805,6 +1913,9 @@ describe("StudioPage", () => {
       "入口草稿：订单入口"
     );
     expect(screen.getByTestId("studio-context-meta")).not.toHaveTextContent("default");
+    expect(screen.getByTestId("studio-binding-state-label")).toHaveTextContent(
+      "草稿中"
+    );
     expect(screen.getByRole("button", { name: "保存草稿" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "发布团队入口" })).toBeTruthy();
 
@@ -1823,10 +1934,37 @@ describe("StudioPage", () => {
     expect(returnParams.get("entryName")).toBe("订单入口");
   });
 
+  it("returns to a clean create-team url when a saved draft pointer already exists", async () => {
+    saveTeamCreateDraftPointer({
+      scopeId: "scope-a",
+      teamName: "订单助手",
+      entryName: "订单助手",
+      teamDraftWorkflowId: "test03",
+      teamDraftWorkflowName: "test03",
+    });
+    renderStudioPage(
+      "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B&entryName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B&teamDraftWorkflowId=test03&teamDraftWorkflowName=test03&workflow=test03&tab=studio"
+    );
+
+    expect(await screen.findByRole("button", { name: "返回创建页" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "返回创建页" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/teams/new");
+    });
+    const returnParams = new URLSearchParams(window.location.search);
+    expect(returnParams.get("scopeId")).toBe("scope-a");
+    expect(returnParams.get("scopeLabel")).toBe("团队 A");
+    expect(returnParams.get("teamName")).toBeNull();
+    expect(returnParams.get("entryName")).toBeNull();
+    expect(returnParams.get("teamDraftWorkflowId")).toBeNull();
+  });
+
   it("resyncs the Studio deep link when the target workflow changes after mount", async () => {
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(await screen.findByText("当前 workflow")).toBeTruthy();
 
     await replaceStudioRoute(
       "/studio?template=published-demo&prompt=Continue%20this%20workflow%20in%20Studio&tab=studio"
@@ -1838,7 +1976,7 @@ describe("StudioPage", () => {
       );
     });
 
-    expect(await screen.findByText("模板定义")).toBeTruthy();
+    expect(await screen.findByText("模板 workflow")).toBeTruthy();
     expect(await screen.findByTestId("studio-run-prompt-state")).toHaveTextContent(
       "Continue this workflow in Studio"
     );
@@ -1847,7 +1985,7 @@ describe("StudioPage", () => {
   it("falls back to behaviors when the removed files tab is requested", async () => {
     renderStudioPage("/studio?tab=files");
 
-    expect(await screen.findByRole("heading", { name: "行为定义" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "workflow" })).toBeTruthy();
     expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
       flex: "1",
@@ -1884,24 +2022,24 @@ describe("StudioPage", () => {
 
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    expect(await screen.findByText("当前定义")).toBeTruthy();
-    expect(screen.queryByText("尚未加载定义")).toBeNull();
-    expect(screen.getByText("行为画布")).toBeTruthy();
+    expect(await screen.findByText("当前 workflow")).toBeTruthy();
+    expect(screen.queryByText("尚未加载 workflow")).toBeNull();
+    expect(screen.getByText("workflow 画布")).toBeTruthy();
   });
 
-  it("lets operators switch between the behavior browser and editor within the shared tab", async () => {
+  it("lets operators switch between the workflow browser and editor within the shared tab", async () => {
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(await screen.findByText("当前 workflow")).toBeTruthy();
     expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveAttribute(
       "aria-pressed",
       "true"
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "定义列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "workflow 列表" }));
 
-    expect(await screen.findByPlaceholderText("搜索定义")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "定义列表" })).toHaveAttribute(
+    expect(await screen.findByPlaceholderText("搜索 workflow")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "workflow 列表" })).toHaveAttribute(
       "aria-pressed",
       "true"
     );
@@ -1914,7 +2052,7 @@ describe("StudioPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "编辑草稿" }));
 
-    expect(await screen.findByText("行为画布")).toBeTruthy();
+    expect(await screen.findByText("workflow 画布")).toBeTruthy();
     expect(screen.getByRole("button", { name: "编辑草稿" })).toHaveAttribute(
       "aria-pressed",
       "true"
@@ -1938,14 +2076,14 @@ describe("StudioPage", () => {
       )
     );
 
-    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(await screen.findByText("当前 workflow")).toBeTruthy();
     expect(screen.getByTestId("location-snapshot-probe")).toHaveTextContent(
       "/studio?workflow=workflow-1&tab=studio"
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "定义列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "workflow 列表" }));
 
-    expect(await screen.findByPlaceholderText("搜索定义")).toBeTruthy();
+    expect(await screen.findByPlaceholderText("搜索 workflow")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("location-snapshot-probe")).toHaveTextContent(
         "/studio?tab=workflows"
@@ -1954,7 +2092,7 @@ describe("StudioPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "编辑草稿" }));
 
-    expect(await screen.findByText("行为画布")).toBeTruthy();
+    expect(await screen.findByText("workflow 画布")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("location-snapshot-probe")).toHaveTextContent(
         "/studio?workflow=workflow-1&tab=studio"
@@ -1962,14 +2100,14 @@ describe("StudioPage", () => {
     });
   });
 
-  it("keeps the behavior browser active when the route explicitly targets workflows with a prompt", async () => {
+  it("keeps the workflow browser active when the route explicitly targets workflows with a prompt", async () => {
     renderStudioPage(
       "/studio?tab=workflows&prompt=Continue%20this%20workflow%20in%20Studio"
     );
 
-    expect(await screen.findByPlaceholderText("搜索定义")).toBeTruthy();
-    expect(screen.queryByText("行为画布")).toBeNull();
-    expect(screen.getByRole("button", { name: "定义列表" })).toHaveAttribute(
+    expect(await screen.findByPlaceholderText("搜索 workflow")).toBeTruthy();
+    expect(screen.queryByText("workflow 画布")).toBeNull();
+    expect(screen.getByRole("button", { name: "workflow 列表" })).toHaveAttribute(
       "aria-pressed",
       "true"
     );
@@ -2112,7 +2250,7 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?tab=scripts");
 
     await screen.findByLabelText("Script ID");
-    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
+    fireEvent.click(screen.getByRole("button", { name: "workflow" }));
 
     expect(await screen.findByText("Leave Scripts Studio?")).toBeTruthy();
     expect(
@@ -2127,17 +2265,17 @@ describe("StudioPage", () => {
     });
     expect(screen.getByLabelText("Script ID")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
+    fireEvent.click(screen.getByRole("button", { name: "workflow" }));
     fireEvent.click(await screen.findByRole("button", { name: "Leave page" }));
 
-    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(await screen.findByText("当前 workflow")).toBeTruthy();
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    const editor = await screen.findByLabelText("定义 YAML");
-    const nameInput = await screen.findByLabelText("定义名称");
+    const editor = await screen.findByLabelText("workflow YAML");
+    const nameInput = await screen.findByLabelText("workflow 名称");
     await waitFor(() => {
       expect(nameInput).toHaveValue("workspace-demo");
     });
@@ -2173,13 +2311,13 @@ describe("StudioPage", () => {
 
   it("updates the create-team draft pointer after saving a team draft", async () => {
     renderStudioPage(
-      "/studio?workflow=workflow-1&tab=studio&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
+      "/studio?draft=new&tab=studio&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
     );
 
-    const editor = await screen.findByLabelText("定义 YAML");
+    const editor = await screen.findByLabelText("workflow YAML");
     fireEvent.change(editor, {
       target: {
-        value: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
+        value: "name: 订单入口\nsteps:\n  - id: approve_step\n",
       },
     });
 
@@ -2190,19 +2328,528 @@ describe("StudioPage", () => {
     fireEvent.click(saveButton);
 
     await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: undefined,
+          workflowName: "订单入口",
+          fileName: undefined,
+        })
+      );
+    });
+
+    await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(window.location.pathname).toBe("/studio");
-      expect(searchParams.get("teamDraftWorkflowId")).toBe("workflow-1");
-      expect(searchParams.get("teamDraftWorkflowName")).toBe("workspace-demo");
-      expect(searchParams.get("workflow")).toBe("workflow-1");
+      expect(searchParams.get("teamDraftWorkflowId")).toBe("generated-订单入口");
+      expect(searchParams.get("teamDraftWorkflowName")).toBe("订单入口");
+      expect(searchParams.get("workflow")).toBe("generated-订单入口");
       expect(searchParams.get("entryName")).toBe("订单入口");
+    });
+  });
+
+  it("keeps a fresh create-team draft isolated even when a workflow id leaks into the route", async () => {
+    renderStudioPage(
+      "/studio?workflow=workflow-1&draft=new&tab=studio&teamMode=create&teamName=test&entryName=test"
+    );
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("workflow 名称") as HTMLInputElement).value
+      ).toBe("test");
+    });
+
+    const saveButton = screen.getByRole("button", { name: "保存草稿" });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: undefined,
+          workflowName: "test",
+          fileName: undefined,
+        })
+      );
+    });
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("teamDraftWorkflowId")).toBe("generated-test");
+      expect(searchParams.get("workflow")).toBe("generated-test");
+    });
+  });
+
+  it("copies a behavior definition into the current team draft without rebinding save identity", async () => {
+    renderStudioPage(
+      "/studio?draft=new&tab=studio&teamMode=create&teamName=test&entryName=test"
+    );
+
+    await screen.findByText("创建团队：test");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /workspace-demo/i })
+    );
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("workflow YAML") as HTMLTextAreaElement).value
+      ).toContain("name: workspace-demo");
+    });
+
+    const saveButton = screen.getByRole("button", { name: "保存草稿" });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: undefined,
+          workflowName: "test",
+          fileName: undefined,
+        })
+      );
+    });
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("teamDraftWorkflowId")).toBe("generated-test");
+      expect(searchParams.get("workflow")).toBe("generated-test");
+      expect(searchParams.get("sourceBehaviorDefinitionId")).toBe("workflow-1");
+      expect(searchParams.get("sourceBehaviorDefinitionName")).toBe("workspace-demo");
+    });
+  });
+
+  it("publishes the current team draft name instead of the source behavior definition name", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage(
+      "/studio?draft=new&tab=studio&teamMode=create&teamName=test&entryName=test"
+    );
+
+    await screen.findByText("创建团队：test");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /workspace-demo/i })
+    );
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("workflow YAML") as HTMLTextAreaElement).value
+      ).toContain("name: workspace-demo");
+    });
+
+    const publishButton = screen.getByTestId("studio-publish-workflow-button");
+    await waitFor(() => {
+      expect(publishButton).toBeEnabled();
+    });
+    fireEvent.click(publishButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: undefined,
+          workflowName: "test",
+          fileName: undefined,
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          displayName: "test",
+        })
+      );
+    });
+
+    const lastBindCall = (studioApi.bindScopeWorkflow as jest.Mock).mock.calls.at(-1)?.[0];
+    expect(lastBindCall?.workflowYamls?.[0]).toContain("name: test");
+    expect(lastBindCall?.workflowYamls?.[0]).not.toContain(
+      "name: workspace-demo"
+    );
+    expect(scopesApi.upsertWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("removes a published team draft from saved drafts and exits create-team mode", async () => {
+    saveTeamCreateDraftPointer({
+      scopeId: "scope-1",
+      teamName: "订单",
+      entryName: "订单",
+      teamDraftWorkflowId: "team-draft-1",
+      teamDraftWorkflowName: "订单",
+    });
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&scopeLabel=Scope+1&teamMode=create&teamName=%E8%AE%A2%E5%8D%95&entryName=%E8%AE%A2%E5%8D%95&teamDraftWorkflowId=team-draft-1&teamDraftWorkflowName=%E8%AE%A2%E5%8D%95&workflow=team-draft-1&tab=studio"
+    );
+
+    expect(await screen.findByText("创建团队：订单")).toBeTruthy();
+
+    const publishButton = screen.getByTestId("studio-publish-workflow-button");
+    await waitFor(() => {
+      expect(publishButton).toBeEnabled();
+    });
+    fireEvent.click(publishButton);
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeWorkflow).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("teamMode")).toBeNull();
+      expect(searchParams.get("teamDraftWorkflowId")).toBeNull();
+      expect(searchParams.get("workflow")).toBe("team-draft-1");
+    });
+
+    expect(loadTeamCreateDraftPointers("scope-1")).toEqual([]);
+  });
+
+  it("keeps behavior-definition selection separate from the current saved team draft", async () => {
+    const workflowFiles = {
+      "team-draft-1": {
+        workflowId: "team-draft-1",
+        name: "test",
+        fileName: "test.yaml",
+        filePath: "/tmp/workflows/test.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        yaml: "name: test\nsteps:\n  - id: team_entry_step\n",
+        findings: [],
+        updatedAtUtc: "2026-04-17T10:54:00Z",
+        document: {
+          name: "test",
+          description: "Team entry draft",
+          roles: [],
+          steps: [
+            {
+              id: "team_entry_step",
+              type: "llm_call",
+              targetRole: "",
+              parameters: {},
+              next: "",
+              branches: {},
+            },
+          ],
+        },
+      },
+      "workflow-joker": {
+        workflowId: "workflow-joker",
+        name: "joker",
+        fileName: "joker.yaml",
+        filePath: "/tmp/workflows/joker.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        yaml: "name: joker\nsteps:\n  - id: tell_joke\n",
+        findings: [],
+        updatedAtUtc: "2026-04-17T10:54:23Z",
+        document: {
+          name: "joker",
+          description: "Joker definition",
+          roles: [],
+          steps: [
+            {
+              id: "tell_joke",
+              type: "llm_call",
+              targetRole: "",
+              parameters: {},
+              next: "",
+              branches: {},
+            },
+          ],
+        },
+      },
+      "workflow-test03": {
+        workflowId: "workflow-test03",
+        name: "test03",
+        fileName: "test03.yaml",
+        filePath: "/tmp/workflows/test03.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        yaml: "name: test03\nsteps:\n  - id: test03_step\n",
+        findings: [],
+        updatedAtUtc: "2026-04-17T10:36:38Z",
+        document: {
+          name: "test03",
+          description: "Test03 definition",
+          roles: [],
+          steps: [
+            {
+              id: "test03_step",
+              type: "llm_call",
+              targetRole: "",
+              parameters: {},
+              next: "",
+              branches: {},
+            },
+          ],
+        },
+      },
+    } as const;
+
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "team-draft-1",
+        name: "test",
+        description: "Team entry draft",
+        fileName: "test.yaml",
+        filePath: "/tmp/workflows/test.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:54:00Z",
+      },
+      {
+        workflowId: "workflow-joker",
+        name: "joker",
+        description: "Joker definition",
+        fileName: "joker.yaml",
+        filePath: "/tmp/workflows/joker.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:54:23Z",
+      },
+      {
+        workflowId: "workflow-test03",
+        name: "test03",
+        description: "Test03 definition",
+        fileName: "test03.yaml",
+        filePath: "/tmp/workflows/test03.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:36:38Z",
+      },
+    ]);
+    (studioApi.getWorkflow as jest.Mock).mockImplementation(
+      async (workflowId: string) => workflowFiles[workflowId as keyof typeof workflowFiles]
+    );
+
+    renderStudioPage(
+      "/studio?teamMode=create&teamName=test&entryName=test&teamDraftWorkflowId=team-draft-1&teamDraftWorkflowName=test&workflow=team-draft-1&tab=studio"
+    );
+
+    await screen.findByText("创建团队：test");
+    expect(screen.getByTestId("studio-team-workflow-label")).toHaveTextContent("");
+
+    fireEvent.click(await screen.findByRole("button", { name: /^joker$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-team-workflow-label")).toHaveTextContent(
+        "joker"
+      );
+      expect(
+        (screen.getByLabelText("workflow YAML") as HTMLTextAreaElement).value
+      ).toContain("name: joker");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^test03$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-team-workflow-label")).toHaveTextContent(
+        "test03"
+      );
+      expect(
+        (screen.getByLabelText("workflow YAML") as HTMLTextAreaElement).value
+      ).toContain("name: test03");
+    });
+
+    const saveButton = screen.getByRole("button", { name: "保存草稿" });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "team-draft-1",
+          workflowName: "test",
+        })
+      );
+    });
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("sourceBehaviorDefinitionId")).toBe(
+        "workflow-test03"
+      );
+      expect(searchParams.get("sourceBehaviorDefinitionName")).toBe("test03");
+    });
+  });
+
+  it("restores the saved source behavior definition label when resuming a team draft", async () => {
+    saveTeamCreateDraftPointer({
+      teamName: "订单测试",
+      entryName: "订单测试",
+      teamDraftWorkflowId: "team-draft-1",
+      teamDraftWorkflowName: "订单测试",
+      sourceBehaviorDefinitionId: "workflow-joker",
+      sourceBehaviorDefinitionName: "joker",
+    });
+
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "team-draft-1",
+        name: "订单测试",
+        description: "Team entry draft",
+        fileName: "订单测试.yaml",
+        filePath: "/tmp/workflows/订单测试.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T13:06:00Z",
+      },
+      {
+        workflowId: "workflow-joker",
+        name: "joker",
+        description: "Joker definition",
+        fileName: "joker.yaml",
+        filePath: "/tmp/workflows/joker.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:54:23Z",
+      },
+    ]);
+    (studioApi.getWorkflow as jest.Mock).mockImplementation(async (workflowId: string) => ({
+      workflowId,
+      name: workflowId === "team-draft-1" ? "订单测试" : "joker",
+      fileName: `${workflowId}.yaml`,
+      filePath: `/tmp/workflows/${workflowId}.yaml`,
+      directoryId: "dir-1",
+      directoryLabel: "Workspace",
+      yaml:
+        workflowId === "team-draft-1"
+          ? "name: 订单测试\nsteps:\n  - id: team_entry_step\n"
+          : "name: joker\nsteps:\n  - id: tell_joke\n",
+      findings: [],
+      updatedAtUtc: "2026-04-17T13:06:00Z",
+      document: {
+        name: workflowId === "team-draft-1" ? "订单测试" : "joker",
+        description: "",
+        roles: [],
+        steps: [
+          {
+            id: workflowId === "team-draft-1" ? "team_entry_step" : "tell_joke",
+            type: "llm_call",
+            targetRole: "",
+            parameters: {},
+            next: "",
+            branches: {},
+          },
+        ],
+      },
+    }));
+
+    renderStudioPage(
+      "/studio?teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E6%B5%8B%E8%AF%95&entryName=%E8%AE%A2%E5%8D%95%E6%B5%8B%E8%AF%95&teamDraftWorkflowId=team-draft-1&teamDraftWorkflowName=%E8%AE%A2%E5%8D%95%E6%B5%8B%E8%AF%95&workflow=team-draft-1&tab=studio"
+    );
+
+    await screen.findByText("创建团队：订单测试");
+    expect(screen.getByTestId("studio-team-workflow-label")).toHaveTextContent(
+      "joker"
+    );
+  });
+
+  it("hides saved team-entry drafts from the workflow list in create-team mode", async () => {
+    saveTeamCreateDraftPointer({
+      teamName: "测试",
+      entryName: "测试",
+      teamDraftWorkflowId: "team-draft-1",
+      teamDraftWorkflowName: "test",
+    });
+    saveTeamCreateDraftPointer({
+      teamName: "订单测试",
+      entryName: "订单测试",
+      teamDraftWorkflowId: "team-draft-2",
+      teamDraftWorkflowName: "order-test",
+    });
+
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "team-draft-1",
+        name: "test",
+        description: "Team entry draft",
+        fileName: "test.yaml",
+        filePath: "/tmp/workflows/test.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:54:00Z",
+      },
+      {
+        workflowId: "team-draft-2",
+        name: "order-test",
+        description: "Team entry draft",
+        fileName: "order-test.yaml",
+        filePath: "/tmp/workflows/order-test.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:40:00Z",
+      },
+      {
+        workflowId: "workflow-joker",
+        name: "joker",
+        description: "Behavior definition",
+        fileName: "joker.yaml",
+        filePath: "/tmp/workflows/joker.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:54:23Z",
+      },
+      {
+        workflowId: "workflow-test03",
+        name: "test03",
+        description: "Behavior definition",
+        fileName: "test03.yaml",
+        filePath: "/tmp/workflows/test03.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-04-17T10:36:38Z",
+      },
+    ]);
+
+    renderStudioPage(
+      "/studio?teamMode=create&teamName=test&entryName=test&teamDraftWorkflowId=team-draft-1&teamDraftWorkflowName=test&workflow=team-draft-1&tab=studio"
+    );
+
+    await screen.findByText("创建团队：test");
+    fireEvent.click(screen.getByRole("button", { name: "workflow" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /^test$/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^order-test$/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /^joker$/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^test03$/i })).toBeTruthy();
     });
   });
 
   it("keeps Studio workflow saves pinned to the current scope route", async () => {
     renderStudioPage("/studio?scopeId=scope-1&workflow=workflow-1&tab=studio");
 
-    const editor = await screen.findByLabelText("定义 YAML");
+    const editor = await screen.findByLabelText("workflow YAML");
     fireEvent.change(editor, {
       target: {
         value: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
@@ -2230,7 +2877,7 @@ describe("StudioPage", () => {
   it("keeps the toolbar save action enabled when the draft falls back to the default directory", async () => {
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    await screen.findByText("当前定义");
+    await screen.findByText("当前 workflow");
 
     const toolbarSaveButton = screen.getByRole("button", { name: /^保\s*存$/ });
     await waitFor(() => {
@@ -2249,10 +2896,10 @@ describe("StudioPage", () => {
 
     expect(await screen.findByText("新建草稿")).toBeTruthy();
     expect(
-      (await screen.findByLabelText("定义名称")) as HTMLInputElement
+      (await screen.findByLabelText("workflow 名称")) as HTMLInputElement
     ).toHaveValue("draft");
     expect(
-      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
+      (await screen.findByLabelText("workflow YAML")) as HTMLTextAreaElement
     ).toHaveValue("name: draft\nsteps: []\n");
   });
 
@@ -2280,10 +2927,10 @@ describe("StudioPage", () => {
     });
 
     expect(
-      (await screen.findByLabelText("定义名称")) as HTMLInputElement
+      (await screen.findByLabelText("workflow 名称")) as HTMLInputElement
     ).toHaveValue("draft");
     expect(
-      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
+      (await screen.findByLabelText("workflow YAML")) as HTMLTextAreaElement
     ).toHaveValue("name: draft\nsteps: []\n");
   });
 
@@ -2298,10 +2945,10 @@ describe("StudioPage", () => {
 
     expect(await screen.findByText("新建草稿")).toBeTruthy();
     expect(
-      (await screen.findByLabelText("定义名称")) as HTMLInputElement
+      (await screen.findByLabelText("workflow 名称")) as HTMLInputElement
     ).toHaveValue("legacy_draft");
     expect(
-      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
+      (await screen.findByLabelText("workflow YAML")) as HTMLTextAreaElement
     ).toHaveValue("name: legacy_draft\nsteps:\n  - id: legacy_step\n");
   });
 
@@ -2335,7 +2982,7 @@ describe("StudioPage", () => {
       );
     });
 
-    expect(await screen.findByText("模板定义")).toBeTruthy();
+    expect(await screen.findByText("模板 workflow")).toBeTruthy();
     expect(await screen.findByTestId("workflow-graph-node-count")).toHaveTextContent(
       "2"
     );
@@ -2407,7 +3054,7 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.change(await screen.findByLabelText("定义 YAML"), {
+    fireEvent.change(await screen.findByLabelText("workflow YAML"), {
       target: {
         value: "name: workspace-demo\nsteps:\n  - id: review_step\n",
       },
@@ -2469,7 +3116,7 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    await screen.findByLabelText("定义 YAML");
+    await screen.findByLabelText("workflow YAML");
     await waitFor(() => {
       expect(screen.getByTestId("studio-editor-run-button")).toBeEnabled();
     });
@@ -2591,7 +3238,7 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?template=published-demo&tab=studio");
 
-    expect(await screen.findByText("模板定义")).toBeTruthy();
+    expect(await screen.findByText("模板 workflow")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Open Chat" })
     ).not.toBeInTheDocument();
@@ -2825,6 +3472,11 @@ describe("StudioPage", () => {
       expect(studioApi.authorWorkflow).toHaveBeenCalledWith(
         expect.objectContaining({
           prompt: "Create a short review workflow",
+          metadata: expect.objectContaining({
+            source: "aevatar-console-web",
+            surface: "studio",
+            "nyxid.route_preference": "",
+          }),
         }),
         expect.any(Object)
       );
@@ -2833,12 +3485,9 @@ describe("StudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "YAML" }));
 
     await waitFor(() => {
+      const yamlEditors = screen.getAllByLabelText("workflow YAML");
       expect(
-        (
-          screen.getByLabelText(
-            "行为定义 YAML"
-          ) as HTMLTextAreaElement
-        ).value.trim()
+        (yamlEditors[0] as HTMLTextAreaElement).value.trim()
       ).toBe("name: ai-generated\nsteps: []");
     });
   });
@@ -2889,6 +3538,42 @@ describe("StudioPage", () => {
     expect(
       screen.queryByText(/Error occurred while trying to proxy/i)
     ).toBeNull();
+  });
+
+  it("sanitizes unsupported model route failures for workflow AI", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
+      ...mockCreateDefaultStudioAppContext(),
+      mode: "embedded",
+    });
+    (studioApi.authorWorkflow as jest.Mock).mockRejectedValueOnce(
+      new Error(
+        "HTTP 400 (invalid_request_error): The 'gpt-5.1' model is not supported when using Codex with a ChatGPT account. | endpoint=https://nyx-api.example/api/v1/proxy/s/chrono-llm-2, model=claude-sonnet-4-5-20250929, route=/api/v1/proxy/s/chrono-llm-2"
+      )
+    );
+
+    renderStudioPage("/studio?draft=new&tab=studio");
+
+    const askAiButton = await screen.findByRole("button", { name: "Open Ask AI" });
+    await waitFor(() => {
+      expect(askAiButton).toBeEnabled();
+    });
+    fireEvent.click(askAiButton);
+    fireEvent.change(
+      await screen.findByLabelText("Studio AI workflow prompt"),
+      {
+        target: {
+          value: "Create a short review workflow",
+        },
+      }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    expect(await screen.findByText("AI 生成失败")).toBeTruthy();
+    expect(
+      await screen.findByText("当前 AI 模型与路由配置不兼容，请切换到 Gateway 或受支持的模型后重试。")
+    ).toBeTruthy();
+    expect(screen.queryByText(/gpt-5\.1/i)).toBeNull();
+    expect(screen.queryByText(/chrono-llm-2/i)).toBeNull();
   });
 
   it("applies a saved role to the current workflow from the roles catalog", async () => {

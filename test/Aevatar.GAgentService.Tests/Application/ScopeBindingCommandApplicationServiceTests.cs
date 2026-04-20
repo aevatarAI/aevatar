@@ -77,6 +77,36 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldRepublishExistingServiceDefinition_WhenCatalogIsMissingButWriteSideAlreadyExists()
+    {
+        var commandPort = new RecordingServiceCommandPort
+        {
+            CreateServiceException = new InvalidOperationException(
+                "Service definition 'scope-a:default:default:default' already exists."),
+        };
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ])));
+
+        commandPort.Calls.Should().HaveCount(7);
+        commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
+        commandPort.Calls[1].Method.Should().Be("RepublishServiceAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "UpdateServiceAsync");
+        result.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldTreatFirstYamlAsEntryWorkflow_AndRemainingAsSubWorkflows()
     {
         var commandPort = new RecordingServiceCommandPort();
@@ -1092,15 +1122,25 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public List<CommandCall> Calls { get; } = [];
 
+        public Exception? CreateServiceException { get; set; }
+
         public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(CreateServiceDefinitionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("CreateServiceAsync", command));
+            if (CreateServiceException != null)
+                return Task.FromException<ServiceCommandAcceptedReceipt>(CreateServiceException);
             return Task.FromResult(DefaultReceipt);
         }
 
         public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(UpdateServiceDefinitionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("UpdateServiceAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RepublishServiceAsync(RepublishServiceDefinitionCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("RepublishServiceAsync", command));
             return Task.FromResult(DefaultReceipt);
         }
 

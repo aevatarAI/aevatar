@@ -12,6 +12,10 @@ public interface IServiceCommandPort
         UpdateServiceDefinitionCommand command,
         CancellationToken ct = default);
 
+    Task<ServiceCommandAcceptedReceipt> RepublishServiceAsync(
+        RepublishServiceDefinitionCommand command,
+        CancellationToken ct = default);
+
     Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(
         CreateServiceRevisionCommand command,
         CancellationToken ct = default);

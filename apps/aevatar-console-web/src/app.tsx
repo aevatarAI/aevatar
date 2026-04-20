@@ -37,6 +37,7 @@ import {
   type NavigationGroup,
 } from "./shared/navigation/navigationGroups";
 import { getNavigationSelectedKeys } from "./shared/navigation/navigationMenuSelection";
+import { buildScopedTeamsMenuHref } from "./shared/navigation/teamRoutes";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { buildMissionSnapshotFromRuntime } from "@/pages/MissionControl/runtimeAdapter";
@@ -527,12 +528,19 @@ function decorateNavigationMenuItems(
             icon: item.icon,
           })
         : item.icon;
+    const scopedPath =
+      path === "/teams"
+        ? buildScopedTeamsMenuHref("teams")
+        : path === "/teams/new"
+          ? buildScopedTeamsMenuHref("create-team")
+          : path;
 
     return {
       ...item,
       children,
       icon,
       name,
+      path: scopedPath,
     };
   });
 }

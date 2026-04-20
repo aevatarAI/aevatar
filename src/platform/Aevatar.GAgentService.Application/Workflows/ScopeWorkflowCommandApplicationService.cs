@@ -54,15 +54,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
 
         if (existingService == null)
         {
-            await _serviceCommandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
-            {
-                Spec = new ServiceDefinitionSpec
-                {
-                    Identity = identity.Clone(),
-                    DisplayName = desiredDisplayName,
-                    Endpoints = { BuildChatEndpointSpec() },
-                },
-            }, ct);
+            await EnsureServiceDefinitionExistsAsync(identity, desiredDisplayName, ct);
         }
         else if (!string.Equals(existingService.DisplayName, desiredDisplayName, StringComparison.Ordinal))
         {
@@ -149,6 +141,40 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
             definitionActorIdPrefix,
             expectedActorId);
     }
+
+    private async Task EnsureServiceDefinitionExistsAsync(
+        ServiceIdentity identity,
+        string desiredDisplayName,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _serviceCommandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
+            {
+                Spec = new ServiceDefinitionSpec
+                {
+                    Identity = identity.Clone(),
+                    DisplayName = desiredDisplayName,
+                    Endpoints = { BuildChatEndpointSpec() },
+                },
+            }, ct);
+        }
+        catch (InvalidOperationException ex) when (IsDuplicateServiceDefinition(ex, identity))
+        {
+            await _serviceCommandPort.RepublishServiceAsync(new RepublishServiceDefinitionCommand
+            {
+                Identity = identity.Clone(),
+            }, ct);
+        }
+    }
+
+    private static bool IsDuplicateServiceDefinition(
+        InvalidOperationException ex,
+        ServiceIdentity identity) =>
+        string.Equals(
+            ex.Message,
+            $"Service definition '{ServiceKeys.Build(identity)}' already exists.",
+            StringComparison.Ordinal);
 
     private static ServiceEndpointSpec BuildChatEndpointSpec() =>
         new()

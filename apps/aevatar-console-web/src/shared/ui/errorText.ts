@@ -9,6 +9,14 @@ function normalizeUserFacingError(message: string): string {
   }
 
   const lower = normalized.toLowerCase();
+  const isUnsupportedModelRoute =
+    lower.includes("invalid_request_error") &&
+    lower.includes("not supported when using codex with a chatgpt account");
+
+  if (isUnsupportedModelRoute) {
+    return "当前 AI 模型与路由配置不兼容，请切换到 Gateway 或受支持的模型后重试。";
+  }
+
   const isProxyFailure =
     lower.includes("error occurred while trying to proxy") ||
     lower.includes("failed to fetch") ||

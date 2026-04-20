@@ -129,7 +129,7 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
       <div className="console-scripts-package-tree-body">
         {entries.length === 0 ? (
           <div className="console-scripts-package-tree-empty">
-            先添加一个 C# 或 Proto 文件，再开始编写脚本行为。
+            先添加一个 C# 或 Proto 文件，再开始编写脚本。
           </div>
         ) : (
           entries.map((entry) => {

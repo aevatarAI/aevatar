@@ -68,7 +68,7 @@ describe("PrimitivesPage", () => {
     expect(screen.getByText("参数")).toBeTruthy();
     expect(screen.getByText("示例")).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "示例行为定义" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "示例 workflow" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "查看连接器 human_input" }),
     ).toHaveStyle({

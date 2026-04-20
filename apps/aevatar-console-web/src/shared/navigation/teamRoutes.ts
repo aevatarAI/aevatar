@@ -1,3 +1,5 @@
+import { readScopeQueryDraft } from './scopeRoutes';
+
 type TeamDetailTab =
   | 'overview'
   | 'topology'
@@ -68,21 +70,61 @@ function buildHref(
   return search ? `${pathname}?${search}` : pathname;
 }
 
-export function buildTeamsHref(): string {
-  return '/teams';
+export function buildTeamsHref(options?: {
+  scopeId?: string;
+}): string {
+  return buildHref('/teams', {
+    scopeId: options?.scopeId,
+  });
 }
 
 export function buildTeamCreateHref(options?: {
+  scopeId?: string;
+  scopeLabel?: string;
   teamName?: string;
   entryName?: string;
   teamDraftWorkflowId?: string;
   teamDraftWorkflowName?: string;
+  sourceBehaviorDefinitionId?: string;
+  sourceBehaviorDefinitionName?: string;
 }): string {
   return buildHref('/teams/new', {
+    scopeId: options?.scopeId,
+    scopeLabel: options?.scopeLabel,
     teamName: options?.teamName,
     entryName: options?.entryName,
     teamDraftWorkflowId: options?.teamDraftWorkflowId,
     teamDraftWorkflowName: options?.teamDraftWorkflowName,
+    sourceBehaviorDefinitionId: options?.sourceBehaviorDefinitionId,
+    sourceBehaviorDefinitionName: options?.sourceBehaviorDefinitionName,
+  });
+}
+
+export function buildScopedTeamsMenuHref(
+  target: 'teams' | 'create-team',
+  options?: {
+    search?: string;
+    pathname?: string;
+  },
+): string {
+  const search =
+    typeof options?.search === 'string'
+      ? options.search
+      : typeof window === 'undefined'
+        ? ''
+        : window.location.search;
+  const { scopeId } = readScopeQueryDraft(search, options?.pathname);
+  const scopeLabel = trimOptional(new URLSearchParams(search).get('scopeLabel')) || scopeId;
+
+  if (target === 'create-team') {
+    return buildTeamCreateHref({
+      scopeId: scopeId || undefined,
+      scopeLabel: scopeLabel || undefined,
+    });
+  }
+
+  return buildTeamsHref({
+    scopeId: scopeId || undefined,
   });
 }
 

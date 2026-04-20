@@ -51,7 +51,7 @@ function buildPrimitiveSummary(primitive: WorkflowPrimitiveDescriptor): string {
 
   return primitive.aliases.length > 0
     ? `别名：${primitive.aliases.join(", ")}`
-    : "已就绪，可继续查看参数契约和示例行为定义。";
+    : "已就绪，可继续查看参数契约和示例 workflow。";
 }
 
 const PrimitiveSummaryMetric: React.FC<{
@@ -163,7 +163,7 @@ const PrimitiveCatalogCard: React.FC<{
           查看
         </Button>
         <Button
-          aria-label="示例行为定义"
+          aria-label="示例 workflow"
           disabled={!hasExampleWorkflow}
           icon={<BuildOutlined />}
           onClick={(event) => {
@@ -174,7 +174,7 @@ const PrimitiveCatalogCard: React.FC<{
           }}
           type="primary"
         >
-          示例行为定义
+          示例 workflow
         </Button>
       </div>
     </div>
@@ -312,7 +312,7 @@ const PrimitivesPage: React.FC = () => {
           <AevatarPanel
             layoutMode="document"
             title="可用连接器"
-            titleHelp="卡片流目录帮助你快速浏览能力分类、参数契约和示例行为定义。"
+            titleHelp="卡片流目录帮助你快速浏览能力分类、参数契约和示例 workflow。"
           >
             {filteredRows.length === 0 ? (
               <Empty
@@ -358,7 +358,7 @@ const PrimitivesPage: React.FC = () => {
         title={selectedPrimitive?.name || selectedPrimitiveName || "连接器"}
       >
         {!selectedPrimitive ? (
-          <AevatarInspectorEmpty description="选择一个连接器以查看它的参数契约和示例行为定义。" />
+          <AevatarInspectorEmpty description="选择一个连接器以查看它的参数契约和示例 workflow。" />
         ) : (
           <>
             <AevatarPanel
@@ -432,7 +432,7 @@ const PrimitivesPage: React.FC = () => {
 
             <AevatarPanel
               title="示例覆盖"
-              titleHelp="示例行为定义会把连接器目录和行为设计串起来。"
+              titleHelp="示例 workflow 会把连接器目录和 workflow 设计串起来。"
             >
               {selectedPrimitive.exampleWorkflows.length > 0 ? (
                 <Space orientation="vertical" size={8} style={{ width: "100%" }}>
@@ -458,14 +458,14 @@ const PrimitivesPage: React.FC = () => {
                           )
                         }
                       >
-                        打开行为定义
+                        打开 workflow
                       </Button>
                     </div>
                   ))}
                 </Space>
               ) : (
                 <Empty
-                  description="当前还没有关联示例行为定义。"
+                  description="当前还没有关联示例 workflow。"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}

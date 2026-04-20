@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_FILE="${SCRIPT_DIR}/Aevatar.Mainnet.Host.Api.csproj"
-PROJECT_PATTERN='Aevatar\.Mainnet\.Host\.Api(\.dll|\.csproj)'
+PROJECT_PATTERN='(^|[ /])Aevatar\.Mainnet\.Host\.Api(\.dll|\.csproj)?([ /]|$)'
 CONFIGURATION="${AEVATAR_APP_CONFIGURATION:-Debug}"
 API_HOST="${AEVATAR_APP_HOST:-127.0.0.1}"
 API_PORT="${AEVATAR_APP_PORT:-5080}"
@@ -251,19 +251,34 @@ case "${APP_MODE}" in
   persistent-local)
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=PersistentLocal"
+      "DOTNET_ENVIRONMENT=PersistentLocal"
+      "AEVATAR_ActorRuntime__OrleansStreamBackend=InMemory"
+      "AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet"
+      "AEVATAR_ActorRuntime__OrleansGarnetConnectionString=localhost:6379"
+      "AEVATAR_Projection__Document__Providers__InMemory__Enabled=true"
+      "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled=false"
+      "AEVATAR_Projection__Graph__Providers__InMemory__Enabled=true"
+      "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled=false"
+      "AEVATAR_Projection__Policies__Environment=Development"
+      "AEVATAR_Projection__Policies__DenyInMemoryDocumentReadStore=false"
+      "AEVATAR_Projection__Policies__DenyInMemoryGraphFactStore=false"
+      "AEVATAR_GAgentService__Demo__Enabled=false"
     )
     ;;
   distributed)
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Distributed"
+      "DOTNET_ENVIRONMENT=Distributed"
     )
     ;;
 esac
 
 env_cmd=(env)
-for name in "${unset_env[@]}"; do
-  env_cmd+=(-u "${name}")
-done
+if [[ ${#unset_env[@]} -gt 0 ]]; then
+  for name in "${unset_env[@]}"; do
+    env_cmd+=(-u "${name}")
+  done
+fi
 env_cmd+=("${launch_env[@]}")
 
 nohup "${env_cmd[@]}" "${DOTNET_CMD}" run \

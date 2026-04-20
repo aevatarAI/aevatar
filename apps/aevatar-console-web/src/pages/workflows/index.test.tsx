@@ -81,7 +81,7 @@ describe("WorkflowsPage", () => {
     window.history.replaceState({}, "", "/runtime/workflows");
   });
 
-  it("opens the definition inspector from the workflow query", async () => {
+  it("opens the workflow inspector from the workflow query", async () => {
     window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
 
     renderWithQueryClient(React.createElement(WorkflowsPage));
@@ -92,7 +92,7 @@ describe("WorkflowsPage", () => {
       );
     });
 
-    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+    expect(await screen.findByText("Workflow Summary")).toBeTruthy();
     expect(window.location.search).toContain("workflow=demo_flow");
   });
 
@@ -111,7 +111,7 @@ describe("WorkflowsPage", () => {
 
     await waitFor(() => {
       expect(window.location.search).toBe("");
-      expect(screen.queryByText("Definition Summary")).toBeNull();
+      expect(screen.queryByText("Workflow Summary")).toBeNull();
     });
   });
 
@@ -138,22 +138,22 @@ describe("WorkflowsPage", () => {
     });
   });
 
-  it("opens the definition inspector when the catalog card is clicked", async () => {
+  it("opens the workflow inspector when the catalog card is clicked", async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Inspect workflow demo_flow" }),
     );
 
-    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+    expect(await screen.findByText("Workflow Summary")).toBeTruthy();
   });
 
-  it("opens the Studio workflow editor from the definition inspector", async () => {
+  it("opens the Studio workflow editor from the workflow inspector", async () => {
     window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
 
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+    expect(await screen.findByText("Workflow Summary")).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Open workflow editor" }),

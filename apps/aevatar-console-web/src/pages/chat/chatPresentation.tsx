@@ -1932,7 +1932,7 @@ export function ConversationLlmConfigBar({
         </div>
 
         <div className="scope-chat-llm-route-row">
-          <span className="scope-chat-llm-route-label">Route</span>
+          <span className="scope-chat-llm-route-label">Chat route</span>
           <select
             aria-label="Conversation route"
             className="scope-chat-llm-route-select"
@@ -1944,7 +1944,7 @@ export function ConversationLlmConfigBar({
             value={routeSelectValue}
           >
             <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>
-              Config default
+              Chat preference
             </option>
             {routeOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -1952,6 +1952,9 @@ export function ConversationLlmConfigBar({
               </option>
             ))}
           </select>
+        </div>
+        <div className="scope-chat-llm-route-help">
+          Uses your per-user chat route preference. Studio AI generation is not affected.
         </div>
 
         <div className="scope-chat-llm-options">

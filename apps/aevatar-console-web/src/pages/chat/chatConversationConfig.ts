@@ -96,7 +96,7 @@ export function describeConversationRoute(
   routeOptions: readonly ConversationRouteOption[]
 ): string {
   if (route === undefined) {
-    return "Config default";
+    return "Chat preference";
   }
 
   if (route === USER_LLM_ROUTE_GATEWAY) {

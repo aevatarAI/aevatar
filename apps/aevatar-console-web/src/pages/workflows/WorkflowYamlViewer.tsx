@@ -292,8 +292,8 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             type="secondary"
             style={{ margin: 0, maxWidth: 720 }}
           >
-            Read-only workflow definition with syntax highlighting, inline copy,
-            and editor-style controls.
+            Read-only workflow YAML with syntax highlighting, inline copy, and
+            editor-style controls.
           </Typography.Paragraph>
           <Space wrap size={[8, 8]}>
             <Tag color="blue">Read only</Tag>

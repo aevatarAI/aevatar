@@ -95,13 +95,13 @@ describe('StudioWorkflowsPage', () => {
     render(React.createElement(StudioWorkflowsPage, createProps()));
 
     const browserSection = screen
-      .getByPlaceholderText('搜索定义')
+      .getByPlaceholderText('搜索 workflow')
       .closest('section');
     expect(browserSection).toHaveStyle('height: 100%');
     expect(browserSection).toHaveStyle('min-height: 0');
 
     const emptyContainer = screen
-      .getByText('还没有定义')
+      .getByText('还没有 workflow')
       .closest('.ant-empty')?.parentElement?.parentElement;
     expect(emptyContainer).toHaveStyle('display: flex');
     expect(emptyContainer).toHaveStyle('justify-content: center');
@@ -122,7 +122,7 @@ describe('StudioWorkflowsPage', () => {
       ),
     );
 
-    expect(screen.getByText('当前定义')).toBeInTheDocument();
+    expect(screen.getByText('当前 workflow')).toBeInTheDocument();
     expect(screen.getByText('新建草稿')).toBeInTheDocument();
     expect(screen.getByText('legacy_draft')).toBeInTheDocument();
     expect(screen.getByText('Loaded from the browser draft handoff.')).toBeInTheDocument();
@@ -189,7 +189,7 @@ describe('StudioWorkflowsPage', () => {
     expect(workflowSection).toHaveStyle('min-height: 0');
     expect(screen.getByTestId('studio-workflows-results')).toHaveStyle('overflow-y: auto');
     expect(screen.getByTestId('studio-workflows-results')).toHaveStyle('height: 0');
-    expect(screen.queryByText('当前团队下的行为定义。')).not.toBeInTheDocument();
+    expect(screen.queryByText('当前团队下的 workflow。')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '进入编辑' })).toBeInTheDocument();
   });
 });

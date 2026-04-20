@@ -825,6 +825,11 @@ describe("ChatPage", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Conversation model settings" })
     );
+    expect(
+      await screen.findByText(
+        "Uses your per-user chat route preference. Studio AI generation is not affected."
+      )
+    ).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("Conversation route"), {
       target: { value: "/api/v1/proxy/s/openai" },
     });

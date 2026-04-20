@@ -62,7 +62,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             ["ActorRuntime:KafkaTopicName"] = "topic",
             ["ActorRuntime:KafkaConsumerGroup"] = "group",
             ["Projection:Policies:Environment"] = "Production",
-        });
+        }, environmentName: "Distributed");
 
         // Set env vars that should override the above after AddMainnetDistributedOrleansHost.
         // Both stream and persistence must be InMemory together to pass validation.
@@ -89,11 +89,31 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             .Should().Be("Development", "bare env vars must override Distributed.json");
     }
 
-    private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_PersistentLocalEnvironment_ShouldNotLoadDistributedKafkaDefaults()
+    {
+        var builder = CreateBuilder(
+            new Dictionary<string, string?>(),
+            environmentName: "PersistentLocal");
+
+        builder.AddAevatarDefaultHost();
+        builder.AddMainnetDistributedOrleansHost();
+
+        builder.Configuration["ActorRuntime:OrleansStreamBackend"]
+            .Should().Be("InMemory", "PersistentLocal should keep its in-memory stream backend");
+        builder.Configuration["ActorRuntime:OrleansPersistenceBackend"]
+            .Should().Be("Garnet", "PersistentLocal should keep its Garnet persistence backend");
+        builder.Configuration["ActorRuntime:KafkaBootstrapServers"]
+            .Should().BeNull("PersistentLocal should not implicitly inherit Distributed Kafka defaults");
+    }
+
+    private static WebApplicationBuilder CreateBuilder(
+        Dictionary<string, string?> values,
+        string environmentName = "Development")
     {
         var options = new WebApplicationOptions
         {
-            EnvironmentName = Environments.Development,
+            EnvironmentName = environmentName,
         };
         var builder = WebApplication.CreateBuilder(options);
         builder.Configuration.AddInMemoryCollection(values);

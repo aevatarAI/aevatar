@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { message } from 'antd';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
@@ -8,6 +9,21 @@ import {
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
 import ScriptsWorkbenchPage from './ScriptsWorkbenchPage';
+
+jest.mock('antd', () => {
+  const actual = jest.requireActual('antd');
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
+    },
+  };
+});
 
 jest.mock('@/shared/studio/scriptsApi', () => ({
   scriptsApi: {
@@ -59,6 +75,13 @@ const mockedStudioApi = studioApi as unknown as {
 
 const mockedHistory = history as unknown as {
   push: jest.Mock;
+};
+
+const mockedMessage = message as unknown as {
+  success: jest.Mock;
+  info: jest.Mock;
+  warning: jest.Mock;
+  error: jest.Mock;
 };
 
 const appContext = {
@@ -333,9 +356,11 @@ describe('ScriptsWorkbenchPage', () => {
     await waitFor(() => {
       expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
     });
-    expect(
-      await screen.findByText('Saved script-1 into current scope scope-1.'),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(mockedMessage.success).toHaveBeenCalledWith(
+        'Saved script-1 into current scope scope-1.',
+      );
+    });
   });
 
   it('boots a fresh draft with the app script starter contract', async () => {
@@ -521,6 +546,19 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(screen.getByText('Test Run')).toBeTruthy();
   });
 
+  it('keeps the library drawer open by default so saved drafts stay discoverable', async () => {
+    renderPage({
+      mode: 'embedded',
+    });
+
+    await screen.findByLabelText('Script ID');
+
+    expect(screen.getByLabelText('Close drawer')).toBeTruthy();
+    expect(screen.getAllByText('Library').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Activity' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
+  });
+
   it('creates a new draft directly from the header without opening the panels drawer', async () => {
     const { container } = renderPage({
       mode: 'embedded',
@@ -541,7 +579,9 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
         (screen.getByLabelText('Script ID') as HTMLInputElement).value,
       ).toBe('script-2');
     });
-    expect(await screen.findByText('Created script-2.')).toBeTruthy();
+    await waitFor(() => {
+      expect(mockedMessage.info).toHaveBeenCalledWith('Created script-2.');
+    });
   });
 
   it('keeps proxy mode gated for testing and AI actions', async () => {
@@ -561,6 +601,43 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(
       screen.getByText('Test Run').closest('.ant-dropdown-menu-item-disabled'),
     ).toBeTruthy();
+  });
+
+  it('routes Ask AI script generation through the gateway metadata override', async () => {
+    renderPage({
+      mode: 'embedded',
+    });
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Ask AI to generate script code.',
+      }),
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        'Build a script that validates an email address, normalizes it, and returns a JSON summary.',
+      ),
+      {
+        target: {
+          value: 'Generate a validator',
+        },
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.generateScript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: 'Generate a validator',
+          metadata: expect.objectContaining({
+            source: 'aevatar-console-web',
+            surface: 'studio-scripts',
+            'nyxid.route_preference': '',
+          }),
+        }),
+        expect.any(Object),
+      );
+    });
   });
 
   it('cancels Ask AI generation from the floating panel', async () => {
@@ -601,7 +678,9 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Cancelled AI generation.')).toBeTruthy();
+      expect(mockedMessage.info).toHaveBeenCalledWith(
+        'Cancelled AI generation.',
+      );
     });
   });
 
@@ -691,8 +770,10 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedStudioApi.bindScopeScript).not.toHaveBeenCalled();
       expect(mockedHistory.push).not.toHaveBeenCalled();
     });
-    expect(
-      await screen.findByText(/Started draft run run-1 on runtime runtime-1\./),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(mockedMessage.success).toHaveBeenCalledWith(
+        'Started draft run run-1 on runtime runtime-1.',
+      );
+    });
   });
 });

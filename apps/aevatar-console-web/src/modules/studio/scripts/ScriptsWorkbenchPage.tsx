@@ -20,6 +20,7 @@ import {
   Button,
   Dropdown,
   Input,
+  message,
   Space,
   Tooltip,
 } from 'antd';
@@ -28,6 +29,7 @@ import React from 'react';
 import { history } from '@/shared/navigation/history';
 import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import type { StudioAppContext } from '@/shared/studio/models';
+import { buildStudioAuthoringLlmMetadata } from '@/shared/studio/authoringLlmMetadata';
 import {
   addPackageFile,
   coerceScriptPackage,
@@ -791,7 +793,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const [askAiPending, setAskAiPending] = React.useState(false);
   const [workspaceSection, setWorkspaceSection] =
     React.useState<WorkspaceSection>('library');
-  const [workspacePanelOpen, setWorkspacePanelOpen] = React.useState(false);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = React.useState(true);
   const [filesPaneOpen, setFilesPaneOpen] = React.useState(true);
   const [editorView, setEditorView] = React.useState<EditorView>('source');
   const [floatingOffset, setFloatingOffset] = React.useState<FloatingOffset>(() => {
@@ -819,6 +821,32 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const askAiUnavailableMessage = 'Ask AI requires an embedded host.';
   const headerHostLabel = formatStudioHostModeLabel(appContext.mode);
   const headerHostTooltip = getStudioHostModeTooltip(appContext.mode);
+  const showToastNotice = React.useCallback((nextNotice: NoticeState) => {
+    if (nextNotice.type === 'success') {
+      void message.success(nextNotice.message);
+      return;
+    }
+
+    if (nextNotice.type === 'warning') {
+      void message.warning(nextNotice.message);
+      return;
+    }
+
+    if (nextNotice.type === 'info') {
+      void message.info(nextNotice.message);
+      return;
+    }
+
+    void message.error(nextNotice.message);
+  }, []);
+  const inlineNotice = React.useMemo(
+    () =>
+      notice &&
+      (Boolean(notice.description) || Boolean(notice.actions?.length))
+        ? notice
+        : null,
+    [notice],
+  );
 
   React.useEffect(() => {
     if (!selectedDraftKey && drafts[0]?.key) {
@@ -830,6 +858,14 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setSelectedDraftKey(drafts[0]?.key || '');
     }
   }, [drafts, selectedDraftKey]);
+
+  React.useEffect(() => {
+    if (!notice || inlineNotice) {
+      return;
+    }
+
+    showToastNotice(notice);
+  }, [inlineNotice, notice, showToastNotice]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') {
@@ -2078,10 +2114,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           currentSource: serializePersistedSource(selectedDraft.package),
           currentPackage: selectedDraft.package,
           currentFilePath: selectedDraft.selectedFilePath,
-          metadata: {
+          metadata: buildStudioAuthoringLlmMetadata({
             source: 'aevatar-console-web',
             surface: 'studio-scripts',
-          },
+          }),
         },
         {
           signal: controller.signal,
@@ -2491,19 +2527,19 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
   return (
     <div className="console-scripts-page">
-      {notice ? (
+      {inlineNotice ? (
         <div style={{ padding: '16px 20px 0' }}>
           <Alert
             showIcon
-            type={notice.type}
-            title={notice.message}
+            type={inlineNotice.type}
+            title={inlineNotice.message}
             description={
-              notice.description || notice.actions?.length ? (
+              inlineNotice.description || inlineNotice.actions?.length ? (
                 <Space direction="vertical" size={12}>
-                  {notice.description ? <span>{notice.description}</span> : null}
-                  {notice.actions?.length ? (
+                  {inlineNotice.description ? <span>{inlineNotice.description}</span> : null}
+                  {inlineNotice.actions?.length ? (
                     <Space wrap size={[8, 8]}>
-                      {notice.actions.map((action) => (
+                      {inlineNotice.actions.map((action) => (
                         <Button
                           key={action.href}
                           size="small"
@@ -2758,10 +2794,51 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                         padding: 24,
                       }}
                     >
-                      <ScriptsStudioEmptyState
-                        title="Create or select a script draft"
-                        copy="Add a file to the package or select an existing draft to start editing."
-                      />
+                      <div style={{ display: 'grid', gap: 16, justifyItems: 'center' }}>
+                        <ScriptsStudioEmptyState
+                          title="Create or select a script draft"
+                          copy="Use New draft to start a fresh script, or add a C# file to the current draft and begin editing from the file list."
+                        />
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 10,
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={createNewDraft}
+                            className="console-scripts-ghost-action"
+                          >
+                            <FileAddOutlined />
+                            <span>New draft</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleAddFile('csharp')}
+                            className="console-scripts-solid-action"
+                            disabled={!selectedDraft}
+                          >
+                            <FileAddOutlined />
+                            <span>添加 C# 文件</span>
+                          </button>
+                          {!workspacePanelOpen ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWorkspacePanelOpen(true);
+                                setWorkspaceSection('library');
+                              }}
+                              className="console-scripts-ghost-action"
+                            >
+                              <FolderOpenOutlined />
+                              <span>打开草稿列表</span>
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>

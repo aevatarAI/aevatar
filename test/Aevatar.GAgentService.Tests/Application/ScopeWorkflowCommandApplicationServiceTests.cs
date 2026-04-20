@@ -52,6 +52,30 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldRepublishExistingServiceDefinition_WhenCatalogIsMissingButWriteSideAlreadyExists()
+    {
+        var commandPort = new RecordingServiceCommandPort
+        {
+            CreateServiceException = new InvalidOperationException(
+                "Service definition 'test-scope:default:default:my-workflow' already exists."),
+        };
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
+        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, queryPort);
+
+        var result = await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
+            ScopeId, WorkflowId, WorkflowYaml));
+
+        commandPort.Calls.Should().HaveCount(7);
+        commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
+        commandPort.Calls[1].Method.Should().Be("RepublishServiceAsync");
+        commandPort.Calls.Should().NotContain(c => c.Method == "UpdateServiceAsync");
+        result.Workflow.WorkflowId.Should().Be(WorkflowId);
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldUpdateService_WhenDisplayNameChanged()
     {
         var existingSnapshot = CreateServiceSnapshot(
@@ -227,15 +251,25 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
 
         public List<CommandCall> Calls { get; } = [];
 
+        public Exception? CreateServiceException { get; set; }
+
         public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(CreateServiceDefinitionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("CreateServiceAsync", command));
+            if (CreateServiceException != null)
+                return Task.FromException<ServiceCommandAcceptedReceipt>(CreateServiceException);
             return Task.FromResult(DefaultReceipt);
         }
 
         public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(UpdateServiceDefinitionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("UpdateServiceAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RepublishServiceAsync(RepublishServiceDefinitionCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("RepublishServiceAsync", command));
             return Task.FromResult(DefaultReceipt);
         }
 

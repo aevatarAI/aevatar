@@ -152,6 +152,9 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             return Task.FromResult(CreateReceipt(command.Spec.Identity));
         }
 
+        public Task<ServiceCommandAcceptedReceipt> RepublishServiceAsync(RepublishServiceDefinitionCommand command, CancellationToken ct = default) =>
+            Task.FromResult(CreateReceipt(command.Identity));
+
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default)
         {
             CreateRevisionCommands.Add(command.Clone());

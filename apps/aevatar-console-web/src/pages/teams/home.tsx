@@ -4,15 +4,17 @@ import {
   MoreOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
   Dropdown,
   Empty,
+  Modal,
   Space,
   Tooltip,
   Typography,
+  message,
   theme,
 } from "antd";
 import React from "react";
@@ -22,6 +24,7 @@ import { servicesApi } from "@/shared/api/servicesApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
+import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
@@ -35,7 +38,10 @@ import {
   getStudioScopeBindingCurrentRevision,
   type StudioScopeBindingStatus,
 } from "@/shared/studio/models";
-import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
+import {
+  buildStudioWorkflowEditorRoute,
+  buildStudioWorkflowWorkspaceRoute,
+} from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
@@ -55,24 +61,46 @@ import {
   collectWorkflowOperationalServiceIds,
   WORKFLOW_RUNTIME_GUARDRAIL,
   type WorkflowOperationalAttention,
+  type WorkflowOperationalUnit,
 } from "./workflowOperationalUnits";
 
 const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
+const archiveConfirmationAttempts = 6;
+const archiveConfirmationDelayMs = 250;
+const archiveTeamActionLabel = "归档团队";
+const transientQueryRetryCount = 2;
+
+const transientQueryRetryOptions = {
+  retry: transientQueryRetryCount,
+  retryDelay: (attemptIndex: number) => Math.min(350 * attemptIndex, 1_200),
+};
 
 type ScopeBackedTeamPreview = {
   readonly attention: WorkflowOperationalAttention;
   readonly attentionDetail: string;
+  readonly archiveRevisionId: string;
+  readonly deploymentId: string;
   readonly detailHref: string;
+  readonly defaultBindingRevisionId: string;
   readonly entryLabel: string;
+  readonly isDefaultEntry: boolean;
+  readonly isArchivable: boolean;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
   readonly serviceId: string;
   readonly serviceLabel: string;
+  readonly teamKey: string;
   readonly title: string;
   readonly updatedAt: string | null;
+};
+
+type PublishedTeamPreviewEntry = {
+  readonly preview: ScopeBackedTeamPreview;
+  readonly workflowId: string;
+  readonly workflowName: string;
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -211,6 +239,48 @@ function parseTimestamp(value: string | null | undefined): number {
 
 function normalizeStatus(value: string | null | undefined): string {
   return trimOptional(value).toLowerCase();
+}
+
+function isArchivedTeamStatus(value: string | null | undefined): boolean {
+  return ["deactivated", "retired"].includes(normalizeStatus(value));
+}
+
+function hasPublishedTeamFact(unit: WorkflowOperationalUnit): boolean {
+  return Boolean(unit.matchedService) &&
+    !isArchivedTeamStatus(unit.matchedService?.deploymentStatus);
+}
+
+function isRetiredBindingRevision(
+  revision: ReturnType<typeof getStudioScopeBindingCurrentRevision>,
+): boolean {
+  return (
+    Boolean(trimOptional(revision?.retiredAt)) ||
+    normalizeStatus(revision?.status) === "retired"
+  );
+}
+
+function buildTeamPreviewKey(input: {
+  readonly detailHref: string;
+  readonly serviceId?: string | null;
+  readonly workflowId?: string | null;
+}): string {
+  const normalizedServiceId = trimOptional(input.serviceId);
+  if (normalizedServiceId) {
+    return `service:${normalizedServiceId}`;
+  }
+
+  const normalizedWorkflowId = trimOptional(input.workflowId);
+  if (normalizedWorkflowId) {
+    return `workflow:${normalizedWorkflowId}`;
+  }
+
+  return `detail:${input.detailHref}`;
+}
+
+function waitForDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function compareRuns(
@@ -360,6 +430,10 @@ function resolveScopePreviewService(input: {
   readonly binding: StudioScopeBindingStatus | null | undefined;
   readonly services: readonly ServiceCatalogSnapshot[];
 }): ServiceCatalogSnapshot | null {
+  if (!input.binding?.available) {
+    return null;
+  }
+
   const boundServiceId = trimOptional(input.binding?.serviceId);
   if (!boundServiceId) {
     return null;
@@ -393,6 +467,289 @@ function resolveRuntimeUnavailable(input: {
   return !input.runtimeAvailableByServiceId.has(serviceId);
 }
 
+function workflowMatchesCurrentBinding(
+  workflow: ScopeWorkflowSummary,
+  binding: StudioScopeBindingStatus | null | undefined,
+  serviceId?: string | null,
+): boolean {
+  if (!binding?.available) {
+    return false;
+  }
+
+  const currentRevision = getStudioScopeBindingCurrentRevision(binding);
+  const workflowName = trimOptional(workflow.workflowName);
+  const revisionId = trimOptional(workflow.activeRevisionId);
+  const boundServiceId = trimOptional(binding?.serviceId);
+  const normalizedServiceId = trimOptional(serviceId);
+
+  return (
+    (workflowName.length > 0 &&
+      trimOptional(currentRevision?.workflowName) === workflowName) ||
+    (revisionId.length > 0 &&
+      trimOptional(currentRevision?.revisionId) === revisionId) ||
+    (boundServiceId.length > 0 &&
+      normalizedServiceId.length > 0 &&
+      boundServiceId === normalizedServiceId)
+  );
+}
+
+function describeWorkflowAttentionDetail(
+  unit: WorkflowOperationalUnit,
+): string {
+  switch (unit.attention) {
+    case "failed":
+      return (
+        trimOptional(unit.latestRun?.lastError) ||
+        "最近一次团队运行处于异常状态。"
+      );
+    case "waiting":
+      return (
+        trimOptional(unit.latestRun?.lastError) ||
+        "最近一次团队运行正在等待人工或外部信号。"
+      );
+    case "healthy":
+      return "最近一次团队运行正常，可继续进入详情查看。";
+    case "no-recent-runs":
+      return "团队已经发布，但当前还没有可见的运行信号。";
+    case "no-bound-service":
+      return "团队已经发布，但服务能力还没有完整就绪。";
+    case "runtime-unresolved":
+      return "团队已经发布，但当前运行信号暂时不可见。";
+    case "draft":
+    default:
+      return "当前团队入口还没有形成可运行状态。";
+  }
+}
+
+function buildWorkflowTeamPreview(input: {
+  readonly binding: StudioScopeBindingStatus | null | undefined;
+  readonly scopeId: string;
+  readonly unit: WorkflowOperationalUnit;
+}): ScopeBackedTeamPreview {
+  const { binding, scopeId, unit } = input;
+  const currentRevision = getStudioScopeBindingCurrentRevision(binding);
+  const matchedService = unit.matchedService;
+  const serviceId = trimOptional(matchedService?.serviceId);
+  const workflowId = trimOptional(unit.workflow.workflowId);
+  const isDefaultEntry = workflowMatchesCurrentBinding(
+    unit.workflow,
+    binding,
+    serviceId,
+  );
+  const entryLabel =
+    pickMeaningfulLabel(
+      isDefaultEntry ? trimOptional(binding?.displayName) : "",
+      trimOptional(unit.workflow.displayName),
+      trimOptional(unit.workflow.workflowName),
+      trimOptional(matchedService?.displayName),
+      serviceId,
+    ) || "未命名入口";
+  const serviceLabel =
+    pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
+    "未记录";
+  const title =
+    pickMeaningfulLabel(
+      isDefaultEntry ? trimOptional(binding?.displayName) : "",
+      trimOptional(unit.workflow.displayName),
+      trimOptional(matchedService?.displayName),
+      trimOptional(unit.workflow.workflowName),
+      entryLabel,
+    ) || "未命名团队";
+  const detailHref = buildTeamDetailHref({
+    runId: unit.latestRun?.runId || undefined,
+    scopeId,
+    serviceId: serviceId || undefined,
+    workflowId: workflowId || undefined,
+  });
+  const topologyHref = buildTeamDetailHref({
+    runId: unit.latestRun?.runId || undefined,
+    scopeId,
+    serviceId: serviceId || undefined,
+    tab: "topology",
+    workflowId: workflowId || undefined,
+  });
+  const runtimeHref =
+    serviceId.length > 0
+      ? buildRuntimeRunsHref({
+          actorId:
+            unit.latestRun?.actorId ||
+            matchedService?.primaryActorId ||
+            undefined,
+          scopeId,
+          serviceId,
+        })
+      : "";
+  const archiveRevisionId =
+    trimOptional(matchedService?.activeServingRevisionId) ||
+    trimOptional(matchedService?.defaultServingRevisionId) ||
+    trimOptional(unit.workflow.activeRevisionId) ||
+    trimOptional(unit.latestRun?.revisionId);
+  const deploymentId =
+    trimOptional(matchedService?.deploymentId) ||
+    trimOptional(unit.latestRun?.deploymentId) ||
+    trimOptional(currentRevision?.deploymentId);
+  const defaultBindingRevisionId =
+    isDefaultEntry && currentRevision ? trimOptional(currentRevision.revisionId) : "";
+  const builderHref = workflowId
+    ? buildStudioWorkflowEditorRoute({
+        scopeId,
+        workflowId,
+      })
+    : buildStudioWorkflowWorkspaceRoute({
+        scopeId,
+        scopeLabel: scopeId,
+      });
+  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
+  if (runtimeHref) {
+    moreActions.push({
+      key: "runtime",
+      label: "查看运行",
+      onClick: () => history.push(runtimeHref),
+    });
+  }
+  moreActions.push({
+    key: "topology",
+    label: "事件拓扑",
+    onClick: () => history.push(topologyHref),
+  });
+  moreActions.push({
+    key: "builder",
+    label: "编辑",
+    onClick: () => history.push(builderHref),
+  });
+
+  return {
+    attention: unit.attention,
+    attentionDetail: describeWorkflowAttentionDetail(unit),
+    archiveRevisionId,
+    deploymentId,
+    detailHref,
+    defaultBindingRevisionId,
+    entryLabel,
+    isDefaultEntry,
+    isArchivable: Boolean((serviceId && deploymentId) || defaultBindingRevisionId),
+    latestRun: unit.latestRun,
+    moreActions,
+    serviceId,
+    serviceLabel,
+    teamKey: buildTeamPreviewKey({
+      detailHref,
+      serviceId,
+      workflowId,
+    }),
+    title,
+    updatedAt:
+      unit.latestRun?.lastUpdatedAt ||
+      matchedService?.updatedAt ||
+      unit.workflow.updatedAt ||
+      null,
+  };
+}
+
+function collapseLegacyDuplicatePublishedTeamPreviews(
+  entries: readonly PublishedTeamPreviewEntry[],
+): ScopeBackedTeamPreview[] {
+  if (entries.length <= 1) {
+    return entries.map((entry) => entry.preview);
+  }
+
+  const defaultWorkflowKeys = new Set(
+    entries
+      .filter((entry) => entry.preview.isDefaultEntry)
+      .map((entry) => trimOptional(entry.workflowName).toLowerCase())
+      .filter((key) => key.length > 0),
+  );
+
+  const filteredEntries = entries
+    .filter((entry) => {
+      const workflowKey = trimOptional(entry.workflowName).toLowerCase();
+      if (!workflowKey || entry.preview.isDefaultEntry) {
+        return true;
+      }
+
+      return !(
+        defaultWorkflowKeys.has(workflowKey) &&
+        trimOptional(entry.preview.serviceId) === trimOptional(entry.workflowId)
+      );
+    });
+
+  const entriesByWorkflowKey = new Map<string, PublishedTeamPreviewEntry[]>();
+  filteredEntries.forEach((entry) => {
+    const workflowKey = trimOptional(entry.workflowName).toLowerCase();
+    if (!workflowKey) {
+      return;
+    }
+
+    const existing = entriesByWorkflowKey.get(workflowKey);
+    if (existing) {
+      existing.push(entry);
+      return;
+    }
+
+    entriesByWorkflowKey.set(workflowKey, [entry]);
+  });
+
+  const collapsedWorkflowKeys = new Set<string>();
+  return filteredEntries
+    .flatMap((entry) => {
+      const workflowKey = trimOptional(entry.workflowName).toLowerCase();
+      if (!workflowKey) {
+        return [entry.preview];
+      }
+
+      const sameWorkflowEntries = entriesByWorkflowKey.get(workflowKey) ?? [entry];
+      const shouldCollapseWorkflow =
+        sameWorkflowEntries.length > 1 &&
+        (sameWorkflowEntries.some((candidate) => candidate.preview.isDefaultEntry) ||
+          sameWorkflowEntries.some(
+            (candidate) =>
+              trimOptional(candidate.preview.serviceId) ===
+              trimOptional(candidate.workflowId),
+          ));
+      if (!shouldCollapseWorkflow) {
+        return [entry.preview];
+      }
+
+      if (collapsedWorkflowKeys.has(workflowKey)) {
+        return [];
+      }
+
+      collapsedWorkflowKeys.add(workflowKey);
+      const preferredEntry = sameWorkflowEntries.reduce((best, candidate) => {
+        const bestDefaultScore = best.preview.isDefaultEntry ? 1 : 0;
+        const candidateDefaultScore = candidate.preview.isDefaultEntry ? 1 : 0;
+        if (candidateDefaultScore !== bestDefaultScore) {
+          return candidateDefaultScore > bestDefaultScore ? candidate : best;
+        }
+
+        const bestShadowPenalty =
+          trimOptional(best.preview.serviceId) === trimOptional(best.workflowId)
+            ? 0
+            : 1;
+        const candidateShadowPenalty =
+          trimOptional(candidate.preview.serviceId) === trimOptional(candidate.workflowId)
+            ? 0
+            : 1;
+        if (candidateShadowPenalty !== bestShadowPenalty) {
+          return candidateShadowPenalty > bestShadowPenalty ? candidate : best;
+        }
+
+        const bestRunScore = best.preview.latestRun ? 1 : 0;
+        const candidateRunScore = candidate.preview.latestRun ? 1 : 0;
+        if (candidateRunScore !== bestRunScore) {
+          return candidateRunScore > bestRunScore ? candidate : best;
+        }
+
+        return parseTimestamp(candidate.preview.updatedAt) >
+          parseTimestamp(best.preview.updatedAt)
+          ? candidate
+          : best;
+      });
+
+      return [preferredEntry.preview];
+    });
+}
+
 function buildScopeBackedTeamPreview(input: {
   readonly binding: StudioScopeBindingStatus | null | undefined;
   readonly guardrailedServiceIds?: ReadonlySet<string>;
@@ -402,13 +759,23 @@ function buildScopeBackedTeamPreview(input: {
   readonly services: readonly ServiceCatalogSnapshot[];
 }): ScopeBackedTeamPreview | null {
   const currentRevision = getStudioScopeBindingCurrentRevision(input.binding);
+  if (
+    isRetiredBindingRevision(currentRevision) ||
+    isArchivedTeamStatus(input.binding?.deploymentStatus)
+  ) {
+    return null;
+  }
+
   const revisionTarget = describeStudioScopeBindingRevisionTarget(currentRevision);
   const matchedService = resolveScopePreviewService({
     binding: input.binding,
     services: input.services,
   });
-  const boundServiceId = trimOptional(input.binding?.serviceId);
-  const serviceId = trimOptional(matchedService?.serviceId) || boundServiceId;
+  if (!matchedService || isArchivedTeamStatus(matchedService.deploymentStatus)) {
+    return null;
+  }
+
+  const serviceId = trimOptional(matchedService.serviceId);
   const runtimeUnavailable = resolveRuntimeUnavailable({
     runtimeAvailableByServiceId: input.runtimeAvailableByServiceId,
     runtimeGuardrailedServiceIds: input.guardrailedServiceIds,
@@ -417,17 +784,6 @@ function buildScopeBackedTeamPreview(input: {
   const runs =
     serviceId && !runtimeUnavailable ? input.runsByServiceId[serviceId] ?? [] : [];
   const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
-  const hasEntryFacts = Boolean(
-    serviceId ||
-      matchedService ||
-      currentRevision ||
-      trimOptional(input.binding?.serviceKey) ||
-      trimOptional(input.binding?.displayName),
-  );
-
-  if (!hasEntryFacts) {
-    return null;
-  }
 
   const entryLabel =
     pickMeaningfulLabel(
@@ -480,6 +836,21 @@ function buildScopeBackedTeamPreview(input: {
     scopeId: input.scopeId,
     serviceId: serviceId || undefined,
   });
+  const archiveRevisionId =
+    trimOptional(matchedService?.activeServingRevisionId) ||
+    trimOptional(matchedService?.defaultServingRevisionId) ||
+    trimOptional(currentRevision?.revisionId);
+  const deploymentId =
+    trimOptional(matchedService?.deploymentId) ||
+    trimOptional(latestRun?.deploymentId) ||
+    trimOptional(currentRevision?.deploymentId) ||
+    trimOptional(input.binding?.deploymentId);
+  const topologyHref = buildTeamDetailHref({
+    runId: latestRun?.runId || undefined,
+    scopeId: input.scopeId,
+    serviceId: serviceId || undefined,
+    tab: "topology",
+  });
   const runtimeHref =
     serviceId.length > 0
       ? buildRuntimeRunsHref({
@@ -505,20 +876,36 @@ function buildScopeBackedTeamPreview(input: {
     });
   }
   moreActions.push({
+    key: "topology",
+    label: "事件拓扑",
+    onClick: () => history.push(topologyHref),
+  });
+  moreActions.push({
     key: "builder",
-    label: "进入 Studio",
+    label: "编辑",
     onClick: () => history.push(builderHref),
   });
 
   return {
     attention,
     attentionDetail,
+    archiveRevisionId,
+    deploymentId,
     detailHref,
+    defaultBindingRevisionId: trimOptional(currentRevision?.revisionId),
     entryLabel,
+    isDefaultEntry: true,
+    isArchivable: Boolean(
+      (serviceId && deploymentId) || trimOptional(currentRevision?.revisionId),
+    ),
     latestRun,
     moreActions,
     serviceId,
     serviceLabel,
+    teamKey: buildTeamPreviewKey({
+      detailHref,
+      serviceId,
+    }),
     title,
     updatedAt:
       latestRun?.lastUpdatedAt ||
@@ -529,11 +916,19 @@ function buildScopeBackedTeamPreview(input: {
 }
 
 const MoreActionsButton: React.FC<{
-  readonly actions: Array<{ key: string; label: string; onClick: () => void }>;
+  readonly actions: Array<{
+    key: string;
+    label: string;
+    onClick: () => void;
+    danger?: boolean;
+    disabled?: boolean;
+  }>;
 }> = ({ actions }) => (
   <Dropdown
     menu={{
       items: actions.map((action) => ({
+        danger: action.danger,
+        disabled: action.disabled,
         key: action.key,
         label: action.label,
       })),
@@ -560,9 +955,22 @@ const MoreActionsButton: React.FC<{
 );
 
 const ScopeBackedTeamCard: React.FC<{
+  readonly onArchiveTeam: (preview: ScopeBackedTeamPreview) => void;
   readonly preview: ScopeBackedTeamPreview;
-}> = ({ preview }) => {
+}> = ({ onArchiveTeam, preview }) => {
   const { token } = theme.useToken();
+  const entryLabel = `${preview.isDefaultEntry ? "默认入口" : "团队入口"}：${preview.entryLabel}`;
+  const actions = preview.isArchivable
+    ? [
+        ...preview.moreActions,
+        {
+          danger: true,
+          key: `archive:${preview.teamKey}`,
+          label: archiveTeamActionLabel,
+          onClick: () => onArchiveTeam(preview),
+        },
+      ]
+    : preview.moreActions;
 
   return (
     <div
@@ -597,16 +1005,33 @@ const ScopeBackedTeamCard: React.FC<{
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <Typography.Title
-            level={3}
-            style={{
-              fontSize: 22,
-              margin: 0,
-              overflowWrap: "anywhere",
-            }}
-          >
-            {preview.title}
-          </Typography.Title>
+          <Space size={[8, 8]} wrap>
+            <Typography.Title
+              level={3}
+              style={{
+                fontSize: 22,
+                margin: 0,
+                overflowWrap: "anywhere",
+              }}
+            >
+              {preview.title}
+            </Typography.Title>
+            {preview.isDefaultEntry ? (
+              <Typography.Text
+                style={{
+                  background: "rgba(24, 144, 255, 0.08)",
+                  borderRadius: 999,
+                  color: token.colorInfo,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  lineHeight: 1,
+                  padding: "7px 10px",
+                }}
+              >
+                当前默认入口
+              </Typography.Text>
+            ) : null}
+          </Space>
           <Typography.Paragraph
             ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
             style={{
@@ -641,7 +1066,7 @@ const ScopeBackedTeamCard: React.FC<{
           fontSize: 13,
         }}
       >
-        默认入口：{preview.entryLabel}
+        {entryLabel}
       </Typography.Text>
 
       <div
@@ -675,16 +1100,29 @@ const ScopeBackedTeamCard: React.FC<{
         >
           查看团队
         </Button>
-        <MoreActionsButton actions={preview.moreActions} />
+        <MoreActionsButton actions={actions} />
       </Space>
     </div>
   );
 };
 
 const ScopeBackedTeamRow: React.FC<{
+  readonly onArchiveTeam: (preview: ScopeBackedTeamPreview) => void;
   readonly preview: ScopeBackedTeamPreview;
-}> = ({ preview }) => {
+}> = ({ onArchiveTeam, preview }) => {
   const { token } = theme.useToken();
+  const entryLabel = `${preview.isDefaultEntry ? "默认入口" : "团队入口"}：${preview.entryLabel}`;
+  const actions = preview.isArchivable
+    ? [
+        ...preview.moreActions,
+        {
+          danger: true,
+          key: `archive:${preview.teamKey}`,
+          label: archiveTeamActionLabel,
+          onClick: () => onArchiveTeam(preview),
+        },
+      ]
+    : preview.moreActions;
 
   return (
     <div
@@ -736,6 +1174,21 @@ const ScopeBackedTeamRow: React.FC<{
           >
             {formatAttentionLabel(preview.attention)}
           </span>
+          {preview.isDefaultEntry ? (
+            <Typography.Text
+              style={{
+                background: "rgba(24, 144, 255, 0.08)",
+                borderRadius: 999,
+                color: token.colorInfo,
+                fontSize: 12,
+                fontWeight: 600,
+                lineHeight: 1,
+                padding: "7px 10px",
+              }}
+            >
+              当前默认入口
+            </Typography.Text>
+          ) : null}
         </Space>
         <Typography.Paragraph
           ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
@@ -754,7 +1207,7 @@ const ScopeBackedTeamRow: React.FC<{
             fontSize: 13,
           }}
         >
-          默认入口：{preview.entryLabel}
+          {entryLabel}
         </Typography.Text>
       </div>
 
@@ -775,7 +1228,7 @@ const ScopeBackedTeamRow: React.FC<{
         >
           查看团队
         </Button>
-        <MoreActionsButton actions={preview.moreActions} />
+        <MoreActionsButton actions={actions} />
       </Space>
     </div>
   );
@@ -783,8 +1236,14 @@ const ScopeBackedTeamRow: React.FC<{
 
 const TeamsHomePage: React.FC = () => {
   const { token } = theme.useToken();
+  const [messageApi, messageContextHolder] = message.useMessage();
+  const queryClient = useQueryClient();
   const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [archivedTeamKeys, setArchivedTeamKeys] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [archivingTeamKey, setArchivingTeamKey] = React.useState("");
   const [manualRosterView, setManualRosterView] = React.useState<
     "cards" | "list" | null
   >(null);
@@ -793,7 +1252,7 @@ const TeamsHomePage: React.FC = () => {
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
     queryFn: () => studioApi.getAuthSession(),
-    retry: false,
+    ...transientQueryRetryOptions,
   });
   const localScopeId = trimOptional(loadRestorableAuthSession()?.user.sub);
   const locallyResolvedScope = React.useMemo(() => {
@@ -844,17 +1303,22 @@ const TeamsHomePage: React.FC = () => {
     history.replace(buildScopeHref("/teams", activeDraft));
   }, [activeDraft]);
 
+  React.useEffect(() => {
+    setArchivedTeamKeys(new Set());
+    setArchivingTeamKey("");
+  }, [scopeId]);
+
   const bindingQuery = useQuery({
     enabled: scopeId.length > 0,
     queryKey: ["teams", "binding", scopeId],
     queryFn: () => studioApi.getScopeBinding(scopeId),
-    retry: false,
+    ...transientQueryRetryOptions,
   });
   const workflowsQuery = useQuery({
     enabled: scopeId.length > 0,
     queryKey: ["teams", "workflows", scopeId],
     queryFn: () => scopesApi.listWorkflows(scopeId),
-    retry: false,
+    ...transientQueryRetryOptions,
   });
   const servicesQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -865,7 +1329,7 @@ const TeamsHomePage: React.FC = () => {
         appId: scopeServiceAppId,
         namespace: scopeServiceNamespace,
       }),
-    retry: false,
+    ...transientQueryRetryOptions,
   });
 
   const matchedServiceIds = React.useMemo(
@@ -878,8 +1342,11 @@ const TeamsHomePage: React.FC = () => {
     [bindingQuery.data, servicesQuery.data, workflowsQuery.data],
   );
   const scopePreviewServiceId = React.useMemo(
-    () => trimOptional(bindingQuery.data?.serviceId),
-    [bindingQuery.data?.serviceId],
+    () =>
+      bindingQuery.data?.available
+        ? trimOptional(bindingQuery.data?.serviceId)
+        : "",
+    [bindingQuery.data?.available, bindingQuery.data?.serviceId],
   );
   const runtimeServiceIds = React.useMemo(() => {
     const normalizedScopePreviewServiceId = trimOptional(scopePreviewServiceId);
@@ -907,7 +1374,7 @@ const TeamsHomePage: React.FC = () => {
         scopeRuntimeApi.listServiceRuns(scopeId, serviceId, {
           take: 12,
         }),
-      retry: false,
+      ...transientQueryRetryOptions,
     })),
   });
   const runtimeAvailableByServiceId = React.useMemo(() => {
@@ -971,21 +1438,239 @@ const TeamsHomePage: React.FC = () => {
       servicesQuery.data,
     ],
   );
+  const waitForArchivedServiceConfirmation = React.useCallback(
+    async (serviceId: string) => {
+      const query = {
+        appId: scopeServiceAppId,
+        namespace: scopeServiceNamespace,
+        tenantId: scopeId,
+      };
 
-  const draftUnits = units.filter(
-    (unit) => unit.isDraftOnly || (!unit.matchedService && !unit.latestRun),
+      for (let attempt = 0; attempt < archiveConfirmationAttempts; attempt += 1) {
+        const latestService = await servicesApi.getService(serviceId, query);
+        if (!latestService || isArchivedTeamStatus(latestService.deploymentStatus)) {
+          return true;
+        }
+
+        if (attempt < archiveConfirmationAttempts - 1) {
+          await waitForDelay(archiveConfirmationDelayMs);
+        }
+      }
+
+      return false;
+    },
+    [scopeId],
   );
-  const visibleTeamCount = scopePreviewTeam ? 1 : 0;
+  const waitForRetiredBindingConfirmation = React.useCallback(
+    async (revisionId: string) => {
+      for (let attempt = 0; attempt < archiveConfirmationAttempts; attempt += 1) {
+        const latestBinding = await studioApi.getScopeBinding(scopeId);
+        const currentRevision = getStudioScopeBindingCurrentRevision(latestBinding);
+        if (
+          !currentRevision ||
+          isRetiredBindingRevision(currentRevision) ||
+          trimOptional(currentRevision.revisionId) !== trimOptional(revisionId)
+        ) {
+          return true;
+        }
+
+        if (attempt < archiveConfirmationAttempts - 1) {
+          await waitForDelay(archiveConfirmationDelayMs);
+        }
+      }
+
+      return false;
+    },
+    [scopeId],
+  );
+  const archiveTeam = React.useCallback(
+    async (preview: ScopeBackedTeamPreview) => {
+      if (!scopeId) {
+        throw new Error("先锁定一个 Scope，才能归档团队。");
+      }
+
+      if (!preview.isArchivable) {
+        throw new Error("当前团队还没有可下线的 live deployment。");
+      }
+
+      const normalizedServiceId = trimOptional(preview.serviceId);
+      const normalizedDeploymentId = trimOptional(preview.deploymentId);
+      const normalizedBindingRevisionId = trimOptional(
+        preview.defaultBindingRevisionId,
+      );
+      if (
+        !(normalizedServiceId && normalizedDeploymentId) &&
+        !(preview.isDefaultEntry && normalizedBindingRevisionId)
+      ) {
+        throw new Error("团队缺少可下线的 deployment 或 binding revision。");
+      }
+
+      setArchivingTeamKey(preview.teamKey);
+      try {
+        if (normalizedServiceId && normalizedDeploymentId) {
+          await servicesApi.deactivateDeployment(
+            normalizedServiceId,
+            normalizedDeploymentId,
+            {
+              appId: scopeServiceAppId,
+              namespace: scopeServiceNamespace,
+              tenantId: scopeId,
+            },
+          );
+        }
+
+        let bindingCleanupNotice = "";
+        if (preview.isDefaultEntry && normalizedBindingRevisionId) {
+          try {
+            await studioApi.retireScopeBindingRevision({
+              scopeId,
+              revisionId: normalizedBindingRevisionId,
+            });
+          } catch (error) {
+            bindingCleanupNotice =
+              error instanceof Error
+                ? error.message
+                : "默认入口引用还没有完全清理干净。";
+          }
+        }
+
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: ["teams", "binding", scopeId],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["teams", "workflows", scopeId],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["teams", "services", scopeId],
+          }),
+          ...(normalizedServiceId
+            ? [
+                queryClient.invalidateQueries({
+                  queryKey: ["teams", "runs", scopeId, normalizedServiceId],
+                }),
+              ]
+            : []),
+        ]);
+
+        const removalConfirmed = normalizedServiceId
+          ? await waitForArchivedServiceConfirmation(normalizedServiceId)
+          : preview.isDefaultEntry && normalizedBindingRevisionId
+            ? await waitForRetiredBindingConfirmation(normalizedBindingRevisionId)
+            : false;
+
+        if (removalConfirmed) {
+          setArchivedTeamKeys((current) => {
+            const next = new Set(current);
+            next.add(preview.teamKey);
+            return next;
+          });
+          messageApi.success(
+            `团队“${preview.title}”已归档，Studio 里的 workflow 源码保留不变。`,
+          );
+        } else {
+          messageApi.warning(
+            `团队“${preview.title}”的归档请求已提交，但列表还没确认更新；请稍后刷新再看。`,
+          );
+        }
+
+        if (bindingCleanupNotice) {
+          messageApi.warning(
+            `团队 deployment 已下线，但默认入口还需要再清理一次：${bindingCleanupNotice}`,
+          );
+        }
+      } finally {
+        setArchivingTeamKey((current) =>
+          current === preview.teamKey ? "" : current,
+        );
+      }
+    },
+    [
+      messageApi,
+      queryClient,
+      scopeId,
+      waitForArchivedServiceConfirmation,
+      waitForRetiredBindingConfirmation,
+    ],
+  );
+  const handleArchiveTeam = React.useCallback(
+    (preview: ScopeBackedTeamPreview) => {
+      if (!preview.isArchivable || archivingTeamKey) {
+        return;
+      }
+
+      Modal.confirm({
+        cancelText: "取消",
+        okButtonProps: { danger: true },
+        okText: archiveTeamActionLabel,
+        onOk: () => archiveTeam(preview),
+        title: `${archiveTeamActionLabel}“${preview.title}”？`,
+        content: preview.isDefaultEntry
+          ? "这会归档当前团队并把它从 My Teams 里移除，同时清理当前默认入口指向；不会删除 Studio 里的 workflow 源码。"
+          : "这会归档当前团队并把它从 My Teams 里移除；不会删除 Studio 里的 workflow 源码。",
+      });
+    },
+    [archiveTeam, archivingTeamKey],
+  );
+  const teamPreviews = React.useMemo(() => {
+    const publishedPreviewEntries = units
+      .filter((unit) => hasPublishedTeamFact(unit))
+      .map((unit) => ({
+        preview: buildWorkflowTeamPreview({
+          binding: bindingQuery.data ?? null,
+          scopeId,
+          unit,
+        }),
+        workflowId: trimOptional(unit.workflow.workflowId),
+        workflowName: trimOptional(unit.workflow.workflowName),
+      }));
+    const visiblePublishedPreviews = collapseLegacyDuplicatePublishedTeamPreviews(
+      publishedPreviewEntries,
+    ).filter(
+      (preview) => !archivedTeamKeys.has(preview.teamKey),
+    );
+    if (visiblePublishedPreviews.length > 0) {
+      return visiblePublishedPreviews;
+    }
+
+    if (!scopePreviewTeam || archivedTeamKeys.has(scopePreviewTeam.teamKey)) {
+      return [];
+    }
+
+    return [scopePreviewTeam];
+  }, [archivedTeamKeys, bindingQuery.data, scopeId, scopePreviewTeam, units]);
+
+  const draftUnits = units.filter((unit) => unit.isDraftOnly);
+  const visibleTeamCount = teamPreviews.length;
+  const scopeBindingUnavailableNotice =
+    scopeId.length > 0 &&
+    bindingQuery.isSuccess &&
+    bindingQuery.data?.available === false
+      ? visibleTeamCount > 0
+        ? {
+            description:
+              "没有找到当前 Scope 的默认入口服务，首页会先展示其他已发布团队。请在 Studio 里重新发布团队，或重新设置默认入口。",
+            title: "当前默认团队入口不可用",
+          }
+        : {
+            description:
+              "没有找到已发布的默认入口服务，所以首页暂时没有运行信号。去 Studio 发布团队后，这里会自动出现。",
+            title: "当前 Scope 还没有默认团队入口",
+          }
+      : null;
   const resolvedRosterView =
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
-  const healthyTeamCount = scopePreviewTeam?.attention === "healthy" ? 1 : 0;
-  const attentionTeamCount =
-    scopePreviewTeam && scopePreviewTeam.attention !== "healthy" ? 1 : 0;
+  const healthyTeamCount = teamPreviews.filter(
+    (preview) => preview.attention === "healthy",
+  ).length;
+  const attentionTeamCount = teamPreviews.filter(
+    (preview) => preview.attention !== "healthy",
+  ).length;
   const draftHint =
     draftUnits.length > 0
-      ? `当前 Scope 里还有 ${draftUnits.length} 个已保存的行为定义，但它们还没有形成首页团队入口。`
+      ? `当前 Scope 里还有 ${draftUnits.length} 个已保存的 workflow，但它们还没有形成首页团队入口。`
       : "当前 Scope 里还没有形成首页团队入口。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
@@ -1026,7 +1711,14 @@ const TeamsHomePage: React.FC = () => {
         <Space wrap>
           <Button
             icon={<PlusOutlined />}
-            onClick={() => history.push(buildTeamCreateHref())}
+            onClick={() =>
+              history.push(
+                buildTeamCreateHref({
+                  scopeId: scopeId || undefined,
+                  scopeLabel: scopeId || undefined,
+                }),
+              )
+            }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
@@ -1037,6 +1729,7 @@ const TeamsHomePage: React.FC = () => {
       layoutMode="document"
       title={titleNode}
     >
+      {messageContextHolder}
       <div
         style={{
           display: "flex",
@@ -1153,6 +1846,15 @@ const TeamsHomePage: React.FC = () => {
           />
         ) : null}
 
+        {scopeBindingUnavailableNotice ? (
+          <Alert
+            description={scopeBindingUnavailableNotice.description}
+            showIcon
+            title={scopeBindingUnavailableNotice.title}
+            type="info"
+          />
+        ) : null}
+
         {partialIssues.length > 0 ? (
           <Alert
             description={partialIssues.join(" ")}
@@ -1211,7 +1913,7 @@ const TeamsHomePage: React.FC = () => {
                     打开 Studio
                   </Button>
                 }
-                description={`其中 ${draftUnits.length} 个行为定义还停留在草稿阶段，尚未形成首页团队入口。`}
+                description={`其中 ${draftUnits.length} 个 workflow 还停留在草稿阶段，尚未形成首页团队入口。`}
                 showIcon
                 title="还有草稿待整理"
                 type="info"
@@ -1226,7 +1928,7 @@ const TeamsHomePage: React.FC = () => {
                 title="当前 Scope 的团队入口暂时无法加载。"
                 type="error"
               />
-            ) : scopePreviewTeam ? (
+            ) : teamPreviews.length > 0 ? (
               <>
                 <div
                   style={{
@@ -1250,10 +1952,10 @@ const TeamsHomePage: React.FC = () => {
                         margin: 0,
                       }}
                     >
-                      团队入口
+                      已发布团队
                     </Typography.Title>
                     <Typography.Text type="secondary">
-                      当前 Scope 下已经形成首页入口的团队。
+                      当前 Scope 下所有仍在服役的已发布团队，默认入口会单独标记。
                     </Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (
@@ -1286,7 +1988,13 @@ const TeamsHomePage: React.FC = () => {
                       gap: 14,
                     }}
                   >
-                    <ScopeBackedTeamRow preview={scopePreviewTeam} />
+                    {teamPreviews.map((preview) => (
+                      <ScopeBackedTeamRow
+                        key={`${preview.title}:${preview.serviceId}:${preview.detailHref}`}
+                        onArchiveTeam={handleArchiveTeam}
+                        preview={preview}
+                      />
+                    ))}
                   </div>
                 ) : (
                   <div
@@ -1297,7 +2005,13 @@ const TeamsHomePage: React.FC = () => {
                       gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
                     }}
                   >
-                    <ScopeBackedTeamCard preview={scopePreviewTeam} />
+                    {teamPreviews.map((preview) => (
+                      <ScopeBackedTeamCard
+                        key={`${preview.title}:${preview.serviceId}:${preview.detailHref}`}
+                        onArchiveTeam={handleArchiveTeam}
+                        preview={preview}
+                      />
+                    ))}
                   </div>
                 )}
               </>

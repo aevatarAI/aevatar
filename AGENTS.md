@@ -128,6 +128,8 @@
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
 - 端口约束：仓库内禁止出现 `5000` 端口，这会与系统冲突；所有 Web API 服务同时禁止使用 `5000` 与 `5050` 端口。新增或修改 Host、启动脚本、`launchSettings`、README、CLI 示例、测试样例、SDK 默认值或任何代码/脚本文案时，不得写入 `5000`，并必须保持代码、脚本与文档一致。若需要提供默认示例，统一使用其他端口（当前文档默认使用 `5100`）。
+- 前端收尾检查：凡是改动 `apps/aevatar-console-web` 内的页面、组件、路由、样式、Studio/Teams 交互或其他前端运行链路，收尾时必须检查前端开发服务是否仍在 `5173` 端口监听。推荐命令：`lsof -nP -iTCP:5173 -sTCP:LISTEN`。
+- 前端收尾检查结果必须诚实：若 `5173` 正在监听，在结果说明里写明前端仍存活；若未监听，必须在收尾前重启 `apps/aevatar-console-web` 的 dev server（`npm run start:dev`）或明确告知用户当前前端未启动，禁止省略这一状态。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `bash tools/ci/workflow_binding_boundary_guard.sh`：单独执行 workflow binding 边界门禁。
 - `bash tools/ci/query_projection_priming_guard.sh`：校验 query/read 路径不触发 projection priming 或生命周期操作。

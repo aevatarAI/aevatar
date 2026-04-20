@@ -8,7 +8,7 @@ import {
   readStringRecord,
   type Decoder,
 } from "./http/decoders";
-import { requestJson } from "./http/client";
+import { jsonBody, requestJson } from "./http/client";
 import type {
   ScopeScriptCatalog,
   ScopeScriptDetail,
@@ -17,6 +17,7 @@ import type {
   ScopeWorkflowDetail,
   ScopeWorkflowSource,
   ScopeWorkflowSummary,
+  ScopeWorkflowUpsertResult,
 } from "@/shared/models/scopes";
 
 function decodeScopeWorkflowSummary(
@@ -125,6 +126,34 @@ function decodeScopeWorkflowDetail(
       sourceValue === null || sourceValue === undefined
         ? null
         : decodeScopeWorkflowSource(sourceValue, `${label}.source`),
+  };
+}
+
+function decodeScopeWorkflowUpsertResult(
+  value: unknown,
+  label = "ScopeWorkflowUpsertResult"
+): ScopeWorkflowUpsertResult {
+  const record = expectRecord(value, label);
+  return {
+    workflow: decodeScopeWorkflowSummary(
+      record.workflow ?? record.Workflow,
+      `${label}.workflow`
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      `${label}.revisionId`
+    ),
+    definitionActorIdPrefix: readString(
+      record,
+      ["definitionActorIdPrefix", "DefinitionActorIdPrefix"],
+      `${label}.definitionActorIdPrefix`
+    ),
+    expectedActorId: readString(
+      record,
+      ["expectedActorId", "ExpectedActorId"],
+      `${label}.expectedActorId`
+    ),
   };
 }
 
@@ -273,6 +302,35 @@ const decodeScopeScriptSummaries: Decoder<ScopeScriptSummary[]> = (value) =>
   expectArray(value, "ScopeScriptSummary[]", decodeScopeScriptSummary);
 
 export const scopesApi = {
+  upsertWorkflow(
+    scopeId: string,
+    workflowId: string,
+    input: {
+      workflowYaml: string;
+      workflowName?: string;
+      displayName?: string;
+      inlineWorkflowYamls?: Record<string, string>;
+      revisionId?: string;
+    }
+  ): Promise<ScopeWorkflowUpsertResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(
+        scopeId
+      )}/workflows/${encodeURIComponent(workflowId)}`,
+      decodeScopeWorkflowUpsertResult,
+      {
+        method: "PUT",
+        ...jsonBody({
+          workflowYaml: input.workflowYaml,
+          workflowName: input.workflowName,
+          displayName: input.displayName,
+          inlineWorkflowYamls: input.inlineWorkflowYamls,
+          revisionId: input.revisionId,
+        }),
+      }
+    );
+  },
+
   listWorkflows(scopeId: string): Promise<ScopeWorkflowSummary[]> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/workflows?includeSource=false`,

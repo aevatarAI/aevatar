@@ -57,6 +57,15 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
     }
 
+    public async Task<ServiceCommandAcceptedReceipt> RepublishServiceAsync(
+        RepublishServiceDefinitionCommand command,
+        CancellationToken ct = default)
+    {
+        var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Identity, ct);
+        await _catalogProjectionPort.EnsureProjectionAsync(actorId, ct);
+        return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:republish", ct);
+    }
+
     public async Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(
         CreateServiceRevisionCommand command,
         CancellationToken ct = default)
@@ -108,6 +117,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
     {
         var actorId = await _targetProvisioner.EnsureDeploymentTargetAsync(command.Identity, ct);
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
+        await _catalogProjectionPort.EnsureProjectionAsync(actorId, ct);
         await _deploymentProjectionPort.EnsureProjectionAsync(actorId, ct);
         await EnsureServingProjectionsAsync(ServiceActorIds.ServingSet(command.Identity), ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
@@ -118,6 +128,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureDeploymentTargetAsync(command.Identity, ct);
+        await _catalogProjectionPort.EnsureProjectionAsync(actorId, ct);
         await _deploymentProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.DeploymentId}", ct);
     }

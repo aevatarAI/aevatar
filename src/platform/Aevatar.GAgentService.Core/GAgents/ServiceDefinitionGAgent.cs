@@ -42,6 +42,18 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
     }
 
     [EventHandler]
+    public async Task HandleRepublishAsync(RepublishServiceDefinitionCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureExistingIdentity(command.Identity);
+
+        await PersistDomainEventAsync(new ServiceDefinitionRepublishedEvent
+        {
+            Spec = State.Spec?.Clone() ?? new ServiceDefinitionSpec(),
+        });
+    }
+
+    [EventHandler]
     public async Task HandleSetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -61,6 +73,7 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
             .Match(current, evt)
             .On<ServiceDefinitionCreatedEvent>(ApplyCreated)
             .On<ServiceDefinitionUpdatedEvent>(ApplyUpdated)
+            .On<ServiceDefinitionRepublishedEvent>(ApplyRepublished)
             .On<DefaultServingRevisionChangedEvent>(ApplyDefaultServingRevisionChanged)
             .OrCurrent();
 
@@ -79,6 +92,15 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         next.Spec = evt.Spec?.Clone() ?? new ServiceDefinitionSpec();
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Spec?.Identity, "updated");
+        return next;
+    }
+
+    private static ServiceDefinitionState ApplyRepublished(ServiceDefinitionState state, ServiceDefinitionRepublishedEvent evt)
+    {
+        var next = state.Clone();
+        next.Spec = evt.Spec?.Clone() ?? new ServiceDefinitionSpec();
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(evt.Spec?.Identity, "republished");
         return next;
     }
 

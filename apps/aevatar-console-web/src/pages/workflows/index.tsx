@@ -55,7 +55,7 @@ function buildWorkflowSummary(workflow: WorkflowCatalogItem): string {
 
   return workflow.requiresLlmProvider
     ? "Requires an LLM provider before the runtime handoff can execute."
-    : "Closed-world definition ready for inspection and direct run handoff.";
+    : "Closed-world workflow ready for inspection and direct run handoff.";
 }
 
 const WorkflowSummaryMetric: React.FC<{
@@ -253,7 +253,7 @@ const WorkflowsPage: React.FC = () => {
     <AevatarPageShell
       layoutMode="document"
       title="Workflow Library"
-      titleHelp="Workflow definitions now live in a card-flow library. Definition detail, role topology, and YAML inspection sit in a drawer so the library stage stays focused."
+      titleHelp="Workflows now live in a card-flow library. Workflow detail, role topology, and YAML inspection sit in a drawer so the library stage stays focused."
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -315,7 +315,7 @@ const WorkflowsPage: React.FC = () => {
           <AevatarPanel
             layoutMode="document"
             title="Workflow Catalog"
-            titleHelp="The library remains scannable because the expensive definition detail now opens contextually."
+            titleHelp="The library remains scannable because the expensive workflow detail now opens contextually."
           >
             {catalogQuery.error ? (
               <Alert
@@ -398,16 +398,16 @@ const WorkflowsPage: React.FC = () => {
         }
         onClose={() => setSelectedWorkflow("")}
         open={Boolean(selectedWorkflow)}
-        subtitle="Definition inspector"
+        subtitle="Workflow inspector"
         title={selectedWorkflowDetail?.catalog.name || selectedWorkflow || "Workflow"}
       >
         {!selectedWorkflowDetail ? (
-          <AevatarInspectorEmpty description="Choose a workflow to inspect its role topology, step count, and source definition." />
+          <AevatarInspectorEmpty description="Choose a workflow to inspect its role topology, step count, and source YAML." />
         ) : (
           <>
             <AevatarPanel
-              title="Definition Summary"
-              titleHelp="Definition-level signals the operator needs before opening the workflow editor or Runs."
+              title="Workflow Summary"
+              titleHelp="Workflow-level signals the operator needs before opening the workflow editor or Runs."
             >
               <Space orientation="vertical" size={8}>
                 <Space wrap size={[8, 8]}>

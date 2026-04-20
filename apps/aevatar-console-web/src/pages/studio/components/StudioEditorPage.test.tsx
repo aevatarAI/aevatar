@@ -141,6 +141,7 @@ function createBaseProps(overrides = {}) {
     draftFileName: 'workspace-demo.yaml',
     draftMode: '',
     selectedWorkflowId: 'workflow-1',
+    selectedDefinitionWorkflowId: 'workflow-1',
     templateWorkflowName: '',
     activeWorkflowDescription: 'A Studio workflow used in tests.',
     activeWorkflowFile,
@@ -398,8 +399,8 @@ describe('StudioEditorPage', () => {
     );
 
     expect(screen.getByTestId('studio-editor-shell')).toBeInTheDocument();
-    expect(screen.getByText('行为定义')).toBeInTheDocument();
-    expect(screen.getByText('当前定义还没有步骤。')).toBeInTheDocument();
+    expect(screen.getByText('workflow')).toBeInTheDocument();
+    expect(screen.getByText('当前 workflow 还没有步骤。')).toBeInTheDocument();
   });
 
   it('keeps the empty node inspector compact and offers quick pivots', () => {
@@ -438,8 +439,8 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('行为定义')).toBeInTheDocument();
-    expect(screen.queryByText('下一步：保存定义')).not.toBeInTheDocument();
+    expect(await screen.findByText('workflow')).toBeInTheDocument();
+    expect(screen.queryByText('下一步：保存 workflow')).not.toBeInTheDocument();
   });
 
   it('keeps the unpublished team entry summary collapsed with no details toggle', async () => {
@@ -497,9 +498,10 @@ describe('StudioEditorPage', () => {
       await screen.findByText('你正在创建团队「订单助手团队」'),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Studio team entry name')).toHaveValue('订单入口');
-    expect(screen.getByText('当前行为定义：test01')).toBeInTheDocument();
+    expect(screen.getByText('来源 workflow：test01')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发布团队入口' })).toBeInTheDocument();
     expect(screen.getByText('入口草稿：订单入口')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /workspace-demo/i })).toBeInTheDocument();
     expect(
       screen.getByText(
         '保存只会写草稿。点击“发布团队入口”后，当前 scope 的默认入口会切换成 订单入口。',

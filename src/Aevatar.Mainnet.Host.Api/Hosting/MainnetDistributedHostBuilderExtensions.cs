@@ -15,18 +15,24 @@ public static class MainnetDistributedHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        builder.Configuration.AddJsonFile(
-            Path.Combine(AppContext.BaseDirectory, "appsettings.Distributed.json"),
-            optional: true,
-            reloadOnChange: false);
+        if (builder.Environment.IsEnvironment("Distributed"))
+        {
+            builder.Configuration.AddJsonFile(
+                Path.Combine(AppContext.BaseDirectory, "appsettings.Distributed.json"),
+                optional: true,
+                reloadOnChange: false);
+        }
 
-        // Re-add environment variables so they take precedence over Distributed.json.
+        // Re-add environment variables when Distributed.json is loaded so they keep precedence.
         // CreateBuilder and AddAevatarConfig register env var sources before this method,
         // but Distributed.json (loaded above) would shadow them without this re-add.
-        // Both prefixed (AEVATAR_ActorRuntime__*, AEVATAR_Orleans__*) and bare
-        // (Projection__*, ASPNETCORE_ENVIRONMENT) are used by CI/cluster scripts.
-        builder.Configuration.AddEnvironmentVariables("AEVATAR_");
-        builder.Configuration.AddEnvironmentVariables();
+        if (builder.Environment.IsEnvironment("Distributed"))
+        {
+            // Both prefixed (AEVATAR_ActorRuntime__*, AEVATAR_Orleans__*) and bare
+            // (Projection__*, ASPNETCORE_ENVIRONMENT) are used by CI/cluster scripts.
+            builder.Configuration.AddEnvironmentVariables("AEVATAR_");
+            builder.Configuration.AddEnvironmentVariables();
+        }
 
         var runtimeOptions = ResolveRuntimeOptions(builder.Configuration);
         if (!string.Equals(runtimeOptions.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))

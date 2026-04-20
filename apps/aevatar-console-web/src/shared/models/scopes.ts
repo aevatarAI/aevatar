@@ -24,6 +24,13 @@ export interface ScopeWorkflowDetail {
   source: ScopeWorkflowSource | null;
 }
 
+export interface ScopeWorkflowUpsertResult {
+  workflow: ScopeWorkflowSummary;
+  revisionId: string;
+  definitionActorIdPrefix: string;
+  expectedActorId: string;
+}
+
 export interface ScopeScriptSummary {
   scopeId: string;
   scriptId: string;

@@ -8,17 +8,19 @@ type Props = { flash: (msg: string, type: 'success' | 'error') => void };
 const FIELDS: FieldDef[] = [
   {
     key: 'defaultModel',
-    label: 'Default Model',
+    label: 'Default Chat Model',
     type: 'text',
     placeholder: 'e.g. deepseek-chat, claude-sonnet-4-20250514',
-    description: 'Override the LLM model used for chat. Leave empty to use provider default.',
+    description:
+      'Override the LLM model used for chat conversations. Leave empty to use the provider default. Does not affect Studio AI workflow or script generation.',
   },
   {
     key: 'preferredLlmRoute',
-    label: 'Preferred LLM Route',
+    label: 'Preferred Chat Route',
     type: 'text',
     placeholder: 'e.g. chrono-llm, /api/v1/proxy/s/my-service',
-    description: 'Route LLM requests to a specific NyxID proxy service. Empty = gateway default.',
+    description:
+      'Route chat conversations to a specific NyxID proxy service. Empty = gateway default. Does not affect Studio AI workflow or script generation.',
   },
   {
     key: 'maxToolRounds',

@@ -6,7 +6,7 @@ describe('StudioShell', () => {
   const navItems: readonly StudioShellNavItem[] = [
     {
       key: 'workflows',
-      label: '行为定义',
+      label: 'workflow',
       description: 'Browse workspace workflows and start new drafts.',
       count: 3,
     },
@@ -50,10 +50,10 @@ describe('StudioShell', () => {
     expect(screen.getByLabelText('Workbench')).toHaveStyle({ width: '56px' });
     expect(screen.getByLabelText('Workbench navigation')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '行为定义' }),
+      screen.getByRole('button', { name: 'workflow' }),
     ).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByText('Browse workspace workflows and start new drafts.')).toBeNull();
-    expect(screen.queryByText('行为定义')).toBeNull();
+    expect(screen.queryByText('workflow')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '团队构建器' }));
     fireEvent.click(screen.getByRole('button', { name: '编辑器设置' }));

@@ -1496,6 +1496,8 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
     ? 'processing'
     : error
       ? 'error'
+      : isTeamCreationMode
+        ? 'default'
       : binding?.available
         ? 'success'
         : 'default';
@@ -1503,6 +1505,8 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
     ? '加载中'
     : error
       ? '不可用'
+      : isTeamCreationMode
+        ? '草稿中'
       : binding?.available
         ? '已发布'
         : '未发布';
@@ -1550,7 +1554,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
     <StudioNoticeCard
       type="info"
       title="尚未发布默认入口"
-      description="发布当前行为定义或脚本后，这里会显示团队默认入口。"
+      description="发布当前 workflow 或脚本后，这里会显示团队默认入口。"
       compact
     />
   ) : (
@@ -1810,7 +1814,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
                   : '未发布默认入口'}
             </Typography.Text>
             <Tag color={bindingStateColor}>{bindingStateLabel}</Tag>
-            {binding?.available ? (
+            {!isTeamCreationMode && binding?.available ? (
               <Tag color="success">
                 {binding.defaultServingRevisionId || 'default pending'}
               </Tag>
@@ -2386,7 +2390,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
               <div style={workflowSectionHeaderStyle}>
                 <div style={cardStackStyle}>
                   <Typography.Text style={workflowSectionHeadingStyle}>
-                    当前定义
+                    当前 workflow
                   </Typography.Text>
                 </div>
               </div>
@@ -2395,15 +2399,15 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                 <div style={cardStackStyle}>
                   <Space wrap size={[8, 8]}>
                     {selectedWorkflowId ? (
-                      <Tag color="processing">工作区定义</Tag>
+                      <Tag color="processing">工作区 workflow</Tag>
                     ) : null}
                     {templateWorkflow ? (
-                      <Tag color="success">模板定义</Tag>
+                      <Tag color="success">模板 workflow</Tag>
                     ) : null}
                     {draftMode === 'new' ? <Tag color="gold">新建草稿</Tag> : null}
                   </Space>
                   <Typography.Text strong>
-                    {activeWorkflowName || '尚未选择定义'}
+                    {activeWorkflowName || '尚未选择 workflow'}
                   </Typography.Text>
                   {activeWorkflowDescription ? (
                     <Typography.Text style={workflowSectionCopyStyle}>
@@ -2420,7 +2424,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                       进入编辑
                     </Button>
                     <Button onClick={onStartBlankDraft} style={workflowGhostActionStyle}>
-                      新建定义
+                      新建 workflow
                     </Button>
                   </Space>
                 </div>
@@ -2477,20 +2481,20 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                       <div style={workflowSummaryCardBodyStyle}>
                         <Space wrap size={[8, 8]}>
                           {selectedWorkflowId ? (
-                            <Tag color="processing">工作区定义</Tag>
+                            <Tag color="processing">工作区 workflow</Tag>
                           ) : null}
                           {templateWorkflow ? (
-                            <Tag color="success">模板定义</Tag>
+                            <Tag color="success">模板 workflow</Tag>
                           ) : null}
                           {draftMode === 'new' ? (
                             <Tag color="gold">新建草稿</Tag>
                           ) : null}
                         </Space>
                         <Typography.Text style={workflowSectionHeadingStyle}>
-                          当前定义
+                          当前 workflow
                         </Typography.Text>
                         <Typography.Text strong style={workflowCardTitleStyle}>
-                          {activeWorkflowName || '尚未选择定义'}
+                          {activeWorkflowName || '尚未选择 workflow'}
                         </Typography.Text>
                         {draftSummaryDescription ? (
                           <Typography.Text style={workflowSummaryHintStyle}>
@@ -2515,7 +2519,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                           onClick={onStartBlankDraft}
                           style={workflowGhostActionStyle}
                         >
-                          新建定义
+                          新建 workflow
                         </Button>
                       </div>
                     </div>
@@ -2529,8 +2533,8 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     style={{ color: 'var(--ant-color-text-tertiary)' }}
                   />
                   <input
-                    aria-label="搜索定义"
-                    placeholder="搜索定义"
+                    aria-label="搜索 workflow"
+                    placeholder="搜索 workflow"
                     style={workflowSearchInputStyle}
                     value={workflowSearch}
                     onChange={(event) => onSetWorkflowSearch(event.target.value)}
@@ -2552,7 +2556,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     onClick={onStartBlankDraft}
                     style={workflowSolidActionStyle}
                   >
-                    新建定义
+                    新建 workflow
                   </Button>
                 </div>
               </div>
@@ -2565,12 +2569,12 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
           >
             {workflows.isLoading ? (
               <Typography.Text type="secondary">
-                正在加载定义...
+                正在加载 workflow...
               </Typography.Text>
             ) : workflows.isError ? (
               <StudioNoticeCard
                 type="error"
-                title="读取行为定义失败"
+                title="读取 workflow 失败"
                 description={describeError(workflows.error)}
               />
             ) : filteredWorkflows.length > 0 ? (
@@ -2653,8 +2657,8 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                     description={
                       workflowSearch.trim()
-                        ? '没有匹配的定义。'
-                        : '还没有定义'
+                        ? '没有匹配的 workflow。'
+                        : '还没有 workflow'
                     }
                   />
                 </div>
@@ -2719,7 +2723,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   executionCanStop,
   executionStopPending,
   runPrompt,
-  executionNotice,
   logsPopoutMode = false,
   logsDetached = false,
   onOpenExecution,
@@ -3474,19 +3477,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           description={describeError(selectedExecution.error)}
         />
       ) : null}
-      {executionNotice ? (
-        <StudioNoticeCard
-          type={executionNotice.type}
-          title={
-            executionNotice.type === 'error'
-              ? '执行操作失败'
-              : executionNotice.type === 'info'
-                ? '已请求停止运行'
-                : '执行状态已更新'
-          }
-          description={executionNotice.message}
-        />
-      ) : null}
       {selectedExecutionDetail?.error ? (
         <StudioNoticeCard
           type="error"
@@ -3939,7 +3929,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       >
         <div style={cardStackStyle}>
           <Typography.Text type="secondary">
-            这段输入会作为 <Typography.Text code>$input</Typography.Text> 传入当前行为定义。
+            这段输入会作为 <Typography.Text code>$input</Typography.Text> 传入当前 workflow。
           </Typography.Text>
           <Input.TextArea
             aria-label="Studio execution prompt"
@@ -3966,6 +3956,7 @@ export type StudioEditorPageProps = {
   readonly draftFileName: string;
   readonly draftMode: DraftMode;
   readonly selectedWorkflowId: string;
+  readonly selectedDefinitionWorkflowId: string;
   readonly templateWorkflowName: string;
   readonly activeWorkflowDescription: string;
   readonly activeWorkflowFile: StudioWorkflowFile | null | undefined;
@@ -4103,6 +4094,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   draftFileName,
   draftMode,
   selectedWorkflowId,
+  selectedDefinitionWorkflowId,
   templateWorkflowName,
   activeWorkflowDescription,
   activeWorkflowFile,
@@ -4117,8 +4109,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   workspaceSettings,
   savePending,
   canSaveWorkflow,
-  saveNotice,
-  workflowImportNotice,
   workflowImportInputRef,
   askAiPrompt,
   askAiPending,
@@ -4131,11 +4121,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   runPending,
   canOpenRunWorkflow,
   canRunWorkflow,
-  runNotice,
   resolvedScopeId,
   publishPending,
   canPublishWorkflow,
-  publishNotice,
   teamCreation,
   scopeBinding,
   scopeBindingLoading,
@@ -4801,66 +4789,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
   const editorStatusItems: React.ReactNode[] = [];
 
-  if (saveNotice && saveNotice.type === 'error') {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="save-notice"
-        type={saveNotice.type}
-        title="定义保存失败"
-        description={saveNotice.message}
-        compact
-      />,
-    );
-  }
-
-  if (workflowImportNotice) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="workflow-import-notice"
-        type={workflowImportNotice.type}
-        title={
-          workflowImportNotice.type === 'error'
-            ? '定义导入失败'
-            : '定义已导入'
-        }
-        description={workflowImportNotice.message}
-        compact
-      />,
-    );
-  }
-
-  if (runNotice) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="run-notice"
-        type={runNotice.type}
-        title={
-          runNotice.type === 'success'
-            ? '测试运行已启动'
-            : '测试运行失败'
-        }
-        description={runNotice.message}
-        compact
-      />,
-    );
-  }
-
-  if (publishNotice) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="publish-notice"
-        type={publishNotice.type}
-        title={
-          publishNotice.type === 'error'
-            ? '团队入口发布失败'
-            : '团队入口已更新'
-        }
-        description={publishNotice.message}
-        compact
-      />,
-    );
-  }
-
   const teamCreationNotice = teamCreation ? (
     <StudioNoticeCard
       key="team-creation-notice"
@@ -4881,7 +4809,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     <StudioNoticeCard
       key="selected-workflow-error"
       type="error"
-      title="读取行为定义失败"
+      title="读取 workflow 失败"
       description={describeError(selectedWorkflow.error)}
       compact
     />
@@ -4889,7 +4817,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     <StudioNoticeCard
       key="template-workflow-error"
       type="error"
-      title="读取模板定义失败"
+      title="读取模板 workflow 失败"
       description={describeError(templateWorkflow.error)}
       compact
     />
@@ -4988,7 +4916,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                         />
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           {showTeamWorkflowLabel
-                            ? `当前行为定义：${teamWorkflowLabel}`
+                            ? `来源 workflow：${teamWorkflowLabel}`
                             : '当前正在编辑团队入口草稿。'}
                         </Typography.Text>
                       </>
@@ -5003,7 +4931,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     )}
                     <StudioInfoPopover
                       open={descriptionEditorOpen}
-                      ariaLabel="编辑定义说明"
+                      ariaLabel="编辑 workflow 说明"
                       onOpenChange={(open) => {
                         setDescriptionEditorOpen(open);
                         if (open) {
@@ -5013,7 +4941,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     >
                       <textarea
                         aria-label="Studio workflow description"
-                        placeholder="定义说明"
+                        placeholder="workflow 说明"
                         value={descriptionDraft}
                         onChange={(event) =>
                           setDescriptionDraft(event.target.value)
@@ -5101,7 +5029,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     padding: '12px 14px',
                   }}
                 >
-                  <Typography.Text strong>行为定义</Typography.Text>
+                  <Typography.Text strong>workflow</Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                     {visibleWorkflowDefinitions.length}
                   </Typography.Text>
@@ -5113,18 +5041,19 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   {workflows.isLoading ? (
                     <div style={{ padding: 14 }}>
                       <Typography.Text type="secondary">
-                        正在加载行为定义...
+                        正在加载 workflow...
                       </Typography.Text>
                     </div>
                   ) : workflows.isError ? (
                     <div style={{ padding: 14 }}>
                       <Typography.Text type="danger">
-                        行为定义加载失败
+                        workflow 加载失败
                       </Typography.Text>
                     </div>
                   ) : visibleWorkflowDefinitions.length > 0 ? (
                     visibleWorkflowDefinitions.map((workflow) => {
-                      const active = workflow.workflowId === selectedWorkflowId;
+                      const active =
+                        workflow.workflowId === selectedDefinitionWorkflowId;
                       return (
                         <button
                           key={workflow.workflowId}
@@ -5156,7 +5085,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   ) : (
                     <div style={{ padding: 14 }}>
                       <Typography.Text type="secondary">
-                        当前还没有可编辑的行为定义。
+                        当前还没有可编辑的 workflow。
                       </Typography.Text>
                     </div>
                   )}
@@ -5168,7 +5097,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   }}
                 >
                   <Button block onClick={onStartBlankDraft}>
-                    + 新建定义
+                    + 新建 workflow
                   </Button>
                 </div>
               </div>
@@ -5241,7 +5170,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     <div style={studioCanvasEmptyStateStyle}>
                       <div style={studioCanvasEmptyCardStyle}>
                         <Typography.Text strong style={{ display: 'block' }}>
-                          当前定义还没有步骤。
+                          当前 workflow 还没有步骤。
                         </Typography.Text>
                         <Typography.Text type="secondary">
                           先把第一个处理步骤放进画布，再继续补角色、连接和运行方式。
@@ -5354,7 +5283,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                           ? `选中: ${selectedGraphNodeId}`
                           : '先选步骤，或切到角色 / YAML 继续编辑'
                         : inspectorTab === 'roles'
-                          ? '管理当前定义的 Agent 角色'
+                          ? '管理当前 workflow 的 Agent 角色'
                           : '查看和校验当前 YAML'}
                     </Typography.Text>
                   </div>
@@ -7271,7 +7200,6 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
   settingsDirty,
   settingsPending,
   runtimeTestPending,
-  settingsNotice,
   runtimeTestResult,
   directoryPath,
   directoryLabel,
@@ -8345,19 +8273,6 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
       <div style={studioSurfaceBodyStyle}>
         {settingsDraft ? (
           <>
-            {settingsNotice ? (
-              <div style={studioNoticeStripStyle}>
-                <StudioNoticeCard
-                  type={settingsNotice.type}
-                  title={
-                    settingsNotice.type === 'error'
-                      ? '配置操作失败'
-                      : '配置已更新'
-                  }
-                  description={settingsNotice.message}
-                />
-              </div>
-            ) : null}
             <div style={sectionPanelStyle}>
               <div style={summaryMetricGridStyle}>
                 <StudioSummaryMetric label="提供方" value={providers.length} />

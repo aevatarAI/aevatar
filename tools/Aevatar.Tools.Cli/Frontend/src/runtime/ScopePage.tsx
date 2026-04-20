@@ -1366,8 +1366,8 @@ function ConversationLlmConfigBar({
   const normalizedQuery = query.trim().toLowerCase();
   const isStreamingProxyMode = mode === 'streaming-proxy';
   const panelTitle = isStreamingProxyMode ? 'Room model preferences' : 'Conversation model';
-  const routeLabel = isStreamingProxyMode ? 'Preferred route' : 'Route';
-  const defaultRouteLabel = isStreamingProxyMode ? 'Room default' : 'Config default';
+  const routeLabel = isStreamingProxyMode ? 'Preferred route' : 'Chat route';
+  const defaultRouteLabel = isStreamingProxyMode ? 'Room default' : 'Chat preference';
   const emptyStateLabel = isStreamingProxyMode
     ? `No room models for ${effectiveRouteLabel}`
     : `No models for ${effectiveRouteLabel}`;

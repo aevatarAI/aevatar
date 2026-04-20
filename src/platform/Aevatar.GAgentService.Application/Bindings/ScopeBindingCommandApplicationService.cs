@@ -64,10 +64,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 
         if (existingService == null)
         {
-            await _serviceCommandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
-            {
-                Spec = CloneServiceDefinition(desiredBinding.ServiceDefinition),
-            }, ct);
+            await EnsureServiceDefinitionExistsAsync(desiredBinding.ServiceDefinition, ct);
         }
         else if (ServiceDefinitionNeedsUpdate(existingService, desiredBinding.ServiceDefinition))
         {
@@ -118,6 +115,26 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
+    }
+
+    private async Task EnsureServiceDefinitionExistsAsync(
+        ServiceDefinitionSpec desiredDefinition,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _serviceCommandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
+            {
+                Spec = CloneServiceDefinition(desiredDefinition),
+            }, ct);
+        }
+        catch (InvalidOperationException ex) when (IsDuplicateServiceDefinition(ex, desiredDefinition.Identity))
+        {
+            await _serviceCommandPort.RepublishServiceAsync(new RepublishServiceDefinitionCommand
+            {
+                Identity = desiredDefinition.Identity.Clone(),
+            }, ct);
+        }
     }
 
     private async Task<bool> ShouldCreateRevisionAsync(
@@ -470,6 +487,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 
         return false;
     }
+
+    private static bool IsDuplicateServiceDefinition(
+        InvalidOperationException ex,
+        ServiceIdentity identity) =>
+        string.Equals(
+            ex.Message,
+            $"Service definition '{ServiceKeys.Build(identity)}' already exists.",
+            StringComparison.Ordinal);
 
     private static ServiceDefinitionSpec CloneServiceDefinition(ServiceDefinitionSpec source)
     {

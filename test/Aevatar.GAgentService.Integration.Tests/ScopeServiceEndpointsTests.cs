@@ -3279,6 +3279,9 @@ public sealed class ScopeServiceEndpointsTests
         public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(UpdateServiceDefinitionCommand command, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<ServiceCommandAcceptedReceipt> RepublishServiceAsync(RepublishServiceDefinitionCommand command, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default) =>
             throw new NotSupportedException();
 

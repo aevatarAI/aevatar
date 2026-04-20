@@ -28,6 +28,10 @@ message UpdateServiceDefinitionCommand {
   ServiceDefinitionSpec spec = 1;
 }
 
+message RepublishServiceDefinitionCommand {
+  ServiceIdentity identity = 1;
+}
+
 message SetDefaultServingRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
@@ -38,6 +42,10 @@ message ServiceDefinitionCreatedEvent {
 }
 
 message ServiceDefinitionUpdatedEvent {
+  ServiceDefinitionSpec spec = 1;
+}
+
+message ServiceDefinitionRepublishedEvent {
   ServiceDefinitionSpec spec = 1;
 }
 

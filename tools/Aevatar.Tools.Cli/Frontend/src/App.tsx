@@ -5209,9 +5209,9 @@ function CloudConfigSection(props: {
       </div>
 
       <div className="settings-section-card space-y-4">
-        <div className="section-heading">Preferred route</div>
+        <div className="section-heading">Chat route preference</div>
         <div>
-          <label className="field-label">LLM route</label>
+          <label className="field-label">Chat route</label>
           <select
             className="panel-input mt-1"
             value={preferredRoute}
@@ -5231,6 +5231,9 @@ function CloudConfigSection(props: {
           {preferredRoute === USER_LLM_ROUTE_GATEWAY
             ? 'All Aevatar chat requests will go through NyxID Gateway.'
             : `${effectiveRouteLabel} will be used for Aevatar chat requests via ${preferredRoute}. If it is unavailable, Aevatar falls back to NyxID Gateway.`}
+        </div>
+        <div className="text-[11px] text-gray-400 leading-relaxed">
+          This preference only affects chat conversations. Studio AI workflow and script generation keep the default authoring route.
         </div>
       </div>
 

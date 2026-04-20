@@ -68,6 +68,19 @@ public sealed class ServiceCatalogProjector
             return;
         }
 
+        if (payload.Is(ServiceDefinitionRepublishedEvent.Descriptor))
+        {
+            var evt = payload.Unpack<ServiceDefinitionRepublishedEvent>();
+            await UpsertDefinitionAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, readModel =>
+            {
+                ApplyIdentity(readModel, evt.Spec.Identity);
+                readModel.DisplayName = evt.Spec.DisplayName ?? string.Empty;
+                readModel.Endpoints = evt.Spec.Endpoints.Select(MapEndpoint).ToList();
+                readModel.PolicyIds = [.. evt.Spec.PolicyIds];
+            }, ct);
+            return;
+        }
+
         if (payload.Is(DefaultServingRevisionChangedEvent.Descriptor))
         {
             var evt = payload.Unpack<DefaultServingRevisionChangedEvent>();

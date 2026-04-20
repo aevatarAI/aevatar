@@ -850,6 +850,9 @@ public sealed class ServiceEndpointsTests
         public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(UpdateServiceDefinitionCommand command, CancellationToken ct = default) =>
             Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-service", "corr-update-service"));
 
+        public Task<ServiceCommandAcceptedReceipt> RepublishServiceAsync(RepublishServiceDefinitionCommand command, CancellationToken ct = default) =>
+            Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-republish-service", "corr-republish-service"));
+
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default)
         {
             CreateRevisionCommand = command;

@@ -147,6 +147,8 @@
 - `dotnet restore aevatar.slnx --nologo` / `dotnet build aevatar.slnx --nologo` / `dotnet test aevatar.slnx --nologo`
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
+- 前端收尾检查：凡是改动 `apps/aevatar-console-web` 内的页面、组件、路由、样式、Studio/Teams 交互或其他前端运行链路，收尾时必须检查前端开发服务是否仍在 `5173` 端口监听。推荐命令：`lsof -nP -iTCP:5173 -sTCP:LISTEN`。
+- 前端收尾检查结果必须诚实：若 `5173` 正在监听，在结果说明里写明前端仍存活；若未监听，必须在收尾前重启 `apps/aevatar-console-web` 的 dev server（`npm run start:dev`）或明确告知用户当前前端未启动，禁止省略这一状态。
 
 ### CI 门禁（全量）
 - `bash tools/ci/architecture_guards.sh`：CI 架构门禁主入口。

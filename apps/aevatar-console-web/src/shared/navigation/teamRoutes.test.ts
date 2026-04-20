@@ -1,4 +1,5 @@
 import {
+  buildScopedTeamsMenuHref,
   buildTeamCreateHref,
   buildTeamDetailHref,
   buildTeamsHref,
@@ -6,6 +7,14 @@ import {
 } from "./teamRoutes";
 
 describe("teamRoutes", () => {
+  it("builds the teams home href with the current scope context", () => {
+    expect(
+      buildTeamsHref({
+        scopeId: " scope-alpha ",
+      }),
+    ).toBe("/teams?scopeId=scope-alpha");
+  });
+
   it("builds a workflow-aware team detail href and trims empty values", () => {
     expect(
       buildTeamDetailHref({
@@ -32,14 +41,34 @@ describe("teamRoutes", () => {
   it("preserves draft team names when returning to the create page", () => {
     expect(
       buildTeamCreateHref({
+        scopeId: "scope-alpha",
+        scopeLabel: "Scope Alpha",
         teamName: "订单助手团队",
         entryName: "订单入口",
         teamDraftWorkflowId: "workflow-7",
         teamDraftWorkflowName: "order-entry-draft",
+        sourceBehaviorDefinitionId: "workflow-hello-chat",
+        sourceBehaviorDefinitionName: "hello-chat",
       }),
     ).toBe(
-      "/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft",
+      "/teams/new?scopeId=scope-alpha&scopeLabel=Scope+Alpha&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft&sourceBehaviorDefinitionId=workflow-hello-chat&sourceBehaviorDefinitionName=hello-chat",
     );
+  });
+
+  it("keeps scope context when the navigation menu opens Teams or Create Team", () => {
+    expect(
+      buildScopedTeamsMenuHref("teams", {
+        search: "?scopeId=scope-alpha&scopeLabel=Scope+Alpha",
+        pathname: "/teams/scope-alpha",
+      }),
+    ).toBe("/teams?scopeId=scope-alpha");
+
+    expect(
+      buildScopedTeamsMenuHref("create-team", {
+        search: "?scopeId=scope-alpha&scopeLabel=Scope+Alpha",
+        pathname: "/teams/scope-alpha",
+      }),
+    ).toBe("/teams/new?scopeId=scope-alpha&scopeLabel=Scope+Alpha");
   });
 
   it("reads the team detail route state from path and query", () => {

@@ -801,7 +801,7 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
+            var metadata = await InjectAuthoringLLMMetadataAsync(http, request.Metadata, ct);
             var result = await generator.GenerateAsync(
                 new WorkflowGenerateRequest(
                     request.Prompt.Trim(),
@@ -923,7 +923,7 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
+            var metadata = await InjectAuthoringLLMMetadataAsync(http, request.Metadata, ct);
             var result = await generator.GenerateAsync(
                 new ScriptGenerateRequest(
                     request.Prompt.Trim(),
@@ -1067,7 +1067,7 @@ internal static class StudioEndpoints
             : null;
     }
 
-    private static async Task<Dictionary<string, string>> InjectLLMMetadataAsync(
+    internal static async Task<Dictionary<string, string>> InjectAuthoringLLMMetadataAsync(
         HttpContext http,
         IReadOnlyDictionary<string, string>? clientMetadata,
         CancellationToken ct)
@@ -1075,6 +1075,10 @@ internal static class StudioEndpoints
         var metadata = clientMetadata != null
             ? new Dictionary<string, string>(clientMetadata)
             : new Dictionary<string, string>();
+
+        // Authoring requests should default to the stable gateway/default route instead of
+        // inheriting a chat-specific proxy selection from user preferences. If the client
+        // explicitly supplies a route or model override, preserve it.
 
         // Forward caller's Bearer token so NyxID-backed providers and connectors can authenticate.
         var bearerToken = ExtractBearerToken(http);
@@ -1091,10 +1095,9 @@ internal static class StudioEndpoints
             try
             {
                 var preferences = await llmPreferencesStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
+                if (!metadata.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
+                    !string.IsNullOrWhiteSpace(preferences.DefaultModel))
                     metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
-                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
             }
             catch
             {

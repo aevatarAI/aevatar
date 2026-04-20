@@ -6,7 +6,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Empty, Tag } from 'antd';
+import { Alert, Empty, Tag, message } from 'antd';
 import React from 'react';
 import { chatHistoryApi } from '@/pages/chat/chatHistoryApi';
 import type {
@@ -1076,6 +1076,56 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     enabled: Boolean(scopeId && selectedConversationId),
     queryFn: () => chatHistoryApi.loadConversation(scopeId, selectedConversationId),
   });
+  const showToastNotice = React.useCallback((notice: NoticeState) => {
+    if (notice.type === 'success') {
+      void message.success(notice.message);
+      return;
+    }
+
+    if (notice.type === 'warning') {
+      void message.warning(notice.message);
+      return;
+    }
+
+    if (notice.type === 'info') {
+      void message.info(notice.message);
+      return;
+    }
+
+    void message.error(notice.message);
+  }, []);
+
+  React.useEffect(() => {
+    if (!settingsNotice) {
+      return;
+    }
+
+    showToastNotice(settingsNotice);
+  }, [settingsNotice, showToastNotice]);
+
+  React.useEffect(() => {
+    if (!roleNotice) {
+      return;
+    }
+
+    showToastNotice(roleNotice);
+  }, [roleNotice, showToastNotice]);
+
+  React.useEffect(() => {
+    if (!connectorNotice) {
+      return;
+    }
+
+    showToastNotice(connectorNotice);
+  }, [connectorNotice, showToastNotice]);
+
+  React.useEffect(() => {
+    if (!chatNotice) {
+      return;
+    }
+
+    showToastNotice(chatNotice);
+  }, [chatNotice, showToastNotice]);
 
   const handleSaveSettings = async () => {
     setSettingsPending(true);
@@ -1315,14 +1365,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           />
         ) : null}
 
-        {settingsNotice ? (
-          <Alert
-            type={settingsNotice.type}
-            showIcon
-            message={settingsNotice.message}
-          />
-        ) : null}
-
         <div style={editorSurfaceStyle}>
           <textarea
             aria-label="settings.json editor"
@@ -1366,10 +1408,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             </button>
           </div>
         </div>
-
-        {roleNotice ? (
-          <Alert type={roleNotice.type} showIcon message={roleNotice.message} />
-        ) : null}
 
         {roles.isError ? (
           <Alert
@@ -1678,14 +1716,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             </button>
           </div>
         </div>
-
-        {connectorNotice ? (
-          <Alert
-            type={connectorNotice.type}
-            showIcon
-            message={connectorNotice.message}
-          />
-        ) : null}
 
         {connectors.isError ? (
           <Alert
@@ -2443,10 +2473,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               Delete
             </button>
           </div>
-
-          {chatNotice ? (
-            <Alert type={chatNotice.type} showIcon message={chatNotice.message} />
-          ) : null}
 
           {selectedConversationMessages.isLoading ? (
             <div style={emptyCardStyle}>Loading conversation...</div>

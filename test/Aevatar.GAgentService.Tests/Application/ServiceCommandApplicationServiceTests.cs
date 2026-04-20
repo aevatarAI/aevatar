@@ -101,13 +101,14 @@ public sealed class ServiceCommandApplicationServiceTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
+        var catalogProjectionPort = new RecordingCatalogProjectionPort();
         var deploymentProjectionPort = new RecordingProjectionPort();
         var servingProjectionPort = new RecordingProjectionPort();
         var trafficProjectionPort = new RecordingProjectionPort();
         var service = CreateService(
             provisioner,
             dispatchPort,
-            new RecordingCatalogProjectionPort(),
+            catalogProjectionPort,
             new RecordingRevisionProjectionPort(),
             deploymentProjectionPort: deploymentProjectionPort,
             servingProjectionPort: servingProjectionPort,
@@ -122,6 +123,7 @@ public sealed class ServiceCommandApplicationServiceTests
         receipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
         provisioner.DeploymentRequests.Should().ContainSingle();
         provisioner.ServingSetRequests.Should().ContainSingle();
+        catalogProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
         deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
         servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
         trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
@@ -134,6 +136,7 @@ public sealed class ServiceCommandApplicationServiceTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
+        var catalogProjectionPort = new RecordingCatalogProjectionPort();
         var deploymentProjectionPort = new RecordingProjectionPort();
         var servingProjectionPort = new RecordingProjectionPort();
         var rolloutProjectionPort = new RecordingProjectionPort();
@@ -141,7 +144,7 @@ public sealed class ServiceCommandApplicationServiceTests
         var service = CreateService(
             provisioner,
             dispatchPort,
-            new RecordingCatalogProjectionPort(),
+            catalogProjectionPort,
             new RecordingRevisionProjectionPort(),
             deploymentProjectionPort: deploymentProjectionPort,
             servingProjectionPort: servingProjectionPort,
@@ -189,6 +192,7 @@ public sealed class ServiceCommandApplicationServiceTests
         provisioner.DeploymentRequests.Should().ContainSingle();
         provisioner.RolloutRequests.Should().HaveCount(4);
         provisioner.ServingSetRequests.Should().HaveCount(3);
+        catalogProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
         deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
         rolloutProjectionPort.ActorIds.Should().Equal(
             ServiceActorIds.Rollout(identity),

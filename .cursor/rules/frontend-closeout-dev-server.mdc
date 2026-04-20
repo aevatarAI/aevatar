@@ -1,0 +1,13 @@
+---
+description: Verify the frontend dev server is still alive during frontend close-out
+globs: apps/aevatar-console-web/**
+alwaysApply: false
+---
+
+# Frontend Close-Out Dev Server Check
+
+- When work touches `apps/aevatar-console-web`, include a close-out check for the frontend dev server.
+- Before finishing, verify that port `5173` is still listening with `lsof -nP -iTCP:5173 -sTCP:LISTEN`.
+- If `5173` is listening, say so in the final verification summary.
+- If `5173` is not listening, either restart the dev server with `npm run start:dev` in `apps/aevatar-console-web` or clearly tell the user that the frontend is currently down.
+- Never claim the frontend is running without checking it.

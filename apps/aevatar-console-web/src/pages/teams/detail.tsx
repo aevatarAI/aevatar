@@ -1716,7 +1716,7 @@ const TeamDetailPage: React.FC = () => {
     () => [
       {
         badge: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
-        label: "流程定义",
+        label: "workflow",
         note: activeWorkflowId ? `workflowId: ${activeWorkflowId}` : "当前还没有 workflowId",
         value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
       },
