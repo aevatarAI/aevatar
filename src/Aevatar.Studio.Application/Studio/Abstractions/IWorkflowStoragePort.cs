@@ -5,13 +5,13 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// </summary>
 public interface IWorkflowStoragePort
 {
-    Task UploadWorkflowYamlAsync(string workflowId, string workflowName, string yaml, CancellationToken ct);
+    Task UploadWorkflowYamlAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct);
 
-    Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(CancellationToken ct);
+    Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(string scopeId, CancellationToken ct);
 
-    Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string workflowId, CancellationToken ct);
+    Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct);
 
-    Task DeleteWorkflowYamlAsync(string workflowId, CancellationToken ct);
+    Task DeleteWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct);
 }
 
 public sealed record StoredWorkflowYaml(

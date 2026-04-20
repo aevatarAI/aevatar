@@ -866,6 +866,21 @@ export const studioApi = {
     });
   },
 
+  deleteWorkflow(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<void> {
+    return requestJson(
+      withOptionalScopeId(
+        `/api/workspace/workflows/${encodeURIComponent(workflowId)}`,
+        scopeId
+      ),
+      {
+        method: "DELETE",
+      }
+    );
+  },
+
   parseYaml(input: {
     yaml: string;
     availableWorkflowNames?: string[];
