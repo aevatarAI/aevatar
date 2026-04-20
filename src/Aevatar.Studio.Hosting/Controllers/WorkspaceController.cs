@@ -3,9 +3,9 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Controllers;
 
@@ -16,18 +16,18 @@ public sealed class WorkspaceController : ControllerBase
     private readonly WorkspaceService _workspaceService;
     private readonly AppScopedWorkflowService _scopeWorkflowService;
     private readonly IAppScopeResolver _scopeResolver;
-    private readonly IAuthenticationSchemeProvider _authenticationSchemeProvider;
+    private readonly StudioHostingOptions _hostingOptions;
 
     public WorkspaceController(
         WorkspaceService workspaceService,
         AppScopedWorkflowService scopeWorkflowService,
         IAppScopeResolver scopeResolver,
-        IAuthenticationSchemeProvider authenticationSchemeProvider)
+        IOptions<StudioHostingOptions> hostingOptions)
     {
         _workspaceService = workspaceService;
         _scopeWorkflowService = scopeWorkflowService;
         _scopeResolver = scopeResolver;
-        _authenticationSchemeProvider = authenticationSchemeProvider;
+        _hostingOptions = hostingOptions?.Value ?? throw new ArgumentNullException(nameof(hostingOptions));
     }
 
     [HttpGet]
@@ -210,7 +210,7 @@ public sealed class WorkspaceController : ControllerBase
             }));
         }
 
-        if (await IsAuthenticationEnabledAsync())
+        if (!_hostingOptions.AllowUnauthenticatedScopeQueryFallback)
         {
             return (null, Unauthorized(new
             {
@@ -219,12 +219,6 @@ public sealed class WorkspaceController : ControllerBase
         }
 
         return (new AppScopeContext(normalizedRequestedScopeId, "query:scopeId"), null);
-    }
-
-    private async Task<bool> IsAuthenticationEnabledAsync()
-    {
-        var schemes = await _authenticationSchemeProvider.GetAllSchemesAsync();
-        return schemes.Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
     }
 
     [HttpDelete("workflows/{workflowId}")]

@@ -116,11 +116,65 @@ public sealed class AppScopedWorkflowServiceTests
                 Yaml: "name: draft\nsteps: []\n"));
 
         storagePort.LastUpload.Should().NotBeNull();
+        storagePort.LastUpload!.ScopeId.Should().Be("scope-1");
         storagePort.LastUpload!.WorkflowId.Should().Be("renamed-workflow");
         storagePort.LastUpload.WorkflowName.Should().Be("renamed-workflow");
         storagePort.LastUpload.Yaml.Should().StartWith("name: renamed-workflow");
         response.Name.Should().Be("renamed-workflow");
         response.Yaml.Should().StartWith("name: renamed-workflow");
+    }
+
+    [Fact]
+    public async Task ListAsync_WhenStoredDraftExistsUnderDifferentScope_ShouldNotLeakAcrossScopes()
+    {
+        var service = new AppScopedWorkflowService(
+            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
+            {
+                BaseAddress = new Uri("https://backend.example"),
+            }),
+            new StubWorkflowYamlDocumentService(),
+            workflowQueryPort: new StubScopeWorkflowQueryPort(),
+            workflowStoragePort: new StubWorkflowStoragePort(new[]
+            {
+                new ScopedStoredWorkflowYaml(
+                    "scope-2",
+                    new StoredWorkflowYaml(
+                        "hello-chat",
+                        "hello-chat",
+                        "name: hello-chat\ndescription: stored workflow\nsteps: []\n",
+                        new DateTimeOffset(2026, 4, 10, 9, 0, 0, TimeSpan.Zero))),
+            }));
+
+        var workflows = await service.ListAsync("scope-1");
+
+        workflows.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenStoredDraftExistsUnderDifferentScope_ShouldNotLeakAcrossScopes()
+    {
+        var service = new AppScopedWorkflowService(
+            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
+            {
+                BaseAddress = new Uri("https://backend.example"),
+            }),
+            new StubWorkflowYamlDocumentService(),
+            workflowQueryPort: new StubScopeWorkflowQueryPort(),
+            workflowActorBindingReader: new StubWorkflowActorBindingReader(null),
+            workflowStoragePort: new StubWorkflowStoragePort(new[]
+            {
+                new ScopedStoredWorkflowYaml(
+                    "scope-2",
+                    new StoredWorkflowYaml(
+                        "hello-chat",
+                        "hello-chat",
+                        "name: hello-chat\ndescription: restored from storage\nsteps: []\n",
+                        new DateTimeOffset(2026, 4, 10, 9, 0, 0, TimeSpan.Zero))),
+            }));
+
+        var workflow = await service.GetAsync("scope-1", "hello-chat");
+
+        workflow.Should().BeNull();
     }
 
     [Fact]
@@ -448,41 +502,78 @@ public sealed class AppScopedWorkflowServiceTests
 
     private sealed class StubWorkflowStoragePort : IWorkflowStoragePort
     {
-        private readonly Dictionary<string, StoredWorkflowYaml> _storedWorkflows;
+        private readonly Dictionary<string, Dictionary<string, StoredWorkflowYaml>> _storedWorkflows;
         public UploadedWorkflowYaml? LastUpload { get; private set; }
 
-        public StubWorkflowStoragePort(params StoredWorkflowYaml[] storedWorkflows)
+        public StubWorkflowStoragePort()
         {
-            _storedWorkflows = storedWorkflows.ToDictionary(item => item.WorkflowId, StringComparer.Ordinal);
+            _storedWorkflows = new Dictionary<string, Dictionary<string, StoredWorkflowYaml>>(StringComparer.Ordinal);
         }
 
-        public Task UploadWorkflowYamlAsync(string workflowId, string workflowName, string yaml, CancellationToken ct)
+        public StubWorkflowStoragePort(params StoredWorkflowYaml[] storedWorkflows)
+            : this(storedWorkflows.Select(static workflow => new ScopedStoredWorkflowYaml("scope-1", workflow)))
+        {
+        }
+
+        public StubWorkflowStoragePort(IEnumerable<ScopedStoredWorkflowYaml> storedWorkflows)
+            : this()
+        {
+            foreach (var storedWorkflow in storedWorkflows)
+            {
+                GetOrCreateScopeStore(storedWorkflow.ScopeId)[storedWorkflow.Workflow.WorkflowId] = storedWorkflow.Workflow;
+            }
+        }
+
+        public Task UploadWorkflowYamlAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
         {
             var uploadedAt = DateTimeOffset.UtcNow;
-            LastUpload = new UploadedWorkflowYaml(workflowId, workflowName, yaml, uploadedAt);
-            _storedWorkflows[workflowId] = new StoredWorkflowYaml(workflowId, workflowName, yaml, uploadedAt);
+            var normalizedScopeId = scopeId.Trim();
+            LastUpload = new UploadedWorkflowYaml(normalizedScopeId, workflowId, workflowName, yaml, uploadedAt);
+            GetOrCreateScopeStore(normalizedScopeId)[workflowId] = new StoredWorkflowYaml(workflowId, workflowName, yaml, uploadedAt);
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<StoredWorkflowYaml>>(_storedWorkflows.Values.ToList());
+        public Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(string scopeId, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<StoredWorkflowYaml>>(
+                _storedWorkflows.TryGetValue(scopeId.Trim(), out var scopeStore)
+                    ? scopeStore.Values.ToList()
+                    : []);
 
-        public Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string workflowId, CancellationToken ct) =>
+        public Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct) =>
             Task.FromResult<StoredWorkflowYaml?>(
-                _storedWorkflows.TryGetValue(workflowId, out var storedWorkflow)
+                _storedWorkflows.TryGetValue(scopeId.Trim(), out var scopeStore) &&
+                scopeStore.TryGetValue(workflowId, out var storedWorkflow)
                     ? storedWorkflow
                     : null);
 
-        public Task DeleteWorkflowYamlAsync(string workflowId, CancellationToken ct)
+        public Task DeleteWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct)
         {
-            _storedWorkflows.Remove(workflowId);
+            if (_storedWorkflows.TryGetValue(scopeId.Trim(), out var scopeStore))
+            {
+                scopeStore.Remove(workflowId);
+            }
             return Task.CompletedTask;
+        }
+
+        private Dictionary<string, StoredWorkflowYaml> GetOrCreateScopeStore(string scopeId)
+        {
+            if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
+                return scopeStore;
+
+            scopeStore = new Dictionary<string, StoredWorkflowYaml>(StringComparer.Ordinal);
+            _storedWorkflows[scopeId] = scopeStore;
+            return scopeStore;
         }
     }
 
     private sealed record UploadedWorkflowYaml(
+        string ScopeId,
         string WorkflowId,
         string WorkflowName,
         string Yaml,
         DateTimeOffset UploadedAtUtc);
+
+    private sealed record ScopedStoredWorkflowYaml(
+        string ScopeId,
+        StoredWorkflowYaml Workflow);
 }

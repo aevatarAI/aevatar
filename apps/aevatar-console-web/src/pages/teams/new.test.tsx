@@ -1,11 +1,29 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { message } from 'antd';
 import React from 'react';
+import { studioApi } from '@/shared/studio/api';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import TeamCreatePage from './new';
+
+jest.mock('antd', () => {
+  const actual = jest.requireActual('antd');
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
+    },
+  };
+});
 
 describe('TeamCreatePage', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/teams/new');
+    jest.clearAllMocks();
   });
 
   it('renders the create-team page with the same summary-plus-main-card rhythm as teams home', async () => {
@@ -79,10 +97,9 @@ describe('TeamCreatePage', () => {
     expect(await screen.findByText('Saved Draft')).toBeTruthy();
     expect(screen.getByText('已保存草稿')).toBeTruthy();
     expect(screen.getByText('order-entry-draft')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Delete Draft' })).toBeDisabled();
     expect(
       screen.getByText(
-        'Delete Draft 需要后端删除 workflow 接口，当前前端先不提供假删除。',
+        'Delete Draft 会删除当前创建流程关联的行为草稿；团队名称和入口名称会保留在这个页面。',
       ),
     ).toBeTruthy();
 
@@ -97,5 +114,37 @@ describe('TeamCreatePage', () => {
     expect(params.get('teamDraftWorkflowName')).toBe('order-entry-draft');
     expect(params.get('workflow')).toBe('workflow-7');
     expect(params.get('draft')).toBeNull();
+  });
+
+  it('deletes the saved draft and keeps the team form values in place', async () => {
+    const deleteWorkflowSpy = jest
+      .spyOn(studioApi, 'deleteWorkflow')
+      .mockResolvedValue(undefined);
+
+    window.history.replaceState(
+      {},
+      '',
+      '/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
+    );
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Draft' }));
+
+    await waitFor(() => {
+      expect(deleteWorkflowSpy).toHaveBeenCalledWith('workflow-7');
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Saved Draft')).toBeNull();
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe('/teams/new');
+    expect(params.get('teamName')).toBe('订单助手团队');
+    expect(params.get('entryName')).toBe('订单入口');
+    expect(params.get('teamDraftWorkflowId')).toBeNull();
+    expect(params.get('teamDraftWorkflowName')).toBeNull();
+    expect(message.success).toHaveBeenCalledWith('已删除当前团队草稿。');
   });
 });
