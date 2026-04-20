@@ -202,6 +202,29 @@ describe("ActorsPage", () => {
     });
   });
 
+  it("shows a dedicated unavailable message when preview actor snapshot is gone", async () => {
+    (runtimeActorsApi.getActorSnapshot as jest.Mock).mockRejectedValueOnce(
+      new Error("HTTP 404 Not Found"),
+    );
+    (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockRejectedValueOnce(
+      new Error("HTTP 404 Not Found"),
+    );
+
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+    const plannerRow = findActorRow("SupportPlanner");
+
+    expect(plannerRow).toBeTruthy();
+
+    fireEvent.click(
+      within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
+    );
+
+    expect(await screen.findByText("这个 actor 当前不可预览")).toBeTruthy();
+    expect(screen.getByText("当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。")).toBeTruthy();
+  });
+
   it("keeps the list page route without a detail actor selection", async () => {
     renderWithQueryClient(React.createElement(ActorsPage));
 

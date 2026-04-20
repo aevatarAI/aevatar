@@ -240,6 +240,13 @@ function graphNodeSubtitle(node: WorkflowActorGraphNode): string {
   return truncateMiddle(node.nodeId, 8, 6);
 }
 
+function isHttp404Error(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /^HTTP 404\b/i.test(error.message.trim())
+  );
+}
+
 function graphNodeTone(nodeType: string): {
   background: string;
   border: string;
@@ -934,10 +941,25 @@ export const TopologyExplorerPage: React.FC<{
   const loadingPreviewTopology =
     previewOpen &&
     (previewSnapshotQuery.isLoading || previewTimelineQuery.isLoading || previewGraphQuery.isLoading);
+  const selectedActorUnavailable =
+    detailOnly &&
+    selectedActorId.trim().length > 0 &&
+    (isHttp404Error(selectedSnapshotQuery.error) ||
+      isHttp404Error(graphQuery.error));
+  const previewActorUnavailable =
+    previewOpen &&
+    previewActorId.trim().length > 0 &&
+    (isHttp404Error(previewSnapshotQuery.error) ||
+      isHttp404Error(previewGraphQuery.error));
   const liveError =
-    actorsQuery.error || selectedSnapshotQuery.error || timelineQuery.error || graphQuery.error;
+    actorsQuery.error ||
+    (selectedActorUnavailable
+      ? null
+      : selectedSnapshotQuery.error || timelineQuery.error || graphQuery.error);
   const previewError =
-    previewSnapshotQuery.error || previewTimelineQuery.error || previewGraphQuery.error;
+    previewActorUnavailable
+      ? null
+      : previewSnapshotQuery.error || previewTimelineQuery.error || previewGraphQuery.error;
 
   const actorListColumns = useMemo<ColumnsType<DisplayActorRecord>>(
     () => [
@@ -1148,6 +1170,58 @@ export const TopologyExplorerPage: React.FC<{
         <AevatarInspectorEmpty description="先在图里点一个节点或关系。" />
       )}
     </AevatarPanel>
+  );
+
+  const actorUnavailableNotice = (
+    actorId: string,
+    options?: {
+      action?: React.ReactNode;
+      compact?: boolean;
+      contextLabel?: string;
+      title?: string;
+    },
+  ) => (
+    <Alert
+      action={options?.action}
+      description={
+        <div style={{ display: "flex", flexDirection: "column", gap: options?.compact ? 8 : 10 }}>
+          <Typography.Text style={{ color: token.colorTextSecondary }}>
+            当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。
+          </Typography.Text>
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              gridTemplateColumns: "96px minmax(0, 1fr)",
+            }}
+          >
+            <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
+              Actor ID
+            </Typography.Text>
+            <TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={actorId} />
+            {options?.contextLabel ? (
+              <>
+                <Typography.Text
+                  style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}
+                >
+                  入口上下文
+                </Typography.Text>
+                <TopologyInlineToken
+                  head={4}
+                  maxWidth="100%"
+                  monospace
+                  tail={4}
+                  value={options.contextLabel}
+                />
+              </>
+            ) : null}
+          </div>
+        </div>
+      }
+      message={options?.title || "当前 actor 不可查询"}
+      showIcon
+      type="warning"
+    />
   );
 
   return (
@@ -1421,6 +1495,12 @@ export const TopologyExplorerPage: React.FC<{
             <AevatarInspectorEmpty description="先从列表里选择一个 actor。" />
           ) : loadingPreviewTopology ? (
             <AevatarInspectorEmpty description="正在读取 snapshot、timeline 和 graph subgraph。" />
+          ) : previewActorUnavailable ? (
+            actorUnavailableNotice(previewActorId, {
+              compact: true,
+              contextLabel: previewContextLabel,
+              title: "这个 actor 当前不可预览",
+            })
           ) : previewError ? (
             <Alert
               message={
@@ -1583,6 +1663,11 @@ export const TopologyExplorerPage: React.FC<{
               />
             ) : loadingLiveTopology ? (
               <AevatarInspectorEmpty description="正在读取 snapshot、timeline 和 graph subgraph。" />
+            ) : selectedActorUnavailable ? (
+              actorUnavailableNotice(selectedActorId, {
+                action: <Button onClick={handleBackToExplorerList}>返回对象列表</Button>,
+                contextLabel: currentContextLabel,
+              })
             ) : !selectedSnapshot ? (
               <AevatarInspectorEmpty
                 description="当前 actor 还没有可读的 snapshot。"

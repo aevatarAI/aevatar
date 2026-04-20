@@ -193,4 +193,34 @@ describe('TopologyDetailPage', () => {
     expect(params.get('scopeId')).toBe('scope-route-a');
     expect(params.get('serviceId')).toBe('default');
   });
+
+  it('shows a dedicated unavailable state when the actor snapshot no longer exists', async () => {
+    const { runtimeActorsApi } = jest.requireMock('@/shared/api/runtimeActorsApi') as {
+      runtimeActorsApi: {
+        getActorGraphEnriched: jest.Mock;
+        getActorSnapshot: jest.Mock;
+        getActorTimeline: jest.Mock;
+      };
+    };
+
+    window.history.replaceState(
+      {},
+      '',
+      '/runtime/explorer/detail?actorId=Workflow%3A10f7e5d3%3Arun%3A7d14565e04d34c28a613051a17ae4a77&runId=run-current&scopeId=scope-route-a&serviceId=default',
+    );
+
+    runtimeActorsApi.getActorSnapshot.mockRejectedValue(new Error('HTTP 404 Not Found'));
+    runtimeActorsApi.getActorTimeline.mockResolvedValue([]);
+    runtimeActorsApi.getActorGraphEnriched.mockRejectedValue(new Error('HTTP 404 Not Found'));
+
+    renderWithQueryClient(React.createElement(TopologyDetailPage));
+
+    expect(await screen.findByText('当前 actor 不可查询')).toBeTruthy();
+    expect(
+      screen.getByText(
+        '当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。',
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '返回对象列表' }).length).toBeGreaterThan(0);
+  });
 });

@@ -33,4 +33,16 @@ describe("RunsMessagesView", () => {
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("Operator prompt")).toBeInTheDocument();
   });
+
+  it("renders an inline accessory above the message stream", () => {
+    render(
+      <RunsMessagesView
+        messages={[]}
+        topAccessory={<div>Action required</div>}
+      />,
+    );
+
+    expect(screen.getByText("Action required")).toBeInTheDocument();
+    expect(screen.getByText("No message output yet.")).toBeInTheDocument();
+  });
 });

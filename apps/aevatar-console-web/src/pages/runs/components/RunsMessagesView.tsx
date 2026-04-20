@@ -1,6 +1,7 @@
 import { Empty, Space, Tag, Typography } from "antd";
 import React from "react";
 import { cardListStyle } from "@/shared/ui/proComponents";
+import { AevatarCompactText } from "@/shared/ui/compactText";
 import {
   workbenchConsoleScrollStyle,
   workbenchConsoleSurfaceStyle,
@@ -14,7 +15,10 @@ export type RunMessageRecord = {
 };
 
 type RunsMessagesViewProps = {
+  emptyDescription?: string;
   messages: RunMessageRecord[];
+  topAccessory?: React.ReactNode;
+  title?: string;
 };
 
 const panelHeaderStyle: React.CSSProperties = {
@@ -25,6 +29,17 @@ const panelHeaderStyle: React.CSSProperties = {
 const messageListStyle: React.CSSProperties = {
   ...cardListStyle,
   gap: 10,
+};
+
+const messageConsoleBodyStyle: React.CSSProperties = {
+  ...cardListStyle,
+  gap: 12,
+};
+
+const accessoryWrapStyle: React.CSSProperties = {
+  alignSelf: "center",
+  maxWidth: 820,
+  width: "100%",
 };
 
 const messageCardStyle: React.CSSProperties = {
@@ -74,58 +89,75 @@ function resolveRoleTone(role: string): "blue" | "cyan" | "gold" | "default" {
   }
 }
 
-const RunsMessagesView: React.FC<RunsMessagesViewProps> = ({ messages }) => (
+const RunsMessagesView: React.FC<RunsMessagesViewProps> = ({
+  emptyDescription = "No message output yet.",
+  messages,
+  topAccessory,
+  title = "Message stream",
+}) => (
   <div style={workbenchConsoleSurfaceStyle}>
     <div style={panelHeaderStyle}>
       <Space wrap size={[8, 8]}>
-        <Typography.Text type="secondary">Message stream</Typography.Text>
+        <Typography.Text type="secondary">{title}</Typography.Text>
         <Tag>{messages.length} observed</Tag>
       </Space>
     </div>
     <div style={workbenchConsoleScrollStyle}>
-      {messages.length > 0 ? (
-        <div style={messageListStyle}>
-          {messages.map((record) => {
-            const role = record.role || "message";
-            const streaming = record.complete !== true;
+      <div style={messageConsoleBodyStyle}>
+        {messages.length > 0 ? (
+          <div style={messageListStyle}>
+            {topAccessory ? (
+              <div style={accessoryWrapStyle}>{topAccessory}</div>
+            ) : null}
+            {messages.map((record) => {
+              const role = record.role || "message";
+              const streaming = record.complete !== true;
 
-            return (
-              <div
-                key={record.messageId}
-                style={{
-                  ...messageCardStyle,
-                  alignSelf: role === "user" ? "flex-end" : "flex-start",
-                  background:
-                    role === "user"
-                      ? "rgba(22, 119, 255, 0.10)"
-                      : "rgba(15, 23, 42, 0.03)",
-                  borderColor: streaming
-                    ? "rgba(22, 119, 255, 0.28)"
-                    : "var(--ant-color-border-secondary)",
-                }}
-              >
-                <div style={messageMetaStyle}>
-                  <Tag color={resolveRoleTone(role)}>{role}</Tag>
-                  <Tag color={streaming ? "processing" : "success"}>
-                    {streaming ? "streaming" : "complete"}
-                  </Tag>
-                  <Typography.Text style={messageIdStyle}>
-                    {record.messageId}
-                  </Typography.Text>
+              return (
+                <div
+                  key={record.messageId}
+                  style={{
+                    ...messageCardStyle,
+                    alignSelf: role === "user" ? "flex-end" : "flex-start",
+                    background:
+                      role === "user"
+                        ? "rgba(22, 119, 255, 0.10)"
+                        : "rgba(15, 23, 42, 0.03)",
+                    borderColor: streaming
+                      ? "rgba(22, 119, 255, 0.28)"
+                      : "var(--ant-color-border-secondary)",
+                  }}
+                >
+                  <div style={messageMetaStyle}>
+                    <Tag color={resolveRoleTone(role)}>{role}</Tag>
+                    <Tag color={streaming ? "processing" : "success"}>
+                      {streaming ? "streaming" : "complete"}
+                    </Tag>
+                  <AevatarCompactText
+                    monospace
+                    style={messageIdStyle}
+                    value={record.messageId}
+                  />
+                  </div>
+                  <Typography.Paragraph style={messageBodyStyle}>
+                    {record.content || "(streaming...)"}
+                  </Typography.Paragraph>
                 </div>
-                <Typography.Paragraph style={messageBodyStyle}>
-                  {record.content || "(streaming...)"}
-                </Typography.Paragraph>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No message output yet."
-        />
-      )}
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            {topAccessory ? (
+              <div style={accessoryWrapStyle}>{topAccessory}</div>
+            ) : null}
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={emptyDescription}
+            />
+          </>
+        )}
+      </div>
     </div>
   </div>
 );
