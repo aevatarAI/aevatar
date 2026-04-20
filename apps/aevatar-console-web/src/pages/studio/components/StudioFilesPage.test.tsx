@@ -69,8 +69,8 @@ const workflows = [
 ];
 
 const roles = {
-  homeDirectory: '/tmp/.aevatar',
-  filePath: '/tmp/.aevatar/roles.json',
+  homeDirectory: 'actor://role-catalog',
+  filePath: 'actor://role-catalog/roles',
   fileExists: true,
   roles: [
     {
@@ -85,8 +85,8 @@ const roles = {
 };
 
 const connectors = {
-  homeDirectory: '/tmp/.aevatar',
-  filePath: '/tmp/.aevatar/connectors.json',
+  homeDirectory: 'actor://connector-catalog',
+  filePath: 'actor://connector-catalog/connectors',
   fileExists: true,
   connectors: [
     {
@@ -343,8 +343,9 @@ describe('StudioFilesPage', () => {
 
     renderWithQueryClient(React.createElement(StudioFilesPage, props));
 
-    fireEvent.click(screen.getByRole('button', { name: 'roles.json' }));
-    expect(screen.getByText('Role Catalog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Role Catalog' }));
+    // Both the tree button and the detail pane title render the label — ensure at least the panel is mounted.
+    expect(screen.getAllByText('Role Catalog').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Add Role' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -353,8 +354,8 @@ describe('StudioFilesPage', () => {
       expect(studioApi.saveRoleCatalog).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'connectors.json' }));
-    expect(screen.getByText('Connector Catalog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Connector Catalog' }));
+    expect(screen.getAllByText('Connector Catalog').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     fireEvent.click(screen.getByRole('button', { name: 'HTTP' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));

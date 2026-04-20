@@ -12,8 +12,11 @@ namespace Aevatar.GAgents.Registry;
 ///
 /// Actor ID: <c>gagent-registry-{scopeId}</c> (per-scope).
 /// </summary>
-public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>
+public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IProjectedActor
 {
+    public static string ProjectionKind => "gagent-registry";
+
+
     [EventHandler(EndpointName = "registerActor")]
     public async Task HandleActorRegistered(ActorRegisteredEvent evt)
     {

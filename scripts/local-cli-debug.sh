@@ -174,6 +174,14 @@ echo "==> Local app:   ${APP_URL} (${CLI_CONFIGURATION})"
 echo "==> App log:     ${APP_LOG_FILE}"
 
 echo "==> Booting local Mainnet Host API..."
+# ASPNETCORE_ENVIRONMENT=Development enables UseDeveloperExceptionPage so any
+# unhandled 500 inside Studio controllers writes its stack trace back to the
+# response body (and to boot.log) instead of returning an empty 500.
+# AEVATAR_GAgentService__Demo__Enabled=false suppresses the sample
+# demo-uppercase bootstrap that auto-runs in Development and is racy with the
+# InMemory projection pipeline at cold start.
+ASPNETCORE_ENVIRONMENT=Development \
+AEVATAR_GAgentService__Demo__Enabled=false \
 AEVATAR_APP_HOST="${API_HOST}" \
 AEVATAR_APP_PORT="${API_PORT}" \
 AEVATAR_APP_CONFIGURATION="${API_CONFIGURATION}" \

@@ -13,8 +13,11 @@ namespace Aevatar.GAgents.StreamingProxyParticipant;
 /// Actor ID: <c>streaming-proxy-participants</c> (cluster-scoped singleton).
 /// </summary>
 public sealed class StreamingProxyParticipantGAgent
-    : GAgentBase<StreamingProxyParticipantGAgentState>
+    : GAgentBase<StreamingProxyParticipantGAgentState>, IProjectedActor
 {
+    public static string ProjectionKind => "streaming-proxy-participant";
+
+
     [EventHandler(EndpointName = "addParticipant")]
     public async Task HandleParticipantAdded(ParticipantAddedEvent evt)
     {

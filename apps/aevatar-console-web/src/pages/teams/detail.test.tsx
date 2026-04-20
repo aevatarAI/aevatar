@@ -435,8 +435,8 @@ jest.mock("@/shared/studio/api", () => ({
       ],
     })),
     getConnectorCatalog: jest.fn(async () => ({
-      homeDirectory: "/tmp/.aevatar",
-      filePath: "/tmp/.aevatar/connectors.json",
+      homeDirectory: "actor://connector-catalog",
+      filePath: "actor://connector-catalog/connectors",
       fileExists: true,
       connectors: [
         {

@@ -315,12 +315,13 @@ public static class ScopeGAgentEndpoints
                 isNewActor = true;
             }
 
-            // Persist newly created actor to chrono-storage so it appears in actors.json
+            // Persist newly created actor to the actor-backed GAgent actor store so it is
+            // visible to scope-level listings.
             if (isNewActor)
             {
                 try
                 {
-                    await actorStore.AddActorAsync(request.ActorTypeName.Trim(), actor.Id, ct);
+                    await actorStore.AddActorAsync(scopeId, request.ActorTypeName.Trim(), actor.Id, ct);
                 }
                 catch (Exception ex)
                 {
@@ -727,7 +728,7 @@ public static class ScopeGAgentEndpoints
     {
         try
         {
-            var groups = await actorStore.GetAsync(ct);
+            var groups = await actorStore.GetAsync(scopeId, ct);
             return Results.Ok(groups);
         }
         catch (InvalidOperationException ex)
@@ -754,7 +755,7 @@ public static class ScopeGAgentEndpoints
             if (string.IsNullOrWhiteSpace(request.GAgentType) || string.IsNullOrWhiteSpace(request.ActorId))
                 return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType and actorId are required." });
 
-            await actorStore.AddActorAsync(request.GAgentType.Trim(), request.ActorId.Trim(), ct);
+            await actorStore.AddActorAsync(scopeId, request.GAgentType.Trim(), request.ActorId.Trim(), ct);
             return Results.Ok();
         }
         catch (InvalidOperationException ex)
@@ -782,7 +783,7 @@ public static class ScopeGAgentEndpoints
             if (string.IsNullOrWhiteSpace(gagentType))
                 return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType query parameter is required." });
 
-            await actorStore.RemoveActorAsync(gagentType.Trim(), actorId.Trim(), ct);
+            await actorStore.RemoveActorAsync(scopeId, gagentType.Trim(), actorId.Trim(), ct);
             return Results.Ok();
         }
         catch (InvalidOperationException ex)

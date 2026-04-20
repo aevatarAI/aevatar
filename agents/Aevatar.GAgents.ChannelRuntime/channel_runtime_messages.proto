@@ -343,6 +343,10 @@ message SkillRunnerInitializedEvent {
 
 message TriggerSkillRunnerExecutionCommand {
   string reason = 1;
+  // 0 = first attempt, 1 = backoff retry after a failed first attempt.
+  // Bounded by SkillRunnerDefaults.MaxRetryAttempts; retries are event-ified
+  // via ScheduleSelfDurableTimeoutAsync and never block the actor turn.
+  int32 retry_attempt = 2;
 }
 
 message SkillRunnerNextRunScheduledEvent {

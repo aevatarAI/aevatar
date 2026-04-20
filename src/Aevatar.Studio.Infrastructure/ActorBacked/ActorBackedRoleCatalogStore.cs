@@ -22,20 +22,23 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     private const string ActorHomeDirectory = "actor://role-catalog";
     private const string ActorFilePath = "actor://role-catalog/roles";
 
-    private readonly IActorRuntime _runtime;
+    private readonly IStudioActorBootstrap _bootstrap;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _localWorkspaceStore;
     private readonly IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
 
     public ActorBackedRoleCatalogStore(
-        IActorRuntime runtime,
+        IStudioActorBootstrap bootstrap,
+        IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore localWorkspaceStore,
         IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedRoleCatalogStore> logger)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _localWorkspaceStore = localWorkspaceStore ?? throw new ArgumentNullException(nameof(localWorkspaceStore));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
@@ -65,7 +68,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         return new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -85,7 +88,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(localCatalog.Roles.Select(ToProtoRoleDefinition));
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         var importedCatalog = new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -129,7 +132,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             Draft = draft.Draft is not null ? ToProtoRoleDefinition(draft.Draft) : null,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         await _localWorkspaceStore.SaveRoleDraftAsync(draft, cancellationToken);
 
@@ -144,7 +147,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     public async Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await ActorCommandDispatcher.SendAsync(actor, new RoleDraftDeletedEvent(), cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new RoleDraftDeletedEvent(), cancellationToken);
 
         await _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
     }
@@ -166,12 +169,8 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
 
-    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
-    {
-        var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return actor ?? await _runtime.CreateAsync<RoleCatalogGAgent>(actorId, ct);
-    }
+    private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
+        _bootstrap.EnsureAsync<RoleCatalogGAgent>(ResolveWriteActorId(), ct);
 
     private static StoredRoleDefinition ToStoredRoleDefinition(RoleDefinitionEntry entry) =>
         new(
