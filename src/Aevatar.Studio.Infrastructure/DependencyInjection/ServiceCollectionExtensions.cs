@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
         services.AddSingleton<FileStudioWorkspaceStore>();
         services.AddSingleton<IStudioWorkspaceStore>(sp => sp.GetRequiredService<FileStudioWorkspaceStore>());
+        services.AddSingleton<IUserConfigDefaults, ConfiguredUserConfigDefaults>();
         services.AddSingleton<IConnectorCatalogImportParser, ConnectorCatalogImportParser>();
         services.AddSingleton<IRoleCatalogImportParser, RoleCatalogImportParser>();
         // chrono-storage blob client retained for media file uploads (ExplorerEndpoints)

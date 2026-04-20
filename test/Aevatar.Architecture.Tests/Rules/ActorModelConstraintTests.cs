@@ -1,5 +1,8 @@
 using ArchUnitNET.Fluent;
 using ArchUnitNET.xUnit;
+using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Core;
+using Aevatar.GAgents.StreamingProxy;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
 namespace Aevatar.Architecture.Tests.Rules;
@@ -134,6 +137,33 @@ public class ActorModelConstraintTests
                 Types().That().HaveNameContaining("AIGAgentBase"))
             .Because("ScriptBehaviorGAgent must inherit GAgentBase<> directly, not AIGAgentBase");
         rule.Check(Arch);
+    }
+
+    [Fact]
+    public void StreamingProxyGAgent_ShouldNot_Inherit_RoleGAgent()
+    {
+        IArchRule rule = Classes().That()
+            .HaveName("StreamingProxyGAgent")
+            .Should().NotBeAssignableTo(
+                Types().That().HaveNameContaining("RoleGAgent"))
+            .Because("StreamingProxyGAgent is a room coordination actor, not a role agent");
+        rule.Check(Arch);
+    }
+
+    [Fact]
+    public void StreamingProxyGAgent_ShouldNot_Implement_IRoleAgent()
+    {
+        Assert.False(
+            typeof(IRoleAgent).IsAssignableFrom(typeof(StreamingProxyGAgent)),
+            "StreamingProxyGAgent must stay outside the workflow role-agent contract");
+    }
+
+    [Fact]
+    public void StreamingProxyGAgent_ShouldNot_Inherit_RoleGAgent_RuntimeContract()
+    {
+        Assert.False(
+            typeof(RoleGAgent).IsAssignableFrom(typeof(StreamingProxyGAgent)),
+            "StreamingProxyGAgent is a room coordination actor, not a role agent");
     }
 
     [Fact]

@@ -405,7 +405,7 @@ export const settings = {
   testRuntime: (data: any) => request<any>('/settings/runtime/test', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-/* ─── User Config (per-user, chrono-storage backed) ─── */
+/* ─── User Config (per-user, actor-backed via UserConfigGAgent) ─── */
 export const userConfig = {
   get:    ()          => request<any>('/user-config'),
   save:   (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
@@ -681,10 +681,10 @@ export const runtime = scope;
 /* ─── NyxID Chat APIs (runtime) ─── */
 export const nyxidChat = {
   createConversation: (scopeId: string) =>
-    request<{ actorId: string; createdAt: string }>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`, { method: 'POST' }),
+    request<{ actorId: string }>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`, { method: 'POST' }),
 
   listConversations: (scopeId: string) =>
-    request<Array<{ actorId: string; createdAt: string }>>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`),
+    request<Array<{ actorId: string }>>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`),
 
   streamMessage: (
     scopeId: string,

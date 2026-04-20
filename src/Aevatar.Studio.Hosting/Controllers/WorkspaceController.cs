@@ -226,4 +226,38 @@ public sealed class WorkspaceController : ControllerBase
         var schemes = await _authenticationSchemeProvider.GetAllSchemesAsync();
         return schemes.Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
     }
+
+    [HttpDelete("workflows/{workflowId}")]
+    public async Task<IActionResult> DeleteWorkflow(
+        string workflowId,
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var scopeResolution = await ResolveScopeContextAsync(scopeId);
+            if (scopeResolution.Failure != null)
+                return scopeResolution.Failure;
+
+            var scopeContext = scopeResolution.Context;
+            if (scopeContext != null)
+            {
+                await _scopeWorkflowService.DeleteDraftAsync(scopeContext.ScopeId, workflowId, cancellationToken);
+            }
+            else
+            {
+                await _workspaceService.DeleteDraftAsync(workflowId, cancellationToken);
+            }
+
+            return NoContent();
+        }
+        catch (AppApiException exception)
+        {
+            return StatusCode(exception.StatusCode, AppApiErrors.CreatePayload(exception));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+    }
 }

@@ -362,6 +362,7 @@ public sealed class ScopeGAgentEndpointsTests
 
         var listResult = await InvokeHandleListActorsAsync("scope-a", store, logger, CancellationToken.None);
         ((IStatusCodeHttpResult)listResult).StatusCode.Should().Be((int)HttpStatusCode.OK);
+        store.LastRequestedScopeId.Should().Be("scope-a");
 
         var addResult = await InvokeHandleAddActorAsync(
             "scope-a",
@@ -370,7 +371,10 @@ public sealed class ScopeGAgentEndpointsTests
             logger,
             CancellationToken.None);
         ((IStatusCodeHttpResult)addResult).StatusCode.Should().Be((int)HttpStatusCode.OK);
-        store.AddedActors.Should().ContainSingle(x => x.GAgentType == "gagent-a" && x.ActorId == "actor-3");
+        store.AddedActors.Should().ContainSingle(x =>
+            x.ScopeId == "scope-a" &&
+            x.GAgentType == "gagent-a" &&
+            x.ActorId == "actor-3");
 
         var removeResult = await InvokeHandleRemoveActorAsync(
             "scope-a",
@@ -380,6 +384,10 @@ public sealed class ScopeGAgentEndpointsTests
             logger,
             CancellationToken.None);
         ((IStatusCodeHttpResult)removeResult).StatusCode.Should().Be((int)HttpStatusCode.OK);
+        store.RemovedActors.Should().ContainSingle(x =>
+            x.ScopeId == "scope-a" &&
+            x.GAgentType == "gagent-a" &&
+            x.ActorId == "actor-1");
 
         var invalidAdd = await InvokeHandleAddActorAsync(
             "scope-a",
@@ -618,14 +626,25 @@ public sealed class ScopeGAgentEndpointsTests
     private sealed class RecordingGAgentActorStore : IGAgentActorStore
     {
         public List<GAgentActorGroup> Actors { get; set; } = [];
-        public List<(string GAgentType, string ActorId)> AddedActors { get; } = [];
+        public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
+        public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
         public Exception? ThrowOnGet { get; set; }
         public Exception? ThrowOnAdd { get; set; }
         public Exception? ThrowOnRemove { get; set; }
+        public string? LastRequestedScopeId { get; private set; }
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default)
         {
             if (ThrowOnGet != null) throw ThrowOnGet;
+            return Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Actors);
+        }
+
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnGet != null) throw ThrowOnGet;
+            LastRequestedScopeId = scopeId;
             return Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Actors);
         }
 
@@ -634,7 +653,20 @@ public sealed class ScopeGAgentEndpointsTests
             if (ThrowOnAdd != null)
                 throw ThrowOnAdd;
 
-            AddedActors.Add((gagentType, actorId));
+            AddedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task AddActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnAdd != null)
+                throw ThrowOnAdd;
+
+            AddedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
 
@@ -643,6 +675,20 @@ public sealed class ScopeGAgentEndpointsTests
             if (ThrowOnRemove != null)
                 throw ThrowOnRemove;
 
+            RemovedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnRemove != null)
+                throw ThrowOnRemove;
+
+            RemovedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
     }

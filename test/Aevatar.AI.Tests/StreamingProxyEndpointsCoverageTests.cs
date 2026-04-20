@@ -43,6 +43,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         actorStore.AddedActors.Should().ContainSingle();
+        actorStore.AddedActors[0].ScopeId.Should().Be("scope-a");
         var registeredActorId = actorStore.AddedActors[0].ActorId;
         operations.Should().ContainInOrder(
             $"store:add:{registeredActorId}",
@@ -80,6 +81,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         statusCode.Should().Be(StatusCodes.Status500InternalServerError);
         actorStore.AddedActors.Should().ContainSingle();
         actorStore.RemovedActors.Should().ContainSingle();
+        actorStore.RemovedActors[0].ScopeId.Should().Be("scope-a");
         actorStore.RemovedActors[0].ActorId.Should().Be(actorStore.AddedActors[0].ActorId);
         runtime.DestroyedActorIds.Should().ContainSingle(actorStore.AddedActors[0].ActorId);
         operations.Should().ContainInOrder(
@@ -184,23 +186,50 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
     private sealed class RecordingGAgentActorStore(List<string> operations) : IGAgentActorStore
     {
-        public List<(string GAgentType, string ActorId)> AddedActors { get; } = [];
-        public List<(string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
+        public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
+
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
 
         public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {
             operations.Add($"store:add:{actorId}");
-            AddedActors.Add((gagentType, actorId));
+            AddedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task AddActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            operations.Add($"store:add:{actorId}");
+            AddedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
 
         public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {
             operations.Add($"store:remove:{actorId}");
-            RemovedActors.Add((gagentType, actorId));
+            RemovedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            operations.Add($"store:remove:{actorId}");
+            RemovedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
     }

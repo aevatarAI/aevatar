@@ -44,14 +44,14 @@ type QueryState<T> = {
 
 type StudioFileKey =
   | 'settings.json'
-  | 'roles.json'
-  | 'connectors.json'
+  | 'role-catalog'
+  | 'connector-catalog'
   | `chat-history:${string}`
   | `workflow:${string}`
   | `script:${string}`;
 
 type StaticFileDescriptor = {
-  readonly file: 'settings.json' | 'roles.json' | 'connectors.json';
+  readonly file: 'settings.json' | 'role-catalog' | 'connector-catalog';
   readonly icon: React.ReactNode;
   readonly label: string;
 };
@@ -82,14 +82,14 @@ const staticFiles: readonly StaticFileDescriptor[] = [
     label: 'settings.json',
   },
   {
-    file: 'roles.json',
+    file: 'role-catalog',
     icon: <TeamOutlined />,
-    label: 'roles.json',
+    label: 'Role Catalog',
   },
   {
-    file: 'connectors.json',
+    file: 'connector-catalog',
     icon: <ApiOutlined />,
-    label: 'connectors.json',
+    label: 'Connector Catalog',
   },
 ];
 

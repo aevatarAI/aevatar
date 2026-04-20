@@ -31,6 +31,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddStudioApplication();
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents();
+        services.AddStudioProjectionReadModelProviders(configuration);
         return services;
     }
 

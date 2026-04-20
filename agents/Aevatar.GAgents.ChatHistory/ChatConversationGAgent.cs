@@ -15,8 +15,10 @@ namespace Aevatar.GAgents.ChatHistory;
 /// the change to the <see cref="ChatHistoryIndexGAgent"/> via <c>SendToAsync</c>,
 /// ensuring transactional consistency between conversation and index actors.
 /// </summary>
-public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
+public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, IProjectedActor
 {
+    public static string ProjectionKind => "chat-conversation";
+
     /// <summary>Maximum messages retained per conversation.</summary>
     internal const int MaxMessages = 500;
 

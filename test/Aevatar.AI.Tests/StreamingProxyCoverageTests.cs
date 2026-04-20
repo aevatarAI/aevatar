@@ -84,7 +84,9 @@ public class StreamingProxyCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("roomName");
-        actorStore.AddedActors.Should().ContainSingle(x => x.gagentType == StreamingProxyDefaults.GAgentTypeName);
+        actorStore.AddedActors.Should().ContainSingle(x =>
+            x.scopeId == "scope-a" &&
+            x.gagentType == StreamingProxyDefaults.GAgentTypeName);
         runtime.CreateCalls.Should().ContainSingle();
         runtime.CreateCalls[0].agentType.Should().Be(typeof(StreamingProxyGAgent));
     }
@@ -129,6 +131,7 @@ public class StreamingProxyCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         actorStore.RemovedActors.Should().ContainSingle(x =>
+            x.scopeId == "scope-a" &&
             x.gagentType == StreamingProxyDefaults.GAgentTypeName && x.actorId == "room-1");
         participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
     }
@@ -264,10 +267,10 @@ public class StreamingProxyCoverageTests
                 BindingFlags.NonPublic | BindingFlags.Static)!;
         var methodCalls = new[]
         {
-            new EventEnvelope { Payload = Any.Pack(new GroupChatTopicEvent { Prompt = "topic", SessionId = "s1" }) },
-            new EventEnvelope { Payload = Any.Pack(new GroupChatMessageEvent { AgentId = "a1", AgentName = "A1", Content = "hi", SessionId = "s1" }) },
-            new EventEnvelope { Payload = Any.Pack(new GroupChatParticipantJoinedEvent { AgentId = "a1", DisplayName = "A1" }) },
-            new EventEnvelope { Payload = Any.Pack(new GroupChatParticipantLeftEvent { AgentId = "a1" }) },
+            CreateTopologyEnvelope(new GroupChatTopicEvent { Prompt = "topic", SessionId = "s1" }),
+            CreateTopologyEnvelope(new GroupChatMessageEvent { AgentId = "a1", AgentName = "A1", Content = "hi", SessionId = "s1" }),
+            CreateTopologyEnvelope(new GroupChatParticipantJoinedEvent { AgentId = "a1", DisplayName = "A1" }),
+            CreateTopologyEnvelope(new GroupChatParticipantLeftEvent { AgentId = "a1" }),
         };
 
         foreach (var envelope in methodCalls)
@@ -292,6 +295,47 @@ public class StreamingProxyCoverageTests
         body.Should().Contain("AGENT_MESSAGE");
         body.Should().Contain("PARTICIPANT_JOINED");
         body.Should().Contain("PARTICIPANT_LEFT");
+    }
+
+    [Fact]
+    public async Task MapAndWriteEventAsync_ShouldIgnoreDirectInboundEvents()
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyGAgent).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxySseWriter",
+            context.Response);
+
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "MapAndWriteEventAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        var result = method.Invoke(null, [new EventEnvelope
+        {
+            Payload = Any.Pack(new GroupChatMessageEvent
+            {
+                AgentId = "a1",
+                AgentName = "A1",
+                Content = "hi",
+                SessionId = "s1",
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect("api", "room-1"),
+        }, writer])!;
+
+        switch (result)
+        {
+            case ValueTask valueTask:
+                await valueTask;
+                break;
+            case Task task:
+                await task;
+                break;
+        }
+
+        context.Response.Body.Position = 0;
+        var body = new StreamReader(context.Response.Body).ReadToEnd();
+        body.Should().BeEmpty();
     }
 
     [Fact]
@@ -351,7 +395,7 @@ public class StreamingProxyCoverageTests
         });
         await agent.HandleGroupChatParticipantLeft(new GroupChatParticipantLeftEvent { AgentId = "agent-1" });
 
-        var state = AgentCoverageTestSupport.ReadPrivateField<StreamingProxyGAgentState>(agent, "_proxyState");
+        var state = agent.State;
         state.RoomName.Should().Be("Nyx Room");
         state.NextSequence.Should().Be(2);
         state.Messages.Should().HaveCount(2);
@@ -416,12 +460,21 @@ public class StreamingProxyCoverageTests
         var agent = new StreamingProxyGAgent
         {
             Services = provider,
-            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<StreamingProxyGAgentState>>(),
         };
 
         AgentCoverageTestSupport.AssignActorId(agent, actorId);
         return agent;
     }
+
+    private static EventEnvelope CreateTopologyEnvelope(IMessage payload) =>
+        new()
+        {
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                "streaming-proxy-room",
+                TopologyAudience.Parent),
+        };
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
     {
@@ -572,21 +625,46 @@ public class StreamingProxyCoverageTests
     private sealed class StubGAgentActorStore : IGAgentActorStore
     {
         public List<GAgentActorGroup> Groups { get; } = [];
-        public List<(string gagentType, string actorId)> AddedActors { get; } = [];
-        public List<(string gagentType, string actorId)> RemovedActors { get; } = [];
+        public List<(string scopeId, string gagentType, string actorId)> AddedActors { get; } = [];
+        public List<(string scopeId, string gagentType, string actorId)> RemovedActors { get; } = [];
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Groups.AsReadOnly());
 
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Groups.AsReadOnly());
+
         public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {
-            AddedActors.Add((gagentType, actorId));
+            AddedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task AddActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            AddedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
 
         public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {
-            RemovedActors.Add((gagentType, actorId));
+            RemovedActors.Add((string.Empty, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            RemovedActors.Add((scopeId, gagentType, actorId));
             return Task.CompletedTask;
         }
     }

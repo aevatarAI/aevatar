@@ -21,6 +21,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
     private RuntimeCallbackLease? _nextRunLease;
+    private RuntimeCallbackLease? _retryLease;
 
     public SkillRunnerGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -133,6 +134,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 Output = output,
             });
 
+            await CancelRetryLeaseAsync(CancellationToken.None);
             await ScheduleNextRunAsync(now, CancellationToken.None);
             await UpdateRegistryExecutionAsync(
                 SkillRunnerDefaults.StatusRunning,
@@ -144,7 +146,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Skill runner {ActorId} execution failed", Id);
+            Logger.LogWarning(
+                ex,
+                "Skill runner {ActorId} execution failed (attempt={Attempt})",
+                Id,
+                command.RetryAttempt);
+
+            if (command.RetryAttempt < SkillRunnerDefaults.MaxRetryAttempts)
+            {
+                await ScheduleRetryAsync(command.RetryAttempt + 1, CancellationToken.None);
+                return;
+            }
+
             await PersistDomainEventAsync(new SkillRunnerExecutionFailedEvent
             {
                 FailedAt = Timestamp.FromDateTimeOffset(now),
@@ -157,6 +170,36 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
+    private async Task ScheduleRetryAsync(int retryAttempt, CancellationToken ct)
+    {
+        await CancelRetryLeaseAsync(ct);
+
+        _retryLease = await ScheduleSelfDurableTimeoutAsync(
+            SkillRunnerDefaults.RetryCallbackId,
+            SkillRunnerDefaults.RetryBackoff,
+            new TriggerSkillRunnerExecutionCommand
+            {
+                Reason = "retry",
+                RetryAttempt = retryAttempt,
+            },
+            ct: ct);
+
+        Logger.LogInformation(
+            "Skill runner {ActorId} scheduled retry attempt {Attempt} in {Backoff}",
+            Id,
+            retryAttempt,
+            SkillRunnerDefaults.RetryBackoff);
+    }
+
+    private async Task CancelRetryLeaseAsync(CancellationToken ct)
+    {
+        if (_retryLease == null)
+            return;
+
+        await CancelDurableCallbackAsync(_retryLease, ct);
+        _retryLease = null;
+    }
+
     [EventHandler]
     public async Task HandleDisableAsync(DisableSkillRunnerCommand command)
     {
@@ -165,6 +208,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             await CancelDurableCallbackAsync(_nextRunLease, CancellationToken.None);
             _nextRunLease = null;
         }
+
+        await CancelRetryLeaseAsync(CancellationToken.None);
 
         await PersistDomainEventAsync(new SkillRunnerDisabledEvent
         {

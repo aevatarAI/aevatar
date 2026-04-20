@@ -33,8 +33,8 @@ describe("teamIntegrations", () => {
     const summary = deriveTeamIntegrationsSummary({
       bindingKind: "workflow",
       connectorCatalog: {
-        homeDirectory: "/tmp/.aevatar",
-        filePath: "/tmp/.aevatar/connectors.json",
+        homeDirectory: "actor://connector-catalog",
+        filePath: "actor://connector-catalog/connectors",
         fileExists: true,
         connectors: [
           {
@@ -72,8 +72,8 @@ describe("teamIntegrations", () => {
     const summary = deriveTeamIntegrationsSummary({
       bindingKind: "script",
       connectorCatalog: {
-        homeDirectory: "/tmp/.aevatar",
-        filePath: "/tmp/.aevatar/connectors.json",
+        homeDirectory: "actor://connector-catalog",
+        filePath: "actor://connector-catalog/connectors",
         fileExists: true,
         connectors: [],
       },
@@ -92,8 +92,8 @@ describe("teamIntegrations", () => {
     const summary = deriveTeamIntegrationsSummary({
       bindingKind: "workflow",
       connectorCatalog: {
-        homeDirectory: "/tmp/.aevatar",
-        filePath: "/tmp/.aevatar/connectors.json",
+        homeDirectory: "actor://connector-catalog",
+        filePath: "actor://connector-catalog/connectors",
         fileExists: true,
         connectors: [],
       },

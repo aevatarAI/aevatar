@@ -3,9 +3,12 @@ import { Loader2, Plus, Trash2, ChevronDown } from 'lucide-react';
 import * as api from '../../api';
 import { type RoleState, toRoleState, toRolePayload } from '../../studio';
 
-type Props = { flash: (msg: string, type: 'success' | 'error') => void };
+type Props = {
+  flash: (msg: string, type: 'success' | 'error') => void;
+  onSaved?: () => void;
+};
 
-export default function RolesCatalogEditor({ flash }: Props) {
+export default function RolesCatalogEditor({ flash, onSaved }: Props) {
   const [tab, setTab] = useState<'catalog' | 'raw'>('catalog');
   const [roles, setRoles] = useState<RoleState[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,6 +41,7 @@ export default function RolesCatalogEditor({ flash }: Props) {
       const payload = { ...catalogMeta, roles: roles.map(toRolePayload) };
       await api.roles.saveCatalog(payload);
       flash('Roles saved', 'success');
+      onSaved?.();
     } catch (e: any) {
       flash(e?.message || 'Save failed', 'error');
     } finally {
@@ -52,6 +56,7 @@ export default function RolesCatalogEditor({ flash }: Props) {
       await api.roles.saveCatalog(parsed);
       flash('Roles saved (raw)', 'success');
       await loadCatalog();
+      onSaved?.();
     } catch (e: any) {
       flash(e?.message || 'Invalid JSON or save failed', 'error');
     } finally {

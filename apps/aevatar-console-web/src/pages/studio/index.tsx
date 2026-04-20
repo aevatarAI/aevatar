@@ -2154,9 +2154,9 @@ const StudioPage: React.FC = () => {
       connectorDraftQuery.data?.updatedAtUtc,
     ],
   );
-  const connectorCatalogIsRemote = connectorCatalogMeta.filePath.startsWith(
-    'chrono-storage://',
-  );
+  const connectorCatalogIsRemote =
+    connectorCatalogMeta.filePath.startsWith('actor://') ||
+    connectorCatalogMeta.filePath.startsWith('chrono-storage://');
   const roleCatalogMeta = useMemo(
     () => ({
       filePath: rolesQuery.data?.filePath || '',
@@ -2176,9 +2176,9 @@ const StudioPage: React.FC = () => {
       roleDraftQuery.data?.updatedAtUtc,
     ],
   );
-  const roleCatalogIsRemote = roleCatalogMeta.filePath.startsWith(
-    'chrono-storage://',
-  );
+  const roleCatalogIsRemote =
+    roleCatalogMeta.filePath.startsWith('actor://') ||
+    roleCatalogMeta.filePath.startsWith('chrono-storage://');
   const connectorCatalogDirty = useMemo(
     () =>
       JSON.stringify(connectorCatalogDraft.map((connector) => toConnectorDefinition(connector))) !==

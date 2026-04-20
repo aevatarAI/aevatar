@@ -42,6 +42,7 @@ import {
   Maximize2,
   Palette,
   Play,
+  Plug,
   Plus,
   Search,
   Settings,
@@ -51,6 +52,7 @@ import {
   Trash2,
   Upload,
   User,
+  Users,
   Workflow as WorkflowIcon,
   Wrench,
   X,
@@ -61,6 +63,8 @@ import * as nyxid from './auth/nyxid';
 import ScopePage from './runtime/ScopePage';
 import GAgentPage from './runtime/GAgentPage';
 import ConfigExplorerPage from './config-explorer/ConfigExplorerPage';
+import RolesPage from './catalogs/RolesPage';
+import ConnectorsPage from './catalogs/ConnectorsPage';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -138,7 +142,7 @@ type DirectorySummary = {
   isBuiltIn: boolean;
 };
 
-type WorkspacePage = 'studio' | 'scripts' | 'gagents' | 'explorer' | 'console' | 'settings';
+type WorkspacePage = 'studio' | 'scripts' | 'gagents' | 'roles' | 'connectors' | 'explorer' | 'console' | 'settings';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
 type SettingsSection = 'runtime' | 'cloud-config' | 'skills' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
@@ -146,8 +150,8 @@ type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'scripts', 'gagents', 'explorer', 'console', 'settings'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'scripts', 'gagents', 'explorer'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'scripts', 'gagents', 'roles', 'connectors', 'explorer', 'console', 'settings'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'scripts', 'gagents', 'roles', 'connectors', 'explorer'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -3452,6 +3456,21 @@ function App() {
             onClick={() => setWorkspacePage('gagents')}
           />
 
+          {/* ── Catalogs ── */}
+          <div className="w-8 border-t border-[#E6E3DE] my-0.5" />
+          <RailButton
+            active={workspacePage === 'roles'}
+            label="Roles"
+            icon={<Users size={18} />}
+            onClick={() => setWorkspacePage('roles')}
+          />
+          <RailButton
+            active={workspacePage === 'connectors'}
+            label="Connectors"
+            icon={<Plug size={18} />}
+            onClick={() => setWorkspacePage('connectors')}
+          />
+
           {/* ── Storage ── */}
           <div className="w-8 border-t border-[#E6E3DE] my-0.5" />
           <RailButton
@@ -3520,6 +3539,20 @@ function App() {
           />
         ) : workspacePage === 'gagents' ? (
           <GAgentPage />
+        ) : workspacePage === 'roles' ? (
+          <RolesPage
+            flash={flash}
+            onSaved={() => {
+              void api.roles.getCatalog().then(hydrateRoleCatalog).catch(() => {});
+            }}
+          />
+        ) : workspacePage === 'connectors' ? (
+          <ConnectorsPage
+            flash={flash}
+            onSaved={() => {
+              void api.connectors.getCatalog().then(hydrateConnectorCatalog).catch(() => {});
+            }}
+          />
         ) : workspacePage === 'console' ? (
           <ScopePage />
         ) : workspacePage === 'settings' ? (

@@ -225,7 +225,8 @@ Nodes keep credentials on user's infrastructure. NyxID routes requests through W
 - **Probe unknown services**: Try `GET /openapi.json`, `GET /docs`, or `GET /api` to discover endpoints
 - Always check `<connected-services>` before assuming a slug exists
 - Keep request bodies minimal and service-correct
-- Never ask for, display, or log raw credentials
+- Credentials the user pastes to configure a service (App ID, App Secret, API key, token, Verification Token) are expected input — accept them and call the right tool (`nyxid_providers action=set_credentials`, `nyxid_services action=create`, `nyxid_external_keys`, `channel_registrations`). NyxID web cannot configure most providers, so chat is the required path. Never refuse citing "secret leakage" or ask the user to redact.
+- Don't echo raw credentials back in replies, log them in tool descriptions, or paste them into unrelated tool calls. Confirm success without restating the secret.
 - When something fails, check the error and try alternatives before asking the user
 - Connect services in-chat using the catalog-driven flow
 - Read all guidance from the catalog entry — don't hardcode service-specific instructions

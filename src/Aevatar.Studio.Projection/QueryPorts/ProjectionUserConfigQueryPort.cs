@@ -14,13 +14,23 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
 
     private readonly IProjectionDocumentReader<UserConfigCurrentStateDocument, string> _documentReader;
     private readonly IAppScopeResolver _scopeResolver;
+    private readonly string _defaultLocalRuntimeBaseUrl;
+    private readonly string _defaultRemoteRuntimeBaseUrl;
 
     public ProjectionUserConfigQueryPort(
         IProjectionDocumentReader<UserConfigCurrentStateDocument, string> documentReader,
-        IAppScopeResolver scopeResolver)
+        IAppScopeResolver scopeResolver,
+        IUserConfigDefaults userConfigDefaults)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+        var resolvedDefaults = userConfigDefaults ?? throw new ArgumentNullException(nameof(userConfigDefaults));
+        _defaultLocalRuntimeBaseUrl = UserConfigRuntime.NormalizeBaseUrl(
+            resolvedDefaults.LocalRuntimeBaseUrl,
+            UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
+        _defaultRemoteRuntimeBaseUrl = UserConfigRuntime.NormalizeBaseUrl(
+            resolvedDefaults.RemoteRuntimeBaseUrl,
+            UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
     }
 
     public async Task<UserConfig> GetAsync(CancellationToken ct = default)
@@ -40,19 +50,19 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
                 ? UserConfigRuntimeDefaults.LocalMode
                 : document.RuntimeMode,
             LocalRuntimeBaseUrl: string.IsNullOrEmpty(document.LocalRuntimeBaseUrl)
-                ? UserConfigRuntimeDefaults.LocalRuntimeBaseUrl
+                ? _defaultLocalRuntimeBaseUrl
                 : document.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl: string.IsNullOrEmpty(document.RemoteRuntimeBaseUrl)
-                ? UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl
+                ? _defaultRemoteRuntimeBaseUrl
                 : document.RemoteRuntimeBaseUrl,
             MaxToolRounds: document.MaxToolRounds);
     }
 
-    private static UserConfig CreateDefaultConfig() =>
+    private UserConfig CreateDefaultConfig() =>
         new(
             DefaultModel: string.Empty,
             PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
             RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
-            LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
-            RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
+            LocalRuntimeBaseUrl: _defaultLocalRuntimeBaseUrl,
+            RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl);
 }

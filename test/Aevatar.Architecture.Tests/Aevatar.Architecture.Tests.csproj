@@ -46,5 +46,6 @@
     <ProjectReference Include="../../src/platform/Aevatar.GAgentService.Projection/Aevatar.GAgentService.Projection.csproj" />
     <ProjectReference Include="../../src/Aevatar.Scripting.Infrastructure/Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.StreamingProxy/Aevatar.GAgents.StreamingProxy.csproj" />
   </ItemGroup>
 </Project>

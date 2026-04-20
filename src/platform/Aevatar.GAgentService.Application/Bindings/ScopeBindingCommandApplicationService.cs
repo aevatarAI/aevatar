@@ -19,8 +19,12 @@ namespace Aevatar.GAgentService.Application.Bindings;
 
 public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommandPort
 {
+    private static readonly TimeSpan ReadModelVisibilityTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ReadModelVisibilityPollInterval = TimeSpan.FromMilliseconds(25);
+
     private readonly IServiceCommandPort _serviceCommandPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
+    private readonly IServiceServingQueryPort _serviceServingQueryPort;
     private readonly IServiceGovernanceCommandPort _serviceGovernanceCommandPort;
     private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
     private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
@@ -31,6 +35,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     public ScopeBindingCommandApplicationService(
         IServiceCommandPort serviceCommandPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
+        IServiceServingQueryPort serviceServingQueryPort,
         IServiceGovernanceCommandPort serviceGovernanceCommandPort,
         IServiceGovernanceQueryPort serviceGovernanceQueryPort,
         IScopeScriptQueryPort scopeScriptQueryPort,
@@ -40,6 +45,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
+        _serviceServingQueryPort = serviceServingQueryPort ?? throw new ArgumentNullException(nameof(serviceServingQueryPort));
         _serviceGovernanceCommandPort = serviceGovernanceCommandPort ?? throw new ArgumentNullException(nameof(serviceGovernanceCommandPort));
         _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
         _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
@@ -116,9 +122,78 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             RevisionId = revisionId,
         }, ct);
 
+        // The six command awaits above only guarantee the event-sourcing
+        // commits have landed. Read-model projections (service catalog +
+        // serving set) materialize asynchronously; if we return before they
+        // catch up, the frontend's immediate follow-up invoke races
+        // ServiceInvocationResolutionService and sees "Service ... was not
+        // found" or "has no serving traffic view". Poll both readmodels
+        // until visible (bounded) so the bind HTTP ACK honestly means
+        // "readmodel observed, invoke is safe now".
+        await WaitForBindingVisibleAsync(identity, ct);
+
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
     }
+
+    private async Task WaitForBindingVisibleAsync(ServiceIdentity identity, CancellationToken ct)
+    {
+        // Bounded wait — don't hold the HTTP request forever. The invoke
+        // path retains its own error surface if the projection truly never
+        // materializes; the frontend sees the same error it would have seen
+        // before this wait.
+        var deadline = DateTimeOffset.UtcNow + ReadModelVisibilityTimeout;
+        // Fast-fail cap when neither readmodel ever shows up. Keeps
+        // test environments that don't wire projections from burning the
+        // full 5s budget per call while still giving production room to
+        // catch up on a real materialization lag.
+        const int fastFailPollLimit = 8;
+        var consecutiveNoProgress = 0;
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var service = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
+            ServiceServingSetSnapshot? servingSet = null;
+            if (service != null)
+            {
+                servingSet = await _serviceServingQueryPort.GetServiceServingSetAsync(identity, ct);
+            }
+
+            if (service != null && servingSet != null && servingSet.Targets.Any(IsTargetActivationVisible))
+            {
+                return;
+            }
+
+            if (service == null)
+            {
+                consecutiveNoProgress++;
+            }
+            else
+            {
+                consecutiveNoProgress = 0;
+            }
+
+            if (consecutiveNoProgress >= fastFailPollLimit || DateTimeOffset.UtcNow >= deadline)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(ReadModelVisibilityPollInterval, ct);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+    }
+
+    private static bool IsTargetActivationVisible(ServiceServingTargetSnapshot target) =>
+        System.Enum.TryParse<ServiceServingState>(target.ServingState, ignoreCase: true, out var state)
+        && state == ServiceServingState.Active;
 
     private async Task<bool> ShouldCreateRevisionAsync(
         ScopeBindingUpsertRequest request,

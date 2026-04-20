@@ -18,16 +18,19 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
 {
     private const string WriteActorId = "streaming-proxy-participants";
 
-    private readonly IActorRuntime _runtime;
+    private readonly IStudioActorBootstrap _bootstrap;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedStreamingProxyParticipantStore> _logger;
 
     public ActorBackedStreamingProxyParticipantStore(
-        IActorRuntime runtime,
+        IStudioActorBootstrap bootstrap,
+        IActorDispatchPort dispatchPort,
         IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedStreamingProxyParticipantStore> logger)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -65,7 +68,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
             DisplayName = displayName,
             JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
     }
 
     public async Task RemoveParticipantAsync(
@@ -77,7 +80,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
             RoomId = roomId,
             AgentId = agentId,
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
     }
 
     public async Task RemoveRoomAsync(
@@ -88,14 +91,11 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
         {
             RoomId = roomId,
         };
-        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
     }
 
     // ── Actor resolution ──
 
-    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(WriteActorId);
-        return actor ?? await _runtime.CreateAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
-    }
+    private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
+        _bootstrap.EnsureAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
 }
