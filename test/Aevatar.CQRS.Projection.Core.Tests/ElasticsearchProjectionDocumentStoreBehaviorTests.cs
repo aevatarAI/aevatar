@@ -495,8 +495,6 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     public async Task DeleteAsync_WhenDocumentDeleted_ShouldReturnApplied()
     {
         var handler = new ScriptedHttpMessageHandler();
-        // EnsureIndex ack, then delete returns {"result":"deleted"}
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"deleted"}"""));
 
         using var store = CreateStore(
@@ -506,7 +504,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var result = await store.DeleteAsync("actor-1");
 
         result.IsApplied.Should().BeTrue();
-        handler.CapturedRequests.Should().Contain(r =>
+        handler.CapturedRequests.Should().ContainSingle(r =>
             r.Method == "DELETE" && r.PathAndQuery.EndsWith("/_doc/actor-1"));
     }
 
@@ -514,7 +512,6 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     public async Task DeleteAsync_WhenDocumentNotFound_ShouldReturnDuplicate()
     {
         var handler = new ScriptedHttpMessageHandler();
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"not_found"}"""));
 
         using var store = CreateStore(
@@ -524,6 +521,29 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var result = await store.DeleteAsync("actor-ghost");
 
         result.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenAutoCreateIndexEnabled_ShouldNotBootstrapIndexBeforeDelete()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"error":{"type":"index_not_found_exception"},"status":404}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+                MissingIndexBehavior = ElasticsearchMissingIndexBehavior.WarnAndReturnEmpty,
+            },
+            handler);
+
+        var result = await store.DeleteAsync("actor-ghost");
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "DELETE" && r.PathAndQuery.EndsWith("/_doc/actor-ghost"));
     }
 
     [Fact]
@@ -606,7 +626,6 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     public async Task DeleteAsync_WhenMalformedResponseBody_ShouldFallBackToApplied()
     {
         var handler = new ScriptedHttpMessageHandler();
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, "not valid json"));
 
         using var store = CreateStore(

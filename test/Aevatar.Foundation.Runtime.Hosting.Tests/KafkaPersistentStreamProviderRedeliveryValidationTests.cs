@@ -17,23 +17,22 @@ using Orleans;
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 /// <summary>
-/// Validation harness for the Orleans persistent stream provider "throw-vs-return"
-/// redelivery contract (Channel RFC §9.5.6 / §17 Phase 0 prerequisite).
+/// Validation harness for the Orleans Kafka persistent stream provider
+/// "throw-vs-return" redelivery contract (Channel RFC §9.5.6).
 ///
-/// Asserts that the configured Orleans persistent stream provider:
+/// Asserts that the Kafka-backed Orleans persistent stream provider:
 ///   1. Does NOT redeliver an envelope when the subscriber's OnNextAsync returns normally.
 ///   2. DOES redeliver an envelope when the subscriber's OnNextAsync throws and the
 ///      throw is propagated (envelope.Runtime.Dispatch.PropagateFailure = true).
 ///
-/// Runs against the Kafka persistent provider when
-/// AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS / AEVATAR_TEST_GARNET_CONNECTION_STRING are set.
-/// Kafka is used as the reference persistent provider in aevatar test infra; the same
-/// harness, re-run with <c>StreamBackend = EventHubs</c> + an EventHubs namespace
-/// connection string, validates the EventHubs provider before §9.5.6 commits to it.
-/// EventHubs provider validation result must be captured in the Phase 0 PR body.
+/// Runs when AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS and
+/// AEVATAR_TEST_GARNET_CONNECTION_STRING are set. The repository currently ships
+/// InMemory and KafkaProvider stream backends only; if a new persistent backend is
+/// added later, extend this harness explicitly instead of assuming Kafka semantics
+/// carry over unchanged.
 /// </summary>
 [Collection(nameof(EnvironmentVariableDependentCollection))]
-public sealed class PersistentStreamProviderRedeliveryValidationTests
+public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
 {
     private static readonly TimeSpan RedeliveryTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan NoRedeliveryQuietPeriod = TimeSpan.FromSeconds(10);

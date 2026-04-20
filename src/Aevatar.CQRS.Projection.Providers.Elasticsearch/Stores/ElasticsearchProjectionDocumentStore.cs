@@ -120,8 +120,6 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         ThrowIfDynamicReadModelWritesUnsupportedForDelete();
 
         var trimmedId = id.Trim();
-        await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
-
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
@@ -132,7 +130,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
                 var notFoundPayload = await response.Content.ReadAsStringAsync(ct);
-                TryHandleMissingIndexForRead("delete", notFoundPayload);
+                TryHandleMissingIndexForDelete(notFoundPayload);
                 result = ProjectionWriteResult.Duplicate();
             }
             else
@@ -485,6 +483,24 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             operation,
             _missingIndexBehavior);
         return true;
+    }
+
+    private void TryHandleMissingIndexForDelete(string payload)
+    {
+        if (!ElasticsearchProjectionDocumentStoreHttpSupport.IsIndexNotFoundPayload(payload))
+            return;
+
+        if (_missingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw)
+            throw new InvalidOperationException(
+                $"Elasticsearch index '{_indexName}' was not found during 'delete' for read-model '{typeof(TReadModel).FullName}'. " +
+                $"Configure index bootstrap before issuing deletes. body={ElasticsearchProjectionDocumentStoreNamingSupport.TruncatePayload(payload)}");
+
+        _logger.LogWarning(
+            "Projection read-model index is missing during delete. provider={Provider} readModelType={ReadModelType} index={Index} behavior={Behavior}",
+            ProviderName,
+            typeof(TReadModel).FullName,
+            _indexName,
+            _missingIndexBehavior);
     }
 
     private ResolvedIndexTarget ResolveIndexTarget(TReadModel readModel)

@@ -1,5 +1,7 @@
 ---
 title: "[RFC] Aevatar Chat — Multi-Channel Adapter Architecture"
+status: active
+owner: eanzhao
 labels: [architecture, rfc, channel]
 target_repo: aevatarAI/aevatar
 ---
