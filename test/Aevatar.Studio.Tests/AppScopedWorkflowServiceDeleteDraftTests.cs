@@ -18,8 +18,8 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task DeleteDraftAsync_ShouldCallWorkflowStorageDelete()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var storagePort = new RecordingWorkflowStoragePort();
-        var service = environment.CreateService(workflowStoragePort: storagePort);
+        var storagePort = new RecordingWorkflowDraftStore();
+        var service = environment.CreateService(workflowDraftStore: storagePort);
 
         await service.DeleteDraftAsync("scope-1", "workflow-1");
 
@@ -37,7 +37,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             workflowActorBindingReader: runtimePorts.BindingReader,
             artifactStore: runtimePorts.ArtifactStore,
             serviceLifecycleQueryPort: runtimePorts.ServiceLifecycleQueryPort,
-            workflowStoragePort: new RecordingWorkflowStoragePort());
+            workflowDraftStore: new RecordingWorkflowDraftStore());
 
         await service.DeleteDraftAsync("scope-1", "workflow-1");
 
@@ -49,16 +49,16 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     {
         using var environment = new ScopedWorkflowEnvironment();
         var runtimePorts = new RuntimePortSpies();
-        var storagePort = new RecordingWorkflowStoragePort();
+        var storagePort = new RecordingWorkflowDraftStore();
         var service = environment.CreateService(
             workflowQueryPort: runtimePorts.QueryPort,
             workflowCommandPort: runtimePorts.CommandPort,
             workflowActorBindingReader: runtimePorts.BindingReader,
             artifactStore: runtimePorts.ArtifactStore,
             serviceLifecycleQueryPort: runtimePorts.ServiceLifecycleQueryPort,
-            workflowStoragePort: storagePort);
+            workflowDraftStore: storagePort);
 
-        var saved = await service.SaveAsync(
+        var saved = await service.SaveDraftAsync(
             "scope-1",
             new SaveWorkflowFileRequest(
                 WorkflowId: null,
@@ -80,11 +80,11 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         var runtimePorts = new RuntimePortSpies();
         var service = environment.CreateService(
             workflowQueryPort: runtimePorts.QueryPort,
-            workflowStoragePort: new RecordingWorkflowStoragePort(new[]
+            workflowDraftStore: new RecordingWorkflowDraftStore(new[]
             {
-                new ScopedStoredWorkflowYaml(
+                new ScopedDraft(
                     "scope-1",
-                    new StoredWorkflowYaml(
+                    new WorkflowDraft(
                         "workflow-1",
                         "workflow-1",
                         "name: workflow-1\nsteps: []\n",
@@ -106,7 +106,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task DeleteDraftAsync_ShouldRemoveLocalLayoutSidecarWhenPresent()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var service = environment.CreateService(workflowStoragePort: new RecordingWorkflowStoragePort());
+        var service = environment.CreateService(workflowDraftStore: new RecordingWorkflowDraftStore());
         var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
 
         Directory.CreateDirectory(Path.GetDirectoryName(layoutPath)!);
@@ -135,9 +135,9 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task DeleteDraftAsync_WhenStoragePortThrows_ShouldPropagateAndLeaveLayoutIntact()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var storagePort = new ThrowingWorkflowStoragePort(
+        var storagePort = new ThrowingWorkflowDraftStore(
             new InvalidOperationException("chrono-storage is unavailable"));
-        var service = environment.CreateService(workflowStoragePort: storagePort);
+        var service = environment.CreateService(workflowDraftStore: storagePort);
         var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
         Directory.CreateDirectory(Path.GetDirectoryName(layoutPath)!);
         await File.WriteAllTextAsync(layoutPath, "{}");
@@ -154,11 +154,11 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     {
         using var environment = new ScopedWorkflowEnvironment();
         var service = environment.CreateService(
-            workflowStoragePort: new ThrowingWorkflowStoragePort(
+            workflowDraftStore: new ThrowingWorkflowDraftStore(
                 new InvalidOperationException("chrono-storage is unavailable")));
         var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
 
-        var act = () => service.SaveAsync(
+        var act = () => service.SaveDraftAsync(
             "scope-1",
             new SaveWorkflowFileRequest(
                 WorkflowId: null,
@@ -178,8 +178,8 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         using var environment = new ScopedWorkflowEnvironment();
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
-        var storagePort = new ThrowingWorkflowStoragePort(new OperationCanceledException(cts.Token));
-        var service = environment.CreateService(workflowStoragePort: storagePort);
+        var storagePort = new ThrowingWorkflowDraftStore(new OperationCanceledException(cts.Token));
+        var service = environment.CreateService(workflowDraftStore: storagePort);
 
         var act = () => service.DeleteDraftAsync("scope-1", "workflow-1", cts.Token);
 
@@ -205,7 +205,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             IWorkflowActorBindingReader? workflowActorBindingReader = null,
             IServiceRevisionArtifactStore? artifactStore = null,
             IServiceLifecycleQueryPort? serviceLifecycleQueryPort = null,
-            IWorkflowStoragePort? workflowStoragePort = null)
+            IWorkflowDraftStore? workflowDraftStore = null)
         {
             return new AppScopedWorkflowService(
                 new StubHttpClientFactory(),
@@ -214,7 +214,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 workflowActorBindingReader,
                 artifactStore,
                 serviceLifecycleQueryPort,
-                workflowStoragePort);
+                workflowDraftStore);
         }
 
         public string BuildLayoutPath(string scopeId, string workflowId) =>
@@ -249,19 +249,19 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             $"name: {document.Name}\nsteps: []\n";
     }
 
-    private sealed class RecordingWorkflowStoragePort : IWorkflowStoragePort
+    private sealed class RecordingWorkflowDraftStore : IWorkflowDraftStore
     {
-        private readonly Dictionary<string, Dictionary<string, StoredWorkflowYaml>> _storedWorkflows =
+        private readonly Dictionary<string, Dictionary<string, WorkflowDraft>> _storedWorkflows =
             new(StringComparer.Ordinal);
 
         public List<ScopedWorkflowUpload> Uploads { get; } = [];
         public List<string> DeletedWorkflowIds { get; } = [];
 
-        public RecordingWorkflowStoragePort()
+        public RecordingWorkflowDraftStore()
         {
         }
 
-        public RecordingWorkflowStoragePort(IEnumerable<ScopedStoredWorkflowYaml> storedWorkflows)
+        public RecordingWorkflowDraftStore(IEnumerable<ScopedDraft> storedWorkflows)
         {
             foreach (var storedWorkflow in storedWorkflows)
             {
@@ -270,10 +270,10 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             }
         }
 
-        public Task UploadWorkflowYamlAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
+        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
         {
             Uploads.Add(new ScopedWorkflowUpload(scopeId, workflowId, workflowName, yaml));
-            GetOrCreateScopeStore(scopeId)[workflowId] = new StoredWorkflowYaml(
+            GetOrCreateScopeStore(scopeId)[workflowId] = new WorkflowDraft(
                 workflowId,
                 workflowName,
                 yaml,
@@ -281,26 +281,26 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(string scopeId, CancellationToken ct)
+        public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct)
         {
             if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
             {
-                return Task.FromResult<IReadOnlyList<StoredWorkflowYaml>>(scopeStore.Values.ToList());
+                return Task.FromResult<IReadOnlyList<WorkflowDraft>>(scopeStore.Values.ToList());
             }
 
-            return Task.FromResult<IReadOnlyList<StoredWorkflowYaml>>([]);
+            return Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
         }
 
-        public Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct)
+        public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct)
         {
-            return Task.FromResult<StoredWorkflowYaml?>(
+            return Task.FromResult<WorkflowDraft?>(
                 _storedWorkflows.TryGetValue(scopeId, out var scopeStore) &&
                 scopeStore.TryGetValue(workflowId, out var storedWorkflow)
                     ? storedWorkflow
                     : null);
         }
 
-        public Task DeleteWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct)
+        public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct)
         {
             DeletedWorkflowIds.Add(workflowId);
             if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
@@ -311,38 +311,38 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             return Task.CompletedTask;
         }
 
-        private Dictionary<string, StoredWorkflowYaml> GetOrCreateScopeStore(string scopeId)
+        private Dictionary<string, WorkflowDraft> GetOrCreateScopeStore(string scopeId)
         {
             if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
             {
                 return scopeStore;
             }
 
-            scopeStore = new Dictionary<string, StoredWorkflowYaml>(StringComparer.Ordinal);
+            scopeStore = new Dictionary<string, WorkflowDraft>(StringComparer.Ordinal);
             _storedWorkflows[scopeId] = scopeStore;
             return scopeStore;
         }
     }
 
-    private sealed class ThrowingWorkflowStoragePort : IWorkflowStoragePort
+    private sealed class ThrowingWorkflowDraftStore : IWorkflowDraftStore
     {
         private readonly Exception _exception;
 
-        public ThrowingWorkflowStoragePort(Exception exception)
+        public ThrowingWorkflowDraftStore(Exception exception)
         {
             _exception = exception;
         }
 
-        public Task UploadWorkflowYamlAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct) =>
+        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct) =>
             Task.FromException(_exception);
 
-        public Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(string scopeId, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<StoredWorkflowYaml>>([]);
+        public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
 
-        public Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromResult<StoredWorkflowYaml?>(null);
+        public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
+            Task.FromResult<WorkflowDraft?>(null);
 
-        public Task DeleteWorkflowYamlAsync(string scopeId, string workflowId, CancellationToken ct) =>
+        public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
             Task.FromException(_exception);
     }
 
@@ -352,9 +352,9 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         string WorkflowName,
         string Yaml);
 
-    private sealed record ScopedStoredWorkflowYaml(
+    private sealed record ScopedDraft(
         string ScopeId,
-        StoredWorkflowYaml Workflow);
+        WorkflowDraft Workflow);
 
     private sealed class RuntimePortSpies
     {
