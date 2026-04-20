@@ -6,6 +6,11 @@ test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaProviderRuntimeIntegrationTests.cs
+# Persistent-provider redelivery harness (Channel RFC §9.5.6): verifying the
+# ABSENCE of redelivery in the return-path test requires waiting past the
+# provider's commit horizon. No deterministic completion signal exists for
+# "nothing redelivered" — that's exactly the contract under validation.
+test/Aevatar.Foundation.Runtime.Hosting.Tests/PersistentStreamProviderRedeliveryValidationTests.cs
 # Short delays for timestamp distinctness, async settling, and TTL verification
 test/Aevatar.Tools.Cli.Tests/ChronoStorageUserMemoryStoreTests.cs
 test/Aevatar.Tools.Cli.Tests/ChronoStorageChatHistoryStoreTests.cs

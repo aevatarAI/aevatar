@@ -89,6 +89,29 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_PropagatesCredentialRef()
+    {
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-credref-1",
+                    Platform = "lark",
+                    CredentialRef = "secrets://lark/encrypt-key/bot-credref-1",
+                },
+            },
+        };
+
+        var envelope = BuildCommittedEnvelope("evt-credref-1", version: 4, state);
+        await _projector.ProjectAsync(_context, envelope, CancellationToken.None);
+
+        _dispatcher.Upserts.Should().HaveCount(1);
+        _dispatcher.Upserts[0].CredentialRef.Should().Be("secrets://lark/encrypt-key/bot-credref-1");
+    }
+
+    [Fact]
     public async Task ProjectAsync_DefaultsEncryptKeyToEmpty_WhenNotSet()
     {
         var state = new ChannelBotRegistrationStoreState

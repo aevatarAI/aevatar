@@ -146,6 +146,23 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRegister_PersistsCredentialRef()
+    {
+        var cmd = new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxUserToken = "token-abc",
+            CredentialRef = "secrets://lark/encrypt-key/test-1",
+        };
+
+        await _agent.HandleRegister(cmd);
+
+        var entry = _agent.State.Registrations[0];
+        entry.CredentialRef.Should().Be("secrets://lark/encrypt-key/test-1");
+    }
+
+    [Fact]
     public async Task HandleUnregister_RemovesEntry()
     {
         var cmd = new ChannelBotRegisterCommand
