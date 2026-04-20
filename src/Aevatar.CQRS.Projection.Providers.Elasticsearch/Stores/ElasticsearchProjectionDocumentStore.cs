@@ -113,6 +113,61 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         return await _writer.UpsertAsync(indexTarget.IndexName, keyValue, readModel, ct);
     }
 
+    public async Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ct.ThrowIfCancellationRequested();
+        ThrowIfDynamicReadModelWritesUnsupportedForDelete();
+
+        var trimmedId = id.Trim();
+        await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+
+        var startedAt = DateTimeOffset.UtcNow;
+        try
+        {
+            using var response = await _httpClient.DeleteAsync(
+                $"{_indexName}/_doc/{Uri.EscapeDataString(trimmedId)}",
+                ct);
+            ProjectionWriteResult result;
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                var notFoundPayload = await response.Content.ReadAsStringAsync(ct);
+                TryHandleMissingIndexForRead("delete", notFoundPayload);
+                result = ProjectionWriteResult.Duplicate();
+            }
+            else
+            {
+                await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "delete", ct);
+                var payload = await response.Content.ReadAsStringAsync(ct);
+                result = ResolveDeleteResultFromPayload(payload);
+            }
+
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogInformation(
+                "Projection read-model delete completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                trimmedId,
+                elapsedMs,
+                result.Disposition);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogError(
+                ex,
+                "Projection read-model delete failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                trimmedId,
+                elapsedMs,
+                "failed",
+                ex.GetType().Name);
+            throw;
+        }
+    }
+
     public async Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -457,6 +512,38 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         throw new InvalidOperationException(
             $"Elasticsearch '{operation}' is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
             "Use direct provider-native inspection/query capability for this read model type.");
+    }
+
+    private static ProjectionWriteResult ResolveDeleteResultFromPayload(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return ProjectionWriteResult.Applied();
+
+        try
+        {
+            using var jsonDoc = JsonDocument.Parse(payload);
+            if (jsonDoc.RootElement.TryGetProperty("result", out var resultNode) &&
+                resultNode.ValueKind == JsonValueKind.String &&
+                string.Equals(resultNode.GetString(), "not_found", StringComparison.Ordinal))
+            {
+                return ProjectionWriteResult.Duplicate();
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return ProjectionWriteResult.Applied();
+    }
+
+    private void ThrowIfDynamicReadModelWritesUnsupportedForDelete()
+    {
+        if (!_supportsDynamicIndexing)
+            return;
+
+        throw new InvalidOperationException(
+            $"Elasticsearch 'delete' by key is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
+            "Dynamically indexed read models must delete via provider-native index-scoped operations.");
     }
 
     private static TypeRegistry BuildDefaultTypeRegistry()

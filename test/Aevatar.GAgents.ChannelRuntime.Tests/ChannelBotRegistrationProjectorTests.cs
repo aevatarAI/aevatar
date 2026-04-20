@@ -208,12 +208,21 @@ public sealed class ChannelBotRegistrationProjectorTests
     {
         public List<ChannelBotRegistrationDocument> Upserts { get; } = [];
 
+        public List<string> Deletes { get; } = [];
+
         public Task<ProjectionWriteResult> UpsertAsync(
             ChannelBotRegistrationDocument readModel,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Upserts.Add(readModel.Clone());
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

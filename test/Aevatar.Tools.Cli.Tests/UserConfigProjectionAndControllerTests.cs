@@ -567,11 +567,19 @@ public sealed class UserConfigProjectionAndControllerTests
     {
         public UserConfigCurrentStateDocument? LastUpsert { get; private set; }
 
+        public string? LastDeletedId { get; private set; }
+
         public Task<ProjectionWriteResult> UpsertAsync(
             UserConfigCurrentStateDocument readModel,
             CancellationToken ct = default)
         {
             LastUpsert = readModel.Clone();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            LastDeletedId = id;
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

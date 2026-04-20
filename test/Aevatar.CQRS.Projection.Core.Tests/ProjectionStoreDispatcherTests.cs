@@ -111,6 +111,52 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public async Task DeleteAsync_ShouldDelegateToSingleBinding()
+    {
+        var binding = new RecordingBinding("document");
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>([binding]);
+
+        await dispatcher.DeleteAsync("id-to-delete");
+
+        binding.DeleteCount.Should().Be(1);
+        binding.LastDeletedId.Should().Be("id-to-delete");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ShouldThrow_WhenIdIsBlank()
+    {
+        var binding = new RecordingBinding("document");
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>([binding]);
+
+        Func<Task> act = () => dispatcher.DeleteAsync("   ");
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        binding.DeleteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ProjectionDocumentBinding_DeleteAsync_ShouldForwardToWriter()
+    {
+        var writer = new RecordingDocumentWriter();
+        var binding = new ProjectionDocumentStoreBinding<TestReadModel>(writer);
+
+        var result = await binding.DeleteAsync("id-1");
+
+        result.IsApplied.Should().BeTrue();
+        writer.Deletes.Should().ContainSingle().Which.Should().Be("id-1");
+    }
+
+    [Fact]
+    public async Task ProjectionDocumentBinding_DeleteAsync_WhenWriterMissing_ShouldNoOpAsApplied()
+    {
+        var binding = new ProjectionDocumentStoreBinding<TestReadModel>();
+
+        var result = await binding.DeleteAsync("id-1");
+
+        result.IsApplied.Should().BeTrue();
+    }
+
+    [Fact]
     public void Ctor_WhenDisabledBindingsExistButOneEnabled_ShouldSelectEnabledBinding()
     {
         var disabledBinding = new ProjectionDocumentStoreBinding<TestReadModel>();
@@ -154,11 +200,23 @@ public class ProjectionStoreDispatcherTests
 
         public string LastValue { get; private set; } = "";
 
+        public int DeleteCount { get; private set; }
+
+        public string LastDeletedId { get; private set; } = "";
+
         public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             UpsertCount++;
             LastValue = readModel.Value;
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            DeleteCount++;
+            LastDeletedId = id;
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
@@ -167,10 +225,19 @@ public class ProjectionStoreDispatcherTests
     {
         public List<TestReadModel> Upserts { get; } = [];
 
+        public List<string> Deletes { get; } = [];
+
         public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

@@ -9,10 +9,10 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// Materializes <see cref="ChannelBotRegistrationStoreState"/> into per-entry
 /// <see cref="ChannelBotRegistrationDocument"/> documents for query-side read model.
 ///
-/// Known limitation: <see cref="IProjectionWriteDispatcher{T}"/> only supports
-/// <c>UpsertAsync</c>. When a bot is unregistered, the state no longer contains
-/// that entry, but the orphaned document is not deleted. A future
-/// <c>IProjectionWriteDispatcher.DeleteAsync</c> is needed to close this gap.
+/// Tombstone behavior: <see cref="IProjectionWriteDispatcher{T}.DeleteAsync"/> is
+/// available, but per-entry tombstone wiring is deferred to the
+/// <c>PerEntryDocumentProjector</c> refactor (Channel RFC §7.1). Until then,
+/// unregistered entries leave orphaned documents in the read model.
 /// </summary>
 public sealed class ChannelBotRegistrationProjector
     : ICurrentStateProjectionMaterializer<ChannelBotRegistrationMaterializationContext>
