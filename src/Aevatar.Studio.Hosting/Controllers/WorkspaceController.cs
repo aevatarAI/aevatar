@@ -172,7 +172,7 @@ public sealed class WorkspaceController : ControllerBase
         {
             try
             {
-                return Ok(await _scopeWorkflowService.SaveAsync(scopeContext.ScopeId, request, cancellationToken));
+                return Ok(await _scopeWorkflowService.SaveDraftAsync(scopeContext.ScopeId, request, cancellationToken));
             }
             catch (AppApiException exception)
             {
