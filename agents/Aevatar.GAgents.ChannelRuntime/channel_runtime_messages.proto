@@ -16,6 +16,11 @@ message ChannelBotRegistrationEntry {
   google.protobuf.Timestamp created_at = 7;
   string webhook_url = 8;  // Full callback URL configured via setWebhook
   string encrypt_key = 9;  // Lark Encrypt Key — used for signature verification AND event decryption
+  // Late-bound credential reference (Channel RFC §17.3). When non-empty, overrides
+  // the raw encrypt_key above and is resolved via ICredentialProvider at the provider
+  // boundary. The raw encrypt_key field is retained through the migration window
+  // and will be removed once all registrations carry credential_ref.
+  string credential_ref = 10;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -138,6 +143,9 @@ message ChannelBotRegisterCommand {
   string webhook_url = 6;
   string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
   string encrypt_key = 8;   // Lark Encrypt Key for signature verification + event decryption
+  // Late-bound credential reference (Channel RFC §17.3). See
+  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
+  string credential_ref = 9;
 }
 
 message ChannelBotUnregisterCommand {
@@ -169,6 +177,9 @@ message ChannelBotRegistrationDocument {
   string actor_id = 10;                     // Source actor ID
   string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
   string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
+  // Late-bound credential reference (Channel RFC §17.3). See
+  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
+  string credential_ref = 13;
 }
 
 // ─── Agent Registry (actor-backed delivery target store) ───
