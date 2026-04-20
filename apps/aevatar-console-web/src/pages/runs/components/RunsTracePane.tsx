@@ -52,8 +52,10 @@ type RunsTracePaneProps = {
   hasPendingInteraction: boolean;
   messageConsoleView: React.ReactNode;
   messageCount: number;
+  messagesLabel?: string;
   onConsoleViewChange: (key: ConsoleViewKey) => void;
   timelineView: React.ReactNode;
+  title?: string;
 };
 
 const RunsTracePane: React.FC<RunsTracePaneProps> = ({
@@ -63,62 +65,95 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
   hasPendingInteraction,
   messageConsoleView,
   messageCount,
+  messagesLabel = "Messages",
   onConsoleViewChange,
   timelineView,
-}) => (
-  <ProCard
-    title="Run trace"
-    hoverable
-    {...moduleCardProps}
-    style={workbenchCardStyle}
-    bodyStyle={workbenchConsoleBodyStyle}
-    extra={
-      <Space separator={<Divider orientation="vertical" />} size={12}>
-        <Typography.Text type="secondary">
-          {messageCount} messages
-        </Typography.Text>
-        <Typography.Text type="secondary">
-          {eventCount} events
-        </Typography.Text>
-        <Typography.Text type="secondary">
-          {hasPendingInteraction ? "interaction pending" : "monitoring"}
-        </Typography.Text>
-      </Space>
-    }
-  >
-    <div style={workbenchConsoleViewportStyle}>
-      <style>{runsTraceTabsCss}</style>
-      <Tabs
-        activeKey={consoleView}
-        animated={false}
-        className={runsTraceTabsClassName}
-        destroyOnHidden
-        style={workbenchTraceTabsStyle}
-        items={[
-          {
-            key: "timeline",
-            label: "Timeline",
-            children: <div style={workbenchTraceTabPanelStyle}>{timelineView}</div>,
-          },
-          {
-            key: "messages",
-            label: "Messages",
-            children: (
-              <div style={workbenchTraceTabPanelStyle}>{messageConsoleView}</div>
-            ),
-          },
-          {
-            key: "events",
-            label: "Events",
-            children: (
-              <div style={workbenchTraceTabPanelStyle}>{eventConsoleView}</div>
-            ),
-          },
-        ]}
-        onChange={(key) => onConsoleViewChange(key as ConsoleViewKey)}
-      />
-    </div>
-  </ProCard>
-);
+  title = "Run trace",
+}) => {
+  const preferMessagesFirst = messagesLabel === "Conversation";
+  const tabItems = preferMessagesFirst
+    ? [
+        {
+          key: "messages",
+          label: messagesLabel,
+          children: (
+            <div style={workbenchTraceTabPanelStyle}>{messageConsoleView}</div>
+          ),
+        },
+        {
+          key: "timeline",
+          label: "Timeline",
+          children: (
+            <div style={workbenchTraceTabPanelStyle}>{timelineView}</div>
+          ),
+        },
+        {
+          key: "events",
+          label: "Events",
+          children: (
+            <div style={workbenchTraceTabPanelStyle}>{eventConsoleView}</div>
+          ),
+        },
+      ]
+    : [
+        {
+          key: "timeline",
+          label: "Timeline",
+          children: (
+            <div style={workbenchTraceTabPanelStyle}>{timelineView}</div>
+          ),
+        },
+        {
+          key: "messages",
+          label: messagesLabel,
+          children: (
+            <div style={workbenchTraceTabPanelStyle}>{messageConsoleView}</div>
+          ),
+        },
+        {
+          key: "events",
+          label: "Events",
+          children: (
+            <div style={workbenchTraceTabPanelStyle}>{eventConsoleView}</div>
+          ),
+        },
+      ];
+
+  return (
+    <ProCard
+      title={title}
+      hoverable
+      {...moduleCardProps}
+      style={workbenchCardStyle}
+      bodyStyle={workbenchConsoleBodyStyle}
+      extra={
+        <Space separator={<Divider orientation="vertical" />} size={12}>
+          <Typography.Text type="secondary">
+            {messageCount} messages
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {eventCount} events
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {hasPendingInteraction ? "action required" : "live trace"}
+          </Typography.Text>
+        </Space>
+      }
+    >
+      <div style={workbenchConsoleViewportStyle}>
+        <style>{runsTraceTabsCss}</style>
+        <Tabs
+          activeKey={consoleView}
+          animated={false}
+          className={runsTraceTabsClassName}
+          destroyOnHidden
+          style={workbenchTraceTabsStyle}
+          items={tabItems}
+          onChange={(key) => onConsoleViewChange(key as ConsoleViewKey)}
+        />
+      </div>
+    </ProCard>
+  );
+};
 
 export default RunsTracePane;

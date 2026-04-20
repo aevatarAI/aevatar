@@ -34,6 +34,15 @@ public sealed class ChronoStorageCatalogBlobClient
     }
 
     public RemoteScopeContext? TryResolveContext(string prefix, string fileName)
+        => TryResolveContextCore(_scopeResolver.Resolve(), prefix, fileName);
+
+    public RemoteScopeContext? TryResolveContext(AppScopeContext scope, string prefix, string fileName)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return TryResolveContextCore(scope, prefix, fileName);
+    }
+
+    private RemoteScopeContext? TryResolveContextCore(AppScopeContext? scope, string prefix, string fileName)
     {
         if (!_options.Enabled)
         {
@@ -47,7 +56,6 @@ public sealed class ChronoStorageCatalogBlobClient
         }
 
         var endpoint = ResolveApiEndpoint();
-        var scope = _scopeResolver.Resolve();
         if (scope is null)
         {
             throw new InvalidOperationException("Chrono-storage catalog access requires an authenticated or configured app scope.");

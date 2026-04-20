@@ -45,6 +45,13 @@ import {
   AevatarPanel,
   AevatarStatusTag,
 } from "@/shared/ui/aevatarPageShells";
+import {
+  AevatarCompactTag,
+  AevatarCompactText,
+  aevatarMonoFontFamily,
+  truncateMiddle,
+  truncateTail,
+} from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import {
   buildAevatarPanelStyle,
@@ -52,35 +59,21 @@ import {
   formatAevatarStatusLabel,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
-import {
-  topologyMockDefaultActorId,
-  topologyMockEdgeTypes,
-  topologyMockRecordMap,
-  topologyMockRecords,
-  type TopologyMockRecord,
-} from "./topologyMockData";
 
 type ExplorerRouteSelection = {
   actorId: string;
-  mode: "live" | "sample";
   runId: string;
   scopeId: string;
   serviceId: string;
 };
 
-type TopologyDataMode = "live" | "sample";
 type TopologyTabKey = "graph" | "timeline" | "edges" | "snapshot";
 
 type DisplayActorRecord = {
   description: string;
   id: string;
-  isSample: boolean;
-  lastUpdatedAt?: string;
-  runId?: string;
-  scopeId?: string;
-  serviceId?: string;
-  status?: string;
   subtitle?: string;
+  type?: string;
   workflowName?: string;
 };
 
@@ -88,7 +81,6 @@ function readExplorerSelection(): ExplorerRouteSelection {
   if (typeof window === "undefined") {
     return {
       actorId: "",
-      mode: "sample",
       runId: "",
       scopeId: "",
       serviceId: "",
@@ -98,27 +90,15 @@ function readExplorerSelection(): ExplorerRouteSelection {
   const searchParams = new URLSearchParams(window.location.search);
   return {
     actorId: searchParams.get("actorId")?.trim() ?? "",
-    mode: searchParams.get("mode") === "sample" ? "sample" : "live",
     runId: searchParams.get("runId")?.trim() ?? "",
     scopeId: searchParams.get("scopeId")?.trim() ?? "",
     serviceId: searchParams.get("serviceId")?.trim() ?? "",
   };
 }
 
-function compactToken(value: string, head = 6, tail = 4): string {
-  if (!value || value.length <= head + tail + 3) {
-    return value;
-  }
-
-  return `${value.slice(0, head)}...${value.slice(-tail)}`;
-}
-
-function compactLabel(value: string, max = 18): string {
-  if (!value || value.length <= max) {
-    return value;
-  }
-
-  return `${value.slice(0, Math.max(1, max - 3))}...`;
+function readAgentWorkflowName(actor: WorkflowAgentSummary): string {
+  const match = actor.description.match(/\[(.+)\]$/);
+  return match?.[1]?.trim() || actor.description || actor.type || "Actor";
 }
 
 function statusKeyFromCompletionValue(value?: number): string {
@@ -144,11 +124,11 @@ function statusKeyFromCompletionValue(value?: number): string {
 
 function buildContextLabel(scopeId?: string, serviceId?: string, runId?: string): string {
   const segments = [
-    scopeId ? compactToken(scopeId) : "",
+    scopeId ? truncateMiddle(scopeId, 6, 4) : "",
     serviceId || "",
-    runId ? compactToken(runId, 8, 6) : "",
+    runId ? truncateMiddle(runId, 8, 6) : "",
   ].filter(Boolean);
-  return segments.length > 0 ? segments.join(" / ") : "未带入上下文";
+  return segments.length > 0 ? segments.join(" / ") : "未带入入口上下文";
 }
 
 function filterSubgraph(
@@ -250,14 +230,21 @@ function graphNodeTitle(node: WorkflowActorGraphNode): string {
 
 function graphNodeSubtitle(node: WorkflowActorGraphNode): string {
   if (node.nodeType === "WorkflowRun") {
-    return compactToken(node.properties.commandId || node.nodeId, 8, 6);
+    return truncateMiddle(node.properties.commandId || node.nodeId, 8, 6);
   }
 
   if (node.nodeType === "WorkflowStep") {
     return node.properties.stepType || node.nodeType;
   }
 
-  return compactToken(node.nodeId, 8, 6);
+  return truncateMiddle(node.nodeId, 8, 6);
+}
+
+function isHttp404Error(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /^HTTP 404\b/i.test(error.message.trim())
+  );
 }
 
 function graphNodeTone(nodeType: string): {
@@ -315,21 +302,15 @@ const TopologyInlineToken: React.FC<{
   tail = 6,
   value,
 }) => (
-  <Tooltip title={value}>
-    <Typography.Text
-      style={{
-        display: "inline-block",
-        fontFamily: monospace ? '"IBM Plex Mono", "SF Mono", monospace' : undefined,
-        maxWidth,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-      strong={strong || monospace}
-    >
-      {monospace ? compactToken(value, head, tail) : value}
-    </Typography.Text>
-  </Tooltip>
+  <AevatarCompactText
+    head={head}
+    maxWidth={maxWidth}
+    mode={monospace ? "middle" : "tail"}
+    monospace={monospace}
+    strong={strong || monospace}
+    tail={tail}
+    value={value}
+  />
 );
 
 const TopologyMetricCard: React.FC<{
@@ -373,50 +354,32 @@ const TopologyCompactLabelText: React.FC<{
   strong?: boolean;
   value: string;
 }> = ({ color, maxWidth = 180, strong = false, value }) => {
-  const text = compactLabel(value, 18);
-  const content = (
-    <Typography.Text
+  return (
+    <AevatarCompactText
+      color={color}
+      maxChars={18}
+      maxWidth={maxWidth}
+      mode="tail"
       strong={strong}
-      style={{
-        color: color ?? "inherit",
-        display: "inline-block",
-        fontSize: strong ? 13 : 12,
-        maxWidth,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {text}
-    </Typography.Text>
+      style={{ fontSize: strong ? 13 : 12 }}
+      value={value}
+    />
   );
-
-  return value.length > 18 ? <Tooltip title={value}>{content}</Tooltip> : content;
 };
 
 const TopologyCompactIdentifierTag: React.FC<{
   color?: string;
   value: string;
 }> = ({ color, value }) => {
-  const text = compactToken(value, 4, 4);
-  const tag = (
-    <Tag
+  return (
+    <AevatarCompactTag
       color={color}
-      style={{
-        borderRadius: 999,
-        fontFamily: '"IBM Plex Mono", "SF Mono", monospace',
-        marginInlineEnd: 0,
-        maxWidth: 128,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {text}
-    </Tag>
+      head={4}
+      style={{ borderRadius: 999 }}
+      tail={4}
+      value={value}
+    />
   );
-
-  return value.length > 11 ? <Tooltip title={value}>{tag}</Tooltip> : tag;
 };
 
 const TopologyCompactDateText: React.FC<{
@@ -605,15 +568,7 @@ export const TopologyExplorerPage: React.FC<{
   const surfaceToken = token as AevatarThemeSurfaceToken;
   const initialRouteRef = useRef<ExplorerRouteSelection>(readExplorerSelection());
   const workbenchRef = useRef<HTMLDivElement | null>(null);
-  const initialActorId = initialRouteRef.current.actorId || topologyMockDefaultActorId;
-
-  const [dataMode, setDataMode] = useState<TopologyDataMode>(() => {
-    if (detailOnly && initialRouteRef.current.actorId) {
-      return initialRouteRef.current.mode;
-    }
-
-    return initialRouteRef.current.actorId ? "live" : "sample";
-  });
+  const initialActorId = initialRouteRef.current.actorId || "";
   const [activeTab, setActiveTab] = useState<TopologyTabKey>("graph");
   const [actorKeyword, setActorKeyword] = useState("");
   const [actorInput, setActorInput] = useState(initialActorId);
@@ -628,22 +583,22 @@ export const TopologyExplorerPage: React.FC<{
   const [graphFullscreenOpen, setGraphFullscreenOpen] = useState(false);
 
   const actorsQuery = useQuery({
-    enabled: dataMode === "live",
+    enabled: !detailOnly,
     queryFn: () => runtimeQueryApi.listAgents(),
-    queryKey: ["runtime-agents", dataMode],
+    queryKey: ["runtime-agents"],
   });
   const selectedSnapshotQuery = useQuery({
-    enabled: dataMode === "live" && selectedActorId.trim().length > 0,
+    enabled: detailOnly && selectedActorId.trim().length > 0,
     queryFn: () => runtimeActorsApi.getActorSnapshot(selectedActorId),
-    queryKey: ["runtime-actor-snapshot", selectedActorId, dataMode],
+    queryKey: ["runtime-actor-snapshot", selectedActorId],
   });
   const timelineQuery = useQuery({
-    enabled: dataMode === "live" && selectedActorId.trim().length > 0,
+    enabled: detailOnly && selectedActorId.trim().length > 0,
     queryFn: () => runtimeActorsApi.getActorTimeline(selectedActorId, { take: 40 }),
-    queryKey: ["runtime-actor-timeline", selectedActorId, dataMode],
+    queryKey: ["runtime-actor-timeline", selectedActorId],
   });
   const graphQuery = useQuery({
-    enabled: dataMode === "live" && selectedActorId.trim().length > 0,
+    enabled: detailOnly && selectedActorId.trim().length > 0,
     queryFn: () =>
       runtimeActorsApi.getActorGraphEnriched(selectedActorId, {
         depth,
@@ -654,24 +609,23 @@ export const TopologyExplorerPage: React.FC<{
     queryKey: [
       "runtime-actor-graph",
       selectedActorId,
-      dataMode,
       depth,
       direction,
       edgeTypes.join("|"),
     ],
   });
   const previewSnapshotQuery = useQuery({
-    enabled: previewOpen && dataMode === "live" && previewActorId.trim().length > 0,
+    enabled: previewOpen && previewActorId.trim().length > 0,
     queryFn: () => runtimeActorsApi.getActorSnapshot(previewActorId),
-    queryKey: ["runtime-actor-snapshot", previewActorId, dataMode],
+    queryKey: ["runtime-actor-snapshot", previewActorId, "preview"],
   });
   const previewTimelineQuery = useQuery({
-    enabled: previewOpen && dataMode === "live" && previewActorId.trim().length > 0,
+    enabled: previewOpen && previewActorId.trim().length > 0,
     queryFn: () => runtimeActorsApi.getActorTimeline(previewActorId, { take: 8 }),
-    queryKey: ["runtime-actor-timeline", previewActorId, dataMode],
+    queryKey: ["runtime-actor-timeline", previewActorId, "preview"],
   });
   const previewGraphQuery = useQuery({
-    enabled: previewOpen && dataMode === "live" && previewActorId.trim().length > 0,
+    enabled: previewOpen && previewActorId.trim().length > 0,
     queryFn: () =>
       runtimeActorsApi.getActorGraphEnriched(previewActorId, {
         depth: 2,
@@ -679,29 +633,8 @@ export const TopologyExplorerPage: React.FC<{
         edgeTypes: [],
         take: 60,
       }),
-    queryKey: ["runtime-actor-graph", previewActorId, dataMode, "preview"],
+    queryKey: ["runtime-actor-graph", previewActorId, "preview"],
   });
-
-  const filteredMockActors = useMemo(() => {
-    const keyword = actorKeyword.trim().toLowerCase();
-    const records = topologyMockRecords;
-    if (!keyword) {
-      return records;
-    }
-
-    return records.filter((record) =>
-      [
-        record.actor.id,
-        record.actor.description,
-        record.workflowName,
-        record.serviceId,
-        record.runId,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(keyword),
-    );
-  }, [actorKeyword]);
 
   const liveActors = useMemo<DisplayActorRecord[]>(() => {
     const keyword = actorKeyword.trim().toLowerCase();
@@ -716,75 +649,29 @@ export const TopologyExplorerPage: React.FC<{
       : actors;
 
     return filtered.map((actor) => ({
-      description: actor.description || actor.type,
+      description: actor.type || "WorkflowRunGAgent",
       id: actor.id,
-      isSample: false,
       subtitle: actor.type,
-      workflowName: actor.description,
+      type: actor.type,
+      workflowName: readAgentWorkflowName(actor),
     }));
   }, [actorKeyword, actorsQuery.data]);
 
-  const sampleActors = useMemo<DisplayActorRecord[]>(
-    () =>
-      filteredMockActors.map((record) => ({
-        description: record.actor.description,
-        id: record.actor.id,
-        isSample: true,
-        lastUpdatedAt: record.snapshot.lastUpdatedAt,
-        runId: record.runId,
-        scopeId: record.scopeId,
-        serviceId: record.serviceId,
-        status: statusKeyFromCompletionValue(record.snapshot.completionStatusValue),
-        subtitle: record.workflowName,
-        workflowName: record.workflowName,
-      })),
-    [filteredMockActors],
-  );
-
-  const displayActors = dataMode === "sample" ? sampleActors : liveActors;
+  const displayActors = liveActors;
   const selectedDisplayActor =
     displayActors.find((actor) => actor.id === selectedActorId) ?? null;
   const previewDisplayActor =
     displayActors.find((actor) => actor.id === previewActorId) ?? null;
-  const selectedMockRecord =
-    dataMode === "sample"
-      ? topologyMockRecordMap.get(selectedActorId) ??
-        topologyMockRecordMap.get(topologyMockDefaultActorId) ??
-        null
-      : null;
-  const previewMockRecord =
-    dataMode === "sample"
-      ? topologyMockRecordMap.get(previewActorId) ??
-        topologyMockRecordMap.get(topologyMockDefaultActorId) ??
-        null
-      : null;
-
-  const selectedSnapshot = dataMode === "sample"
-    ? selectedMockRecord?.snapshot ?? null
-    : selectedSnapshotQuery.data ?? null;
-  const selectedTimeline = dataMode === "sample"
-    ? selectedMockRecord?.timeline ?? []
-    : timelineQuery.data ?? [];
-  const rawSubgraph = dataMode === "sample"
-    ? selectedMockRecord?.graph ?? null
-    : graphQuery.data?.subgraph ?? null;
-  const previewSnapshot = dataMode === "sample"
-    ? previewMockRecord?.snapshot ?? null
-    : previewSnapshotQuery.data ?? null;
-  const previewTimelineRecords = dataMode === "sample"
-    ? previewMockRecord?.timeline ?? []
-    : previewTimelineQuery.data ?? [];
-  const previewSubgraph = dataMode === "sample"
-    ? previewMockRecord?.graph ?? {
-        edges: [],
-        nodes: [],
-        rootNodeId: previewActorId,
-      }
-    : previewGraphQuery.data?.subgraph ?? {
-        edges: [],
-        nodes: [],
-        rootNodeId: previewActorId,
-      };
+  const selectedSnapshot = selectedSnapshotQuery.data ?? null;
+  const selectedTimeline = timelineQuery.data ?? [];
+  const rawSubgraph = graphQuery.data?.subgraph ?? null;
+  const previewSnapshot = previewSnapshotQuery.data ?? null;
+  const previewTimelineRecords = previewTimelineQuery.data ?? [];
+  const previewSubgraph = previewGraphQuery.data?.subgraph ?? {
+    edges: [],
+    nodes: [],
+    rootNodeId: previewActorId,
+  };
   const selectedSubgraph = useMemo(() => {
     if (!rawSubgraph) {
       return {
@@ -833,47 +720,30 @@ export const TopologyExplorerPage: React.FC<{
     const routeSelection = readExplorerSelection();
     history.replace(
       buildRuntimeExplorerHref({
-        actorId:
-          detailOnly || dataMode === "live" ? selectedActorId || undefined : undefined,
-        mode:
-          detailOnly && selectedActorId && dataMode === "sample"
-            ? "sample"
-            : undefined,
+        actorId: detailOnly ? selectedActorId || undefined : undefined,
         runId:
-          detailOnly && dataMode === "sample"
-            ? selectedMockRecord?.runId || undefined
-            : dataMode === "live" &&
-                routeSelection.actorId &&
-                routeSelection.actorId === selectedActorId
-              ? routeSelection.runId || undefined
+          detailOnly &&
+          routeSelection.actorId &&
+          routeSelection.actorId === selectedActorId
+            ? routeSelection.runId || undefined
+            : detailOnly
+              ? initialRouteRef.current.runId || undefined
               : undefined,
-        scopeId:
-          detailOnly && dataMode === "sample"
-            ? selectedMockRecord?.scopeId || undefined
-            : routeSelection.scopeId || undefined,
-        serviceId:
-          detailOnly && dataMode === "sample"
-            ? selectedMockRecord?.serviceId || undefined
-            : routeSelection.serviceId || undefined,
+        scopeId: detailOnly ? routeSelection.scopeId || undefined : undefined,
+        serviceId: detailOnly ? routeSelection.serviceId || undefined : undefined,
       }),
     );
-  }, [dataMode, detailOnly, selectedActorId, selectedMockRecord]);
+  }, [detailOnly, selectedActorId]);
 
-  const currentContextLabel = useMemo(() => {
-    if (selectedMockRecord) {
-      return buildContextLabel(
-        selectedMockRecord.scopeId,
-        selectedMockRecord.serviceId,
-        selectedMockRecord.runId,
-      );
-    }
-
-    return buildContextLabel(
-      initialRouteRef.current.scopeId,
-      initialRouteRef.current.serviceId,
-      initialRouteRef.current.runId,
-    );
-  }, [selectedMockRecord]);
+  const currentContextLabel = useMemo(
+    () =>
+      buildContextLabel(
+        initialRouteRef.current.scopeId,
+        initialRouteRef.current.serviceId,
+        initialRouteRef.current.runId,
+      ),
+    [],
+  );
 
   const focusStatus = statusKeyFromCompletionValue(
     selectedSnapshot?.completionStatusValue,
@@ -885,12 +755,11 @@ export const TopologyExplorerPage: React.FC<{
   const previewTimeline = previewTimelineRecords.slice(0, 4);
   const previewUpdatedAt =
     previewSnapshot?.lastUpdatedAt ||
-    previewDisplayActor?.lastUpdatedAt ||
     "";
   const previewContextLabel = buildContextLabel(
-    previewMockRecord?.scopeId || initialRouteRef.current.scopeId,
-    previewMockRecord?.serviceId || initialRouteRef.current.serviceId,
-    previewMockRecord?.runId || initialRouteRef.current.runId,
+    initialRouteRef.current.scopeId,
+    initialRouteRef.current.serviceId,
+    initialRouteRef.current.runId,
   );
   const graphCanvasNodes = useMemo(
     () => buildGraphCanvasNodes(selectedSubgraph),
@@ -899,6 +768,13 @@ export const TopologyExplorerPage: React.FC<{
   const graphCanvasEdges = useMemo(
     () => buildGraphCanvasEdges(selectedSubgraph),
     [selectedSubgraph],
+  );
+  const availableEdgeTypes = useMemo(
+    () =>
+      Array.from(
+        new Set(selectedSubgraph.edges.map((edge) => edge.edgeType).filter(Boolean)),
+      ).sort((left, right) => left.localeCompare(right)),
+    [selectedSubgraph.edges],
   );
 
   const actorTableColumns = useMemo<ColumnsType<WorkflowActorTimelineItem>>(
@@ -984,48 +860,30 @@ export const TopologyExplorerPage: React.FC<{
   const handleLoadFocus = useCallback(() => {
     const nextValue = actorInput.trim();
     if (!nextValue) {
-      if (dataMode === "sample") {
-        commitWorkbenchActor(topologyMockDefaultActorId);
-      } else {
+      if (detailOnly) {
         setActorInput("");
         setSelectedActorId("");
         setSelectedNodeId("");
         setPreviewActorId("");
+        setSelectedEdgeId("");
       }
-      setSelectedEdgeId("");
       return;
     }
 
-    if (dataMode === "sample") {
-      const nextRecord =
-        topologyMockRecordMap.get(nextValue) ??
-        topologyMockRecords.find((record) =>
-          [
-            record.actor.id,
-            record.actor.description,
-            record.workflowName,
-            record.serviceId,
-            record.runId,
-          ]
-            .join(" ")
-            .toLowerCase()
-            .includes(nextValue.toLowerCase()),
-        ) ??
-        topologyMockRecordMap.get(topologyMockDefaultActorId);
-      if (!nextRecord) {
-        return;
-      }
-
-      commitWorkbenchActor(nextRecord.actor.id);
+    if (!detailOnly) {
+      history.push(
+        buildRuntimeExplorerHref({
+          actorId: nextValue,
+          runId: initialRouteRef.current.runId || undefined,
+          scopeId: initialRouteRef.current.scopeId || undefined,
+          serviceId: initialRouteRef.current.serviceId || undefined,
+        }),
+      );
       return;
     }
 
     commitWorkbenchActor(nextValue);
-  }, [actorInput, commitWorkbenchActor, dataMode]);
-
-  const handleSelectActor = useCallback((actorId: string) => {
-    commitWorkbenchActor(actorId);
-  }, [commitWorkbenchActor]);
+  }, [actorInput, commitWorkbenchActor, detailOnly]);
 
   const handleOpenPreview = useCallback(
     (actorId: string) => {
@@ -1036,7 +894,7 @@ export const TopologyExplorerPage: React.FC<{
   );
 
   const handleEnterWorkbench = useCallback(
-    (nextTab?: TopologyTabKey) => {
+    () => {
       const nextActorId = previewActorId.trim();
       if (!nextActorId) {
         return;
@@ -1045,20 +903,14 @@ export const TopologyExplorerPage: React.FC<{
       history.push(
         buildRuntimeExplorerHref({
           actorId: nextActorId,
-          mode: dataMode === "sample" ? "sample" : undefined,
-          runId:
-            previewMockRecord?.runId || initialRouteRef.current.runId || undefined,
-          scopeId:
-            previewMockRecord?.scopeId || initialRouteRef.current.scopeId || undefined,
-          serviceId:
-            previewMockRecord?.serviceId ||
-            initialRouteRef.current.serviceId ||
-            undefined,
+          runId: initialRouteRef.current.runId || undefined,
+          scopeId: initialRouteRef.current.scopeId || undefined,
+          serviceId: initialRouteRef.current.serviceId || undefined,
         }),
       );
       setPreviewOpen(false);
     },
-    [dataMode, previewActorId, previewMockRecord],
+    [previewActorId],
   );
 
   const handleOpenRuns = useCallback(() => {
@@ -1071,76 +923,60 @@ export const TopologyExplorerPage: React.FC<{
         actorId: selectedActorId,
         returnTo: buildRuntimeExplorerHref({
           actorId: selectedActorId || undefined,
-          mode: detailOnly && dataMode === "sample" ? "sample" : undefined,
-          runId: selectedMockRecord?.runId || initialRouteRef.current.runId || undefined,
-          scopeId: selectedMockRecord?.scopeId || initialRouteRef.current.scopeId || undefined,
-          serviceId:
-            selectedMockRecord?.serviceId || initialRouteRef.current.serviceId || undefined,
+          runId: initialRouteRef.current.runId || undefined,
+          scopeId: initialRouteRef.current.scopeId || undefined,
+          serviceId: initialRouteRef.current.serviceId || undefined,
         }),
       }),
     );
-  }, [dataMode, detailOnly, selectedActorId, selectedMockRecord]);
+  }, [selectedActorId]);
 
   const handleBackToExplorerList = useCallback(() => {
     history.push(buildRuntimeExplorerHref());
   }, []);
 
-  const handleUseSampleData = useCallback(() => {
-    setDataMode("sample");
-    setActorInput(topologyMockDefaultActorId);
-    setSelectedActorId(topologyMockDefaultActorId);
-    setSelectedNodeId(topologyMockDefaultActorId);
-    setSelectedEdgeId("");
-    setPreviewActorId(topologyMockDefaultActorId);
-    setPreviewOpen(false);
-  }, []);
-
-  const handleUseLiveData = useCallback(() => {
-    setDataMode("live");
-    setActorInput(initialRouteRef.current.actorId || "");
-    setSelectedActorId(initialRouteRef.current.actorId || "");
-    setSelectedNodeId(initialRouteRef.current.actorId || "");
-    setSelectedEdgeId("");
-    setPreviewActorId(initialRouteRef.current.actorId || "");
-    setPreviewOpen(false);
-  }, []);
-
   const loadingLiveTopology =
-    dataMode === "live" &&
+    detailOnly &&
     (selectedSnapshotQuery.isLoading || timelineQuery.isLoading || graphQuery.isLoading);
   const loadingPreviewTopology =
-    dataMode === "live" &&
     previewOpen &&
     (previewSnapshotQuery.isLoading || previewTimelineQuery.isLoading || previewGraphQuery.isLoading);
+  const selectedActorUnavailable =
+    detailOnly &&
+    selectedActorId.trim().length > 0 &&
+    (isHttp404Error(selectedSnapshotQuery.error) ||
+      isHttp404Error(graphQuery.error));
+  const previewActorUnavailable =
+    previewOpen &&
+    previewActorId.trim().length > 0 &&
+    (isHttp404Error(previewSnapshotQuery.error) ||
+      isHttp404Error(previewGraphQuery.error));
   const liveError =
-    selectedSnapshotQuery.error || timelineQuery.error || graphQuery.error || actorsQuery.error;
+    actorsQuery.error ||
+    (selectedActorUnavailable
+      ? null
+      : selectedSnapshotQuery.error || timelineQuery.error || graphQuery.error);
   const previewError =
-    previewSnapshotQuery.error || previewTimelineQuery.error || previewGraphQuery.error;
+    previewActorUnavailable
+      ? null
+      : previewSnapshotQuery.error || previewTimelineQuery.error || previewGraphQuery.error;
 
   const actorListColumns = useMemo<ColumnsType<DisplayActorRecord>>(
     () => [
       {
-        dataIndex: "status",
-        key: "status",
-        title: "状态",
-        width: 112,
-        render: (value: string | undefined) =>
-          value ? <TopologyStatusPill status={value} /> : <Tag>待读取</Tag>,
-      },
-      {
         key: "workflow",
         title: "工作流 / 对象",
-        width: 240,
+        width: 280,
         render: (_value, record) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
             <TopologyCompactLabelText
-              maxWidth={156}
+              maxWidth={196}
               strong
               value={record.workflowName || record.subtitle || "Actor"}
             />
             <TopologyCompactLabelText
               color={token.colorTextSecondary}
-              maxWidth={220}
+              maxWidth={240}
               value={record.description}
             />
           </div>
@@ -1156,44 +992,32 @@ export const TopologyExplorerPage: React.FC<{
         ),
       },
       {
-        key: "context",
-        title: "运行上下文",
-        width: 250,
-        render: (_value, record) => (
+        dataIndex: "type",
+        key: "type",
+        title: "Actor 类型",
+        width: 196,
+        render: (value?: string) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-            <Space size={[6, 6]} style={{ maxWidth: "100%" }} wrap={false}>
-              {record.serviceId ? (
-                <TopologyCompactIdentifierTag color="default" value={record.serviceId} />
-              ) : null}
-              {record.runId ? (
-                <TopologyCompactIdentifierTag color="processing" value={record.runId} />
-              ) : null}
-              {!record.serviceId && !record.runId ? <Tag>上下文待读取</Tag> : null}
-            </Space>
-            {record.scopeId ? (
-              <TopologyInlineToken
-                head={4}
-                maxWidth={184}
-                monospace
-                tail={4}
-                value={record.scopeId}
-              />
-            ) : (
-              <TopologyCompactLabelText
-                color={token.colorTextSecondary}
-                maxWidth={184}
-                value="当前列表没有 scope 维度。"
-              />
-            )}
+            <TopologyCompactIdentifierTag color="default" value={value || "WorkflowRunGAgent"} />
+            <TopologyCompactLabelText
+              color={token.colorTextSecondary}
+              maxWidth={180}
+              value="当前列表按 actor 维度暴露后端真实对象。"
+            />
           </div>
         ),
       },
       {
-        dataIndex: "lastUpdatedAt",
-        key: "lastUpdatedAt",
-        title: "最近更新",
-        width: 164,
-        render: (value?: string) => <TopologyCompactDateText value={value} />,
+        key: "context",
+        title: "入口上下文",
+        width: 220,
+        render: () => (
+          <TopologyCompactLabelText
+            color={token.colorTextSecondary}
+            maxWidth={196}
+            value={currentContextLabel}
+          />
+        ),
       },
       {
         key: "actions",
@@ -1212,7 +1036,7 @@ export const TopologyExplorerPage: React.FC<{
         ),
       },
     ],
-    [handleOpenPreview, token.colorTextSecondary],
+    [currentContextLabel, handleOpenPreview, token.colorTextSecondary],
   );
 
   const graphControlLabelStyle: React.CSSProperties = {
@@ -1258,11 +1082,11 @@ export const TopologyExplorerPage: React.FC<{
         <Select
           allowClear
           mode="multiple"
-          options={topologyMockEdgeTypes.map((edgeType) => ({
+          options={availableEdgeTypes.map((edgeType) => ({
             label: edgeTypeLabel(edgeType),
             value: edgeType,
           }))}
-          placeholder="全部关系"
+          placeholder={availableEdgeTypes.length > 0 ? "全部关系" : "暂无关系类型"}
           value={edgeTypes}
           onChange={(values) => setEdgeTypes(values)}
         />
@@ -1348,19 +1172,69 @@ export const TopologyExplorerPage: React.FC<{
     </AevatarPanel>
   );
 
+  const actorUnavailableNotice = (
+    actorId: string,
+    options?: {
+      action?: React.ReactNode;
+      compact?: boolean;
+      contextLabel?: string;
+      title?: string;
+    },
+  ) => (
+    <Alert
+      action={options?.action}
+      description={
+        <div style={{ display: "flex", flexDirection: "column", gap: options?.compact ? 8 : 10 }}>
+          <Typography.Text style={{ color: token.colorTextSecondary }}>
+            当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。
+          </Typography.Text>
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              gridTemplateColumns: "96px minmax(0, 1fr)",
+            }}
+          >
+            <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
+              Actor ID
+            </Typography.Text>
+            <TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={actorId} />
+            {options?.contextLabel ? (
+              <>
+                <Typography.Text
+                  style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}
+                >
+                  入口上下文
+                </Typography.Text>
+                <TopologyInlineToken
+                  head={4}
+                  maxWidth="100%"
+                  monospace
+                  tail={4}
+                  value={options.contextLabel}
+                />
+              </>
+            ) : null}
+          </div>
+        </div>
+      }
+      message={options?.title || "当前 actor 不可查询"}
+      showIcon
+      type="warning"
+    />
+  );
+
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
       description={
         detailOnly
           ? "Topology 详情页用于深度追查单个 workflow run actor 的 graph、timeline、edge 和 snapshot 证据。"
-          : "Topology 是 Platform 的运行关系追查台，用单个 workflow run actor 为焦点还原 run、step、child actor 和最近事件证据。"
+          : "Topology 是 Platform 的运行关系追查台，围绕后端真实 workflow run actor 还原 graph、timeline、edge 和 snapshot 证据。"
       }
       extra={
         <Space size={8}>
-          <Tag color={dataMode === "sample" ? "gold" : "blue"}>
-            {dataMode === "sample" ? "示例数据" : "真实数据"}
-          </Tag>
+          <Tag color="blue">真实数据</Tag>
           <Typography.Text type="secondary">
             {detailOnly ? "单对象深度追查" : "Actor-first investigation"}
           </Typography.Text>
@@ -1401,12 +1275,12 @@ export const TopologyExplorerPage: React.FC<{
               <Typography.Text strong style={{ fontSize: 22 }}>
                 {detailOnly
                   ? "围绕一个 actor 深挖关系图和事件证据"
-                  : "先锁定一个 actor，再看关系图和事件证据"}
+                  : "先从真实 actor 列表锁定对象，再进入关系追查"}
               </Typography.Text>
               <Typography.Text style={{ color: token.colorTextSecondary }}>
                 {detailOnly
                   ? "当前页只服务单个追查对象，列表筛选和快速预览已经收回到 Topology 首页。"
-                  : "后端当前只对单个 actor 提供 snapshot、timeline 和 graph subgraph，所以页面默认走 actor-first 追查。"}
+                  : "后端当前提供 actor 列表、snapshot、timeline 和 graph subgraph，页面默认走 actor-first 追查。"}
               </Typography.Text>
             </div>
             <div
@@ -1432,7 +1306,7 @@ export const TopologyExplorerPage: React.FC<{
                   padding: "0 14px",
                 }}
               >
-                当前上下文 {currentContextLabel}
+                入口上下文 {currentContextLabel}
               </div>
               {detailOnly && selectedActorId ? (
                 <TopologyInlineToken
@@ -1457,7 +1331,7 @@ export const TopologyExplorerPage: React.FC<{
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
-                {detailOnly ? "切换 Actor" : "Actor ID"}
+                {detailOnly ? "切换 Actor" : "直接打开 Actor ID"}
               </Typography.Text>
               <Input
                 onChange={(event) => setActorInput(event.target.value)}
@@ -1495,19 +1369,16 @@ export const TopologyExplorerPage: React.FC<{
             <Typography.Text style={{ color: token.colorTextSecondary }}>
               {detailOnly
                 ? "如果需要换对象，请修改 actorId 或返回列表页重新选择。"
-                : "先在列表里锁定一个 actor，再决定是否进入完整追查工作台。"}
+                : "先在真实 actor 列表里打开预览，或直接输入 Actor ID 打开详情页。"}
             </Typography.Text>
             <Space size={8}>
               <Button onClick={handleLoadFocus} type="primary">
-                {detailOnly ? "刷新追查对象" : "加载追查视图"}
+                {detailOnly ? "刷新追查对象" : "打开追查详情"}
               </Button>
               {detailOnly ? (
                 <Button onClick={handleBackToExplorerList}>返回对象列表</Button>
-              ) : null}
-              {dataMode === "sample" ? (
-                <Button onClick={handleUseLiveData}>切回真实数据</Button>
               ) : (
-                <Button onClick={handleUseSampleData}>查看示例数据</Button>
+                <Button onClick={() => actorsQuery.refetch()}>刷新列表</Button>
               )}
             </Space>
           </div>
@@ -1558,7 +1429,7 @@ export const TopologyExplorerPage: React.FC<{
               />
               <TopologyMetricCard
                 compact
-                label="运行上下文"
+                label="入口上下文"
                 value={<TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={currentContextLabel} />}
               />
               <TopologyMetricCard
@@ -1570,12 +1441,12 @@ export const TopologyExplorerPage: React.FC<{
           ) : (
             <>
               <TopologyMetricCard compact label="可追查对象" value={displayActors.length} />
-              <TopologyMetricCard compact label="焦点状态" value={focusStatusLabel || "未选择"} />
-              <TopologyMetricCard compact label="关系节点" value={selectedSubgraph.nodes.length} />
+              <TopologyMetricCard compact label="数据源" value="Actor Query" />
+              <TopologyMetricCard compact label="入口上下文" value={currentContextLabel} />
               <TopologyMetricCard
                 compact
-                label="最近更新时间"
-                value={selectedSnapshot ? formatDateTime(selectedSnapshot.lastUpdatedAt) : "n/a"}
+                label="列表状态"
+                value={actorsQuery.isLoading ? "读取中" : "已加载"}
               />
             </>
           )}
@@ -1586,11 +1457,7 @@ export const TopologyExplorerPage: React.FC<{
             layoutMode="document"
             padding={18}
             title="可追查对象"
-            extra={
-              <Tag color={dataMode === "sample" ? "gold" : "default"}>
-                {dataMode === "sample" ? "示例" : "实时"}
-              </Tag>
-            }
+            extra={<Tag color="default">实时</Tag>}
           >
             {displayActors.length > 0 ? (
               <Table<DisplayActorRecord>
@@ -1606,11 +1473,6 @@ export const TopologyExplorerPage: React.FC<{
                 scroll={{ x: 1120 }}
                 size="middle"
                 tableLayout="fixed"
-              />
-            ) : dataMode === "sample" ? (
-              <AevatarInspectorEmpty
-                description="示例数据里没有命中当前筛选。"
-                title="未找到示例 actor"
               />
             ) : (
               <AevatarInspectorEmpty
@@ -1633,6 +1495,12 @@ export const TopologyExplorerPage: React.FC<{
             <AevatarInspectorEmpty description="先从列表里选择一个 actor。" />
           ) : loadingPreviewTopology ? (
             <AevatarInspectorEmpty description="正在读取 snapshot、timeline 和 graph subgraph。" />
+          ) : previewActorUnavailable ? (
+            actorUnavailableNotice(previewActorId, {
+              compact: true,
+              contextLabel: previewContextLabel,
+              title: "这个 actor 当前不可预览",
+            })
           ) : previewError ? (
             <Alert
               message={
@@ -1645,23 +1513,15 @@ export const TopologyExplorerPage: React.FC<{
             />
           ) : !previewSnapshot ? (
             <AevatarInspectorEmpty
-              description="当前 actor 还没有可读的 snapshot。你可以切换到示例数据先看页面形态。"
+              description="当前 actor 还没有可读的 snapshot。"
               title="暂无运行态数据"
             />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <Space size={[8, 8]} wrap>
-                  <Tag color={dataMode === "sample" ? "gold" : "blue"}>
-                    {dataMode === "sample" ? "示例对象" : "实时对象"}
-                  </Tag>
+                  <Tag color="blue">实时对象</Tag>
                   <TopologyStatusPill status={previewStatus} />
-                  {previewMockRecord?.serviceId ? (
-                    <TopologyCompactIdentifierTag color="default" value={previewMockRecord.serviceId} />
-                  ) : null}
-                  {previewMockRecord?.runId ? (
-                    <TopologyCompactIdentifierTag color="processing" value={previewMockRecord.runId} />
-                  ) : null}
                 </Space>
                 <TopologyCompactLabelText
                   maxWidth="100%"
@@ -1716,7 +1576,7 @@ export const TopologyExplorerPage: React.FC<{
                   padding: 14,
                 }}
               >
-                <Typography.Text strong>运行上下文</Typography.Text>
+                <Typography.Text strong>入口上下文</Typography.Text>
                 <TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={previewContextLabel} />
                 <Typography.Paragraph style={{ marginBottom: 0, minHeight: 0 }}>
                   {previewSnapshot.lastOutput || "当前没有最近输出。"}
@@ -1788,9 +1648,7 @@ export const TopologyExplorerPage: React.FC<{
             extra={
               selectedActorId ? (
                 <Space size={8} wrap>
-                  <Tag color={dataMode === "sample" ? "gold" : "blue"}>
-                    {dataMode === "sample" ? "示例焦点" : "当前焦点"}
-                  </Tag>
+                  <Tag color="blue">当前焦点</Tag>
                   <Button icon={<RadarChartOutlined />} onClick={handleOpenRuns}>
                     查看运行
                   </Button>
@@ -1805,9 +1663,14 @@ export const TopologyExplorerPage: React.FC<{
               />
             ) : loadingLiveTopology ? (
               <AevatarInspectorEmpty description="正在读取 snapshot、timeline 和 graph subgraph。" />
+            ) : selectedActorUnavailable ? (
+              actorUnavailableNotice(selectedActorId, {
+                action: <Button onClick={handleBackToExplorerList}>返回对象列表</Button>,
+                contextLabel: currentContextLabel,
+              })
             ) : !selectedSnapshot ? (
               <AevatarInspectorEmpty
-                description="当前 actor 还没有可读的 snapshot。你可以切换到示例数据先看页面形态。"
+                description="当前 actor 还没有可读的 snapshot。"
                 title="暂无运行态数据"
               />
             ) : (

@@ -1,6 +1,7 @@
 import { Badge, Button, Space, Tag, Typography } from "antd";
 import React from "react";
 import type { RunEndpointKind } from "@/shared/runs/endpointKinds";
+import { AevatarCompactText } from "@/shared/ui/compactText";
 import type { RunTransport } from "../runEventPresentation";
 
 type RunsStatusStripProps = {
@@ -11,9 +12,12 @@ type RunsStatusStripProps = {
   isRunLive: boolean;
   messageCount: number;
   onAbort: () => void;
-  onOpenInspector: () => void;
+  onOpenDetails: () => void;
+  onOpenSetup: () => void;
   runId: string;
   runStatusLabel: string;
+  compact?: boolean;
+  showSetupAction?: boolean;
   statusTone: "success" | "processing" | "error" | "default";
   transport: RunTransport;
   endpointId: string;
@@ -83,9 +87,12 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
   isRunLive,
   messageCount,
   onAbort,
-  onOpenInspector,
+  onOpenDetails,
+  onOpenSetup,
   runId,
   runStatusLabel,
+  compact = false,
+  showSetupAction = true,
   statusTone,
   transport,
   endpointId,
@@ -109,9 +116,13 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
 
         <div style={metricPillStyle}>
           <Typography.Text style={metricLabelStyle}>Run ID</Typography.Text>
-          <Typography.Text code style={metricValueStyle}>
-            {runId}
-          </Typography.Text>
+          <AevatarCompactText
+            maxWidth={180}
+            monospace
+            strong
+            style={metricValueStyle}
+            value={runId}
+          />
         </div>
 
         <div style={metricPillStyle}>
@@ -121,33 +132,50 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
 
         <div style={metricPillStyle}>
           <Typography.Text style={metricLabelStyle}>Endpoint</Typography.Text>
-          <Typography.Text style={metricValueStyle}>
-            {endpointId || "chat"}
-          </Typography.Text>
+          <AevatarCompactText
+            maxWidth={180}
+            monospace={endpointKind !== "chat"}
+            strong
+            style={metricValueStyle}
+            value={endpointId || "chat"}
+          />
         </div>
 
-        <div style={metricPillStyle}>
-          <Typography.Text style={metricLabelStyle}>Transport</Typography.Text>
-          <Tag color="processing">
-            {transportLabel}
-          </Tag>
-        </div>
+        {!compact ? (
+          <>
+            <div style={metricPillStyle}>
+              <Typography.Text style={metricLabelStyle}>Transport</Typography.Text>
+              <Tag color="processing">
+                {transportLabel}
+              </Tag>
+            </div>
 
-        <div style={metricPillStyle}>
-          <Typography.Text style={metricLabelStyle}>Activity</Typography.Text>
-          <Typography.Text style={metricValueStyle}>
-            {messageCount} msg · {eventCount} evt · {activeStepCount} active
-          </Typography.Text>
-        </div>
+            <div style={metricPillStyle}>
+              <Typography.Text style={metricLabelStyle}>Activity</Typography.Text>
+              <Typography.Text style={metricValueStyle}>
+                {messageCount} msg · {eventCount} evt · {activeStepCount} active
+              </Typography.Text>
+            </div>
+          </>
+        ) : null}
       </div>
 
       <div style={actionWrapStyle}>
+        {showSetupAction ? (
+          <Button
+            size="small"
+            onClick={onOpenSetup}
+            type="default"
+          >
+            Run setup
+          </Button>
+        ) : null}
         <Button
           size="small"
-          onClick={onOpenInspector}
+          onClick={onOpenDetails}
           type={hasPendingInteraction ? "primary" : "default"}
         >
-          {hasPendingInteraction ? "Interaction pending" : "Inspector"}
+          Details
         </Button>
         <Button
           danger

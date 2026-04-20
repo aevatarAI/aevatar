@@ -217,17 +217,19 @@ jest.mock("./components/RunsLaunchRail", () => {
     return React.createElement(
       "section",
       null,
-      React.createElement("div", null, "Launch rail"),
-      React.createElement("textarea", {
-        "aria-label": "Prompt",
-        onChange: (event: any) =>
-          setValues((current: Record<string, unknown>) => ({
-            ...current,
-            prompt: event.target.value,
-          })),
-        placeholder: "Describe the task to run.",
-        value: values.prompt,
-      }),
+      React.createElement("div", null, "Run setup"),
+      props.showPromptField !== false
+        ? React.createElement("textarea", {
+            "aria-label": "Prompt",
+            onChange: (event: any) =>
+              setValues((current: Record<string, unknown>) => ({
+                ...current,
+                prompt: event.target.value,
+              })),
+            placeholder: "Describe the task to run.",
+            value: values.prompt,
+          })
+        : null,
       React.createElement("input", {
         "aria-label": "Scope ID",
         onChange: (event: any) =>
@@ -237,14 +239,16 @@ jest.mock("./components/RunsLaunchRail", () => {
           })),
         value: values.scopeId ?? "",
       }),
-      React.createElement(
-        "button",
-        {
-          onClick: () => props.onSubmitRun(values),
-          type: "button",
-        },
-        "Start run"
-      ),
+      props.showSubmitActions !== false
+        ? React.createElement(
+            "button",
+            {
+              onClick: () => props.onSubmitRun(values),
+              type: "button",
+            },
+            "Start run"
+          )
+        : null,
       props.recentRunRows.map((row: any) =>
         React.createElement(
           "button",
@@ -310,32 +314,31 @@ describe("RunsPage", () => {
     );
   });
 
-  it("renders the runtime run console header and navigation actions", async () => {
+  it("renders the run console header and setup-first state before any run starts", async () => {
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(container.textContent).toContain("Runtime endpoint console");
+    expect(container.textContent).toContain("Run Console");
     expect(
       screen.getByRole("button", { name: "Open runtime console guide" })
     );
     expect(
-      screen.getByRole("button", { name: "Catalog" })
+      screen.getByRole("button", { name: "Workflow catalog" })
     ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "返回团队高级编辑" })
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Explorer" })
+      screen.getByRole("button", { name: "Actor explorer" })
     ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Open observability hub" })
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Inspector" })).toBeTruthy();
     expect(
       screen.getByPlaceholderText("Describe the task to run.")
     ).toBeTruthy();
-    expect(container.textContent).toContain("Launch rail");
-    expect(container.textContent).toContain("Run trace");
-    expect(container.textContent).toContain("Inspector");
+    expect(container.textContent).toContain("Run setup");
+    expect(container.textContent).toContain("Conversation");
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
   });
 
   it("navigates back to the team advanced tab from the runs console", async () => {
@@ -382,7 +385,9 @@ describe("RunsPage", () => {
     );
   });
 
-  it("keeps the trace workspace viewport stretchable so the inner console can scroll", async () => {
+  it("keeps the trace workspace viewport stretchable once a run is active", async () => {
+    mockSession.status = "running";
+    mockSession.runId = "run-1";
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
     const tabs = container.querySelectorAll(".ant-tabs");
@@ -398,6 +403,41 @@ describe("RunsPage", () => {
       minHeight: "0",
       overflow: "hidden",
     });
+  });
+
+  it("shows the trace workbench and primary run actions after the run starts", async () => {
+    mockSession.status = "running";
+    mockSession.runId = "run-1";
+
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(container.textContent).toContain("Conversation");
+    expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Conversation" })).toBeTruthy();
+  });
+
+  it("surfaces pending human interaction inline in the main workspace", async () => {
+    mockSession.status = "running";
+    mockSession.runId = "run-1";
+    mockSession.pendingHumanInput = {
+      prompt: "Approve the release summary.",
+      runId: "run-1",
+      stepId: "review-step",
+      suspensionType: "human_approval",
+      timeoutSeconds: 600,
+    } as any;
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(screen.getByText("Action required")).toBeInTheDocument();
+    expect(screen.getByText("Review and continue the run")).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "Approved" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Operator response" })
+    ).toBeInTheDocument();
   });
 
   it("uses the generic invoke path for prepared service invocation drafts", async () => {
@@ -461,7 +501,6 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("Run the draft");
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
         "scope-1",
@@ -474,6 +513,7 @@ describe("RunsPage", () => {
         expect.any(AbortSignal)
       );
     });
+    expect(screen.getAllByText("Conversation").length).toBeGreaterThan(0);
 
     expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
@@ -500,7 +540,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     await screen.findByDisplayValue("scope-1");
-    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
@@ -562,7 +602,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     await screen.findByDisplayValue("scope-1");
-    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
@@ -629,11 +669,11 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("hello observed run");
     await waitFor(() => {
       expect(mockReset).toHaveBeenCalled();
       expect(mockDispatch).toHaveBeenCalledTimes(2);
     });
+    expect(screen.getAllByText("Conversation").length).toBeGreaterThan(0);
 
     expect(mockDispatch).toHaveBeenNthCalledWith(
       1,
@@ -745,7 +785,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     await screen.findByDisplayValue("Run it");
-    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(

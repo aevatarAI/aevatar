@@ -3,6 +3,10 @@ import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import {
+  clearStoredAuthSession,
+  persistAuthSession,
+} from "@/shared/auth/session";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamsHomePage from "./home";
@@ -150,6 +154,7 @@ jest.mock("@/shared/studio/api", () => ({
 describe("TeamsHomePage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    clearStoredAuthSession();
     jest.clearAllMocks();
   });
 
@@ -159,14 +164,15 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
-    expect(screen.getByText("当前 Team")).toBeTruthy();
-    expect(screen.getByText("当前可见团队")).toBeTruthy();
-    expect(screen.getByText("可见运行信号")).toBeTruthy();
-    expect(screen.getByText("草稿条目")).toBeTruthy();
+    expect(screen.getByText("当前 Scope")).toBeTruthy();
+    expect(screen.getAllByText("团队入口").length).toBeGreaterThan(0);
+    expect(screen.getByText("运行正常")).toBeTruthy();
+    expect(screen.getByText("需要处理")).toBeTruthy();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "切换 Scope" })).toBeNull();
     expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
     expect(screen.queryByText("草稿团队")).toBeNull();
-    expect(screen.queryByRole("button", { name: "显示草稿团队 (1)" })).toBeNull();
+    expect(screen.getByText("还有草稿待整理")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "更多" }));
 
@@ -174,14 +180,13 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("进入 Studio")).toBeTruthy();
   });
 
-  it("lets the user switch from cards to the compact roster manually", async () => {
+  it("does not show the roster view toggle when the homepage only has one visible team", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     await screen.findByRole("heading", { level: 3, name: "NyxID Chat" });
-    fireEvent.click(screen.getByRole("button", { name: "切换到列表视图" }));
-
-    expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
-    expect(screen.queryByLabelText("团队卡片视图")).toBeNull();
+    expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "切换到卡片视图" })).toBeNull();
   });
 
   it("keeps the homepage visible when runtime sampling partially fails", async () => {
@@ -213,6 +218,40 @@ describe("TeamsHomePage", () => {
     expect(params.get("runId")).toBe("run-latest");
   });
 
+  it("falls back to the locally stored auth scope when the live session lookup fails", async () => {
+    window.history.replaceState({}, "", "/teams");
+    persistAuthSession({
+      tokens: {
+        accessToken: "access-token",
+        tokenType: "Bearer",
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3600_000,
+        refreshToken: "refresh-token",
+      },
+      user: {
+        sub: "scope-a",
+        name: "Abigail Deng",
+      },
+    });
+    (studioApi.getAuthSession as jest.Mock).mockRejectedValueOnce(
+      new Error("Error occurred while trying to proxy: localhost:5173/api/auth/me"),
+    );
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
+    expect(screen.getByText("当前登录态校验失败，已回退到本地 Scope")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "登录状态暂时不可用，请刷新后重试。 当前已回退到本地会话里的 Scope scope-a。",
+      ),
+    ).toBeTruthy();
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
+    });
+  });
+
   it("does not turn saved workflows into homepage teams before the current scope has an entry", async () => {
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
     (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
@@ -226,7 +265,8 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("button", { name: "打开 Studio" })).toBeTruthy();
+    const openStudioButtons = await screen.findAllByRole("button", { name: "打开 Studio" });
+    expect(openStudioButtons.length).toBeGreaterThan(0);
     expect(screen.getByText(/已保存的行为定义/)).toBeTruthy();
     expect(screen.queryByText("客服团队")).toBeNull();
     expect(screen.queryByText("草稿团队")).toBeNull();

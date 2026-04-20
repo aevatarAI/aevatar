@@ -38,6 +38,7 @@ import {
   resolveAevatarMetricVisual,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import { AevatarCompactText } from "@/shared/ui/compactText";
 import type { GovernanceAuditEvent } from "./GovernanceAuditTimeline";
 
 export type GovernanceInspectorTarget =
@@ -177,10 +178,50 @@ function renderList(values: string[]) {
   return (
     <Space orientation="vertical" size={6} style={{ display: "flex" }}>
       {values.map((value) => (
-        <Typography.Text key={value}>{value}</Typography.Text>
+        <AevatarCompactText key={value} monospace value={value} />
       ))}
     </Space>
   );
+}
+
+function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.ReactNode {
+  if (!target) {
+    return "治理详情";
+  }
+
+  if (target.kind === "policy") {
+    return target.mode === "create" ? (
+      "新建策略"
+    ) : (
+      <AevatarCompactText monospace value={target.record.policyId} />
+    );
+  }
+
+  if (target.kind === "binding") {
+    return target.mode === "create" ? (
+      "新建绑定"
+    ) : (
+      <AevatarCompactText monospace value={target.record.bindingId} />
+    );
+  }
+
+  if (target.kind === "endpoint") {
+    return target.mode === "create" ? (
+      "新建入口"
+    ) : (
+      <AevatarCompactText monospace value={target.record.endpointId} />
+    );
+  }
+
+  if (target.kind === "activation") {
+    return "激活校验";
+  }
+
+  if (target.kind === "audit") {
+    return "变更记录";
+  }
+
+  return "治理详情";
 }
 
 const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
@@ -393,25 +434,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
           width: 760,
         },
       }}
-      title={
-        target?.kind === "policy"
-          ? target.mode === "create"
-            ? "新建策略"
-            : target.record.policyId
-          : target?.kind === "binding"
-            ? target.mode === "create"
-              ? "新建绑定"
-              : target.record.bindingId
-          : target?.kind === "endpoint"
-              ? target.mode === "create"
-                ? "新建入口"
-                : target.record.endpointId
-              : target?.kind === "activation"
-                ? "激活校验"
-                : target?.kind === "audit"
-                  ? "变更记录"
-                  : "治理详情"
-      }
+      title={buildInspectorTitle(target)}
     >
       <div style={aevatarDrawerScrollStyle}>
         {!canManage ? (
@@ -437,7 +460,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <Typography.Text strong>
                   {target.mode === "create"
                     ? "新建一条治理策略"
-                    : target.record.displayName || target.record.policyId}
+                    : target.record.displayName || (
+                        <AevatarCompactText monospace value={target.record.policyId} />
+                      )}
                 </Typography.Text>
                 {target.mode === "edit" ? (
                   <span
@@ -536,7 +561,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <Typography.Text strong>
                   {target.mode === "create"
                     ? "新建一条治理绑定"
-                    : target.record.displayName || target.record.bindingId}
+                    : target.record.displayName || (
+                        <AevatarCompactText monospace value={target.record.bindingId} />
+                      )}
                 </Typography.Text>
                 {target.mode === "edit" ? (
                   <span
@@ -737,7 +764,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <Typography.Text strong>
                   {target.mode === "create"
                     ? "新增一条治理入口"
-                    : target.record.displayName || target.record.endpointId}
+                    : target.record.displayName || (
+                        <AevatarCompactText monospace value={target.record.endpointId} />
+                      )}
                 </Typography.Text>
                 {target.mode === "edit" ? (
                   <span
@@ -885,9 +914,15 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
             }}
           >
             <Space orientation="vertical" size={16} style={{ display: "flex" }}>
-              <Typography.Text strong>
-                版本 {target.record.revisionId || "未解析"} 的激活校验
-              </Typography.Text>
+              <Space size={8} wrap>
+                <Typography.Text strong>版本</Typography.Text>
+                {target.record.revisionId ? (
+                  <AevatarCompactText monospace value={target.record.revisionId} />
+                ) : (
+                  <Typography.Text type="secondary">未解析</Typography.Text>
+                )}
+                <Typography.Text strong>的激活校验</Typography.Text>
+              </Space>
               <div
                 style={{
                   display: "grid",
@@ -964,9 +999,10 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <Typography.Text type="secondary">
                   来源: {target.event.actor}
                 </Typography.Text>
-                <Typography.Text type="secondary">
-                  对象: {target.event.targetLabel}
-                </Typography.Text>
+                <Space size={6} wrap>
+                  <Typography.Text type="secondary">对象:</Typography.Text>
+                  <AevatarCompactText value={target.event.targetLabel} />
+                </Space>
                 <Typography.Text type="secondary">
                   时间: {target.event.at}
                 </Typography.Text>

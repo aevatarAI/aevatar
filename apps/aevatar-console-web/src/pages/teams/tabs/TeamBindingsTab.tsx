@@ -5,6 +5,7 @@ import {
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import {
+  CompactFactValue,
   DetailPill,
   FactLine,
   SignalCard,
@@ -80,6 +81,8 @@ const TeamBindingsTab: React.FC<TeamBindingsTabProps> = ({
     height: 36,
     paddingInline: 16,
   };
+  const looksIdentifierLike = (value: string): boolean =>
+    value.length > 18 && /[:/._-]/.test(value);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -222,7 +225,11 @@ const TeamBindingsTab: React.FC<TeamBindingsTabProps> = ({
                   >
                     <Typography.Text type="secondary">{row.label}</Typography.Text>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                      <Typography.Text strong>{row.value}</Typography.Text>
+                      {looksIdentifierLike(row.value) ? (
+                        <CompactFactValue value={row.value} />
+                      ) : (
+                        <Typography.Text strong>{row.value}</Typography.Text>
+                      )}
                       <FactLine rows={2} secondary text={row.note} />
                     </div>
                     <DetailPill compact style={row.badgeStyle} text={row.badgeText} />

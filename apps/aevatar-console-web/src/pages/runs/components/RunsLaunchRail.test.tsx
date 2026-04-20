@@ -73,4 +73,57 @@ describe("RunsLaunchRail", () => {
     expect(onUsePreset).toHaveBeenCalledTimes(1);
     expect(onUsePreset).toHaveBeenCalledWith(visiblePresets[0]);
   });
+
+  it("hides advanced chat configuration behind a collapsible section in chat mode", () => {
+    const composerFormRef = {
+      current: undefined,
+    } as React.RefObject<ProFormInstance<RunFormValues> | undefined>;
+
+    render(
+      <RunsLaunchRail
+        catalogSearch=""
+        activeEndpointId="chat"
+        activeEndpointKind="chat"
+        composerFormRef={composerFormRef}
+        initialFormValues={{
+          prompt: "",
+          endpointId: "chat",
+          endpointKind: "chat",
+          scopeId: "scope-1",
+          serviceOverrideId: "",
+          transport: "sse",
+          routeName: "direct",
+        }}
+        recentRunRows={[]}
+        selectedTransport="sse"
+        selectedRouteDetailsPrimitives={[]}
+        streaming={false}
+        submitPathLabel="/api/scopes/{scopeId}/invoke/chat:stream"
+        transportOptions={[{ label: "Service SSE stream", value: "sse" }]}
+        variant="chat"
+        visiblePresets={[]}
+        workflowCatalogLoading={false}
+        routeOptions={[{ label: "direct", value: "direct" }]}
+        onAbortRun={jest.fn()}
+        onCatalogSearchChange={jest.fn()}
+        onClearRecentRuns={jest.fn()}
+        onEndpointChange={jest.fn()}
+        onEndpointKindChange={jest.fn()}
+        onSelectRouteName={jest.fn()}
+        onSubmitRun={async () => {}}
+        onTransportChange={jest.fn()}
+        onUsePreset={jest.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText("Chat route (optional)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Scope ID")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Endpoint")).toBeNull();
+    expect(screen.queryByText("Requests go through /api/scopes/{scopeId}/invoke/chat:stream")).toBeNull();
+
+    fireEvent.click(screen.getByText("Advanced options"));
+
+    expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
+    expect(screen.getByLabelText("Binding override (optional)")).toBeInTheDocument();
+  });
 });

@@ -14,10 +14,6 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import type { ProFormInstance } from "@ant-design/pro-components";
 import {
   PageContainer,
-  ProDescriptions,
-  ProForm,
-  ProFormSwitch,
-  ProFormTextArea,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
@@ -30,10 +26,10 @@ import {
 import {
   Button,
   Drawer,
+  Input,
   message,
   Popover,
   Space,
-  Tabs,
   Typography,
 } from "antd";
 import React, {
@@ -80,9 +76,9 @@ import {
   cardStackStyle,
   drawerBodyStyle,
   drawerScrollStyle,
-  embeddedPanelStyle,
 } from "@/shared/ui/proComponents";
 import RunsInspectorPane from "./components/RunsInspectorPane";
+import RunsActionRequiredPanel from "./components/RunsActionRequiredPanel";
 import RunsEventsView from "./components/RunsEventsView";
 import RunsLaunchRail from "./components/RunsLaunchRail";
 import RunsMessagesView from "./components/RunsMessagesView";
@@ -100,12 +96,9 @@ import {
 } from "./runEventPresentation";
 import {
   builtInPresets,
-  composerRailDefaultWidth,
-  composerRailKeyboardStep,
   type ConsoleViewKey,
   defaultRunRouteName,
   formatElapsedDuration,
-  humanInputColumns,
   type HumanInputRecord,
   readInitialRunFormValues,
   type RecentRunTableRow,
@@ -114,22 +107,14 @@ import {
   type RunFormValues,
   type RunStatusValue,
   runStatusValueEnum,
-  runsWorkbenchComposerRailStyle,
-  runsWorkbenchMainStyle,
   runsWorkbenchMonitorStyle,
-  runsWorkbenchResizeHandleStyle,
-  runsWorkbenchResizeRailStyle,
   runsWorkbenchShellStyle,
-  resolveResponsiveComposerWidth,
   type RunSummaryRecord,
   type SelectedRouteRecord,
   type SignalFormValues,
   trimOptional,
-  waitingSignalColumns,
   type WaitingSignalRecord,
   workbenchOverviewGridStyle,
-  workbenchTraceTabsStyle,
-  workbenchTraceTabsStyles,
 } from "./runWorkbenchConfig";
 
 const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
@@ -159,28 +144,86 @@ const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
   justifyContent: "flex-end",
 };
 
-const runsWorkspaceTabsClassName = "runs-workspace-tabs";
-const runsWorkspaceTabsCss = `
-.${runsWorkspaceTabsClassName} {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
+const runsSetupStateStyle: React.CSSProperties = {
+  display: "flex",
+  flex: 1,
+  justifyContent: "center",
+  minHeight: 0,
+  overflow: "hidden",
+};
 
-.${runsWorkspaceTabsClassName} .ant-tabs-content-holder,
-.${runsWorkspaceTabsClassName} .ant-tabs-content,
-.${runsWorkspaceTabsClassName} .ant-tabs-tabpane-active {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
+const runsSetupRailViewportStyle: React.CSSProperties = {
+  display: "flex",
+  flex: 1,
+  maxWidth: 920,
+  minHeight: 0,
+  overflow: "hidden",
+  width: "100%",
+};
 
-.${runsWorkspaceTabsClassName} .ant-tabs-tabpane-hidden {
-  display: none !important;
-}
-`;
+const runsRunStateStyle: React.CSSProperties = {
+  display: "flex",
+  flex: 1,
+  minHeight: 0,
+  overflow: "hidden",
+};
+
+const runsChatLayoutStyle: React.CSSProperties = {
+  display: "grid",
+  flex: 1,
+  gap: 16,
+  gridTemplateColumns: "minmax(272px, 320px) minmax(0, 1fr)",
+  minHeight: 0,
+  overflow: "hidden",
+};
+
+const runsChatSidebarStyle: React.CSSProperties = {
+  display: "flex",
+  flex: 1,
+  flexDirection: "column",
+  minHeight: 0,
+  minWidth: 0,
+  overflow: "hidden",
+};
+
+const runsChatMainStyle: React.CSSProperties = {
+  display: "flex",
+  flex: 1,
+  flexDirection: "column",
+  gap: 12,
+  minHeight: 0,
+  minWidth: 0,
+  overflow: "hidden",
+};
+
+const runsChatTraceWrapStyle: React.CSSProperties = {
+  display: "flex",
+  flex: 1,
+  minHeight: 0,
+  minWidth: 0,
+  overflow: "hidden",
+};
+
+const runsChatComposerCardStyle: React.CSSProperties = {
+  alignItems: "flex-end",
+  background: "var(--ant-color-bg-container)",
+  border: "1px solid var(--ant-color-border-secondary)",
+  borderRadius: 16,
+  display: "flex",
+  flexDirection: "row",
+  gap: 8,
+  padding: "10px 12px",
+};
+
+const runsChatComposerActionsStyle: React.CSSProperties = {
+  display: "flex",
+  flex: "0 0 auto",
+};
+
+const runsChatComposerInputWrapStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+};
 
 function resolveRequestedServiceId(
   request: Pick<
@@ -213,6 +256,12 @@ function extractMissingServiceId(messageText: string): string {
 
 function isMissingScopeServiceError(messageText: string): boolean {
   return extractMissingServiceId(messageText).length > 0;
+}
+
+function resolveConsoleViewForEndpoint(
+  endpointKind: RunEndpointKind
+): ConsoleViewKey {
+  return endpointKind === "chat" ? "messages" : "timeline";
 }
 
 const RunsPage: React.FC = () => {
@@ -302,13 +351,6 @@ const RunsPage: React.FC = () => {
   const composerFormRef = useRef<ProFormInstance<RunFormValues> | undefined>(
     undefined
   );
-  const runsWorkbenchMainRef = useRef<HTMLDivElement | null>(null);
-  const resumeFormRef = useRef<ProFormInstance<ResumeFormValues> | undefined>(
-    undefined
-  );
-  const signalFormRef = useRef<ProFormInstance<SignalFormValues> | undefined>(
-    undefined
-  );
   const [catalogSearch, setCatalogSearch] = useState("");
   const [selectedRouteName, setSelectedRouteName] = useState(
     scopeDraftPayload?.bundleName ??
@@ -325,13 +367,20 @@ const RunsPage: React.FC = () => {
     initialFormValues.transport
   );
   const [selectedTraceItemKey, setSelectedTraceItemKey] = useState("");
-  const [composerWidth, setComposerWidth] = useState(composerRailDefaultWidth);
   const [activeTransport, setActiveTransport] = useState<RunTransport>(
     initialFormValues.transport
   );
-  const [consoleView, setConsoleView] = useState<ConsoleViewKey>("timeline");
+  const [consoleView, setConsoleView] = useState<ConsoleViewKey>(() =>
+    resolveConsoleViewForEndpoint(
+      normalizeRunEndpointKind(
+        initialFormValues.endpointKind,
+        initialFormValues.endpointId
+      )
+    )
+  );
+  const [hasStartedRun, setHasStartedRun] = useState(false);
   const [isInspectorDrawerOpen, setIsInspectorDrawerOpen] = useState(false);
-  const [isComposerResizing, setIsComposerResizing] = useState(false);
+  const [isSetupDrawerOpen, setIsSetupDrawerOpen] = useState(false);
   const [runStartedAtMs, setRunStartedAtMs] = useState<number | undefined>(
     undefined
   );
@@ -357,6 +406,18 @@ const RunsPage: React.FC = () => {
       initialFormValues.endpointId
     )
   );
+  const [composerPrompt, setComposerPrompt] = useState(
+    initialFormValues.prompt ?? ""
+  );
+  const [activePrompt, setActivePrompt] = useState(
+    initialFormValues.prompt ?? ""
+  );
+  const [activePayloadTypeUrl, setActivePayloadTypeUrl] = useState(
+    initialFormValues.payloadTypeUrl ?? ""
+  );
+  const [activePayloadBase64, setActivePayloadBase64] = useState(
+    initialFormValues.payloadBase64 ?? ""
+  );
   const handleRouteSelection = useCallback((value: string) => {
     const normalizedValue = value ?? "";
     setSelectedRouteName((currentValue) =>
@@ -373,6 +434,17 @@ const RunsPage: React.FC = () => {
     setActiveEndpointId((currentValue) =>
       currentValue === normalizedValue ? currentValue : normalizedValue
     );
+  }, []);
+  const handleComposerPromptChange = useCallback((value: string) => {
+    setComposerPrompt(value);
+    if (composerFormRef.current?.setFieldValue) {
+      composerFormRef.current.setFieldValue("prompt", value);
+      return;
+    }
+
+    composerFormRef.current?.setFieldsValue?.({
+      prompt: value,
+    });
   }, []);
   const handleTransportChange = useCallback((value: RunTransport) => {
     setSelectedTransport((currentValue) =>
@@ -414,6 +486,7 @@ const RunsPage: React.FC = () => {
       abortRun();
       reset();
       setTransportIssue(undefined);
+      setHasStartedRun(true);
       setActiveTransport(selectedTransport);
       setActiveScopeId(snapshot.scopeId);
       setActiveServiceOverrideId(snapshot.serviceOverrideId ?? "");
@@ -425,7 +498,15 @@ const RunsPage: React.FC = () => {
       );
       setSelectedRouteName(snapshot.routeName ?? "");
       setSelectedTraceItemKey("");
-      setConsoleView("timeline");
+      setConsoleView(
+        resolveConsoleViewForEndpoint(
+          normalizeRunEndpointKind(snapshot.endpointKind, snapshot.endpointId)
+        )
+      );
+      setComposerPrompt(snapshot.prompt);
+      setActivePrompt(snapshot.prompt);
+      setActivePayloadTypeUrl(snapshot.payloadTypeUrl ?? "");
+      setActivePayloadBase64(snapshot.payloadBase64 ?? "");
       setRunStartedAtMs(Date.now());
 
       composerFormRef.current?.setFieldsValue({
@@ -511,11 +592,17 @@ const RunsPage: React.FC = () => {
         abortRun();
         reset();
         setTransportIssue(undefined);
+        setHasStartedRun(true);
         setActiveTransport(requestedRun.transport);
         setActiveScopeId(normalizedScopeId);
         setActiveServiceOverrideId(resolvedServiceId);
         setActiveEndpointKind(normalizedEndpointKind);
         setActiveEndpointId(normalizedEndpointId);
+        setComposerPrompt(requestedRun.prompt);
+        setActivePrompt(requestedRun.prompt);
+        setActivePayloadTypeUrl(requestedRun.payloadTypeUrl ?? "");
+        setActivePayloadBase64(requestedRun.payloadBase64 ?? "");
+        setConsoleView(resolveConsoleViewForEndpoint(normalizedEndpointKind));
         setRunStartedAtMs(Date.now());
         setStreaming(true);
 
@@ -745,32 +832,6 @@ const RunsPage: React.FC = () => {
     );
   }, [activeEndpointId, resolveRunEndpointKind]);
 
-  const resizeComposerRail = useCallback((clientX: number) => {
-    const containerRect = runsWorkbenchMainRef.current?.getBoundingClientRect();
-    if (!containerRect) {
-      return;
-    }
-
-    setComposerWidth(
-      resolveResponsiveComposerWidth(
-        clientX - containerRect.left,
-        containerRect.width
-      )
-    );
-  }, []);
-
-  const setComposerWidthWithinBounds = useCallback((requestedWidth: number) => {
-    const containerRect = runsWorkbenchMainRef.current?.getBoundingClientRect();
-    if (!containerRect) {
-      setComposerWidth(requestedWidth);
-      return;
-    }
-
-    setComposerWidth(
-      resolveResponsiveComposerWidth(requestedWidth, containerRect.width)
-    );
-  }, []);
-
   const { resume, signal, resuming, signaling } = useHumanInteraction({
     resume: (request: WorkflowResumeRequest) => {
       const scopeId = resolveRunScopeId();
@@ -881,51 +942,6 @@ const RunsPage: React.FC = () => {
     });
   }, [draftRunKey, initialFormValues, scopeDraftPayload, sendRun]);
 
-  useEffect(() => {
-    const syncComposerWidth = () => {
-      const containerRect =
-        runsWorkbenchMainRef.current?.getBoundingClientRect();
-      if (!containerRect) {
-        return;
-      }
-
-      setComposerWidth((currentWidth) =>
-        resolveResponsiveComposerWidth(currentWidth, containerRect.width)
-      );
-    };
-
-    syncComposerWidth();
-    window.addEventListener("resize", syncComposerWidth);
-    return () => {
-      window.removeEventListener("resize", syncComposerWidth);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isComposerResizing) {
-      return undefined;
-    }
-
-    const handlePointerMove = (event: PointerEvent) => {
-      resizeComposerRail(event.clientX);
-    };
-    const handlePointerUp = () => {
-      setIsComposerResizing(false);
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-  }, [isComposerResizing, resizeComposerRail]);
-
   const endpointKind = resolveRunEndpointKind();
   const endpointName = resolveRunEndpointId();
   const routeName = useMemo(() => {
@@ -953,6 +969,7 @@ const RunsPage: React.FC = () => {
   const actorId = session.context?.actorId;
   const commandId = session.context?.commandId ?? "";
   const payloadTypeUrl =
+    activePayloadTypeUrl.trim() ||
     composerFormRef.current?.getFieldValue("payloadTypeUrl")?.trim?.() ||
     initialFormValues.payloadTypeUrl ||
     "";
@@ -1204,6 +1221,7 @@ const RunsPage: React.FC = () => {
             actorId: entry.actorId || undefined,
             transport: selectedTransport,
           });
+          setComposerPrompt(entry.prompt);
           setSelectedRouteName(isChatEndpoint ? entry.routeName : "");
           setActiveEndpointKind(restoredEndpointKind);
           setActiveEndpointId(restoredEndpointId);
@@ -1374,6 +1392,48 @@ const RunsPage: React.FC = () => {
   const hasPendingInteraction = Boolean(
     humanInputRecord || waitingSignalRecord
   );
+  const hasRunActivity =
+    hasStartedRun ||
+    streaming ||
+    session.status !== "idle" ||
+    session.events.length > 0 ||
+    displayedMessages.length > 0 ||
+    Boolean(session.runId) ||
+    Boolean(actorId) ||
+    hasPendingInteraction ||
+    Boolean(transportIssue);
+  const composerRailInitialValues = useMemo<RunFormValues>(
+    () =>
+      hasRunActivity
+        ? {
+            ...initialFormValues,
+            actorId: actorId ?? undefined,
+            endpointId: activeEndpointId || initialFormValues.endpointId,
+            endpointKind: activeEndpointKind,
+            payloadBase64: activePayloadBase64 || undefined,
+            payloadTypeUrl: activePayloadTypeUrl || undefined,
+            prompt: activePrompt,
+            routeName: selectedRouteName || undefined,
+            scopeId: activeScopeId || undefined,
+            serviceOverrideId: activeServiceOverrideId || undefined,
+            transport: activeTransport,
+          }
+        : initialFormValues,
+    [
+      activeEndpointId,
+      activeEndpointKind,
+      activePayloadBase64,
+      activePayloadTypeUrl,
+      activePrompt,
+      activeScopeId,
+      activeServiceOverrideId,
+      activeTransport,
+      actorId,
+      hasRunActivity,
+      initialFormValues,
+      selectedRouteName,
+    ]
+  );
   const runStatusText =
     runStatusValueEnum[session.status]?.text ?? session.status;
   const isRunLive =
@@ -1390,10 +1450,10 @@ const RunsPage: React.FC = () => {
     : ("default" as const);
 
   useEffect(() => {
-    if (hasPendingInteraction) {
-      setIsInspectorDrawerOpen(true);
+    if (hasRunActivity) {
+      setIsSetupDrawerOpen(false);
     }
-  }, [hasPendingInteraction]);
+  }, [hasRunActivity]);
 
   useEffect(() => {
     if (!runStartedAtMs) {
@@ -1459,11 +1519,9 @@ const RunsPage: React.FC = () => {
   );
 
   useEffect(() => {
-    const prompt = composerFormRef.current?.getFieldValue("prompt") ?? "";
-    const currentPayloadTypeUrl =
-      composerFormRef.current?.getFieldValue("payloadTypeUrl") ?? "";
-    const currentPayloadBase64 =
-      composerFormRef.current?.getFieldValue("payloadBase64") ?? "";
+    const prompt = activePrompt;
+    const currentPayloadTypeUrl = activePayloadTypeUrl;
+    const currentPayloadBase64 = activePayloadBase64;
     const currentEndpointKind = resolveRunEndpointKind();
     const currentEndpointId = resolveRunEndpointId();
     const currentServiceOverrideId = resolveRunServiceOverrideId();
@@ -1500,10 +1558,12 @@ const RunsPage: React.FC = () => {
       })
     );
   }, [
+    activePayloadBase64,
+    activePayloadTypeUrl,
+    activePrompt,
     actorId,
     commandId,
     latestMessagePreview,
-    payloadTypeUrl,
     resolveRunEndpointKind,
     resolveRunScopeId,
     resolveRunServiceOverrideId,
@@ -1555,18 +1615,94 @@ const RunsPage: React.FC = () => {
             endpointId: endpointName,
             endpointKind,
             routeName: selectedRouteName,
-            serviceOverrideId:
-              activeServiceOverrideId || initialFormValues.serviceOverrideId,
+            serviceOverrideId: hasRunActivity
+              ? activeServiceOverrideId || undefined
+              : initialFormValues.serviceOverrideId,
           },
           false
         )
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
         : "/api/scopes/{scopeId}/invoke/chat:stream"
-      : trimOptional(activeServiceOverrideId || initialFormValues.serviceOverrideId)
+      : trimOptional(
+          hasRunActivity
+            ? activeServiceOverrideId || undefined
+            : initialFormValues.serviceOverrideId
+        )
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
         : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
-  const messageConsoleView = <RunsMessagesView messages={displayedMessages} />;
+  const isChatConsole = endpointKind === "chat";
+
+  const handleSubmitResume = useCallback(
+    async (values: ResumeFormValues) => {
+      if (!actorId || !humanInputRecord?.runId || !humanInputRecord.stepId) {
+        return false;
+      }
+
+      await resume({
+        actorId,
+        runId: humanInputRecord.runId,
+        stepId: humanInputRecord.stepId,
+        approved: values.approved,
+        userInput: values.userInput || undefined,
+        commandId,
+      });
+
+      messageApi.success("Resume request accepted.");
+      return true;
+    },
+    [actorId, commandId, humanInputRecord, messageApi, resume]
+  );
+
+  const handleSubmitSignal = useCallback(
+    async (values: SignalFormValues) => {
+      if (
+        !actorId ||
+        !waitingSignal?.runId ||
+        !waitingSignal.signalName
+      ) {
+        return false;
+      }
+
+      await signal({
+        actorId,
+        runId: waitingSignal.runId,
+        stepId: waitingSignal.stepId,
+        signalName: waitingSignal.signalName,
+        payload: values.payload || undefined,
+        commandId,
+      });
+
+      messageApi.success("Signal accepted.");
+      return true;
+    },
+    [actorId, commandId, messageApi, signal, waitingSignal]
+  );
+
+  const chatActionRequiredCard = hasPendingInteraction ? (
+    <RunsActionRequiredPanel
+      humanInputRecord={humanInputRecord}
+      onSubmitResume={handleSubmitResume}
+      onSubmitSignal={handleSubmitSignal}
+      resuming={resuming}
+      signaling={signaling}
+      variant="chat"
+      waitingSignalRecord={waitingSignalRecord}
+    />
+  ) : null;
+
+  const messageConsoleView = (
+    <RunsMessagesView
+      emptyDescription={
+        isChatConsole
+          ? "No conversation yet. Send a prompt to start the run."
+          : "No message output yet."
+      }
+      messages={displayedMessages}
+      topAccessory={isChatConsole ? chatActionRequiredCard : undefined}
+      title={isChatConsole ? "Conversation" : "Message stream"}
+    />
+  );
 
   const eventConsoleView = (
     <RunsEventsView
@@ -1579,6 +1715,130 @@ const RunsPage: React.FC = () => {
     />
   );
 
+  const handleSubmitComposer = useCallback(async () => {
+    const prompt = composerPrompt.trim();
+    if (!prompt) {
+      messageApi.warning("Prompt is required.");
+      return;
+    }
+
+    const currentValues =
+      composerFormRef.current?.getFieldsValue?.() ??
+      ({} as Partial<RunFormValues>);
+    const nextEndpointKind = normalizeRunEndpointKind(
+      currentValues.endpointKind ?? activeEndpointKind,
+      currentValues.endpointId ?? activeEndpointId
+    );
+    const nextValues: RunFormValues = {
+      actorId:
+        typeof currentValues.actorId === "string"
+          ? currentValues.actorId
+          : actorId ?? undefined,
+      endpointId:
+        typeof currentValues.endpointId === "string"
+          ? currentValues.endpointId
+          : activeEndpointId || "chat",
+      endpointKind: nextEndpointKind,
+      payloadBase64:
+        typeof currentValues.payloadBase64 === "string"
+          ? currentValues.payloadBase64
+          : activePayloadBase64 || undefined,
+      payloadTypeUrl:
+        typeof currentValues.payloadTypeUrl === "string"
+          ? currentValues.payloadTypeUrl
+          : activePayloadTypeUrl || undefined,
+      prompt,
+      routeName:
+        typeof currentValues.routeName === "string"
+          ? currentValues.routeName
+          : selectedRouteName || undefined,
+      scopeId:
+        typeof currentValues.scopeId === "string"
+          ? currentValues.scopeId
+          : activeScopeId || "",
+      serviceOverrideId:
+        typeof currentValues.serviceOverrideId === "string"
+          ? currentValues.serviceOverrideId
+          : activeServiceOverrideId || undefined,
+      transport:
+        currentValues.transport === "ws" ? "ws" : selectedTransport,
+    };
+
+    await sendRun(nextValues.scopeId ?? "", nextValues);
+  }, [
+    activeEndpointId,
+    activeEndpointKind,
+    activePayloadBase64,
+    activePayloadTypeUrl,
+    activeScopeId,
+    activeServiceOverrideId,
+    actorId,
+    composerPrompt,
+    messageApi,
+    selectedRouteName,
+    selectedTransport,
+    sendRun,
+  ]);
+
+  const launchRailContent = (
+    <RunsLaunchRail
+      actorId={actorId ?? undefined}
+      activeEndpointId={endpointName}
+      activeEndpointKind={endpointKind}
+      catalogSearch={catalogSearch}
+      composerFormRef={composerFormRef}
+      draftMode={Boolean(draftRunPayload)}
+      initialFormValues={composerRailInitialValues}
+      recentRunRows={recentRunRows}
+      selectedTransport={selectedTransport}
+      selectedRouteDetailsPrimitives={selectedRouteDetails?.primitives ?? []}
+      selectedRouteRecord={selectedRouteRecord}
+      showPromptField={!isChatConsole}
+      showSubmitActions={!isChatConsole}
+      streaming={streaming}
+      submitPathLabel={submitPathLabel}
+      transportOptions={[{ label: "Service SSE stream", value: "sse" }]}
+      variant={isChatConsole ? "chat" : "default"}
+      visiblePresets={visiblePresets}
+      workflowCatalogLoading={workflowCatalogQuery.isLoading}
+      routeOptions={routeOptions}
+      onAbortRun={abortRun}
+      onCatalogSearchChange={setCatalogSearch}
+      onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
+      onEndpointChange={handleEndpointChange}
+      onEndpointKindChange={handleEndpointKindChange}
+      onSelectRouteName={handleRouteSelection}
+      onSubmitRun={async (values) => {
+        await sendRun(values.scopeId ?? "", values);
+      }}
+      onTransportChange={handleTransportChange}
+      onUsePreset={(record) => {
+        composerFormRef.current?.setFieldsValue({
+          prompt: record.prompt,
+          routeName: scopeDraftPayload?.bundleName ?? record.routeName,
+          scopeId:
+            composerFormRef.current?.getFieldValue("scopeId") ??
+            composerRailInitialValues.scopeId,
+          serviceOverrideId: undefined,
+          endpointId:
+            endpointKind === "chat" ? endpointName || "chat" : "chat",
+          endpointKind: "chat",
+          payloadTypeUrl: undefined,
+          payloadBase64: undefined,
+          actorId: undefined,
+          transport: selectedTransport,
+        });
+        setComposerPrompt(record.prompt);
+        setSelectedRouteName(scopeDraftPayload?.bundleName ?? record.routeName);
+        setActiveEndpointKind("chat");
+        setActiveEndpointId(
+          endpointKind === "chat" ? endpointName || "chat" : "chat"
+        );
+        setCatalogSearch("");
+      }}
+    />
+  );
+
   return (
     <PageContainer pageHeaderRender={false} style={{ overflow: "hidden" }}>
       {messageContextHolder}
@@ -1586,7 +1846,7 @@ const RunsPage: React.FC = () => {
         <div style={runsWorkbenchHeaderBarStyle}>
           <div style={runsWorkbenchHeaderTitleStyle}>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              Runtime endpoint console
+              Run Console
             </Typography.Title>
             <Popover
               content={
@@ -1594,13 +1854,12 @@ const RunsPage: React.FC = () => {
                   style={{ margin: 0, maxWidth: 360 }}
                   type="secondary"
                 >
-                  Drive scoped endpoints over{" "}
+                  Start a scoped run over{" "}
                   <Typography.Text code>
                     {submitPathLabel}
-                  </Typography.Text>
-                  , monitor the live event stream when the endpoint is streamed,
-                  and jump into adjacent runtime surfaces directly from the
-                  runtime console.
+                  </Typography.Text>{" "}
+                  and stay in one place for conversation, events, trace, and
+                  operator actions.
                 </Typography.Paragraph>
               }
               placement="bottomLeft"
@@ -1627,10 +1886,11 @@ const RunsPage: React.FC = () => {
               size="small"
               onClick={() => history.push(buildRuntimeWorkflowsHref())}
             >
-              Catalog
+              Workflow catalog
             </Button>
             <Button
               size="small"
+              disabled={!actorId && !session.runId}
               onClick={() =>
                 history.push(
                   buildRuntimeExplorerHref({
@@ -1642,181 +1902,167 @@ const RunsPage: React.FC = () => {
                 )
               }
             >
-              Explorer
+              Actor explorer
             </Button>
           </div>
         </div>
-        <RunsStatusStrip
-          activeStepCount={session.activeSteps.size}
-          elapsedLabel={elapsedLabel}
-          eventCount={session.events.length}
-          hasPendingInteraction={hasPendingInteraction}
-          isRunLive={isRunLive}
-          messageCount={displayedMessages.length}
-          onAbort={handleAbortRun}
-          onOpenInspector={() => setIsInspectorDrawerOpen(true)}
-          runId={session.runId || commandId || "Not started"}
-          runStatusLabel={runStatusText}
-          statusTone={runStatusTone}
-          transport={activeTransport}
-          endpointId={endpointName}
-          endpointKind={endpointKind}
-        />
-
-        <div ref={runsWorkbenchMainRef} style={runsWorkbenchMainStyle}>
-          <div
-            style={{
-              ...runsWorkbenchComposerRailStyle,
-              flex: `0 0 ${composerWidth}px`,
-              maxWidth: composerWidth,
-              minWidth: composerWidth,
-              width: composerWidth,
-            }}
-          >
-            <RunsLaunchRail
-              actorId={actorId ?? undefined}
-              activeEndpointId={endpointName}
-              activeEndpointKind={endpointKind}
-              catalogSearch={catalogSearch}
-              composerFormRef={composerFormRef}
-              draftMode={Boolean(draftRunPayload)}
-              initialFormValues={initialFormValues}
-              recentRunRows={recentRunRows}
-              selectedTransport={selectedTransport}
-              selectedRouteDetailsPrimitives={
-                selectedRouteDetails?.primitives ?? []
-              }
-              selectedRouteRecord={selectedRouteRecord}
-              streaming={streaming}
-              submitPathLabel={submitPathLabel}
-              transportOptions={[
-                { label: "Service SSE stream", value: "sse" },
-              ]}
-              visiblePresets={visiblePresets}
-              workflowCatalogLoading={workflowCatalogQuery.isLoading}
-              routeOptions={routeOptions}
-              onAbortRun={abortRun}
-              onCatalogSearchChange={setCatalogSearch}
-              onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
-              onEndpointChange={handleEndpointChange}
-              onEndpointKindChange={handleEndpointKindChange}
-              onSelectRouteName={handleRouteSelection}
-              onSubmitRun={async (values) => {
-                await sendRun(values.scopeId ?? "", values);
-              }}
-              onTransportChange={handleTransportChange}
-              onUsePreset={(record) => {
-                composerFormRef.current?.setFieldsValue({
-                  prompt: record.prompt,
-                  routeName: scopeDraftPayload?.bundleName ?? record.routeName,
-                  scopeId:
-                    composerFormRef.current?.getFieldValue("scopeId") ??
-                    initialFormValues.scopeId,
-                  serviceOverrideId: undefined,
-                  endpointId:
-                    endpointKind === "chat" ? endpointName || "chat" : "chat",
-                  endpointKind: "chat",
-                  payloadTypeUrl: undefined,
-                  payloadBase64: undefined,
-                  actorId: undefined,
-                  transport: selectedTransport,
-                });
-                setSelectedRouteName(
-                  scopeDraftPayload?.bundleName ?? record.routeName
-                );
-                setActiveEndpointKind("chat");
-                setActiveEndpointId(
-                  endpointKind === "chat" ? endpointName || "chat" : "chat"
-                );
-                setCatalogSearch("");
-              }}
-            />
-          </div>
-          <button
-            aria-label="Resize composer panel"
-            type="button"
-            style={runsWorkbenchResizeRailStyle}
-            onDoubleClick={() =>
-              setComposerWidthWithinBounds(composerRailDefaultWidth)
-            }
-            onKeyDown={(event) => {
-              if (event.key === "ArrowLeft") {
-                event.preventDefault();
-                setComposerWidthWithinBounds(
-                  composerWidth - composerRailKeyboardStep
-                );
-              }
-
-              if (event.key === "ArrowRight") {
-                event.preventDefault();
-                setComposerWidthWithinBounds(
-                  composerWidth + composerRailKeyboardStep
-                );
-              }
-            }}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              setIsComposerResizing(true);
-              resizeComposerRail(event.clientX);
-            }}
-          >
-            <div
-              style={{
-                ...runsWorkbenchResizeHandleStyle,
-                background: isComposerResizing
-                  ? "var(--ant-color-primary)"
-                  : "var(--ant-color-border-secondary)",
-                transform: isComposerResizing ? "scaleX(1.15)" : "scaleX(1)",
-              }}
-            />
-          </button>
-          <div style={runsWorkbenchMonitorStyle}>
-            <div style={workbenchOverviewGridStyle}>
-              <style>{runsWorkspaceTabsCss}</style>
-              <Tabs
-                activeKey="trace-layout"
-                animated={false}
-                className={runsWorkspaceTabsClassName}
-                destroyOnHidden
-                style={{
-                  ...workbenchTraceTabsStyle,
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-                items={[
-                  {
-                    key: "trace-layout",
-                    label: "Trace workspace",
-                    children: (
-                      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-                        <RunsTracePane
-                          consoleView={consoleView}
-                          eventConsoleView={eventConsoleView}
-                          eventCount={eventRows.length}
-                          hasPendingInteraction={hasPendingInteraction}
-                          messageConsoleView={messageConsoleView}
-                          messageCount={displayedMessages.length}
-                          onConsoleViewChange={setConsoleView}
-                          timelineView={
-                            <RunsTimelineView
-                              groups={timelineGroups}
-                              onSelectItem={(item) => {
-                                setSelectedTraceItemKey(item.key);
-                                setIsInspectorDrawerOpen(true);
-                              }}
-                              selectedItemKey={selectedTraceItemKey}
-                            />
-                          }
-                        />
-                      </div>
-                    ),
-                  },
-                ]}
-                styles={workbenchTraceTabsStyles}
-              />
+        {isChatConsole ? (
+          <div style={runsChatLayoutStyle}>
+            <div style={runsChatSidebarStyle}>{launchRailContent}</div>
+            <div style={runsChatMainStyle}>
+              {hasRunActivity ? (
+                <RunsStatusStrip
+                  activeStepCount={session.activeSteps.size}
+                  compact
+                  elapsedLabel={elapsedLabel}
+                  eventCount={session.events.length}
+                  hasPendingInteraction={hasPendingInteraction}
+                  isRunLive={isRunLive}
+                  messageCount={displayedMessages.length}
+                  onAbort={handleAbortRun}
+                  onOpenDetails={() => setIsInspectorDrawerOpen(true)}
+                  onOpenSetup={() => setIsSetupDrawerOpen(true)}
+                  runId={session.runId || commandId || "Not started"}
+                  runStatusLabel={runStatusText}
+                  showSetupAction={false}
+                  statusTone={runStatusTone}
+                  transport={activeTransport}
+                  endpointId={endpointName}
+                  endpointKind={endpointKind}
+                />
+              ) : null}
+              <div style={runsChatTraceWrapStyle}>
+                <RunsTracePane
+                  consoleView={consoleView}
+                  eventConsoleView={eventConsoleView}
+                  eventCount={eventRows.length}
+                  hasPendingInteraction={hasPendingInteraction}
+                  messageConsoleView={messageConsoleView}
+                  messageCount={displayedMessages.length}
+                  messagesLabel="Conversation"
+                  onConsoleViewChange={setConsoleView}
+                  timelineView={
+                    <RunsTimelineView
+                      groups={timelineGroups}
+                      onSelectItem={(item) => {
+                        setSelectedTraceItemKey(item.key);
+                        setIsInspectorDrawerOpen(true);
+                      }}
+                      selectedItemKey={selectedTraceItemKey}
+                    />
+                  }
+                  title="Conversation"
+                />
+              </div>
+              <div style={runsChatComposerCardStyle}>
+                <div style={runsChatComposerInputWrapStyle}>
+                  <Input.TextArea
+                    aria-label="Prompt"
+                    autoSize={{ minRows: 2, maxRows: 6 }}
+                    onChange={(event) =>
+                      handleComposerPromptChange(event.target.value)
+                    }
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        !event.shiftKey &&
+                        !event.nativeEvent.isComposing
+                      ) {
+                        event.preventDefault();
+                        void handleSubmitComposer();
+                      }
+                    }}
+                    placeholder="Describe the task to run."
+                    value={composerPrompt}
+                  />
+                </div>
+                <div style={runsChatComposerActionsStyle}>
+                  <Button
+                    loading={streaming}
+                    onClick={() => void handleSubmitComposer()}
+                    type="primary"
+                  >
+                    Send
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        ) : hasRunActivity ? (
+          <div style={runsRunStateStyle}>
+            <div style={runsWorkbenchMonitorStyle}>
+              <RunsStatusStrip
+                activeStepCount={session.activeSteps.size}
+                elapsedLabel={elapsedLabel}
+                eventCount={session.events.length}
+                hasPendingInteraction={hasPendingInteraction}
+                isRunLive={isRunLive}
+                messageCount={displayedMessages.length}
+                onAbort={handleAbortRun}
+                onOpenDetails={() => setIsInspectorDrawerOpen(true)}
+                onOpenSetup={() => setIsSetupDrawerOpen(true)}
+                runId={session.runId || commandId || "Not started"}
+                runStatusLabel={runStatusText}
+                statusTone={runStatusTone}
+                transport={activeTransport}
+                endpointId={endpointName}
+                endpointKind={endpointKind}
+              />
+              {hasPendingInteraction ? (
+                <RunsActionRequiredPanel
+                  humanInputRecord={humanInputRecord}
+                  onSubmitResume={handleSubmitResume}
+                  onSubmitSignal={handleSubmitSignal}
+                  resuming={resuming}
+                  signaling={signaling}
+                  variant="card"
+                  waitingSignalRecord={waitingSignalRecord}
+                />
+              ) : null}
+              <div style={workbenchOverviewGridStyle}>
+                <RunsTracePane
+                  consoleView={consoleView}
+                  eventConsoleView={eventConsoleView}
+                  eventCount={eventRows.length}
+                  hasPendingInteraction={hasPendingInteraction}
+                  messageConsoleView={messageConsoleView}
+                  messageCount={displayedMessages.length}
+                  messagesLabel="Messages"
+                  onConsoleViewChange={setConsoleView}
+                  timelineView={
+                    <RunsTimelineView
+                      groups={timelineGroups}
+                      onSelectItem={(item) => {
+                        setSelectedTraceItemKey(item.key);
+                        setIsInspectorDrawerOpen(true);
+                      }}
+                      selectedItemKey={selectedTraceItemKey}
+                    />
+                  }
+                  title="Invocation trace"
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={runsSetupStateStyle}>
+            <div style={runsSetupRailViewportStyle}>{launchRailContent}</div>
+          </div>
+        )}
+
+        {hasRunActivity && isSetupDrawerOpen ? (
+          <Drawer
+            destroyOnHidden
+            mask={false}
+            open
+            size={560}
+            styles={{ body: drawerBodyStyle }}
+            title="Run setup"
+            onClose={() => setIsSetupDrawerOpen(false)}
+          >
+            <div style={drawerScrollStyle}>{launchRailContent}</div>
+          </Drawer>
+        ) : null}
 
         {isInspectorDrawerOpen ? (
           <Drawer
@@ -1826,8 +2072,8 @@ const RunsPage: React.FC = () => {
             styles={{ body: drawerBodyStyle }}
             title={
               hasPendingInteraction
-                ? "Inspector · interaction pending"
-                : "Inspector"
+                ? "Details · action pending"
+                : "Details"
             }
             size={520}
             onClose={() => setIsInspectorDrawerOpen(false)}
@@ -1852,146 +2098,6 @@ const RunsPage: React.FC = () => {
                   variant="plain"
                   waitingSignalRecord={waitingSignalRecord}
                 />
-                {humanInputRecord ? (
-                  <div style={embeddedPanelStyle}>
-                    <Space
-                      orientation="vertical"
-                      style={{ width: "100%" }}
-                      size={16}
-                    >
-                      <ProDescriptions<HumanInputRecord>
-                        column={1}
-                        dataSource={humanInputRecord}
-                        columns={humanInputColumns}
-                      />
-                      <ProForm<ResumeFormValues>
-                        key={`${humanInputRecord.runId}-${humanInputRecord.stepId}`}
-                        formRef={resumeFormRef}
-                        layout="vertical"
-                        initialValues={{ approved: true, userInput: "" }}
-                        onFinish={async (values) => {
-                          if (
-                            !actorId ||
-                            !humanInputRecord.runId ||
-                            !humanInputRecord.stepId
-                          ) {
-                            return false;
-                          }
-
-                          await resume({
-                            actorId,
-                            runId: humanInputRecord.runId,
-                            stepId: humanInputRecord.stepId,
-                            approved: values.approved,
-                            userInput: values.userInput || undefined,
-                            commandId,
-                          });
-
-                          messageApi.success("Resume request accepted.");
-                          resumeFormRef.current?.setFieldsValue({
-                            approved: true,
-                            userInput: "",
-                          });
-                          return true;
-                        }}
-                        submitter={{
-                          render: (props) => (
-                            <Space wrap>
-                              <Button
-                                type="primary"
-                                loading={resuming}
-                                onClick={() => props.form?.submit?.()}
-                              >
-                                Submit resume
-                              </Button>
-                            </Space>
-                          ),
-                        }}
-                      >
-                        <ProFormSwitch
-                          name="approved"
-                          label={
-                            isHumanApprovalSuspension(
-                              humanInputRecord.suspensionType
-                            )
-                              ? "Approved"
-                              : "Continue run"
-                          }
-                        />
-                        <ProFormTextArea
-                          name="userInput"
-                          label="Operator response"
-                          fieldProps={{ rows: 4 }}
-                          placeholder="Optional human response"
-                        />
-                      </ProForm>
-                    </Space>
-                  </div>
-                ) : null}
-
-                {waitingSignalRecord ? (
-                  <div style={embeddedPanelStyle}>
-                    <Space
-                      orientation="vertical"
-                      style={{ width: "100%" }}
-                      size={16}
-                    >
-                      <ProDescriptions<WaitingSignalRecord>
-                        column={1}
-                        dataSource={waitingSignalRecord}
-                        columns={waitingSignalColumns}
-                      />
-                      <ProForm<SignalFormValues>
-                        key={`${waitingSignalRecord.runId}-${waitingSignalRecord.stepId}`}
-                        formRef={signalFormRef}
-                        layout="vertical"
-                        initialValues={{ payload: "" }}
-                        onFinish={async (values) => {
-                          if (
-                            !actorId ||
-                            !waitingSignal?.runId ||
-                            !waitingSignal.signalName
-                          ) {
-                            return false;
-                          }
-
-                          await signal({
-                            actorId,
-                            runId: waitingSignal.runId,
-                            stepId: waitingSignal.stepId,
-                            signalName: waitingSignal.signalName,
-                            payload: values.payload || undefined,
-                            commandId,
-                          });
-
-                          messageApi.success("Signal accepted.");
-                          signalFormRef.current?.setFieldsValue({ payload: "" });
-                          return true;
-                        }}
-                        submitter={{
-                          render: (props) => (
-                            <Space wrap>
-                              <Button
-                                type="primary"
-                                loading={signaling}
-                                onClick={() => props.form?.submit?.()}
-                              >
-                                Send signal
-                              </Button>
-                            </Space>
-                          ),
-                        }}
-                      >
-                        <ProFormTextArea
-                          name="payload"
-                          label="Signal payload"
-                          fieldProps={{ rows: 4 }}
-                          placeholder="Optional signal payload"
-                        />
-                      </ProForm>
-                    </Space>
-                  </div>
-                ) : null}
               </div>
             </div>
           </Drawer>

@@ -55,6 +55,12 @@ import {
   AevatarInspectorEmpty,
 } from "@/shared/ui/aevatarPageShells";
 import {
+  AevatarCompactTag,
+  AevatarCompactText,
+  aevatarMonoFontFamily,
+  truncateMiddle,
+} from "@/shared/ui/compactText";
+import {
   aevatarDrawerBodyStyle,
   aevatarDrawerScrollStyle,
   buildAevatarMetricCardStyle,
@@ -145,20 +151,12 @@ const compactHintTagStyle: React.CSSProperties = {
 };
 const compactMonoValueStyle: React.CSSProperties = {
   color: "var(--ant-color-text-secondary)",
-  fontFamily: '"IBM Plex Mono", "SF Mono", monospace',
+  fontFamily: aevatarMonoFontFamily,
   fontSize: 10.5,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
-
-function truncateMiddle(value: string, head = 4, tail = 4): string {
-  if (!value || value.length <= head + tail + 3) {
-    return value;
-  }
-
-  return `${value.slice(0, head)}...${value.slice(-tail)}`;
-}
 
 function buildScopePreview(
   tenantId: string,
@@ -181,32 +179,19 @@ const CompactIdentifierText: React.FC<{
   strong = false,
   value,
 }) => {
-  const text = truncateMiddle(value);
-  const content = (
-    <Typography.Text
+  return (
+    <AevatarCompactText
+      color={color}
+      head={4}
+      maxWidth={maxWidth}
+      monospace
+      singleLine={singleLine}
       strong={strong}
-      style={{
-        color: color ?? "inherit",
-        display: "inline-block",
-        fontFamily: '"IBM Plex Mono", "SF Mono", monospace',
-        fontSize: 11,
-        maxWidth,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: singleLine ? "nowrap" : "normal",
-        ...(singleLine
-          ? {}
-          : {
-              overflowWrap: "anywhere",
-              wordBreak: "break-word",
-            }),
-      }}
-    >
-      {text}
-    </Typography.Text>
+      style={{ fontSize: 11 }}
+      tail={4}
+      value={value}
+    />
   );
-
-  return value.length > 12 ? <Tooltip title={value}>{content}</Tooltip> : content;
 };
 
 const CompactIdentifierTag: React.FC<{
@@ -214,39 +199,27 @@ const CompactIdentifierTag: React.FC<{
   style?: React.CSSProperties;
   value: string;
 }> = ({ color, style, value }) => {
-  const tag = (
-    <Tag color={color} style={style}>
-      {truncateMiddle(value)}
-    </Tag>
-  );
-
-  return value.length > 12 ? <Tooltip title={value}>{tag}</Tooltip> : tag;
+  return <AevatarCompactTag color={color} style={style} value={value} />;
 };
 
 const CompactLabelText: React.FC<{
   color?: string;
+  maxChars?: number;
   maxWidth?: React.CSSProperties["maxWidth"];
   strong?: boolean;
   value: string;
-}> = ({ color, maxWidth = 112, strong = false, value }) => {
-  const content = (
-    <Typography.Text
+}> = ({ color, maxChars = 20, maxWidth = 112, strong = false, value }) => {
+  return (
+    <AevatarCompactText
+      color={color}
+      maxChars={maxChars}
+      maxWidth={maxWidth}
+      mode="tail"
       strong={strong}
-      style={{
-        color: color ?? "inherit",
-        display: "inline-block",
-        fontSize: strong ? 13 : 12,
-        maxWidth,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {value}
-    </Typography.Text>
+      style={{ fontSize: strong ? 13 : 12 }}
+      value={value}
+    />
   );
-
-  return value.length > 8 ? <Tooltip title={value}>{content}</Tooltip> : content;
 };
 
 function readSelectedServiceId(): string {
@@ -1804,16 +1777,12 @@ const DeploymentsPage: React.FC = () => {
                             />
                             {service.displayName &&
                             service.displayName !== service.serviceId ? (
-                              <Tooltip title={service.serviceId}>
-                                <Typography.Text
-                                  style={{
-                                    ...compactMonoValueStyle,
-                                    maxWidth: 120,
-                                  }}
-                                >
-                                  {truncateMiddle(service.serviceId)}
-                                </Typography.Text>
-                              </Tooltip>
+                              <AevatarCompactText
+                                maxWidth={120}
+                                monospace
+                                style={compactMonoValueStyle}
+                                value={service.serviceId}
+                              />
                             ) : null}
                           </div>
                         </td>

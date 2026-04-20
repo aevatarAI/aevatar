@@ -216,6 +216,7 @@ function createBaseProps(overrides = {}) {
     onSetWorkflowDescription: jest.fn(),
     onSetDraftYaml: jest.fn(),
     onSetDraftWorkflowName: jest.fn(),
+    onSetTeamEntryName: jest.fn(),
     onSetDraftDirectoryId: jest.fn(),
     onSetDraftFileName: jest.fn(),
     onSetInspectorTab: jest.fn(),
@@ -323,9 +324,27 @@ describe('StudioEditorPage', () => {
     expect(await screen.findByText('行为描述')).toBeInTheDocument();
     expect(screen.getByText('校验后的 YAML')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /生\s*成/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^生\s*成$/ }));
 
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns the empty canvas state into a direct first-step action', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          draftYaml: '',
+          draftWorkflowName: 'draft',
+          draftFileName: 'draft.yaml',
+          selectedWorkflowId: 'workflow-1',
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '添加第一个步骤' }));
+
+    expect(await screen.findByText('步骤库')).toBeInTheDocument();
   });
 
   it('disables Ask AI when workflow generation is unavailable', async () => {
@@ -346,13 +365,66 @@ describe('StudioEditorPage', () => {
     render(React.createElement(StudioEditorPage, createBaseProps() as any));
 
     expect(screen.getByTestId('studio-editor-shell')).toHaveStyle({
-      height: 'calc(100vh - 176px)',
+      flex: '1 1 0',
+      minHeight: '0',
       overflow: 'hidden',
+    });
+    expect(screen.getByTestId('studio-editor-definition-list')).toHaveStyle({
+      overflowY: 'auto',
+      height: '0',
+      minHeight: '0',
+    });
+    expect(screen.getByTestId('studio-editor-canvas-viewport')).toHaveStyle({
+      flex: '1 1 0',
+      minHeight: '0',
     });
     expect(screen.getByTestId('studio-inspector-scroll')).toHaveStyle({
       overflowY: 'auto',
       minHeight: '0',
     });
+  });
+
+  it('keeps the editor available when the current draft has no YAML yet', () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          draftYaml: '',
+          draftWorkflowName: 'draft',
+          draftFileName: 'draft.yaml',
+          selectedWorkflowId: 'workflow-1',
+        }) as any,
+      ),
+    );
+
+    expect(screen.getByTestId('studio-editor-shell')).toBeInTheDocument();
+    expect(screen.getByText('行为定义')).toBeInTheDocument();
+    expect(screen.getByText('当前定义还没有步骤。')).toBeInTheDocument();
+  });
+
+  it('keeps the empty node inspector compact and offers quick pivots', () => {
+    const onSetInspectorTab = jest.fn();
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          inspectorTab: 'node',
+          onSetInspectorTab,
+        }) as any,
+      ),
+    );
+
+    expect(screen.getByTestId('studio-inspector-shell')).toHaveStyle({
+      width: '272px',
+    });
+    expect(screen.getByTestId('studio-inspector-empty-state')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '管理角色' }));
+    fireEvent.click(screen.getByRole('button', { name: '查看 YAML 草稿' }));
+
+    expect(onSetInspectorTab).toHaveBeenNthCalledWith(1, 'roles');
+    expect(onSetInspectorTab).toHaveBeenNthCalledWith(2, 'yaml');
   });
 
   it('hides legacy recommendation notices for dirty drafts', async () => {
@@ -370,7 +442,7 @@ describe('StudioEditorPage', () => {
     expect(screen.queryByText('下一步：保存定义')).not.toBeInTheDocument();
   });
 
-  it('keeps scope binding details collapsed until requested', async () => {
+  it('keeps the unpublished team entry summary collapsed with no details toggle', async () => {
     render(
       React.createElement(
         StudioEditorPage,
@@ -381,17 +453,65 @@ describe('StudioEditorPage', () => {
     );
 
     expect(await screen.findByText('未发布默认入口')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '绑定团队入口' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /查看详情/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /收起详情/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('尚未发布默认入口')).not.toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getAllByRole('button', { name: /查看详情/i })[0]);
+  it('switches to create-team guidance when the editor is opened from Create Team', async () => {
+    const onSetTeamEntryName = jest.fn();
+    const onSetDraftWorkflowName = jest.fn();
 
-    expect(await screen.findByRole('button', { name: /收起详情/i })).toBeInTheDocument();
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          teamCreation: {
+            teamName: '订单助手团队',
+            entryName: '订单入口',
+            workflowName: 'test01',
+          },
+          scopeBinding: {
+            available: true,
+            scopeId: 'scope-a',
+            serviceId: 'default',
+            displayName: 'Workspace Demo',
+            serviceKey: 'scope-a:default',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'deploy-2',
+            deploymentStatus: 'Active',
+            primaryActorId: 'actor://scope-a/default',
+            updatedAt: '2026-03-26T08:00:00Z',
+            revisions: [],
+          },
+          onSetTeamEntryName,
+          onSetDraftWorkflowName,
+        }) as any,
+      ),
+    );
 
-    fireEvent.click(screen.getAllByRole('button', { name: /收起详情/i })[0]);
-
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /收起详情/i })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText('你正在创建团队「订单助手团队」'),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Studio team entry name')).toHaveValue('订单入口');
+    expect(screen.getByText('当前行为定义：test01')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发布团队入口' })).toBeInTheDocument();
+    expect(screen.getByText('入口草稿：订单入口')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '保存只会写草稿。点击“发布团队入口”后，当前 scope 的默认入口会切换成 订单入口。',
+      ),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Studio team entry name'), {
+      target: { value: '订单入口-v2' },
     });
+    expect(onSetTeamEntryName).toHaveBeenCalledWith('订单入口-v2');
+    expect(onSetDraftWorkflowName).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /查看详情/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '高级设置' })).not.toBeInTheDocument();
   });
 
   it('keeps the published team entry panel visible without recommendation cards', async () => {
@@ -420,7 +540,12 @@ describe('StudioEditorPage', () => {
 
     expect(await screen.findByText('Workspace Demo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /查看详情/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看成员' })).not.toBeInTheDocument();
     expect(screen.queryByText('下一步：打开测试台')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /查看详情/i }));
+
+    expect(await screen.findByRole('button', { name: '查看成员' })).toBeInTheDocument();
   });
 
   it('adds another GAgent endpoint before binding', async () => {
@@ -443,7 +568,7 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+    fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
     expect(
       await screen.findByRole('dialog', { name: '绑定团队入口' }),
@@ -493,7 +618,7 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+    fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
     expect(
       await screen.findByRole('dialog', { name: '绑定团队入口' }),
@@ -552,7 +677,7 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+    fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
     expect(
       await screen.findByRole('dialog', { name: '绑定团队入口' }),
@@ -596,7 +721,7 @@ describe('StudioEditorPage', () => {
         ),
       );
 
-      fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
+      fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
 
       expect(
         await screen.findByRole('dialog', { name: '绑定团队入口' }),
