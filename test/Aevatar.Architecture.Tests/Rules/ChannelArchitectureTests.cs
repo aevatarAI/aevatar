@@ -481,14 +481,27 @@ internal static class ChannelReceiverTracker
         // as a whole-word segment.
         foreach (var local in methodBody.DescendantNodes().OfType<LocalDeclarationStatementSyntax>())
         {
-            if (!TypeTextMatches(local.Declaration.Type, typeHint))
-            {
-                continue;
-            }
+            var declarationType = local.Declaration.Type;
+            var declarationMatches = TypeTextMatches(declarationType, typeHint);
+            var declaredAsVar = declarationType.IsVar || declarationType.ToString() == "var";
 
             foreach (var declarator in local.Declaration.Variables)
             {
-                set.Add(declarator.Identifier.ValueText);
+                if (declarationMatches)
+                {
+                    set.Add(declarator.Identifier.ValueText);
+                    continue;
+                }
+
+                // `var` hides the declared type, so fall back to the initializer expression.
+                // Covers `var resolve = new Func<IFoo>(...)`, `var x = (IFoo)something`,
+                // `var x = default(Func<IFoo>)`, and parenthesized / awaited variants.
+                if (declaredAsVar
+                    && declarator.Initializer?.Value is { } init
+                    && InitializerExpressionMatchesTypeHint(init, typeHint))
+                {
+                    set.Add(declarator.Identifier.ValueText);
+                }
             }
         }
 
@@ -501,10 +514,11 @@ internal static class ChannelReceiverTracker
             }
         }
 
-        // Lambdas assigned to a variable typed as a delegate returning IFoo are covered by the
-        // local-declaration seeding above (the variable's declared type is `Func<IFoo>`). Lambdas
-        // bound to `var` receive no explicit type annotation and are intentionally out of scope
-        // for this heuristic — enforce them via explicit `Func<IFoo>` typing.
+        // Lambdas bound to `var` without an explicit type cast (for example
+        // `var resolve = () => ...`) carry no syntactic type hint. Without a semantic model we
+        // cannot infer their return type — those remain a known limitation. Any explicit typing
+        // (`Func<IFoo> resolve = ...;` or `var resolve = (Func<IFoo>)(() => ...)`) is covered by
+        // the declaration / cast branches above.
 
         bool changed;
         do
@@ -648,6 +662,39 @@ internal static class ChannelReceiverTracker
             PostfixUnaryExpressionSyntax postfix => ExtractLeafName(postfix.Operand),
             _ => null,
         };
+    }
+
+    private static bool InitializerExpressionMatchesTypeHint(ExpressionSyntax expression, string typeHint)
+    {
+        switch (expression)
+        {
+            case ObjectCreationExpressionSyntax objectCreation:
+                return TypeTextMatches(objectCreation.Type, typeHint);
+
+            case CastExpressionSyntax cast:
+                return TypeTextMatches(cast.Type, typeHint)
+                    || InitializerExpressionMatchesTypeHint(cast.Expression, typeHint);
+
+            case DefaultExpressionSyntax @default:
+                return TypeTextMatches(@default.Type, typeHint);
+
+            case ParenthesizedExpressionSyntax parens:
+                return InitializerExpressionMatchesTypeHint(parens.Expression, typeHint);
+
+            case AwaitExpressionSyntax awaitExpr:
+                return InitializerExpressionMatchesTypeHint(awaitExpr.Expression, typeHint);
+
+            case ConditionalExpressionSyntax conditional:
+                return InitializerExpressionMatchesTypeHint(conditional.WhenTrue, typeHint)
+                    || InitializerExpressionMatchesTypeHint(conditional.WhenFalse, typeHint);
+
+            case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression):
+                return InitializerExpressionMatchesTypeHint(binary.Left, typeHint)
+                    || InitializerExpressionMatchesTypeHint(binary.Right, typeHint);
+
+            default:
+                return false;
+        }
     }
 
     private static bool MethodReturnTypeMatches(MethodDeclarationSyntax method, string typeHint)
