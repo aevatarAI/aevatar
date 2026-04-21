@@ -945,8 +945,8 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-1");
-    if (params.get("workflow")) {
-      expect(params.get("workflow")).toBe("workflow-1");
+    if (params.get("focus")) {
+      expect(params.get("focus")).toBe("workflow:workflow-1");
       expect(params.get("tab")).toBe("studio");
     } else {
       expect(params.get("tab")).toBe("workflows");
@@ -966,7 +966,9 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("workflow=workflow-1");
+    expect(window.location.search).toContain(
+      "focus=workflow%3Aworkflow-1",
+    );
 
     cleanup();
     window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1&tab=assets");
@@ -979,7 +981,7 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("script=script-1");
+    expect(window.location.search).toContain("focus=script%3Ascript-1");
     expect(window.location.search).toContain("tab=scripts");
   });
 

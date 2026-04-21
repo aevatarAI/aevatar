@@ -10,17 +10,16 @@ describe('buildStudioRoute', () => {
     expect(buildStudioRoute()).toBe('/studio');
   });
 
-  it('includes workflow, template, tab, and prompt query params when provided', () => {
+  it('includes focus, tab, and prompt query params when provided', () => {
     expect(
       buildStudioRoute({
         scopeId: 'scope-1',
-        workflowId: 'workspace-demo',
-        template: 'published_demo',
+        focus: 'template:published_demo',
         tab: 'executions',
         prompt: 'Run the current draft',
       }),
     ).toBe(
-      '/studio?scopeId=scope-1&workflow=workspace-demo&template=published_demo&tab=executions&prompt=Run+the+current+draft',
+      '/studio?scopeId=scope-1&focus=template%3Apublished_demo&tab=executions&prompt=Run+the+current+draft',
     );
   });
 
@@ -33,7 +32,7 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?tab=workflows&draft=new');
   });
 
-  it('preserves create-team context when opening a blank Studio draft', () => {
+  it('ignores legacy create-team route params when opening a blank Studio draft', () => {
     expect(
       buildStudioRoute({
         teamMode: 'create',
@@ -41,12 +40,10 @@ describe('buildStudioRoute', () => {
         entryName: '订单入口',
         draftMode: 'new',
       }),
-    ).toBe(
-      '/studio?teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&tab=studio&draft=new',
-    );
+    ).toBe('/studio?tab=studio&draft=new');
   });
 
-  it('preserves the saved create-team draft pointer when resuming in Studio', () => {
+  it('ignores the removed create-team draft pointer params', () => {
     expect(
       buildStudioRoute({
         teamMode: 'create',
@@ -54,32 +51,38 @@ describe('buildStudioRoute', () => {
         entryName: '订单入口',
         teamDraftWorkflowId: 'workflow-7',
         teamDraftWorkflowName: 'order-entry-draft',
-        workflowId: 'workflow-7',
+        focus: 'workflow:workflow-7',
       }),
-    ).toBe(
-      '/studio?teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft&workflow=workflow-7&tab=studio',
-    );
+    ).toBe('/studio?focus=workflow%3Aworkflow-7&tab=studio');
   });
 
   it('supports the dedicated Studio editor tab', () => {
     expect(
       buildStudioRoute({
-        workflowId: 'workflow-1',
+        focus: 'workflow:workflow-1',
         tab: 'studio',
       }),
-    ).toBe('/studio?workflow=workflow-1&tab=studio');
+    ).toBe('/studio?focus=workflow%3Aworkflow-1&tab=studio');
   });
 
   it('supports opening the scripts workspace for a specific script', () => {
     expect(
       buildStudioRoute({
         tab: 'scripts',
-        scriptId: 'script-1',
+        focus: 'script:script-1',
       }),
-    ).toBe('/studio?script=script-1&tab=scripts');
+    ).toBe('/studio?focus=script%3Ascript-1&tab=scripts');
   });
 
-  it('supports redirecting legacy playground drafts into Studio', () => {
+  it('supports opening the GAgent build workspace', () => {
+    expect(
+      buildStudioRoute({
+        tab: 'gagents',
+      }),
+    ).toBe('/studio?tab=gagents');
+  });
+
+  it('drops the legacy playground route flag when building Studio routes', () => {
     expect(
       buildStudioRoute({
         draftMode: 'new',
@@ -87,22 +90,20 @@ describe('buildStudioRoute', () => {
         prompt: 'Review the current draft',
         legacySource: 'playground',
       }),
-    ).toBe(
-      '/studio?tab=studio&draft=new&prompt=Review+the+current+draft&legacy=playground',
-    );
+    ).toBe('/studio?tab=studio&draft=new&prompt=Review+the+current+draft');
   });
 
   it('infers the scripts workspace when only a script id is provided', () => {
     expect(
       buildStudioRoute({
-        scriptId: 'script-1',
+        focus: 'script:script-1',
       }),
-    ).toBe('/studio?script=script-1&tab=scripts');
+    ).toBe('/studio?focus=script%3Ascript-1&tab=scripts');
   });
 
   it('builds dedicated workflow and script workspace routes', () => {
     expect(buildStudioWorkflowWorkspaceRoute({ scopeId: 'scope-1' })).toBe(
-      '/studio?scopeId=scope-1&tab=workflows',
+      '/studio?scopeId=scope-1&tab=studio',
     );
     expect(
       buildStudioWorkflowWorkspaceRoute({
@@ -111,29 +112,27 @@ describe('buildStudioRoute', () => {
         memberId: 'service-alpha',
         memberLabel: '默认成员',
       }),
-    ).toBe(
-      '/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E9%BB%98%E8%AE%A4%E6%88%90%E5%91%98&tab=workflows',
-    );
+    ).toBe('/studio?scopeId=scope-a&memberId=service-alpha&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
         workflowId: 'workflow-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&workflow=workflow-1&tab=studio');
+    ).toBe('/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio');
     expect(
       buildStudioScriptsWorkspaceRoute({
         scopeId: 'scope-1',
         scriptId: 'script-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&script=script-1&tab=scripts');
+    ).toBe('/studio?scopeId=scope-1&focus=script%3Ascript-1&tab=scripts');
   });
 
   it('infers the workflow editor when only a workflow id is provided', () => {
     expect(
       buildStudioRoute({
-        workflowId: 'workflow-1',
+        focus: 'workflow:workflow-1',
       }),
-    ).toBe('/studio?workflow=workflow-1&tab=studio');
+    ).toBe('/studio?focus=workflow%3Aworkflow-1&tab=studio');
   });
 
   it('infers the execution view when only an execution id is provided', () => {
@@ -148,26 +147,23 @@ describe('buildStudioRoute', () => {
     expect(
       buildStudioRoute({
         scopeId: 'scope-1',
-        workflowId: 'workflow-1',
-        scriptId: 'script-1',
+        focus: 'workflow:workflow-1',
         executionId: 'execution-1',
       }),
     ).toBe(
-      '/studio?scopeId=scope-1&workflow=workflow-1&script=script-1&tab=executions&execution=execution-1',
+      '/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=executions&execution=execution-1',
     );
   });
 
-  it('preserves team context query params when building Studio routes', () => {
+  it('only persists stable scope and member ids in Studio routes', () => {
     expect(
       buildStudioRoute({
         scopeId: 'scope-a',
         scopeLabel: '团队 A',
         memberId: 'service-alpha',
         memberLabel: '成员 Alpha',
-        workflowId: 'workflow-1',
+        focus: 'workflow:workflow-1',
       }),
-    ).toBe(
-      '/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio',
-    );
+    ).toBe('/studio?scopeId=scope-a&memberId=service-alpha&focus=workflow%3Aworkflow-1&tab=studio');
   });
 });

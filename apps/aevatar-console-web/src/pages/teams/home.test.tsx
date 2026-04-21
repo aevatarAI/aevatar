@@ -180,6 +180,22 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("进入 Studio")).toBeTruthy();
   });
 
+  it("opens Studio from the scope-backed team preview without legacy label params", async () => {
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
+    fireEvent.click(await screen.findByText("进入 Studio"));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("tab")).toBe("workflows");
+    expect(params.get("scopeLabel")).toBeNull();
+  });
+
   it("does not show the roster view toggle when the homepage only has one visible team", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
@@ -271,5 +287,63 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("客服团队")).toBeNull();
     expect(screen.queryByText("草稿团队")).toBeNull();
     expect(screen.queryByRole("button", { name: "查看团队" })).toBeNull();
+  });
+
+  it("opens Studio from the no-entry empty state without legacy label params", async () => {
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      serviceId: "service-alpha",
+      serviceKey: "scope-a:alpha",
+      displayName: "客服运行时",
+      runs: [],
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    const openStudioButtons = await screen.findAllByRole("button", { name: "打开 Studio" });
+    fireEvent.click(openStudioButtons[0]);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("tab")).toBe("workflows");
+    expect(params.get("scopeLabel")).toBeNull();
+  });
+
+  it("does not query runs for the default service when the scope binding is unavailable", async () => {
+    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
+    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+      available: false,
+      scopeId: "scope-a",
+      serviceId: "default",
+      displayName: "",
+      serviceKey: "",
+      defaultServingRevisionId: "",
+      activeServingRevisionId: "",
+      deploymentId: "",
+      deploymentStatus: "",
+      primaryActorId: "",
+      updatedAt: null,
+      revisions: [],
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByText("当前 Scope 还没有默认团队入口"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "没有找到已发布的默认入口服务，所以首页暂时没有运行信号。去 Studio 发布团队后，这里会自动出现。",
+      ),
+    ).toBeTruthy();
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
+    expect(screen.queryByText("部分团队信号暂时不可见")).toBeNull();
   });
 });

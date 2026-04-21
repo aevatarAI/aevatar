@@ -1091,9 +1091,11 @@ internal static class StudioEndpoints
             try
             {
                 var preferences = await llmPreferencesStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
+                if (!metadata.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
+                    !string.IsNullOrWhiteSpace(preferences.DefaultModel))
                     metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
-                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
+                if (!metadata.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
+                    !string.IsNullOrWhiteSpace(preferences.PreferredRoute))
                     metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
             }
             catch

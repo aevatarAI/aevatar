@@ -536,9 +536,11 @@ public static class ScopeWorkflowEndpoints
                 try
                 {
                     var userConfig = await userConfigStore.GetAsync(cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
+                        !string.IsNullOrWhiteSpace(userConfig.DefaultModel))
                         scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
+                        !string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
                         scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
                 }
                 catch

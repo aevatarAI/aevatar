@@ -231,7 +231,7 @@ const ScriptCodeEditorComponent: React.ComponentType<ScriptCodeEditorProps> =
 type ScriptsWorkbenchPageProps = {
   appContext: StudioAppContext;
   initialScriptId?: string;
-  onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
   onSelectScriptId?: (scriptId: string) => void;
 };
 
@@ -748,7 +748,7 @@ function validatePackageFilePath(
 const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   appContext,
   initialScriptId = '',
-  onUnsavedChangesChange,
+  onRegisterLeaveGuard,
   onSelectScriptId,
 }) => {
   const queryClient = useQueryClient();
@@ -766,6 +766,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const [promotionReasonDraft, setPromotionReasonDraft] = React.useState('');
   const [bindModalOpen, setBindModalOpen] = React.useState(false);
   const [bindDisplayNameDraft, setBindDisplayNameDraft] = React.useState('');
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = React.useState(false);
   const [askAiOpen, setAskAiOpen] = React.useState(false);
   const [askAiPrompt, setAskAiPrompt] = React.useState('');
   const [askAiReasoning, setAskAiReasoning] = React.useState('');
@@ -811,6 +812,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const suppressAskAiToggleRef = React.useRef(false);
   const askAiAbortRef = React.useRef<AbortController | null>(null);
   const saveShortcutActionRef = React.useRef<(() => void) | null>(null);
+  const pendingLeaveDecisionRef = React.useRef<{
+    promise: Promise<boolean>;
+    resolve: (allowed: boolean) => void;
+  } | null>(null);
 
   const scopeBacked =
     appContext.scopeResolved && appContext.scriptStorageMode === 'scope';
@@ -2455,6 +2460,45 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   ];
   const surfaceActionClass = (active = false) =>
     `console-scripts-surface-action ${active ? 'active' : ''}`;
+  const settlePendingLeaveDecision = React.useCallback(
+    (
+      allowed: boolean,
+      options?: {
+        closeModal?: boolean;
+      },
+    ) => {
+      pendingLeaveDecisionRef.current?.resolve(allowed);
+      pendingLeaveDecisionRef.current = null;
+      if (options?.closeModal !== false) {
+        setLeaveConfirmOpen(false);
+      }
+    },
+    [],
+  );
+  const requestLeaveConfirmation = React.useCallback(() => {
+    if (!hasUnsavedScopeChanges) {
+      return Promise.resolve(true);
+    }
+
+    if (pendingLeaveDecisionRef.current) {
+      setLeaveConfirmOpen(true);
+      return pendingLeaveDecisionRef.current.promise;
+    }
+
+    let resolveLeaveDecision: ((allowed: boolean) => void) | null = null;
+    const promise = new Promise<boolean>((resolve) => {
+      resolveLeaveDecision = resolve;
+    });
+
+    pendingLeaveDecisionRef.current = {
+      promise,
+      resolve: (allowed: boolean) => {
+        resolveLeaveDecision?.(allowed);
+      },
+    };
+    setLeaveConfirmOpen(true);
+    return promise;
+  }, [hasUnsavedScopeChanges]);
 
   React.useEffect(() => {
     if (isEmbeddedMode) {
@@ -2465,18 +2509,29 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   }, [isEmbeddedMode]);
 
   React.useEffect(() => {
-    onUnsavedChangesChange?.(hasUnsavedScopeChanges);
-  }, [hasUnsavedScopeChanges, onUnsavedChangesChange]);
+    onRegisterLeaveGuard?.(requestLeaveConfirmation);
+
+    return () => {
+      onRegisterLeaveGuard?.(null);
+    };
+  }, [onRegisterLeaveGuard, requestLeaveConfirmation]);
 
   React.useEffect(
     () => () => {
-      onUnsavedChangesChange?.(false);
+      settlePendingLeaveDecision(false, {
+        closeModal: false,
+      });
     },
-    [onUnsavedChangesChange],
+    [settlePendingLeaveDecision],
   );
 
   React.useEffect(() => {
     if (!hasUnsavedScopeChanges) {
+      if (pendingLeaveDecisionRef.current) {
+        settlePendingLeaveDecision(true);
+      } else {
+        setLeaveConfirmOpen(false);
+      }
       return undefined;
     }
 
@@ -2487,7 +2542,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [hasUnsavedScopeChanges]);
+  }, [hasUnsavedScopeChanges, settlePendingLeaveDecision]);
 
   return (
     <div className="console-scripts-page">
@@ -3230,6 +3285,38 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
               placeholder="Script display name"
               style={{ marginTop: 8 }}
             />
+          </div>
+        </ScriptsStudioModal>
+
+        <ScriptsStudioModal
+          open={leaveConfirmOpen}
+          eyebrow="Scripts"
+          title="Leave Scripts Studio?"
+          onClose={() => settlePendingLeaveDecision(false)}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => settlePendingLeaveDecision(false)}
+                className="console-scripts-ghost-action"
+              >
+                Continue editing
+              </button>
+              <button
+                type="button"
+                onClick={() => settlePendingLeaveDecision(true)}
+                className="console-scripts-solid-action"
+              >
+                Leave page
+              </button>
+            </>
+          }
+          width={560}
+        >
+          <div className="console-scripts-detail-copy" style={{ marginTop: 0 }}>
+            The current script changes have not been saved to Scope yet. Your
+            local draft will still be kept in this browser, but these changes
+            will not be visible in Scope until you save them.
           </div>
         </ScriptsStudioModal>
 

@@ -1,5 +1,8 @@
 using System.Text;
+using System.Reflection;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -9,6 +12,7 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -119,6 +123,55 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("SCOPE_ACCESS_DENIED");
         body.Should().Contain("Authentication is required.");
         interactionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowEndpointHelpers_ShouldBuildScopedHeaders_AndRespectExplicitRouteAndModel()
+    {
+        var explicitHeaders = new Dictionary<string, string>
+        {
+            ["scope_id"] = "old",
+            [WorkflowRunCommandMetadataKeys.ScopeId] = "legacy",
+            [LLMRequestMetadataKeys.ModelOverride] = "existing-model",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/openai",
+        };
+        var successContext = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddSingleton<IUserConfigQueryPort>(new StubUserConfigStore(
+                    new UserConfig("user-model", "/preferred-route")))
+                .BuildServiceProvider(),
+        };
+        successContext.Request.Headers.Authorization = "Bearer token-123";
+
+        var scopedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
+            "BuildScopedHeadersAsync",
+            "scope-a",
+            explicitHeaders,
+            successContext,
+            CancellationToken.None);
+
+        scopedHeaders.Should().NotContainKey("scope_id");
+        scopedHeaders.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
+        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/openai");
+        scopedHeaders["nyxid.access_token"].Should().Be("token-123");
+        scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+
+        var failedContext = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddSingleton<IUserConfigQueryPort>(new ThrowingUserConfigStore())
+                .BuildServiceProvider(),
+        };
+        var failedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
+            "BuildScopedHeadersAsync",
+            "scope-a",
+            null,
+            failedContext,
+            CancellationToken.None);
+
+        failedHeaders.Should().BeEmpty();
     }
 
     [Fact]
@@ -687,6 +740,18 @@ public sealed class ScopeWorkflowEndpointsTests
         return await reader.ReadToEndAsync();
     }
 
+    private static async Task<T> InvokePrivateStaticTask<T>(string methodName, params object?[] args)
+    {
+        var method = typeof(ScopeWorkflowEndpoints).GetMethod(
+            methodName,
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull($"Expected private static method {methodName} to exist.");
+
+        var task = method!.Invoke(null, args).Should().BeAssignableTo<Task>().Subject;
+        await task;
+        return (T)task.GetType().GetProperty("Result")!.GetValue(task)!;
+    }
+
     private static WorkflowRunEventEnvelope BuildRawObservedWorkflowExecutionStartedFrame()
     {
         var payload = new WorkflowRunExecutionStartedEvent
@@ -863,5 +928,23 @@ public sealed class ScopeWorkflowEndpointsTests
 
         public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
+    }
+
+    private sealed class StubUserConfigStore : IUserConfigQueryPort
+    {
+        private readonly UserConfig _config;
+
+        public StubUserConfigStore(UserConfig config)
+        {
+            _config = config;
+        }
+
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
+    }
+
+    private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
+    {
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
+            throw new InvalidOperationException("boom");
     }
 }

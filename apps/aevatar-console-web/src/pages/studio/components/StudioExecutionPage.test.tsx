@@ -64,7 +64,6 @@ function createBaseProps(overrides = {}) {
     executionStopPending: false,
     runPrompt: '',
     executionNotice: null,
-    onSwitchStudioView: jest.fn(),
     onOpenExecution: jest.fn(),
     onSaveDraft: jest.fn(),
     onExportDraft: jest.fn(),
