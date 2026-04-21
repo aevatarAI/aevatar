@@ -104,17 +104,15 @@ public sealed class ChannelArchitectureTests
 
                     foreach (var invocation in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
                     {
-                        if (invocation.Expression is not MemberAccessExpressionSyntax member)
+                        var (methodName, receiverExpression) =
+                            ChannelReceiverTracker.GetMemberInvocationParts(invocation);
+
+                        if (methodName != "SendAsync" || receiverExpression is null)
                         {
                             continue;
                         }
 
-                        if (member.Name.Identifier.ValueText != "SendAsync")
-                        {
-                            continue;
-                        }
-
-                        var receiverName = ChannelReceiverTracker.ExtractLeafName(member.Expression);
+                        var receiverName = ChannelReceiverTracker.ExtractLeafName(receiverExpression);
                         if (receiverName is null)
                         {
                             continue;
@@ -169,7 +167,9 @@ public sealed class ChannelArchitectureTests
         foreach (var sourceFile in ChannelSourceIndex.EnumerateProductionSourceFiles())
         {
             var text = File.ReadAllText(sourceFile);
-            if (!text.Contains(".ContinueConversationAsync(", System.StringComparison.Ordinal))
+            // Cheap short-circuit that also accepts `?.ContinueConversationAsync(` null-
+            // conditional forms by matching on the method-name substring without the leading dot.
+            if (!text.Contains("ContinueConversationAsync(", System.StringComparison.Ordinal))
             {
                 continue;
             }
@@ -189,12 +189,8 @@ public sealed class ChannelArchitectureTests
 
                 foreach (var invocation in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
                 {
-                    if (invocation.Expression is not MemberAccessExpressionSyntax member)
-                    {
-                        continue;
-                    }
-
-                    if (member.Name.Identifier.ValueText != "ContinueConversationAsync")
+                    var (methodName, _) = ChannelReceiverTracker.GetMemberInvocationParts(invocation);
+                    if (methodName != "ContinueConversationAsync")
                     {
                         continue;
                     }
@@ -263,13 +259,15 @@ public sealed class ChannelArchitectureTests
 
                     foreach (var invocation in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
                     {
-                        if (invocation.Expression is not MemberAccessExpressionSyntax member
-                            || member.Name.Identifier.ValueText != "WriteAsync")
+                        var (methodName, receiverExpression) =
+                            ChannelReceiverTracker.GetMemberInvocationParts(invocation);
+
+                        if (methodName != "WriteAsync" || receiverExpression is null)
                         {
                             continue;
                         }
 
-                        var receiverName = ChannelReceiverTracker.ExtractLeafName(member.Expression);
+                        var receiverName = ChannelReceiverTracker.ExtractLeafName(receiverExpression);
                         if (receiverName is null)
                         {
                             continue;
@@ -675,6 +673,37 @@ internal static class ChannelReceiverTracker
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Extracts the method name and receiver expression from a member-invocation syntax form,
+    /// normalising <see cref="MemberAccessExpressionSyntax"/> (`x.SendAsync(...)`) and
+    /// <see cref="MemberBindingExpressionSyntax"/> inside a <see cref="ConditionalAccessExpressionSyntax"/>
+    /// (`x?.SendAsync(...)`) into the same shape. Returns <c>(null, null)</c> for invocations that
+    /// aren't plain member dispatches (for example `F(x)` or `del()`).
+    /// </summary>
+    public static (string? MethodName, ExpressionSyntax? Receiver) GetMemberInvocationParts(InvocationExpressionSyntax invocation)
+    {
+        switch (invocation.Expression)
+        {
+            case MemberAccessExpressionSyntax member:
+                return (member.Name.Identifier.ValueText, member.Expression);
+
+            case MemberBindingExpressionSyntax binding:
+            {
+                var methodName = binding.Name.Identifier.ValueText;
+
+                // Null-conditional invocations come through as the `WhenNotNull` of the nearest
+                // enclosing ConditionalAccessExpression. Its `Expression` is the receiver that
+                // precedes the `?.` operator — everything from plain `_outbound?.SendAsync(...)`
+                // to chained `wrapper?.Port?.SendAsync(...)` surfaces here.
+                var nearestConditional = invocation.FirstAncestorOrSelf<ConditionalAccessExpressionSyntax>();
+                return (methodName, nearestConditional?.Expression);
+            }
+
+            default:
+                return (null, null);
+        }
     }
 
     public static string? ExtractLeafName(ExpressionSyntax expression)
