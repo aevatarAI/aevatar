@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Net;
 using System.Net.Http;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -251,6 +252,66 @@ public class LarkPlatformAdapterTests
         inbound.Extra.Should().Contain(new KeyValuePair<string, string>("step_id", "approval-1"));
         inbound.Extra.Should().Contain(new KeyValuePair<string, string>("approved", "True"));
         inbound.Extra.Should().Contain(new KeyValuePair<string, string>("user_input", "Looks good"));
+    }
+
+    [Fact]
+    public async Task ParseInbound_extracts_resume_command_from_rendered_approval_form_submit()
+    {
+        var cardJson = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        {
+            ActorId = "workflow-actor-1",
+            RunId = "run-1",
+            StepId = "approval-1",
+            SuspensionType = "human_approval",
+            Prompt = "Need approval",
+            Content = "Please confirm the publication.",
+            Options = ["approve", "reject"],
+        });
+
+        using var card = JsonDocument.Parse(cardJson);
+        var formElement = card.RootElement.GetProperty("body").GetProperty("elements")[1];
+        var approveActionValue = formElement.GetProperty("elements")[2].GetProperty("actions")[0].GetProperty("value").Clone();
+
+        var payload = new
+        {
+            schema = "2.0",
+            header = new { event_type = "card.action.trigger", token = "verify-token", event_id = "evt_card_submit_1" },
+            @event = new
+            {
+                @operator = new
+                {
+                    open_id = "ou_operator_1",
+                },
+                context = new
+                {
+                    open_chat_id = "oc_chat_card_1",
+                    open_message_id = "om_card_msg_1",
+                },
+                action = new
+                {
+                    value = approveActionValue,
+                    form_value = new
+                    {
+                        edited_content = "Updated final draft",
+                        user_input = "Looks good",
+                    },
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
+
+        inbound.Should().NotBeNull();
+        ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound!, out var command).Should().BeTrue();
+        command.Should().NotBeNull();
+        command!.ActorId.Should().Be("workflow-actor-1");
+        command.RunId.Should().Be("run-1");
+        command.StepId.Should().Be("approval-1");
+        command.Approved.Should().BeTrue();
+        command.UserInput.Should().Be("Updated final draft");
+        command.EditedContent.Should().Be("Updated final draft");
+        command.Feedback.Should().Be("Looks good");
     }
 
     [Fact]

@@ -124,7 +124,10 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 },
                 template = SupportsApproveReject(request) ? "orange" : "blue",
             },
-            elements,
+            body = new
+            {
+                elements,
+            },
         });
     }
 
@@ -192,7 +195,10 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 },
                 template = resolution.Approved ? "green" : "red",
             },
-            elements,
+            body = new
+            {
+                elements,
+            },
         });
     }
 
