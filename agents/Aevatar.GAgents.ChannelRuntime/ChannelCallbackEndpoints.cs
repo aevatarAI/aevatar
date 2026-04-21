@@ -366,7 +366,7 @@ public static class ChannelCallbackEndpoints
             VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
-            EncryptKey = request.EncryptKey?.Trim() ?? string.Empty,
+            CredentialRef = request.CredentialRef?.Trim() ?? string.Empty,
             RequestedId = registrationId,
         };
 
@@ -689,7 +689,7 @@ public static class ChannelCallbackEndpoints
         string? VerificationToken,
         string? ScopeId,
         string? WebhookBaseUrl,
-        string? EncryptKey);
+        string? CredentialRef);
 
     private sealed record TestReplyRequest(string? ChatId, string? Message);
 

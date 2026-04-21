@@ -260,7 +260,7 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task BotQueryPort_GetAsync_PropagatesEncryptKey()
+    public async Task BotQueryPort_GetAsync_DoesNotExposeLegacyEncryptKey()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
         reader.GetAsync("bot-enc", Arg.Any<CancellationToken>())
@@ -283,11 +283,11 @@ public sealed class RegistrationQueryPortTests
         var result = await queryPort.GetAsync("bot-enc");
 
         result.Should().NotBeNull();
-        result!.EncryptKey.Should().Be("my-secret-encrypt-key");
+        result!.EncryptKey.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task BotQueryPort_GetAsync_DefaultsEncryptKeyToEmpty_WhenNull()
+    public async Task BotQueryPort_GetAsync_DefaultsLegacyEncryptKeyToEmpty_WhenNull()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
         reader.GetAsync("bot-no-enc", Arg.Any<CancellationToken>())
@@ -309,7 +309,7 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task BotQueryPort_QueryAllAsync_PropagatesEncryptKey()
+    public async Task BotQueryPort_QueryAllAsync_DoesNotExposeLegacyEncryptKey()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
         reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
@@ -334,8 +334,8 @@ public sealed class RegistrationQueryPortTests
         var result = await queryPort.QueryAllAsync();
 
         result.Should().HaveCount(2);
-        result[0].EncryptKey.Should().Be("key-a");
-        result[1].EncryptKey.Should().Be("key-b");
+        result[0].EncryptKey.Should().BeEmpty();
+        result[1].EncryptKey.Should().BeEmpty();
     }
 
     [Fact]

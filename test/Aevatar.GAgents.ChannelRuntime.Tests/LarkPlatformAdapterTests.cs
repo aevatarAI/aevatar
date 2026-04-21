@@ -4,11 +4,13 @@ using System.Text.Json;
 using System.Net;
 using System.Net.Http;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -503,6 +505,34 @@ public class LarkPlatformAdapterTests
             timestamp, nonce, encryptKey, bodyString);
 
         var http = CreateHttpContextWithSignature(bodyString, expectedSignature, timestamp, nonce);
+        var inbound = await _adapter.ParseInboundAsync(http, reg);
+
+        inbound.Should().NotBeNull();
+        inbound!.Text.Should().Be("Hello from Lark!");
+    }
+
+    [Fact]
+    public async Task ParseInbound_verifies_signature_when_credential_ref_resolves_encrypt_key()
+    {
+        var encryptKey = "test-encrypt-key-123";
+        var credentialRef = "vault://channels/lark/reg-1";
+        var reg = MakeRegistrationWithCredentialRef(credentialRef);
+        const string timestamp = "1234567890";
+        const string nonce = "test-nonce";
+
+        var payload = BuildLarkV2Payload("im.message.receive_v1", timestamp, nonce);
+        var bodyString = JsonSerializer.Serialize(payload);
+        var expectedSignature = LarkPlatformAdapter.ComputeLarkSignature(
+            timestamp, nonce, encryptKey, bodyString);
+
+        var http = CreateHttpContextWithSignature(bodyString, expectedSignature, timestamp, nonce);
+        http.RequestServices = new ServiceCollection()
+            .AddSingleton<ICredentialProvider>(new TestCredentialProvider(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [credentialRef] = $$"""{"access_token":"","encrypt_key":"{{encryptKey}}"}""",
+            }))
+            .BuildServiceProvider();
+
         var inbound = await _adapter.ParseInboundAsync(http, reg);
 
         inbound.Should().NotBeNull();
@@ -1098,6 +1128,18 @@ public class LarkPlatformAdapterTests
         CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
     };
 
+    private static ChannelBotRegistrationEntry MakeRegistrationWithCredentialRef(string credentialRef) => new()
+    {
+        Id = "test-reg-enc",
+        Platform = "lark",
+        NyxProviderSlug = "api-lark-bot",
+        NyxUserToken = "test-token",
+        VerificationToken = "verify-token",
+        CredentialRef = credentialRef,
+        ScopeId = "test-scope",
+        CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+    };
+
     private static object BuildLarkV2Payload(string eventType, string createTime, string nonce) => new
     {
         schema = "2.0",
@@ -1184,5 +1226,11 @@ public class LarkPlatformAdapterTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromException<HttpResponseMessage>(exception);
+    }
+
+    private sealed class TestCredentialProvider(IReadOnlyDictionary<string, string> values) : ICredentialProvider
+    {
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default) =>
+            Task.FromResult(values.TryGetValue(credentialRef, out var value) ? value : null);
     }
 }

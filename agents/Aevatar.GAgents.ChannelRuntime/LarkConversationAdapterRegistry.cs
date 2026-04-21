@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Lark;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
@@ -13,18 +14,21 @@ internal sealed class LarkConversationAdapterRegistry : IAsyncDisposable
     private readonly LarkPayloadRedactor _payloadRedactor;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IServiceProvider _services;
     private readonly ConcurrentDictionary<string, AdapterRegistration> _registrations = new(StringComparer.Ordinal);
 
     public LarkConversationAdapterRegistry(
         LarkMessageComposer composer,
         LarkPayloadRedactor payloadRedactor,
         IHttpClientFactory httpClientFactory,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IServiceProvider services)
     {
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _payloadRedactor = payloadRedactor ?? throw new ArgumentNullException(nameof(payloadRedactor));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _services = services ?? throw new ArgumentNullException(nameof(services));
     }
 
     public async Task<LarkChannelAdapter> GetAsync(ChannelBotRegistrationEntry registration, CancellationToken ct)
@@ -32,7 +36,7 @@ internal sealed class LarkConversationAdapterRegistry : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(registration);
         ct.ThrowIfCancellationRequested();
 
-        var snapshot = AdapterSnapshot.From(registration);
+        var snapshot = await AdapterSnapshot.FromAsync(registration, _services.GetService<ICredentialProvider>(), ct);
         if (_registrations.TryGetValue(snapshot.RegistrationId, out var existing) &&
             existing.Snapshot == snapshot)
         {
@@ -98,7 +102,7 @@ internal sealed class LarkConversationAdapterRegistry : IAsyncDisposable
                     ChannelId.From("lark"),
                     BotInstanceId.From(snapshot.RegistrationId),
                     snapshot.ScopeId),
-                credentialRef: $"channel-registration:lark:{snapshot.RegistrationId}",
+                credentialRef: snapshot.BindingCredentialRef,
                 verificationToken: snapshot.VerificationToken),
             ct);
         await adapter.StartReceivingAsync(ct);
@@ -113,18 +117,78 @@ internal sealed class LarkConversationAdapterRegistry : IAsyncDisposable
         string RegistrationId,
         string ScopeId,
         string VerificationToken,
+        string BindingCredentialRef,
+        string CredentialRef,
         string SecretJson)
     {
-        public static AdapterSnapshot From(ChannelBotRegistrationEntry registration) =>
-            new(
+        public static async Task<AdapterSnapshot> FromAsync(
+            ChannelBotRegistrationEntry registration,
+            ICredentialProvider? credentialProvider,
+            CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(registration);
+            ct.ThrowIfCancellationRequested();
+
+            var credentialRef = registration.CredentialRef?.Trim() ?? string.Empty;
+            var bindingCredentialRef = credentialRef.Length == 0
+                ? $"channel-registration:lark:{registration.Id ?? string.Empty}"
+                : credentialRef;
+
+            var secretJson = credentialRef.Length == 0
+                ? BuildSecretJson(string.Empty)
+                : BuildSecretJson(await ResolveSecretAsync(credentialRef, credentialProvider, ct));
+
+            return new AdapterSnapshot(
                 registration.Id ?? string.Empty,
                 registration.ScopeId ?? string.Empty,
                 registration.VerificationToken ?? string.Empty,
-                JsonSerializer.Serialize(new
+                bindingCredentialRef,
+                credentialRef,
+                secretJson);
+        }
+
+        private static async Task<string> ResolveSecretAsync(
+            string credentialRef,
+            ICredentialProvider? credentialProvider,
+            CancellationToken ct)
+        {
+            if (credentialProvider is null)
+            {
+                throw new InvalidOperationException(
+                    $"No {nameof(ICredentialProvider)} is registered, but channel registration requires credential_ref '{credentialRef}'.");
+            }
+
+            var secret = await credentialProvider.ResolveAsync(credentialRef, ct);
+            if (string.IsNullOrWhiteSpace(secret))
+            {
+                throw new InvalidOperationException(
+                    $"credential_ref '{credentialRef}' did not resolve to a usable Lark secret.");
+            }
+
+            return secret.Trim();
+        }
+
+        private static string BuildSecretJson(string resolvedSecret)
+        {
+            if (string.IsNullOrWhiteSpace(resolvedSecret))
+            {
+                return JsonSerializer.Serialize(new
                 {
                     access_token = string.Empty,
-                    encrypt_key = registration.EncryptKey ?? string.Empty,
-                }));
+                    encrypt_key = string.Empty,
+                });
+            }
+
+            var trimmed = resolvedSecret.Trim();
+            if (trimmed.StartsWith("{", StringComparison.Ordinal))
+                return trimmed;
+
+            return JsonSerializer.Serialize(new
+            {
+                access_token = string.Empty,
+                encrypt_key = trimmed,
+            });
+        }
     }
 
     private sealed class StaticCredentialProvider : ICredentialProvider

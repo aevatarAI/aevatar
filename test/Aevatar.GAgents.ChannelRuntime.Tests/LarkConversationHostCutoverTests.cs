@@ -20,6 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using FoundationCredentialProvider = Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -42,7 +43,8 @@ public sealed class LarkConversationHostCutoverTests
             outbound,
             registrationQueryPort,
             nyxClient: BuildDefaultNyxClient(),
-            replyGenerator: new StubReplyGenerator("group-reply"));
+            replyGenerator: new StubReplyGenerator("group-reply"),
+            credentialProvider: BuildCredentialProvider(registration));
 
         var ingress = services.GetRequiredService<ILarkConversationIngressRuntime>();
         var result = await ingress.HandleAsync(
@@ -126,6 +128,7 @@ public sealed class LarkConversationHostCutoverTests
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(nyxHandler) { BaseAddress = new Uri("https://nyx.example.com") }),
             replyGenerator: new StubReplyGenerator("group-reply"),
+            credentialProvider: BuildCredentialProvider(registration),
             configure: serviceCollection =>
             {
                 serviceCollection.AddSingleton(userAgentQueryPort);
@@ -205,7 +208,8 @@ public sealed class LarkConversationHostCutoverTests
             outbound,
             registrationQueryPort,
             nyxClient: BuildDefaultNyxClient(),
-            replyGenerator: new StubReplyGenerator("group-echo"));
+            replyGenerator: new StubReplyGenerator("group-echo"),
+            credentialProvider: BuildCredentialProvider(registration));
 
         var ingress = services.GetRequiredService<ILarkConversationIngressRuntime>();
         var result = await ingress.HandleAsync(
@@ -245,7 +249,8 @@ public sealed class LarkConversationHostCutoverTests
             outbound,
             registrationQueryPort,
             nyxClient: BuildDefaultNyxClient(),
-            replyGenerator: new StubReplyGenerator("dedup-once"));
+            replyGenerator: new StubReplyGenerator("dedup-once"),
+            credentialProvider: BuildCredentialProvider(registration));
 
         var ingress = services.GetRequiredService<ILarkConversationIngressRuntime>();
         var payload = BuildMessageWebhookJson(
@@ -275,9 +280,16 @@ public sealed class LarkConversationHostCutoverTests
         NyxProviderSlug = "api-lark-bot",
         NyxUserToken = "org-token",
         VerificationToken = "verify-token",
+        CredentialRef = "vault://channels/lark/reg-1",
         ScopeId = "scope-1",
         CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
     };
+
+    private static FoundationCredentialProvider BuildCredentialProvider(ChannelBotRegistrationEntry registration) =>
+        new TestCredentialProvider(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [registration.CredentialRef] = """{"access_token":"","encrypt_key":""}""",
+        });
 
     private static IChannelBotRegistrationQueryPort BuildRegistrationQueryPort(ChannelBotRegistrationEntry registration)
     {
@@ -302,6 +314,7 @@ public sealed class LarkConversationHostCutoverTests
         IChannelBotRegistrationQueryPort registrationQueryPort,
         NyxIdApiClient nyxClient,
         IConversationReplyGenerator replyGenerator,
+        FoundationCredentialProvider credentialProvider,
         Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
@@ -319,6 +332,7 @@ public sealed class LarkConversationHostCutoverTests
         services.AddSingleton(registrationQueryPort);
         services.AddSingleton(nyxClient);
         services.AddSingleton(replyGenerator);
+        services.AddSingleton(credentialProvider);
         services.AddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
         services.AddSingleton<LarkMessageComposer>();
         services.AddSingleton<LarkPayloadRedactor>();
@@ -489,6 +503,15 @@ public sealed class LarkConversationHostCutoverTests
             _ = metadata;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<string?>(reply);
+        }
+    }
+
+    private sealed class TestCredentialProvider(IReadOnlyDictionary<string, string> values) : FoundationCredentialProvider
+    {
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(values.TryGetValue(credentialRef, out var secret) ? secret : null);
         }
     }
 

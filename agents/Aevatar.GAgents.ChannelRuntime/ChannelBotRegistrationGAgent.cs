@@ -42,7 +42,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             VerificationToken = cmd.VerificationToken,
             ScopeId = cmd.ScopeId,
             WebhookUrl = cmd.WebhookUrl,
-            EncryptKey = cmd.EncryptKey,
+            EncryptKey = string.Empty,
             CredentialRef = cmd.CredentialRef ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };

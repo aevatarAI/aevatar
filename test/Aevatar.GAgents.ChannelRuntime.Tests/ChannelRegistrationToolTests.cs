@@ -425,22 +425,22 @@ public class ChannelRegistrationToolTests
         }
     }
 
-    // ─── encrypt_key parameter ───
+    // ─── credential_ref parameter ───
 
     [Fact]
-    public void ParametersSchema_Contains_EncryptKey_Property()
+    public void ParametersSchema_Contains_CredentialRef_Property()
     {
         var sp = new ServiceCollection().BuildServiceProvider();
         var tool = new ChannelRegistrationTool(sp);
 
         var doc = JsonDocument.Parse(tool.ParametersSchema);
         var properties = doc.RootElement.GetProperty("properties");
-        properties.TryGetProperty("encrypt_key", out _).Should().BeTrue(
-            "the register action should accept an encrypt_key parameter");
+        properties.TryGetProperty("credential_ref", out _).Should().BeTrue(
+            "the register action should accept a credential_ref parameter");
     }
 
     [Fact]
-    public async Task ExecuteAsync_Register_Dispatches_EncryptKey_In_Command()
+    public async Task ExecuteAsync_Register_Dispatches_CredentialRef_In_Command()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         // Return confirmation on first poll
@@ -471,15 +471,16 @@ public class ChannelRegistrationToolTests
                     "action": "register",
                     "platform": "lark",
                     "nyx_provider_slug": "api-lark-bot",
-                    "encrypt_key": "my-secret-encrypt-key"
+                    "credential_ref": "vault://channels/lark/reg-1"
                 }
                 """);
 
-            // Verify the actor received a command with encrypt_key set
+            // Verify the actor received a command with credential_ref set
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&
                 e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().EncryptKey == "my-secret-encrypt-key"));
+                e.Payload.Unpack<ChannelBotRegisterCommand>().CredentialRef == "vault://channels/lark/reg-1" &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().EncryptKey == ""));
         }
         finally
         {
@@ -488,7 +489,7 @@ public class ChannelRegistrationToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Register_DefaultsEncryptKeyToEmpty_WhenNotProvided()
+    public async Task ExecuteAsync_Register_DefaultsCredentialRefToEmpty_WhenNotProvided()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -520,10 +521,11 @@ public class ChannelRegistrationToolTests
                 }
                 """);
 
-            // Verify encrypt_key defaults to empty
+            // Verify credential_ref defaults to empty
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&
                 e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().CredentialRef == "" &&
                 e.Payload.Unpack<ChannelBotRegisterCommand>().EncryptKey == ""));
         }
         finally

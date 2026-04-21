@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
@@ -35,16 +36,17 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
         using var doc = JsonDocument.Parse(bodyString);
         var root = doc.RootElement;
+        var encryptKey = await ResolveEncryptKeyAsync(http, registration, http.RequestAborted);
 
         // Lark sends encrypted payloads when encrypt_key is configured:
         // { "encrypt": "<base64-encrypted-string>" }
         if (root.TryGetProperty("encrypt", out var encryptedProp) &&
-            !string.IsNullOrEmpty(registration.EncryptKey))
+            !string.IsNullOrEmpty(encryptKey))
         {
             string decrypted;
             try
             {
-                decrypted = DecryptLarkPayload(encryptedProp.GetString()!, registration.EncryptKey);
+                decrypted = DecryptLarkPayload(encryptedProp.GetString()!, encryptKey);
             }
             catch (Exception ex)
             {
@@ -103,18 +105,19 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
         using var doc = JsonDocument.Parse(bodyString);
         var root = doc.RootElement;
+        var encryptKey = await ResolveEncryptKeyAsync(http, registration, http.RequestAborted);
 
         // Handle encrypted event payloads: { "encrypt": "<base64>" }
         JsonDocument? decryptedDoc = null;
         try
         {
             if (root.TryGetProperty("encrypt", out var encryptedProp) &&
-                !string.IsNullOrEmpty(registration.EncryptKey))
+                !string.IsNullOrEmpty(encryptKey))
             {
                 string decrypted;
                 try
                 {
-                    decrypted = DecryptLarkPayload(encryptedProp.GetString()!, registration.EncryptKey);
+                    decrypted = DecryptLarkPayload(encryptedProp.GetString()!, encryptKey);
                 }
                 catch (Exception ex)
                 {
@@ -144,7 +147,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             // SECURITY: When encrypt_key is configured, signature is REQUIRED — missing
             // header means forged request. Without this, an attacker can omit the header
             // and bypass verification entirely.
-            if (!string.IsNullOrEmpty(registration.EncryptKey))
+            if (!string.IsNullOrEmpty(encryptKey))
             {
                 if (!http.Request.Headers.TryGetValue("X-Lark-Signature", out var sigHeader) ||
                     string.IsNullOrWhiteSpace(sigHeader))
@@ -157,7 +160,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                     ? tsHeader.ToString() : "";
                 var nonce = http.Request.Headers.TryGetValue("X-Lark-Request-Nonce", out var nonceHeader)
                     ? nonceHeader.ToString() : "";
-                var expectedSignature = ComputeLarkSignature(timestamp, nonce, registration.EncryptKey,
+                var expectedSignature = ComputeLarkSignature(timestamp, nonce, encryptKey,
                     Encoding.UTF8.GetString(bodyBytes)); // always use original body for signature
 
                 if (!CryptographicOperations.FixedTimeEquals(
@@ -172,7 +175,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             }
 
             // Verify token on v2 event callbacks (header.token) — fallback when no encrypt_key.
-            if (string.IsNullOrEmpty(registration.EncryptKey) &&
+            if (string.IsNullOrEmpty(encryptKey) &&
                 !string.IsNullOrWhiteSpace(registration.VerificationToken))
             {
                 var headerToken = header.TryGetProperty("token", out var ht) ? ht.GetString() : null;
@@ -414,6 +417,42 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                     break;
             }
         }
+    }
+
+    private static async Task<string> ResolveEncryptKeyAsync(
+        HttpContext http,
+        ChannelBotRegistrationEntry registration,
+        CancellationToken ct)
+    {
+        var credentialRef = registration.CredentialRef?.Trim() ?? string.Empty;
+        if (credentialRef.Length == 0)
+            return registration.EncryptKey ?? string.Empty;
+
+        var credentialProvider = http.RequestServices.GetService(typeof(ICredentialProvider)) as ICredentialProvider
+            ?? throw new InvalidOperationException(
+                $"No {nameof(ICredentialProvider)} is registered, but channel registration requires credential_ref '{credentialRef}'.");
+
+        var resolvedSecret = await credentialProvider.ResolveAsync(credentialRef, ct);
+        if (string.IsNullOrWhiteSpace(resolvedSecret))
+            throw new InvalidOperationException(
+                $"credential_ref '{credentialRef}' did not resolve to a Lark credential.");
+
+        return TryExtractEncryptKey(resolvedSecret);
+    }
+
+    private static string TryExtractEncryptKey(string resolvedSecret)
+    {
+        var trimmed = resolvedSecret.Trim();
+        if (trimmed.Length == 0)
+            return string.Empty;
+
+        if (trimmed[0] != '{')
+            return trimmed;
+
+        using var document = JsonDocument.Parse(trimmed);
+        return document.RootElement.TryGetProperty("encrypt_key", out var encryptKey)
+            ? encryptKey.GetString() ?? string.Empty
+            : string.Empty;
     }
 
     internal static bool IsInteractiveCardPayload(string replyText)
