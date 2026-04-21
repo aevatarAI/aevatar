@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Testing\Aevatar.GAgents.Channel.Testing.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="test_projector_contracts.proto" GrpcServices="None" />
