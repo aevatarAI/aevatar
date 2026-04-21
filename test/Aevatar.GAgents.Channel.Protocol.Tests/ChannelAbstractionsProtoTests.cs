@@ -108,6 +108,7 @@ public sealed class ChannelAbstractionsProtoTests
                 SupportsTyping = true,
                 Streaming = StreamingSupport.Native,
                 RecommendedStreamDebounceMs = 200,
+                Transport = TransportMode.Gateway,
             },
         };
         context.Annotations["surface"] = "modal";
@@ -116,10 +117,14 @@ public sealed class ChannelAbstractionsProtoTests
         context.Clone().ShouldBe(context);
         context.Annotations["surface"].ShouldBe("modal");
         context.Capabilities.Streaming.ShouldBe(StreamingSupport.Native);
+        context.Capabilities.Transport.ShouldBe(TransportMode.Gateway);
         ChannelContractsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(EmitResult));
         ChannelContractsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(StreamChunk));
+        var channelCapabilities = ChannelContractsReflection.Descriptor.MessageTypes
+            .Single(x => x.Name == nameof(ChannelCapabilities));
+        channelCapabilities.FindFieldByName("transport").FieldNumber.ShouldBe(17);
         ScheduleReflection.Descriptor.EnumTypes.Select(x => x.Name)
             .ShouldContain(nameof(ProjectionVerdict));
     }

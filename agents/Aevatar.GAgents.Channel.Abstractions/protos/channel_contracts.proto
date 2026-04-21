@@ -59,6 +59,7 @@ message ChannelCapabilities {
   int32 recommended_stream_debounce_ms = 14;
   int32 typing_keepalive_interval_ms = 15;
   int32 typing_ttl_ms = 16;
+  TransportMode transport = 17;
 }
 
 message AuthContext {

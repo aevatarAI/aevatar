@@ -103,6 +103,7 @@ jobs:
           setup-dotnet: "false"
           cache-nuget: "false"
           install-ripgrep: "true"
+          install-buf: "true"
 
       - name: Architecture Guards (full-scan + projection route mapping)
         env:
