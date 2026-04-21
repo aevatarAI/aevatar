@@ -39,6 +39,16 @@ public abstract class GatewayFixture
     public abstract Task<ChatActivity> PublishEventAsync(InboundActivitySeed seed, CancellationToken ct = default);
 
     /// <summary>
+    /// Replays the last synthetic gateway event so the adapter observes a retry of the same payload.
+    /// </summary>
+    /// <remarks>
+    /// Used by deduplication tests. Implementations must replay the exact event (payload, sequence number, dedup key)
+    /// from the previous <see cref="PublishEventAsync"/> call so the adapter cannot distinguish the retry from the
+    /// original. Return <see langword="null"/> when no prior event exists; tests handle that as not-applicable.
+    /// </remarks>
+    public abstract Task<ChatActivity?> ReplayLastEventAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// Gets the sequence number the fixture currently considers authoritative on the platform side.
     /// </summary>
     public abstract long AuthoritativeSequenceNumber { get; }

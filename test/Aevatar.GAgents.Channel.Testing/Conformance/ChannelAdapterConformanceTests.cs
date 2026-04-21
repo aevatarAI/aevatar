@@ -68,18 +68,33 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     /// Returns whether the adapter implements <typeparamref name="TCapability"/> given the current capability matrix.
     /// </summary>
     /// <remarks>
-    /// Used by capability-parity tests. Default implementation inspects the runtime type of the adapter. Override in a
-    /// derived class when adapters gate capability interfaces behind another boundary.
+    /// Default implementation inspects the runtime type of the adapter. Override in a derived class when adapters gate
+    /// capability interfaces behind another boundary (for example, a composition root where the adapter is wrapped).
     /// </remarks>
     protected virtual bool AdapterImplements<TCapability>(TAdapter adapter) => adapter is TCapability;
+
+    /// <summary>
+    /// Returns whether the adapter implements the supplied optional interface type. The capability-parity test uses this
+    /// overload so it reads the adapter's real runtime type instead of trusting an author-supplied bool.
+    /// </summary>
+    /// <remarks>
+    /// Default implementation delegates to <see cref="Type.IsInstanceOfType(object?)"/>. Override when the adapter is
+    /// hosted through a proxy or composition wrapper that hides its optional interfaces from a direct <c>is</c> test.
+    /// </remarks>
+    protected virtual bool AdapterImplements(TAdapter adapter, Type capabilityInterface)
+    {
+        ArgumentNullException.ThrowIfNull(capabilityInterface);
+        return capabilityInterface.IsInstanceOfType(adapter);
+    }
 
     /// <summary>
     /// Returns the capability-flag ↔ optional-interface parity rules the adapter wants enforced.
     /// </summary>
     /// <remarks>
-    /// Each entry claims that when <see cref="CapabilityInterfaceParity.CapabilityFlag"/> is set, the adapter must also
-    /// implement the supplied optional interface, and vice versa. Default returns an empty set — adapters with optional
-    /// typing / reaction / mention adapter interfaces override this hook to wire the parity into the suite.
+    /// Each entry pairs one <see cref="ChannelCapabilities"/> flag value with one optional <see cref="Type"/>. The
+    /// suite uses <see cref="AdapterImplements(TAdapter, Type)"/> to read the adapter's runtime type, so author-
+    /// supplied parity booleans cannot lie. Default returns an empty set — adapters with optional typing / reaction /
+    /// mention adapter interfaces override this hook to wire the parity into the suite.
     /// </remarks>
     protected virtual IEnumerable<CapabilityInterfaceParity> GetCapabilityInterfaceParities(TAdapter adapter) =>
         Array.Empty<CapabilityInterfaceParity>();
@@ -172,7 +187,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         };
 
         var first = await DispatchAsync(seed);
-        var replay = await WebhookFixture!.ReplayLastInboundAsync();
+        var replay = await ReplayLastAsync();
 
         if (replay is null)
             return;
@@ -420,10 +435,13 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
 
         foreach (var parity in parities)
         {
-            parity.InterfaceImplemented.ShouldBe(
+            var implemented = AdapterImplements(lifetime.Adapter, parity.OptionalInterface);
+            implemented.ShouldBe(
                 parity.CapabilityFlag,
-                $"Capability flag '{parity.CapabilityName}' must match the presence of its optional interface. "
-                    + $"Flag={parity.CapabilityFlag}, interface implemented={parity.InterfaceImplemented}.");
+                $"Capability flag '{parity.CapabilityName}' (={parity.CapabilityFlag}) must match whether the adapter "
+                    + $"implements {parity.OptionalInterface.FullName} (runtime={implemented}). "
+                    + "The suite reads the adapter's runtime type, not the author-supplied value, so declarations "
+                    + "cannot drift from implementations.");
         }
     }
 
@@ -637,6 +655,22 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
 
         if (GatewayFixture is not null)
             return await GatewayFixture.PublishEventAsync(seed, ct);
+
+        throw new InvalidOperationException("No inbound fixture configured.");
+    }
+
+    /// <summary>
+    /// Replays the most recent synthetic inbound call through whichever fixture drove it, preferring webhook when both
+    /// fixtures exist. Returns <see langword="null"/> when the active fixture has no replay history yet, so callers can
+    /// treat that as not-applicable rather than a contract failure.
+    /// </summary>
+    protected async Task<ChatActivity?> ReplayLastAsync(CancellationToken ct = default)
+    {
+        if (WebhookFixture is not null)
+            return await WebhookFixture.ReplayLastInboundAsync(ct);
+
+        if (GatewayFixture is not null)
+            return await GatewayFixture.ReplayLastEventAsync(ct);
 
         throw new InvalidOperationException("No inbound fixture configured.");
     }
