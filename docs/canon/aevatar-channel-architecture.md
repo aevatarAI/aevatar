@@ -1120,9 +1120,31 @@ public static class GAgentSchedulingExtensions {
 
 ChannelRuntime 里的 `AgentRegistryGAgent` 和平台级 `Aevatar.GAgents.Registry.GAgentRegistryGAgent` 命名冲突——前者是"用户所有 SkillRunner/WorkflowAgent 的执行状态目录"，后者是"平台 actor 类型注册表"。两者职责本来就不同，原命名是历史遗留。
 
-改名成 `UserAgentCatalog` 后，职责从名字就能看出来：catalog of user-owned agents。涉及 9 个文件统一改名 + caller 更新。
+这次重构不是“把所有持久化契约一起改名”，而是**把源码层语义改成 `UserAgentCatalog`，同时保留 durable storage contract 不变**。否则会直接切断旧事件、旧 snapshot 和旧 read model。
 
-**为什么必须改而不是文档区分**：在同一个 codebase 里有两个叫 Registry 的 GAgent，任何新人第一天就会踩。文档说明治标不治本。改名是一次性成本、长期收益。
+具体做法分成三层：
+
+1. **源码层 rename**
+   `AgentRegistryGAgent / AgentRegistryState / AgentRegistry*Event` 等手写 C# 与调用点统一收敛为 `UserAgentCatalog*`，让“用户拥有的 agent 目录”这个语义直接体现在类型名上。
+
+2. **三个 durable anchor 保持原值**
+   `WellKnownId` 继续指向 `agent-registry-store`；
+   projection kind 继续使用 `agent-registry`；
+   read model index 继续使用 `agent-registry`。
+   这样 Orleans grain state、projection lease、document index 在升级后仍然可达，不需要 query-time priming 或临时迁移桥。
+
+3. **wire-level back-compat 显式建模**
+   新 protobuf 类型通过 `[LegacyProtoFullName]` / `[LegacyClrTypeName]` 保留旧 `AgentRegistry*` 标识；
+   `ProtobufContractCompatibility`、`StateTransitionMatcher`、`CommittedStateEventEnvelope` 和 Orleans snapshot store 统一走这层兼容解析。
+   结果是：新代码可以继续读取旧 `type.googleapis.com/aevatar.gagents.channelruntime.AgentRegistry*` 事件、旧 committed-state `Any` 和旧 CLR type name snapshot。
+
+**为什么必须这样做而不是只改文档**：同一个 codebase 里有两个叫 Registry 的 GAgent，任何新人第一天就会踩；但如果只做“全量 rename”，又会破坏持久化兼容。正确模式不是二选一，而是“源码层改名 + durable anchor 保持稳定 + attribute-based back-compat”。
+
+**后续同类 rename 的复用模式**：
+- 先分清“源码语义名”和“持久化锚点名”，不要把二者绑定成一次性 rename。
+- 没有明确迁移计划时，优先保留 actor id / projection kind / read-model index。
+- 对 protobuf `Any.TypeUrl` 和 Orleans snapshot CLR type name，显式声明 legacy alias，不要依赖字符串特判。
+- 至少补三类回归测试：projection/state unpack、event-sourcing transition、static handler dispatch。
 
 ## 8. Conformance Suite
 

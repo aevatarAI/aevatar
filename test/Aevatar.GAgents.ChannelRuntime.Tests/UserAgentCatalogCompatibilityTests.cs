@@ -1,9 +1,13 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -87,10 +91,97 @@ public sealed class UserAgentCatalogCompatibilityTests
             x.TemplateName == WorkflowAgentDefaults.TemplateName);
     }
 
+    [Fact]
+    public async Task HandleEventAsync_ShouldDispatchLegacyTypeUrl_ToRenamedEventHandler()
+    {
+        var agent = new LegacyDispatchProbeAgent();
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-compat-dispatch",
+            Payload = CreateLegacyAny(
+                LegacyProtoPrefix + "UpsertedEvent",
+                new UserAgentCatalogUpsertedEvent
+                {
+                    Entry = new UserAgentCatalogEntry
+                    {
+                        AgentId = "agent-compat-3",
+                        AgentType = SkillRunnerDefaults.AgentType,
+                        TemplateName = "daily_report",
+                        Status = "running",
+                    },
+                }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-compat", TopologyAudience.Children),
+        };
+
+        await agent.HandleEventAsync(envelope);
+
+        agent.HandleCount.Should().Be(1);
+        agent.LastHandled.Should().NotBeNull();
+        agent.LastHandled!.Entry.AgentId.Should().Be("agent-compat-3");
+        agent.LastHandled.Entry.Status.Should().Be("running");
+        agent.State.Entries.Should().ContainSingle(x =>
+            x.AgentId == "agent-compat-3" &&
+            x.TemplateName == "daily_report");
+    }
+
     private static Any CreateLegacyAny(string typeUrl, Google.Protobuf.IMessage message) =>
         new()
         {
             TypeUrl = typeUrl,
             Value = message.ToByteString(),
         };
+
+    private sealed class LegacyDispatchProbeAgent : GAgentBase<UserAgentCatalogState>
+    {
+        public LegacyDispatchProbeAgent()
+        {
+            Services = new ServiceCollection()
+                .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+                .BuildServiceProvider();
+        }
+
+        public UserAgentCatalogUpsertedEvent? LastHandled { get; private set; }
+
+        public int HandleCount { get; private set; }
+
+        [EventHandler]
+        public Task HandleAsync(UserAgentCatalogUpsertedEvent evt)
+        {
+            LastHandled = evt.Clone();
+            HandleCount++;
+            State.Entries.Add(evt.Entry.Clone());
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Generation: 0,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Generation: 0,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(
+            RuntimeCallbackLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
 }
