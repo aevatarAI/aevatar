@@ -182,6 +182,38 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         _agent.State.Registrations.Should().ContainSingle();
         _agent.State.Registrations[0].Id.Should().Be(registrationId);
         _agent.State.Registrations[0].Tombstoned.Should().BeTrue();
+        _agent.State.Registrations[0].TombstoneStateVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleCompactTombstones_RemovesOnlyWatermarkSafeEntries()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "slug-a",
+            NyxUserToken = "token-a",
+        });
+        var tombstonedId = _agent.State.Registrations[0].Id;
+        await _agent.HandleUnregister(new ChannelBotUnregisterCommand { RegistrationId = tombstonedId });
+
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "telegram",
+            NyxProviderSlug = "slug-b",
+            NyxUserToken = "token-b",
+        });
+        var liveId = _agent.State.Registrations[1].Id;
+
+        await _agent.HandleCompactTombstones(new ChannelBotCompactTombstonesCommand { SafeStateVersion = 1 });
+        _agent.State.Registrations.Select(x => x.Id).Should().Contain(tombstonedId);
+        _agent.State.Registrations.Select(x => x.Id).Should().Contain(liveId);
+
+        await _agent.HandleCompactTombstones(new ChannelBotCompactTombstonesCommand { SafeStateVersion = 2 });
+
+        _agent.State.Registrations.Should().ContainSingle();
+        _agent.State.Registrations[0].Id.Should().Be(liveId);
+        _agent.State.Registrations[0].Tombstoned.Should().BeFalse();
     }
 
     [Fact]

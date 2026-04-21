@@ -35,6 +35,7 @@ message ChannelBotRegistrationEntry {
   // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
   // .DeleteAsync. Housekeeping cleans watermark-passed entries.
   bool tombstoned = 11;
+  int64 tombstone_state_version = 12;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -101,6 +102,7 @@ message DeviceRegistrationEntry {
   // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
   // .DeleteAsync. Housekeeping cleans watermark-passed entries.
   bool tombstoned = 7;
+  int64 tombstone_state_version = 8;
 }
 
 message DeviceRegistrationState {
@@ -114,6 +116,7 @@ message DeviceRegisteredEvent {
 
 message DeviceUnregisteredEvent {
   string registration_id = 1;
+  int64 tombstone_state_version = 2;
 }
 
 // Commands dispatched to DeviceRegistrationGAgent via EventEnvelope
@@ -126,6 +129,15 @@ message DeviceRegisterCommand {
 
 message DeviceUnregisterCommand {
   string registration_id = 1;
+}
+
+message DeviceCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+message DeviceTombstonesCompactedEvent {
+  repeated string registration_ids = 1;
+  int64 safe_state_version = 2;
 }
 
 // Projection read model for device registrations
@@ -150,6 +162,7 @@ message ChannelBotRegisteredEvent {
 
 message ChannelBotUnregisteredEvent {
   string registration_id = 1;
+  int64 tombstone_state_version = 2;
 }
 
 // Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
@@ -174,6 +187,15 @@ message ChannelBotUnregisterCommand {
 message ChannelBotUpdateTokenCommand {
   string registration_id = 1;
   string nyx_user_token = 2;
+}
+
+message ChannelBotCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+message ChannelBotTombstonesCompactedEvent {
+  repeated string registration_ids = 1;
+  int64 safe_state_version = 2;
 }
 
 // Domain event: token updated on an existing registration
@@ -224,6 +246,7 @@ message AgentRegistryEntry {
   google.protobuf.Timestamp next_run_at = 18;
   int32 error_count = 19;
   string last_error = 20;
+  int64 tombstone_state_version = 21;
 }
 
 message AgentRegistryState {
@@ -259,12 +282,17 @@ message AgentRegistryExecutionUpdateCommand {
   string last_error = 6;
 }
 
+message AgentRegistryCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
 message AgentRegistryUpsertedEvent {
   AgentRegistryEntry entry = 1;
 }
 
 message AgentRegistryTombstonedEvent {
   string agent_id = 1;
+  int64 tombstone_state_version = 2;
 }
 
 message AgentRegistryExecutionUpdatedEvent {
@@ -274,6 +302,11 @@ message AgentRegistryExecutionUpdatedEvent {
   google.protobuf.Timestamp next_run_at = 4;
   int32 error_count = 5;
   string last_error = 6;
+}
+
+message AgentRegistryTombstonesCompactedEvent {
+  repeated string agent_ids = 1;
+  int64 safe_state_version = 2;
 }
 
 message AgentRegistryDocument {
