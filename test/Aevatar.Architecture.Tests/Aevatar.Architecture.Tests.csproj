@@ -14,6 +14,7 @@
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="TngTech.ArchUnitNET" />
     <PackageReference Include="TngTech.ArchUnitNET.xUnit" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
   <!-- Reference all production assemblies for architecture scanning -->
@@ -47,5 +48,6 @@
     <ProjectReference Include="../../src/Aevatar.Scripting.Infrastructure/Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StreamingProxy/Aevatar.GAgents.StreamingProxy.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.Channel.Abstractions/Aevatar.GAgents.Channel.Abstractions.csproj" />
   </ItemGroup>
 </Project>
