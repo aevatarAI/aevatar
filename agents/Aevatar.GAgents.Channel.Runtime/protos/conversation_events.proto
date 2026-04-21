@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "chat_activity.proto";
+import "channel_contracts.proto";
+import "schedule.proto";
+
+message ConversationTurnCompletedEvent {
+  string processed_activity_id = 1;
+  string causation_command_id = 2;
+  string sent_activity_id = 3;
+  string auth_principal = 4;
+  aevatar.gagents.channel.abstractions.ConversationReference conversation = 5;
+  aevatar.gagents.channel.abstractions.MessageContent outbound = 6;
+  int64 completed_at_unix_ms = 7;
+}
+
+message ConversationContinueRequestedEvent {
+  string command_id = 1;
+  string correlation_id = 2;
+  string causation_id = 3;
+  aevatar.gagents.channel.abstractions.PrincipalKind kind = 4;
+  string principal_ref = 5;
+  string on_behalf_of_user_id = 6;
+  aevatar.gagents.channel.abstractions.ConversationReference conversation = 7;
+  aevatar.gagents.channel.abstractions.MessageContent payload = 8;
+  int64 dispatched_at_unix_ms = 9;
+}
+
+message ConversationContinueRejectedEvent {
+  string command_id = 1;
+  string correlation_id = 2;
+  string causation_id = 3;
+  RejectReason reason = 4;
+  string reason_detail = 5;
+  int64 rejected_at_unix_ms = 6;
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_DUPLICATE_COMMAND = 1;
+  REJECT_REASON_CONVERSATION_NOT_FOUND = 2;
+  REJECT_REASON_CREDENTIAL_REF_INVALID = 3;
+  REJECT_REASON_CREDENTIAL_REVOKED_OR_EXPIRED = 4;
+  REJECT_REASON_PRINCIPAL_NOT_AUTHORIZED = 5;
+}
+
+message ConversationContinueFailedEvent {
+  string command_id = 1;
+  string correlation_id = 2;
+  string causation_id = 3;
+  FailureKind kind = 4;
+  string error_code = 5;
+  string error_summary = 6;
+  oneof retry_policy {
+    google.protobuf.Empty not_retryable = 7;
+    int64 retry_after_ms = 8;
+  }
+  int64 failed_at_unix_ms = 9;
+}
+
+enum FailureKind {
+  FAILURE_KIND_UNSPECIFIED = 0;
+  FAILURE_KIND_TRANSIENT_ADAPTER_ERROR = 1;
+  FAILURE_KIND_PERMANENT_ADAPTER_ERROR = 2;
+  FAILURE_KIND_CREDENTIAL_RESOLUTION_FAILED = 3;
+  FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
+}
+
+message ChannelBotRegistrationEntry {
+  aevatar.gagents.channel.abstractions.ChannelTransportBinding transport_binding = 1;
+  string webhook_url = 2;
+  google.protobuf.Timestamp created_at = 3;
+  bool is_deleted = 4;
+}
+
+message UserAgentCatalogEntry {
+  string agent_id = 1;
+  aevatar.gagents.channel.abstractions.ConversationReference conversation = 2;
+  string nyx_provider_slug = 3;
+  string owner_nyx_user_id = 4;
+  string agent_type = 5;
+  string template_name = 6;
+  string scope_id = 7;
+  string api_key_id = 8;
+  aevatar.gagents.channel.abstractions.ScheduleState schedule = 9;
+  string status = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  bool is_deleted = 13;
+}
+
+message DeviceRegistrationEntry {
+  string id = 1;
+  string scope_id = 2;
+  string nyx_conversation_id = 3;
+  string description = 4;
+  string credential_ref = 5;
+  google.protobuf.Timestamp created_at = 6;
+  bool is_deleted = 7;
+}

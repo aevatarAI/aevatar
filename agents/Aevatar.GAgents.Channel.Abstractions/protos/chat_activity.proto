@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.abstractions;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+message ChannelId {
+  string value = 1;
+}
+
+message BotInstanceId {
+  string value = 1;
+}
+
+enum ActivityType {
+  ACTIVITY_TYPE_UNSPECIFIED = 0;
+  ACTIVITY_TYPE_MESSAGE = 1;
+  ACTIVITY_TYPE_COMMAND = 2;
+  ACTIVITY_TYPE_CARD_ACTION = 3;
+  ACTIVITY_TYPE_REACTION = 4;
+  ACTIVITY_TYPE_MEMBERSHIP_CHANGE = 5;
+  ACTIVITY_TYPE_TYPING = 6;
+  ACTIVITY_TYPE_ADAPTER_LIFECYCLE = 7;
+}
+
+enum ConversationScope {
+  CONVERSATION_SCOPE_UNSPECIFIED = 0;
+  CONVERSATION_SCOPE_DIRECT_MESSAGE = 1;
+  CONVERSATION_SCOPE_GROUP = 2;
+  CONVERSATION_SCOPE_CHANNEL = 3;
+  CONVERSATION_SCOPE_THREAD = 4;
+}
+
+enum AttachmentKind {
+  ATTACHMENT_KIND_UNSPECIFIED = 0;
+  ATTACHMENT_KIND_FILE = 1;
+  ATTACHMENT_KIND_IMAGE = 2;
+  ATTACHMENT_KIND_AUDIO = 3;
+  ATTACHMENT_KIND_VIDEO = 4;
+  ATTACHMENT_KIND_LINK = 5;
+  ATTACHMENT_KIND_CARD = 6;
+}
+
+enum MessageDisposition {
+  MESSAGE_DISPOSITION_UNSPECIFIED = 0;
+  MESSAGE_DISPOSITION_NORMAL = 1;
+  MESSAGE_DISPOSITION_EPHEMERAL = 2;
+  MESSAGE_DISPOSITION_SILENT = 3;
+  MESSAGE_DISPOSITION_PINNED = 4;
+}
+
+enum ActionElementKind {
+  ACTION_ELEMENT_KIND_UNSPECIFIED = 0;
+  ACTION_ELEMENT_KIND_BUTTON = 1;
+  ACTION_ELEMENT_KIND_SELECT = 2;
+  ACTION_ELEMENT_KIND_FORM_SUBMIT = 3;
+  ACTION_ELEMENT_KIND_LINK = 4;
+}
+
+enum CardBlockKind {
+  CARD_BLOCK_KIND_UNSPECIFIED = 0;
+  CARD_BLOCK_KIND_SECTION = 1;
+  CARD_BLOCK_KIND_ACTIONS = 2;
+  CARD_BLOCK_KIND_IMAGE = 3;
+  CARD_BLOCK_KIND_CONTEXT = 4;
+  CARD_BLOCK_KIND_DIVIDER = 5;
+}
+
+enum TransportMode {
+  TRANSPORT_MODE_UNSPECIFIED = 0;
+  TRANSPORT_MODE_WEBHOOK = 1;
+  TRANSPORT_MODE_GATEWAY = 2;
+  TRANSPORT_MODE_LONG_POLLING = 3;
+  TRANSPORT_MODE_HYBRID = 4;
+}
+
+message ConversationReference {
+  ChannelId channel = 1;
+  BotInstanceId bot = 2;
+  string partition = 3;
+  ConversationScope scope = 4;
+  string canonical_key = 5;
+}
+
+message ParticipantRef {
+  string canonical_id = 1;
+  string display_name = 2;
+}
+
+message AttachmentRef {
+  string attachment_id = 1;
+  AttachmentKind kind = 2;
+  string name = 3;
+  string content_type = 4;
+  string blob_ref = 5;
+  int64 size_bytes = 6;
+  string external_url = 7;
+}
+
+message ActionOption {
+  string label = 1;
+  string value = 2;
+}
+
+message ActionElement {
+  ActionElementKind kind = 1;
+  string action_id = 2;
+  string label = 3;
+  string value = 4;
+  string placeholder = 5;
+  repeated ActionOption options = 6;
+  bool is_primary = 7;
+  bool is_danger = 8;
+  bool is_disabled = 9;
+}
+
+message CardField {
+  string title = 1;
+  string text = 2;
+  bool is_short = 3;
+}
+
+message CardBlock {
+  CardBlockKind kind = 1;
+  string block_id = 2;
+  string title = 3;
+  string text = 4;
+  string image_url = 5;
+  repeated CardField fields = 6;
+  repeated ActionElement actions = 7;
+}
+
+message MessageContent {
+  string text = 1;
+  repeated AttachmentRef attachments = 2;
+  repeated ActionElement actions = 3;
+  repeated CardBlock cards = 4;
+  MessageDisposition disposition = 5;
+}
+
+message ChatActivity {
+  string id = 1;
+  ActivityType type = 2;
+  ChannelId channel_id = 3;
+  BotInstanceId bot = 4;
+  ConversationReference conversation = 5;
+  ParticipantRef from = 6;
+  repeated ParticipantRef mentions = 7;
+  google.protobuf.Timestamp timestamp = 8;
+  MessageContent content = 9;
+  string reply_to_activity_id = 10;
+  string raw_payload_blob_ref = 11;
+}
