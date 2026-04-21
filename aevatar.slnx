@@ -175,6 +175,5 @@
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
     <Project Path="tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
-    <Project Path="tools\Aevatar.Tools.MockNyxId\Aevatar.Tools.MockNyxId.csproj" />
   </Folder>
 </Solution>

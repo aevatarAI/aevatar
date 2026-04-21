@@ -26,20 +26,24 @@ internal static class StudioEndpoints
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
         app.MapGet("/api/auth/me", HandleGetAuthMeAsync)
-            .Produces<AppAuthMeResponse>(StatusCodes.Status200OK);
+            .Produces<AppAuthMeResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapGet("/api/health", HandleGetHealthAsync)
             .WithTags("Health")
             .WithName("GetAppHealth")
             .WithSummary("Get readiness status for the current app-facing API surface.")
             .Produces<AevatarHealthResponse>(StatusCodes.Status200OK)
-            .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable);
+            .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable)
+            .AllowAnonymous();
         app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode))
-            .Produces<AppContextResponse>(StatusCodes.Status200OK);
+            .Produces<AppContextResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapGet("/api/studio/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode))
             .WithTags("Studio")
-            .Produces<AppContextResponse>(StatusCodes.Status200OK);
+            .Produces<AppContextResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapPost("/api/app/workflow-generator", (
             HttpContext http,
             AppWorkflowGenerateRequest request,
