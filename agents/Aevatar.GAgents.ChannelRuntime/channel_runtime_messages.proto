@@ -223,9 +223,9 @@ message ChannelBotRegistrationDocument {
   string credential_ref = 13;
 }
 
-// ─── Agent Registry (actor-backed delivery target store) ───
+// ─── User Agent Catalog (actor-backed delivery target store) ───
 
-message AgentRegistryEntry {
+message UserAgentCatalogEntry {
   string agent_id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -249,11 +249,11 @@ message AgentRegistryEntry {
   int64 tombstone_state_version = 21;
 }
 
-message AgentRegistryState {
-  repeated AgentRegistryEntry entries = 1;
+message UserAgentCatalogState {
+  repeated UserAgentCatalogEntry entries = 1;
 }
 
-message AgentRegistryUpsertCommand {
+message UserAgentCatalogUpsertCommand {
   string agent_id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -269,11 +269,11 @@ message AgentRegistryUpsertCommand {
   string status = 13;
 }
 
-message AgentRegistryTombstoneCommand {
+message UserAgentCatalogTombstoneCommand {
   string agent_id = 1;
 }
 
-message AgentRegistryExecutionUpdateCommand {
+message UserAgentCatalogExecutionUpdateCommand {
   string agent_id = 1;
   string status = 2;
   google.protobuf.Timestamp last_run_at = 3;
@@ -282,20 +282,20 @@ message AgentRegistryExecutionUpdateCommand {
   string last_error = 6;
 }
 
-message AgentRegistryCompactTombstonesCommand {
+message UserAgentCatalogCompactTombstonesCommand {
   int64 safe_state_version = 1;
 }
 
-message AgentRegistryUpsertedEvent {
-  AgentRegistryEntry entry = 1;
+message UserAgentCatalogUpsertedEvent {
+  UserAgentCatalogEntry entry = 1;
 }
 
-message AgentRegistryTombstonedEvent {
+message UserAgentCatalogTombstonedEvent {
   string agent_id = 1;
   int64 tombstone_state_version = 2;
 }
 
-message AgentRegistryExecutionUpdatedEvent {
+message UserAgentCatalogExecutionUpdatedEvent {
   string agent_id = 1;
   string status = 2;
   google.protobuf.Timestamp last_run_at = 3;
@@ -304,12 +304,12 @@ message AgentRegistryExecutionUpdatedEvent {
   string last_error = 6;
 }
 
-message AgentRegistryTombstonesCompactedEvent {
+message UserAgentCatalogTombstonesCompactedEvent {
   repeated string agent_ids = 1;
   int64 safe_state_version = 2;
 }
 
-message AgentRegistryDocument {
+message UserAgentCatalogDocument {
   string id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -344,7 +344,7 @@ message SkillRunnerOutboundConfig {
   string owner_nyx_user_id = 4;
   string api_key_id = 5;
   // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
-  // AgentRegistry upsert defaults to "lark" for backward compatibility.
+  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
   string platform = 6;
 }
 
@@ -466,7 +466,7 @@ message WorkflowAgentState {
   bool enabled = 16;
   string scope_id = 17;
   // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
-  // AgentRegistry upsert defaults to "lark" for backward compatibility.
+  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
   string platform = 18;
 }
 

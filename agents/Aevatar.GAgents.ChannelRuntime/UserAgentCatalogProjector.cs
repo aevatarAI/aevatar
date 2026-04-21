@@ -6,30 +6,30 @@ using Aevatar.GAgents.Channel.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class AgentRegistryProjector
+public sealed class UserAgentCatalogProjector
     : PerEntryDocumentProjector<
-        AgentRegistryState,
-        AgentRegistryEntry,
-        AgentRegistryDocument,
-        AgentRegistryMaterializationContext>
+        UserAgentCatalogState,
+        UserAgentCatalogEntry,
+        UserAgentCatalogDocument,
+        UserAgentCatalogMaterializationContext>
 {
-    public AgentRegistryProjector(
-        IProjectionWriteDispatcher<AgentRegistryDocument> writeDispatcher,
+    public UserAgentCatalogProjector(
+        IProjectionWriteDispatcher<UserAgentCatalogDocument> writeDispatcher,
         IProjectionClock clock)
         : base(writeDispatcher, clock)
     {
     }
 
-    protected override IEnumerable<AgentRegistryEntry> ExtractEntries(AgentRegistryState state) => state.Entries;
+    protected override IEnumerable<UserAgentCatalogEntry> ExtractEntries(UserAgentCatalogState state) => state.Entries;
 
-    protected override string EntryKey(AgentRegistryEntry entry) => entry.AgentId ?? string.Empty;
+    protected override string EntryKey(UserAgentCatalogEntry entry) => entry.AgentId ?? string.Empty;
 
-    protected override ProjectionVerdict Evaluate(AgentRegistryEntry entry) =>
+    protected override ProjectionVerdict Evaluate(UserAgentCatalogEntry entry) =>
         entry.Tombstoned ? ProjectionVerdict.Tombstone : ProjectionVerdict.Project;
 
-    protected override AgentRegistryDocument Materialize(
-        AgentRegistryEntry entry,
-        AgentRegistryMaterializationContext context,
+    protected override UserAgentCatalogDocument Materialize(
+        UserAgentCatalogEntry entry,
+        UserAgentCatalogMaterializationContext context,
         StateEvent stateEvent,
         DateTimeOffset updatedAt) =>
         new()

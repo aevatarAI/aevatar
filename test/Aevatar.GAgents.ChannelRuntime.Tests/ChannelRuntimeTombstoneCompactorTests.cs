@@ -29,8 +29,8 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
             .Returns(22L);
         watermarkQueryPort.GetLastSuccessfulVersionAsync(
                 Arg.Is<ProjectionRuntimeScopeKey>(key =>
-                    key.RootActorId == AgentRegistryGAgent.WellKnownId &&
-                    key.ProjectionKind == AgentRegistryProjectionPort.ProjectionKind),
+                    key.RootActorId == UserAgentCatalogGAgent.WellKnownId &&
+                    key.ProjectionKind == UserAgentCatalogProjectionPort.ProjectionKind),
                 Arg.Any<CancellationToken>())
             .Returns(32L);
 
@@ -39,12 +39,12 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         var deviceActor = Substitute.For<IActor>();
         deviceActor.Id.Returns(DeviceRegistrationGAgent.WellKnownId);
         var registryActor = Substitute.For<IActor>();
-        registryActor.Id.Returns(AgentRegistryGAgent.WellKnownId);
+        registryActor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
 
         var actorRuntime = Substitute.For<IActorRuntime>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(channelActor));
         actorRuntime.GetAsync(DeviceRegistrationGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(deviceActor));
-        actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
+        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
 
         var sut = new ChannelRuntimeTombstoneCompactor(
             watermarkQueryPort,
@@ -60,7 +60,7 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
             Arg.Is<EventEnvelope>(env => IsDeviceCompaction(env, 22)),
             Arg.Any<CancellationToken>());
         await registryActor.Received(1).HandleEventAsync(
-            Arg.Is<EventEnvelope>(env => IsAgentRegistryCompaction(env, 32)),
+            Arg.Is<EventEnvelope>(env => IsUserAgentCatalogCompaction(env, 32)),
             Arg.Any<CancellationToken>());
     }
 
@@ -98,11 +98,11 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         return envelope.Payload.Unpack<DeviceCompactTombstonesCommand>().SafeStateVersion == safeStateVersion;
     }
 
-    private static bool IsAgentRegistryCompaction(EventEnvelope envelope, long safeStateVersion)
+    private static bool IsUserAgentCatalogCompaction(EventEnvelope envelope, long safeStateVersion)
     {
-        if (envelope.Payload?.Is(AgentRegistryCompactTombstonesCommand.Descriptor) != true)
+        if (envelope.Payload?.Is(UserAgentCatalogCompactTombstonesCommand.Descriptor) != true)
             return false;
 
-        return envelope.Payload.Unpack<AgentRegistryCompactTombstonesCommand>().SafeStateVersion == safeStateVersion;
+        return envelope.Payload.Unpack<UserAgentCatalogCompactTombstonesCommand>().SafeStateVersion == safeStateVersion;
     }
 }

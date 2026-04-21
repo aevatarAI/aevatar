@@ -7,9 +7,9 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class AgentRegistryGAgentTests : IAsyncLifetime
+public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
 {
-    private AgentRegistryGAgent _agent = null!;
+    private UserAgentCatalogGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
 
     public async Task InitializeAsync()
@@ -23,11 +23,11 @@ public sealed class AgentRegistryGAgentTests : IAsyncLifetime
 
         _serviceProvider = services.BuildServiceProvider();
 
-        _agent = new AgentRegistryGAgent
+        _agent = new UserAgentCatalogGAgent
         {
             Services = _serviceProvider,
             EventSourcingBehaviorFactory =
-                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<AgentRegistryState>>(),
+                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
         };
 
         await _agent.ActivateAsync();
@@ -42,14 +42,14 @@ public sealed class AgentRegistryGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleTombstoneAsync_RecordsTombstoneStateVersion()
     {
-        await _agent.HandleUpsertAsync(new AgentRegistryUpsertCommand
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = "agent-a",
             Platform = "lark",
             ConversationId = "conv-a",
         });
 
-        await _agent.HandleTombstoneAsync(new AgentRegistryTombstoneCommand
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand
         {
             AgentId = "agent-a",
         });
@@ -63,32 +63,32 @@ public sealed class AgentRegistryGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleCompactTombstonesAsync_RemovesOnlyWatermarkSafeEntries()
     {
-        await _agent.HandleUpsertAsync(new AgentRegistryUpsertCommand
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = "agent-a",
             Platform = "lark",
             ConversationId = "conv-a",
         });
-        await _agent.HandleTombstoneAsync(new AgentRegistryTombstoneCommand
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand
         {
             AgentId = "agent-a",
         });
 
-        await _agent.HandleUpsertAsync(new AgentRegistryUpsertCommand
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = "agent-b",
             Platform = "telegram",
             ConversationId = "conv-b",
         });
 
-        await _agent.HandleCompactTombstonesAsync(new AgentRegistryCompactTombstonesCommand
+        await _agent.HandleCompactTombstonesAsync(new UserAgentCatalogCompactTombstonesCommand
         {
             SafeStateVersion = 1,
         });
         _agent.State.Entries.Select(x => x.AgentId).Should().Contain("agent-a");
         _agent.State.Entries.Select(x => x.AgentId).Should().Contain("agent-b");
 
-        await _agent.HandleCompactTombstonesAsync(new AgentRegistryCompactTombstonesCommand
+        await _agent.HandleCompactTombstonesAsync(new UserAgentCatalogCompactTombstonesCommand
         {
             SafeStateVersion = 2,
         });

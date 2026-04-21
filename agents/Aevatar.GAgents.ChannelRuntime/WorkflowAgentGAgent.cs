@@ -211,10 +211,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         var runtime = Services.GetService<IActorRuntime>();
         if (runtime is null) return;
 
-        var actor = await runtime.GetAsync(AgentRegistryGAgent.WellKnownId)
-                    ?? await runtime.CreateAsync<AgentRegistryGAgent>(AgentRegistryGAgent.WellKnownId, ct);
+        var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                    ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
-        var command = new AgentRegistryUpsertCommand
+        var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
             Platform = ResolvePlatform(State.Platform),
@@ -242,10 +242,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         var runtime = Services.GetService<IActorRuntime>();
         if (runtime is null) return;
 
-        var actor = await runtime.GetAsync(AgentRegistryGAgent.WellKnownId)
-                    ?? await runtime.CreateAsync<AgentRegistryGAgent>(AgentRegistryGAgent.WellKnownId, ct);
+        var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                    ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
-        var command = new AgentRegistryExecutionUpdateCommand
+        var command = new UserAgentCatalogExecutionUpdateCommand
         {
             AgentId = Id, Status = status,
             LastRunAt = lastRunAt, NextRunAt = nextRunAt,

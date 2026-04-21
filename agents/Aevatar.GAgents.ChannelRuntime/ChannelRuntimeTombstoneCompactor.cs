@@ -39,10 +39,10 @@ public sealed class ChannelRuntimeTombstoneCompactor
             ct);
 
         await CompactAsync(
-            AgentRegistryGAgent.WellKnownId,
-            AgentRegistryProjectionPort.ProjectionKind,
-            safeVersion => new AgentRegistryCompactTombstonesCommand { SafeStateVersion = safeVersion },
-            "agent registry",
+            UserAgentCatalogGAgent.WellKnownId,
+            UserAgentCatalogProjectionPort.ProjectionKind,
+            safeVersion => new UserAgentCatalogCompactTombstonesCommand { SafeStateVersion = safeVersion },
+            "user agent catalog",
             ct);
     }
 
