@@ -684,14 +684,16 @@ public interface ITurnContext {
     // bot logic 通过下面的 SendAsync / ReplyAsync / UpdateAsync / DeleteAsync / BeginStreamingReplyAsync
     // 操作 outbound，内部由 runtime 注入 adapter 引用（runtime-only / internal visibility）。
 
-    Task<EmitResult> SendAsync(MessageContent content);
-    Task<EmitResult> ReplyAsync(MessageContent content);
-    Task<StreamingHandle> BeginStreamingReplyAsync(MessageContent initial);
+    Task<EmitResult> SendAsync(MessageContent content, CancellationToken ct);
+    Task<EmitResult> ReplyAsync(MessageContent content, CancellationToken ct);
+    Task<StreamingHandle> BeginStreamingReplyAsync(MessageContent initial, CancellationToken ct);
 
     // 修改/删除 bot 自己发出的消息。activityId 来自之前 SendAsync / ReplyAsync 返回的
     // EmitResult.SentActivityId。内部用 Activity.Conversation 作为 target，自动附带 bot credential。
-    Task<EmitResult> UpdateAsync(string activityId, MessageContent content);
-    Task<EmitResult> DeleteAsync(string activityId);
+    // Delete 与 IChannelOutboundPort.DeleteAsync 对齐返回 Task：被删消息没有后继 activity id，
+    // EmitResult.SentActivityId 语义不适用；失败由 adapter 以异常形式暴露。
+    Task<EmitResult> UpdateAsync(string activityId, MessageContent content, CancellationToken ct);
+    Task DeleteAsync(string activityId, CancellationToken ct);
 }
 
 public class StreamingHandle : IAsyncDisposable {
