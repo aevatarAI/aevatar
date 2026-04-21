@@ -3,10 +3,24 @@ namespace Aevatar.GAgents.Channel.Abstractions;
 /// <summary>
 /// Represents one sanitized payload emitted by <see cref="IPayloadRedactor"/>.
 /// </summary>
-/// <param name="SanitizedPayload">The payload bytes that may proceed through ingress storage or normalization.</param>
-/// <param name="WasModified">Whether the redactor changed the payload contents.</param>
-public sealed record RedactionResult(byte[] SanitizedPayload, bool WasModified)
+public sealed record RedactionResult
 {
+    private RedactionResult(byte[] sanitizedPayload, bool wasModified)
+    {
+        SanitizedPayload = ClonePayload(sanitizedPayload, nameof(sanitizedPayload));
+        WasModified = wasModified;
+    }
+
+    /// <summary>
+    /// Gets the payload bytes that may proceed through ingress storage or normalization.
+    /// </summary>
+    public byte[] SanitizedPayload { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the redactor changed the payload contents.
+    /// </summary>
+    public bool WasModified { get; }
+
     /// <summary>
     /// Creates a result that preserves the original payload bytes.
     /// </summary>
@@ -18,4 +32,7 @@ public sealed record RedactionResult(byte[] SanitizedPayload, bool WasModified)
     /// </summary>
     public static RedactionResult Modified(byte[] payload) =>
         new(payload ?? throw new ArgumentNullException(nameof(payload)), true);
+
+    private static byte[] ClonePayload(byte[] payload, string paramName) =>
+        payload is null ? throw new ArgumentNullException(paramName) : payload.ToArray();
 }

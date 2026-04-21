@@ -33,6 +33,18 @@ public sealed class ChannelAbstractionsSurfaceTests
     }
 
     [Fact]
+    public void ConversationReferenceHelpers_ShouldRejectMissingCanonicalSegments()
+    {
+        var exception = Should.Throw<ArgumentException>(() => ConversationReference.Create(
+            ChannelId.From("slack"),
+            BotInstanceId.From("ops-bot"),
+            ConversationScope.Thread,
+            "team-1"));
+
+        exception.ParamName.ShouldBe("segments");
+    }
+
+    [Fact]
     public void EmitResultHelpers_ShouldCaptureRetryDelay()
     {
         var sent = EmitResult.Sent("msg-1");
@@ -43,6 +55,24 @@ public sealed class ChannelAbstractionsSurfaceTests
         failed.Success.ShouldBeFalse();
         failed.RetryAfterTimeSpan.ShouldBe(TimeSpan.FromSeconds(5));
         failed.ErrorCode.ShouldBe("rate_limited");
+    }
+
+    [Fact]
+    public void RedactionResultHelpers_ShouldDefensivelyCopyPayloadBytes()
+    {
+        var payload = new byte[] { 1, 2, 3 };
+
+        var unchanged = RedactionResult.Unchanged(payload);
+        var modified = RedactionResult.Modified(payload);
+
+        payload[0] = 9;
+
+        unchanged.SanitizedPayload.ShouldNotBeSameAs(payload);
+        modified.SanitizedPayload.ShouldNotBeSameAs(payload);
+        unchanged.SanitizedPayload[0].ShouldBe((byte)1);
+        modified.SanitizedPayload[0].ShouldBe((byte)1);
+        unchanged.WasModified.ShouldBeFalse();
+        modified.WasModified.ShouldBeTrue();
     }
 
     [Fact]

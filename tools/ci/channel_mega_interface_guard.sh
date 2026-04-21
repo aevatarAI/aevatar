@@ -7,15 +7,16 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 python3 <<'PY'
+import os
 from pathlib import Path
 import re
 import sys
 
-root = Path("agents/Aevatar.GAgents.Channel.Abstractions")
+root = Path(os.environ.get("CHANNEL_MEGA_INTERFACE_GUARD_ROOT", "agents/Aevatar.GAgents.Channel.Abstractions"))
 files = [path for path in root.rglob("*.cs") if "obj" not in path.parts and "bin" not in path.parts]
 pattern = re.compile(r"\binterface\s+([A-Za-z_][A-Za-z0-9_]*)\s*([^{}]*)\{", re.MULTILINE)
 
-violations: list[str] = []
+surfaces: dict[str, dict[str, object]] = {}
 
 for path in files:
     text = path.read_text(encoding="utf-8")
@@ -40,12 +41,33 @@ for path in files:
             continue
 
         body = text[body_start + 1:body_end]
-        has_runtime_surface = any(token in body for token in ("InitializeAsync(", "StartReceivingAsync(", "StopReceivingAsync("))
-        has_outbound_surface = any(token in body for token in ("SendAsync(", "UpdateAsync(", "DeleteAsync(", "ContinueConversationAsync("))
-        inherits_both = "IChannelTransport" in declaration_suffix and "IChannelOutboundPort" in declaration_suffix
+        surface = surfaces.setdefault(
+            name,
+            {
+                "paths": set(),
+                "has_runtime_surface": False,
+                "has_outbound_surface": False,
+                "inherits_transport": False,
+                "inherits_outbound": False,
+            },
+        )
+        surface["paths"].add(str(path))
+        surface["has_runtime_surface"] = surface["has_runtime_surface"] or any(
+            token in body for token in ("InitializeAsync(", "StartReceivingAsync(", "StopReceivingAsync(")
+        )
+        surface["has_outbound_surface"] = surface["has_outbound_surface"] or any(
+            token in body for token in ("SendAsync(", "UpdateAsync(", "DeleteAsync(", "ContinueConversationAsync(")
+        )
+        surface["inherits_transport"] = surface["inherits_transport"] or "IChannelTransport" in declaration_suffix
+        surface["inherits_outbound"] = surface["inherits_outbound"] or "IChannelOutboundPort" in declaration_suffix
 
-        if (has_runtime_surface and has_outbound_surface) or inherits_both:
-            violations.append(f"{path}:{name}")
+violations: list[str] = []
+for name, surface in sorted(surfaces.items()):
+    exposes_runtime_surface = bool(surface["has_runtime_surface"] or surface["inherits_transport"])
+    exposes_outbound_surface = bool(surface["has_outbound_surface"] or surface["inherits_outbound"])
+    if exposes_runtime_surface and exposes_outbound_surface:
+        paths = ", ".join(sorted(surface["paths"]))
+        violations.append(f"{name} ({paths})")
 
 if violations:
     print("Channel mega-interface regression detected:")
