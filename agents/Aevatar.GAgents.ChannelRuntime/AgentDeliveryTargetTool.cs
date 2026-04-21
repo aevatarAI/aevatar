@@ -192,7 +192,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
 
-        var cmd = new UserAgentCatalogUpsertCommand
+        var cmd = new AgentRegistryUpsertCommand
         {
             AgentId = agentId.value!,
             Platform = platform,
@@ -297,7 +297,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand
+            Payload = Any.Pack(new AgentRegistryTombstoneCommand
             {
                 AgentId = agentId,
             }),

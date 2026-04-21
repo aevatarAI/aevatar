@@ -7,20 +7,20 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
+public sealed class UserAgentCatalogGAgent : GAgentBase<AgentRegistryState>
 {
-    public const string WellKnownId = "user-agent-catalog-store";
+    public const string WellKnownId = "agent-registry-store";
 
-    protected override UserAgentCatalogState TransitionState(UserAgentCatalogState current, IMessage evt) =>
+    protected override AgentRegistryState TransitionState(AgentRegistryState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
-            .On<UserAgentCatalogExecutionUpdatedEvent>(ApplyExecutionUpdated)
-            .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
+            .On<AgentRegistryUpsertedEvent>(ApplyUpserted)
+            .On<AgentRegistryExecutionUpdatedEvent>(ApplyExecutionUpdated)
+            .On<AgentRegistryTombstonedEvent>(ApplyTombstoned)
             .OrCurrent();
 
     [EventHandler]
-    public async Task HandleUpsertAsync(UserAgentCatalogUpsertCommand command)
+    public async Task HandleUpsertAsync(AgentRegistryUpsertCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.AgentId))
         {
@@ -30,7 +30,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 
         var existing = State.Entries.FirstOrDefault(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        var entry = new UserAgentCatalogEntry
+        var entry = new AgentRegistryEntry
         {
             AgentId = command.AgentId.Trim(),
             Platform = MergeNonEmpty(command.Platform, existing?.Platform),
@@ -54,14 +54,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LastError = existing?.LastError ?? string.Empty,
         };
 
-        await PersistDomainEventAsync(new UserAgentCatalogUpsertedEvent
+        await PersistDomainEventAsync(new AgentRegistryUpsertedEvent
         {
             Entry = entry,
         });
     }
 
     [EventHandler]
-    public async Task HandleTombstoneAsync(UserAgentCatalogTombstoneCommand command)
+    public async Task HandleTombstoneAsync(AgentRegistryTombstoneCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.AgentId))
         {
@@ -75,14 +75,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return;
         }
 
-        await PersistDomainEventAsync(new UserAgentCatalogTombstonedEvent
+        await PersistDomainEventAsync(new AgentRegistryTombstonedEvent
         {
             AgentId = command.AgentId.Trim(),
         });
     }
 
     [EventHandler]
-    public async Task HandleExecutionUpdateAsync(UserAgentCatalogExecutionUpdateCommand command)
+    public async Task HandleExecutionUpdateAsync(AgentRegistryExecutionUpdateCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.AgentId))
         {
@@ -96,7 +96,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return;
         }
 
-        await PersistDomainEventAsync(new UserAgentCatalogExecutionUpdatedEvent
+        await PersistDomainEventAsync(new AgentRegistryExecutionUpdatedEvent
         {
             AgentId = command.AgentId.Trim(),
             Status = command.Status?.Trim() ?? string.Empty,
@@ -107,7 +107,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         });
     }
 
-    private static UserAgentCatalogState ApplyUpserted(UserAgentCatalogState current, UserAgentCatalogUpsertedEvent evt)
+    private static AgentRegistryState ApplyUpserted(AgentRegistryState current, AgentRegistryUpsertedEvent evt)
     {
         var next = current.Clone();
         var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.Entry.AgentId, StringComparison.Ordinal));
@@ -118,7 +118,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return next;
     }
 
-    private static UserAgentCatalogState ApplyTombstoned(UserAgentCatalogState current, UserAgentCatalogTombstonedEvent evt)
+    private static AgentRegistryState ApplyTombstoned(AgentRegistryState current, AgentRegistryTombstonedEvent evt)
     {
         var next = current.Clone();
         var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));
@@ -130,7 +130,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return next;
     }
 
-    private static UserAgentCatalogState ApplyExecutionUpdated(UserAgentCatalogState current, UserAgentCatalogExecutionUpdatedEvent evt)
+    private static AgentRegistryState ApplyExecutionUpdated(AgentRegistryState current, AgentRegistryExecutionUpdatedEvent evt)
     {
         var next = current.Clone();
         var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));

@@ -3,7 +3,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed partial class UserAgentCatalogDocument : IProjectionReadModel<UserAgentCatalogDocument>
+public sealed partial class AgentRegistryDocument : IProjectionReadModel<AgentRegistryDocument>
 {
     public DateTimeOffset UpdatedAt
     {

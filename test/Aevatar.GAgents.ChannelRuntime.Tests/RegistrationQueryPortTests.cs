@@ -356,9 +356,9 @@ public sealed class RegistrationQueryPortTests
     [Fact]
     public async Task UserAgentCatalogQueryPort_GetAsync_ReturnsEntry_WhenDocumentExists()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
         reader.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogDocument?>(new UserAgentCatalogDocument
+            .Returns(Task.FromResult<AgentRegistryDocument?>(new AgentRegistryDocument
             {
                 Id = "agent-1",
                 Platform = "lark",
@@ -378,7 +378,7 @@ public sealed class RegistrationQueryPortTests
                 ErrorCount = 2,
                 LastError = "last-error",
                 StateVersion = 7,
-                ActorId = "user-agent-catalog-store",
+                ActorId = "agent-registry-store",
             }));
 
         var queryPort = new UserAgentCatalogQueryPort(reader);
@@ -407,9 +407,9 @@ public sealed class RegistrationQueryPortTests
     [Fact]
     public async Task UserAgentCatalogQueryPort_GetAsync_ReturnsNull_WhenTombstoned()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
         reader.GetAsync("agent-2", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogDocument?>(new UserAgentCatalogDocument
+            .Returns(Task.FromResult<AgentRegistryDocument?>(new AgentRegistryDocument
             {
                 Id = "agent-2",
                 Tombstoned = true,
@@ -425,13 +425,13 @@ public sealed class RegistrationQueryPortTests
     [Fact]
     public async Task UserAgentCatalogQueryPort_QueryAllAsync_FiltersTombstonedEntries()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
         reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<AgentRegistryDocument>
             {
                 Items =
                 [
-                    new UserAgentCatalogDocument
+                    new AgentRegistryDocument
                     {
                         Id = "agent-a",
                         Platform = "lark",
@@ -441,7 +441,7 @@ public sealed class RegistrationQueryPortTests
                         TemplateName = "daily_report",
                         StateVersion = 1,
                     },
-                    new UserAgentCatalogDocument
+                    new AgentRegistryDocument
                     {
                         Id = "agent-b",
                         Platform = "lark",
@@ -466,9 +466,9 @@ public sealed class RegistrationQueryPortTests
     [Fact]
     public async Task UserAgentCatalogQueryPort_GetStateVersionAsync_ReturnsVersion_WhenDocumentExists()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var reader = Substitute.For<IProjectionDocumentReader<AgentRegistryDocument, string>>();
         reader.GetAsync("agent-3", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogDocument?>(new UserAgentCatalogDocument
+            .Returns(Task.FromResult<AgentRegistryDocument?>(new AgentRegistryDocument
             {
                 Id = "agent-3",
                 StateVersion = 11,

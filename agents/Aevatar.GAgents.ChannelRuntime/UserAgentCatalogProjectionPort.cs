@@ -19,7 +19,7 @@ public sealed class UserAgentCatalogProjectionPort
             new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = "user-agent-catalog",
+                ProjectionKind = "agent-registry",
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);

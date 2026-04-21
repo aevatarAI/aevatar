@@ -468,7 +468,7 @@ public sealed class AgentBuilderTool : IAgentTool
         var registryActor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                            ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
         await registryActor.HandleEventAsync(
-            BuildDirectEnvelope(registryActor.Id, new UserAgentCatalogTombstoneCommand { AgentId = entry.AgentId }),
+            BuildDirectEnvelope(registryActor.Id, new AgentRegistryTombstoneCommand { AgentId = entry.AgentId }),
             ct);
 
         for (var attempt = 0; attempt < 10; attempt++)
@@ -621,7 +621,7 @@ public sealed class AgentBuilderTool : IAgentTool
         return JsonSerializer.Serialize(payload);
     }
 
-    private static string SerializeAgentStatus(UserAgentCatalogEntry entry, string? note = null)
+    private static string SerializeAgentStatus(AgentRegistryEntry entry, string? note = null)
     {
         return JsonSerializer.Serialize(new
         {
@@ -665,7 +665,7 @@ public sealed class AgentBuilderTool : IAgentTool
             .ToArray();
     }
 
-    private async Task<(UserAgentCatalogEntry? value, string? error)> RequireManagedAgentAsync(
+    private async Task<(AgentRegistryEntry? value, string? error)> RequireManagedAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         string actionName,
@@ -689,7 +689,7 @@ public sealed class AgentBuilderTool : IAgentTool
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
         long versionBefore,
-        Func<UserAgentCatalogEntry, bool> predicate,
+        Func<AgentRegistryEntry, bool> predicate,
         CancellationToken ct,
         int maxAttempts = 10,
         int delayMilliseconds = 500)
@@ -720,7 +720,7 @@ public sealed class AgentBuilderTool : IAgentTool
         await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
     }
 
-    private async Task<UserAgentCatalogEntry?> WaitForAgentStatusAsync(
+    private async Task<AgentRegistryEntry?> WaitForAgentStatusAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
         string expectedStatus,
@@ -740,7 +740,7 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     private async Task<(bool success, string? error)> DispatchAgentLifecycleAsync(
-        UserAgentCatalogEntry entry,
+        AgentRegistryEntry entry,
         IActorRuntime actorRuntime,
         string reason,
         LifecycleAction action,

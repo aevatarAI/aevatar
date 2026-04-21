@@ -66,9 +66,9 @@ public sealed class AgentDeliveryTargetToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
+            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(
             [
-                new UserAgentCatalogEntry
+                new AgentRegistryEntry
                 {
                     AgentId = "agent-1",
                     Platform = "lark",
@@ -77,7 +77,7 @@ public sealed class AgentDeliveryTargetToolTests
                     NyxApiKey = "secret-1234",
                     OwnerNyxUserId = "user-1",
                 },
-                new UserAgentCatalogEntry
+                new AgentRegistryEntry
                 {
                     AgentId = "agent-2",
                     Platform = "lark",
@@ -154,7 +154,7 @@ public sealed class AgentDeliveryTargetToolTests
         queryPort.GetStateVersionAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(3));
         queryPort.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
             {
                 AgentId = "agent-1",
                 Platform = "lark",
@@ -207,12 +207,12 @@ public sealed class AgentDeliveryTargetToolTests
                 e.Route.Direct != null &&
                 e.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId &&
                 e.Payload != null &&
-                e.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor) &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().AgentId == "agent-1" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().ConversationId == "oc_chat_1" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().NyxProviderSlug == "api-lark-bot" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().NyxApiKey == "api-key-1234" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().OwnerNyxUserId == "user-1"));
+                e.Payload.Is(AgentRegistryUpsertCommand.Descriptor) &&
+                e.Payload.Unpack<AgentRegistryUpsertCommand>().AgentId == "agent-1" &&
+                e.Payload.Unpack<AgentRegistryUpsertCommand>().ConversationId == "oc_chat_1" &&
+                e.Payload.Unpack<AgentRegistryUpsertCommand>().NyxProviderSlug == "api-lark-bot" &&
+                e.Payload.Unpack<AgentRegistryUpsertCommand>().NyxApiKey == "api-key-1234" &&
+                e.Payload.Unpack<AgentRegistryUpsertCommand>().OwnerNyxUserId == "user-1"));
         }
         finally
         {
@@ -225,7 +225,7 @@ public sealed class AgentDeliveryTargetToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("agent-2", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
             {
                 AgentId = "agent-2",
                 Platform = "lark",
@@ -266,7 +266,7 @@ public sealed class AgentDeliveryTargetToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("agent-2", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
             {
                 AgentId = "agent-2",
                 Platform = "lark",
@@ -311,7 +311,7 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("agent-3", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
                 {
                     AgentId = "agent-3",
                     Platform = "lark",
@@ -319,7 +319,7 @@ public sealed class AgentDeliveryTargetToolTests
                     NyxProviderSlug = "api-lark-bot",
                     OwnerNyxUserId = "user-1",
                 }),
-                Task.FromResult<UserAgentCatalogEntry?>(null));
+                Task.FromResult<AgentRegistryEntry?>(null));
         queryPort.GetStateVersionAsync("agent-3", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(6), Task.FromResult<long?>(7));
 
@@ -352,8 +352,8 @@ public sealed class AgentDeliveryTargetToolTests
 
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&
-                e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
-                e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "agent-3"));
+                e.Payload.Is(AgentRegistryTombstoneCommand.Descriptor) &&
+                e.Payload.Unpack<AgentRegistryTombstoneCommand>().AgentId == "agent-3"));
         }
         finally
         {

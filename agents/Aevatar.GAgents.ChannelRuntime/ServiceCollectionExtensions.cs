@@ -115,23 +115,23 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
             UserAgentCatalogProjector>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
-            UserAgentCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentRegistryDocument>,
+            AgentRegistryDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
         services.AddHostedService<UserAgentCatalogStartupService>();
 
         if (useElasticsearch)
         {
-            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogDocument, string>(
+            services.AddElasticsearchDocumentProjectionStore<AgentRegistryDocument, string>(
                 optionsFactory: _ => BuildElasticsearchOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AgentRegistryDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
+            services.AddInMemoryDocumentProjectionStore<AgentRegistryDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 
