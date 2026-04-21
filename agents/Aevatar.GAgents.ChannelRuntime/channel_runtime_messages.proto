@@ -30,6 +30,8 @@ message ChannelBotRegistrationEntry {
   // LarkPlatformAdapter resolves it via ICredentialProvider at callback time,
   // raw encrypt_key becomes optional, then removed.
   string credential_ref = 10;
+  // Tombstone flag for logical deletion — required by Channel RFC §14.1 guard #4.
+  bool is_deleted = 11;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -91,6 +93,8 @@ message DeviceRegistrationEntry {
   string nyx_conversation_id = 4;         // NyxID conversation ID
   string description = 5;                 // Human-readable label
   google.protobuf.Timestamp created_at = 6;
+  // Tombstone flag for logical deletion — required by Channel RFC §14.1 guard #4.
+  bool is_deleted = 7;
 }
 
 message DeviceRegistrationState {

@@ -9,10 +9,10 @@ cd "${REPO_ROOT}"
 # RFC §14.1 Layer 1 guard #4: every tombstone-capable Channel catalog / bot /
 # device registration proto must carry `bool is_deleted`.
 #
-# Scope: proto files under agents/Aevatar.GAgents.Channel.*/** (the Channel
-# RFC abstraction tree with the dotted namespace). Legacy proto directories
-# (agents/Aevatar.GAgents.ChannelRuntime/** etc.) are excluded — their
-# tombstone migration is tracked separately.
+# Scope: every .proto file under agents/ (both the new dotted
+# Aevatar.GAgents.Channel.* tree and legacy Aevatar.GAgents.ChannelRuntime/
+# tree). Issue #265 item 1.4 enforces the tombstone contract without
+# carve-outs.
 #
 # Messages checked:
 #   UserAgentCatalogEntry
@@ -34,11 +34,7 @@ if not root.is_dir():
 
 violations: list[str] = []
 
-proto_files = [
-    path
-    for path in root.rglob("*.proto")
-    if any(part.startswith("Aevatar.GAgents.Channel.") for part in path.parts)
-]
+proto_files = list(root.rglob("*.proto"))
 
 for path in proto_files:
     try:

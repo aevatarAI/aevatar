@@ -64,13 +64,20 @@ public sealed class ChannelArchitectureTests
         //   2. the ITurnContext / TurnContext implementations in the abstractions (they proxy the call
         //      back through the adapter using the turn-bound credential)
         //   3. the abstraction interface itself (IChannelOutboundPort.cs)
-        //   4. conformance / surface test harnesses under test/**
+        //
+        // Receiver tracking (addresses review feedback): within each type we compute the set of
+        // identifiers bound to an IChannelOutboundPort — fields, properties, constructor / method
+        // parameters — and then close the set under local-variable aliasing (var port = _outbound;)
+        // and assignment aliasing (port = this._outbound;). Any SendAsync call whose innermost
+        // receiver identifier (`x.SendAsync(...)`, `this._outbound.SendAsync(...)`,
+        // `wrapper.Port.SendAsync(...)`) resolves to one of those names is flagged.
 
         var violators = new List<string>();
 
         foreach (var sourceFile in ChannelSourceIndex.EnumerateProductionSourceFiles())
         {
-            if (!File.ReadAllText(sourceFile).Contains(".SendAsync"))
+            var text = File.ReadAllText(sourceFile);
+            if (!text.Contains(".SendAsync", System.StringComparison.Ordinal))
             {
                 continue;
             }
@@ -81,10 +88,51 @@ public sealed class ChannelArchitectureTests
                 continue;
             }
 
-            var invocationReport = FindForbiddenInvocations(sourceFile, receiverTypeHint: "IChannelOutboundPort", methodName: "SendAsync");
-            if (invocationReport.Count > 0)
+            var tree = CSharpSyntaxTree.ParseText(text, path: sourceFile);
+            var root = tree.GetRoot();
+
+            foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
             {
-                violators.AddRange(invocationReport.Select(line => $"{normalized}: {line}"));
+                var typeReceivers = ChannelReceiverTracker.CollectTypeReceiverNames(typeDecl, "IChannelOutboundPort");
+
+                foreach (var methodBody in ChannelReceiverTracker.EnumerateMethodBodies(typeDecl))
+                {
+                    var callableReceivers = ChannelReceiverTracker.ExpandLocalAliases(methodBody, typeReceivers);
+
+                    foreach (var invocation in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                    {
+                        if (invocation.Expression is not MemberAccessExpressionSyntax member)
+                        {
+                            continue;
+                        }
+
+                        if (member.Name.Identifier.ValueText != "SendAsync")
+                        {
+                            continue;
+                        }
+
+                        var receiverName = ChannelReceiverTracker.ExtractLeafName(member.Expression);
+                        if (receiverName is null)
+                        {
+                            continue;
+                        }
+
+                        // Flag when the receiver name matches either the enclosing type's set or
+                        // the repo-global set of IChannelOutboundPort-typed members. The global
+                        // set catches wrapper-property forwarding (`wrapper.Port.SendAsync(...)`)
+                        // where the property returning IChannelOutboundPort is declared in a
+                        // different file.
+                        if (!callableReceivers.Contains(receiverName)
+                            && !ChannelSourceIndex.GlobalOutboundMemberNames.Contains(receiverName))
+                        {
+                            continue;
+                        }
+
+                        var line = tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1;
+                        violators.Add(
+                            $"{normalized}:{typeDecl.Identifier.ValueText}:line {line}: {invocation.ToString().Trim()}");
+                    }
+                }
             }
         }
 
@@ -164,49 +212,87 @@ public sealed class ChannelArchitectureTests
     [Fact]
     public void RawPayload_BlobWrites_Must_RouteThrough_PayloadRedactor()
     {
-        // Rule: any IBlobStore.WriteAsync invocation that forwards a raw payload must receive the
-        // bytes back from IPayloadRedactor.Redact first. Until IBlobStore lands in the repo this
-        // guard is vacuously satisfied; once the type exists, any call site that mentions a raw
-        // payload without also mentioning the redactor fails the guard.
+        // Rule: any argument handed to IBlobStore.WriteAsync whose provenance looks like raw
+        // channel payload bytes must be the result of IPayloadRedactor.Redact / RedactAsync. This
+        // test performs local, intra-method data-flow:
+        //   * collect identifiers typed as IBlobStore in the enclosing type (receivers for WriteAsync);
+        //   * collect identifiers in the enclosing method whose initializer / latest assignment
+        //     traces back to `.Redact(` or `.RedactAsync(` (possibly through chained aliasing);
+        //   * for each WriteAsync argument that looks like raw payload (identifier / parameter
+        //     containing "raw" in its name, or arguments named RawPayload*), require the provenance
+        //     set to contain the identifier. Inline `redactor.Redact(...)` / `await redactor
+        //     .RedactAsync(...)` arguments are accepted directly.
+        //
+        // Until IBlobStore lands in the repo the guard is vacuously satisfied; once the type is
+        // introduced, any call site that stores non-redacted raw payload bytes trips the rule.
 
         var violators = new List<string>();
 
         foreach (var sourceFile in ChannelSourceIndex.EnumerateProductionSourceFiles())
         {
             var text = File.ReadAllText(sourceFile);
-            if (!text.Contains("IBlobStore"))
+            if (!text.Contains("IBlobStore", System.StringComparison.Ordinal))
             {
                 continue;
             }
 
-            // Flag call sites where we hand raw payload bytes / RawPayload-typed variables to
-            // IBlobStore.WriteAsync without also routing through IPayloadRedactor in the same file.
-            var mentionsRawPayload = Regex.IsMatch(text, @"\bRawPayload\b")
-                || text.Contains("rawPayload")
-                || text.Contains("RawPayloadBlobRef");
+            var tree = CSharpSyntaxTree.ParseText(text, path: sourceFile);
+            var root = tree.GetRoot();
+            var normalized = ChannelSourceIndex.NormalizePath(sourceFile);
 
-            if (!mentionsRawPayload)
+            foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
             {
-                continue;
-            }
+                var blobStoreReceivers = ChannelReceiverTracker.CollectTypeReceiverNames(typeDecl, "IBlobStore");
+                if (blobStoreReceivers.Count == 0)
+                {
+                    continue;
+                }
 
-            if (text.Contains("IPayloadRedactor") || text.Contains("PayloadRedactor.Redact"))
-            {
-                continue;
-            }
+                foreach (var methodBody in ChannelReceiverTracker.EnumerateMethodBodies(typeDecl))
+                {
+                    var redactedProvenance = ChannelReceiverTracker.CollectRedactedProvenance(methodBody);
 
-            if (!Regex.IsMatch(text, @"IBlobStore\b\s*\.?\s*WriteAsync\("))
-            {
-                continue;
-            }
+                    foreach (var invocation in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                    {
+                        if (invocation.Expression is not MemberAccessExpressionSyntax member
+                            || member.Name.Identifier.ValueText != "WriteAsync")
+                        {
+                            continue;
+                        }
 
-            violators.Add(ChannelSourceIndex.NormalizePath(sourceFile));
+                        var receiverName = ChannelReceiverTracker.ExtractLeafName(member.Expression);
+                        if (receiverName is null || !blobStoreReceivers.Contains(receiverName))
+                        {
+                            continue;
+                        }
+
+                        foreach (var argument in invocation.ArgumentList.Arguments)
+                        {
+                            if (!ChannelReceiverTracker.LooksLikeRawPayloadArgument(argument))
+                            {
+                                continue;
+                            }
+
+                            if (ChannelReceiverTracker.ArgumentTracesToRedaction(argument, redactedProvenance))
+                            {
+                                continue;
+                            }
+
+                            var line = tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1;
+                            violators.Add(
+                                $"{normalized}:{typeDecl.Identifier.ValueText}:line {line}: "
+                                + $"argument '{argument.ToString().Trim()}' passed to IBlobStore.WriteAsync "
+                                + "does not trace back to IPayloadRedactor.Redact");
+                        }
+                    }
+                }
+            }
         }
 
         Assert.True(
             violators.Count == 0,
-            "Raw payload blob writes must be routed through IPayloadRedactor.Redact before IBlobStore.WriteAsync. "
-            + "Files that appear to skip the redactor:\n" + string.Join("\n", violators));
+            "Raw payload arguments to IBlobStore.WriteAsync must come from IPayloadRedactor.Redact. "
+            + "Forbidden call sites:\n" + string.Join("\n", violators));
     }
 
     [Fact]
@@ -278,77 +364,287 @@ public sealed class ChannelArchitectureTests
         return false;
     }
 
-    private static List<string> FindForbiddenInvocations(string sourceFile, string receiverTypeHint, string methodName)
+}
+
+internal static class ChannelReceiverTracker
+{
+    public static HashSet<string> CollectTypeReceiverNames(TypeDeclarationSyntax type, string typeHint)
     {
-        var violations = new List<string>();
-        var text = File.ReadAllText(sourceFile);
+        var names = new HashSet<string>(System.StringComparer.Ordinal);
 
-        var tree = CSharpSyntaxTree.ParseText(text, path: sourceFile);
-        var root = tree.GetRoot();
-
-        foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        foreach (var field in type.Members.OfType<FieldDeclarationSyntax>())
         {
-            if (invocation.Expression is not MemberAccessExpressionSyntax member)
+            if (!TypeTextMatches(field.Declaration.Type, typeHint))
             {
                 continue;
             }
 
-            if (member.Name.Identifier.ValueText != methodName)
+            foreach (var variable in field.Declaration.Variables)
             {
-                continue;
+                names.Add(variable.Identifier.ValueText);
             }
-
-            var receiverText = member.Expression.ToString();
-            if (!receiverText.Contains(receiverTypeHint, System.StringComparison.Ordinal)
-                && !TypeHintPresentInParameterList(root, receiverText, receiverTypeHint))
-            {
-                continue;
-            }
-
-            var position = tree.GetLineSpan(invocation.Span).StartLinePosition;
-            violations.Add($"line {position.Line + 1}: {invocation.ToString().Trim()}");
         }
 
-        return violations;
+        foreach (var property in type.Members.OfType<PropertyDeclarationSyntax>())
+        {
+            if (TypeTextMatches(property.Type, typeHint))
+            {
+                names.Add(property.Identifier.ValueText);
+            }
+        }
+
+        foreach (var parameter in type.DescendantNodes().OfType<ParameterSyntax>())
+        {
+            if (parameter.Type != null && TypeTextMatches(parameter.Type, typeHint))
+            {
+                names.Add(parameter.Identifier.ValueText);
+            }
+        }
+
+        return names;
     }
 
-    private static bool TypeHintPresentInParameterList(SyntaxNode root, string receiverText, string typeHint)
+    public static IEnumerable<SyntaxNode> EnumerateMethodBodies(TypeDeclarationSyntax type)
     {
-        // When the call site is `_outbound.SendAsync(...)` we resolve by checking whether any field,
-        // property, or parameter in the file is typed as IChannelOutboundPort.
-        if (string.IsNullOrEmpty(receiverText))
+        foreach (var member in type.Members)
         {
-            return false;
-        }
-
-        var simpleReceiver = receiverText.Trim().TrimStart('_');
-        foreach (var declaration in root.DescendantNodes())
-        {
-            switch (declaration)
+            switch (member)
             {
-                case FieldDeclarationSyntax field when field.Declaration.Type.ToString().Contains(typeHint, System.StringComparison.Ordinal):
-                    if (field.Declaration.Variables.Any(variable =>
-                        variable.Identifier.ValueText.Equals(simpleReceiver, System.StringComparison.OrdinalIgnoreCase)
-                        || variable.Identifier.ValueText.Equals(receiverText, System.StringComparison.Ordinal)))
+                case BaseMethodDeclarationSyntax method:
+                    if (method.Body is not null)
                     {
-                        return true;
+                        yield return method.Body;
                     }
+
+                    if (method.ExpressionBody is not null)
+                    {
+                        yield return method.ExpressionBody;
+                    }
+
                     break;
-                case PropertyDeclarationSyntax property when property.Type.ToString().Contains(typeHint, System.StringComparison.Ordinal):
-                    if (property.Identifier.ValueText.Equals(simpleReceiver, System.StringComparison.OrdinalIgnoreCase)
-                        || property.Identifier.ValueText.Equals(receiverText, System.StringComparison.Ordinal))
+
+                case PropertyDeclarationSyntax property:
+                    if (property.ExpressionBody is not null)
                     {
-                        return true;
+                        yield return property.ExpressionBody;
                     }
-                    break;
-                case ParameterSyntax parameter when parameter.Type?.ToString().Contains(typeHint, System.StringComparison.Ordinal) == true:
-                    if (parameter.Identifier.ValueText.Equals(simpleReceiver, System.StringComparison.OrdinalIgnoreCase)
-                        || parameter.Identifier.ValueText.Equals(receiverText, System.StringComparison.Ordinal))
+
+                    if (property.AccessorList is not null)
                     {
-                        return true;
+                        foreach (var accessor in property.AccessorList.Accessors)
+                        {
+                            if (accessor.Body is not null)
+                            {
+                                yield return accessor.Body;
+                            }
+
+                            if (accessor.ExpressionBody is not null)
+                            {
+                                yield return accessor.ExpressionBody;
+                            }
+                        }
                     }
+
                     break;
             }
+        }
+    }
+
+    public static HashSet<string> ExpandLocalAliases(SyntaxNode methodBody, HashSet<string> seed)
+    {
+        var set = new HashSet<string>(seed, System.StringComparer.Ordinal);
+        bool changed;
+        do
+        {
+            changed = false;
+
+            foreach (var declarator in methodBody.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+            {
+                if (declarator.Initializer?.Value is { } init
+                    && ExtractLeafName(init) is { } leaf
+                    && set.Contains(leaf)
+                    && set.Add(declarator.Identifier.ValueText))
+                {
+                    changed = true;
+                }
+            }
+
+            foreach (var assignment in methodBody.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (assignment.Left is IdentifierNameSyntax lhs
+                    && ExtractLeafName(assignment.Right) is { } rhsLeaf
+                    && set.Contains(rhsLeaf)
+                    && set.Add(lhs.Identifier.ValueText))
+                {
+                    changed = true;
+                }
+            }
+        }
+        while (changed);
+
+        return set;
+    }
+
+    public static HashSet<string> CollectRedactedProvenance(SyntaxNode methodBody)
+    {
+        var set = new HashSet<string>(System.StringComparer.Ordinal);
+
+        foreach (var declarator in methodBody.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+        {
+            if (declarator.Initializer?.Value is { } init && ExpressionProducesRedactedBytes(init))
+            {
+                set.Add(declarator.Identifier.ValueText);
+            }
+        }
+
+        foreach (var assignment in methodBody.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            if (assignment.Left is IdentifierNameSyntax lhs
+                && ExpressionProducesRedactedBytes(assignment.Right))
+            {
+                set.Add(lhs.Identifier.ValueText);
+            }
+        }
+
+        bool changed;
+        do
+        {
+            changed = false;
+
+            foreach (var declarator in methodBody.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+            {
+                if (declarator.Initializer?.Value is { } init
+                    && ExtractLeafName(init) is { } leaf
+                    && set.Contains(leaf)
+                    && set.Add(declarator.Identifier.ValueText))
+                {
+                    changed = true;
+                }
+            }
+
+            foreach (var assignment in methodBody.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (assignment.Left is IdentifierNameSyntax lhs
+                    && ExtractLeafName(assignment.Right) is { } rhsLeaf
+                    && set.Contains(rhsLeaf)
+                    && set.Add(lhs.Identifier.ValueText))
+                {
+                    changed = true;
+                }
+            }
+        }
+        while (changed);
+
+        return set;
+    }
+
+    public static bool LooksLikeRawPayloadArgument(ArgumentSyntax argument)
+    {
+        var text = argument.Expression.ToString();
+        if (text.Contains("RawPayload", System.StringComparison.Ordinal)
+            || text.Contains("rawPayload", System.StringComparison.Ordinal)
+            || text.Contains("rawBytes", System.StringComparison.Ordinal)
+            || text.Contains("RawBytes", System.StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (argument.Expression is IdentifierNameSyntax id)
+        {
+            var name = id.Identifier.ValueText;
+            if (name.StartsWith("raw", System.StringComparison.OrdinalIgnoreCase)
+                || name.Contains("Raw", System.StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool ArgumentTracesToRedaction(ArgumentSyntax argument, HashSet<string> redactedProvenance)
+    {
+        if (ExpressionProducesRedactedBytes(argument.Expression))
+        {
+            return true;
+        }
+
+        if (ExtractLeafName(argument.Expression) is { } leaf && redactedProvenance.Contains(leaf))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    public static string? ExtractLeafName(ExpressionSyntax expression)
+    {
+        return expression switch
+        {
+            IdentifierNameSyntax id => id.Identifier.ValueText,
+            MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+            ParenthesizedExpressionSyntax parens => ExtractLeafName(parens.Expression),
+            AwaitExpressionSyntax awaitExpr => ExtractLeafName(awaitExpr.Expression),
+            CastExpressionSyntax cast => ExtractLeafName(cast.Expression),
+            PostfixUnaryExpressionSyntax postfix => ExtractLeafName(postfix.Operand),
+            _ => null,
+        };
+    }
+
+    private static bool TypeTextMatches(TypeSyntax type, string typeHint)
+    {
+        var text = type.ToString();
+        // Match as a whole identifier segment to avoid matching embedded substrings
+        // (e.g. hint "IBlobStore" would otherwise match "IBlobStoreFactory").
+        if (text.Equals(typeHint, System.StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return Regex.IsMatch(text, $@"(^|[^A-Za-z0-9_]){Regex.Escape(typeHint)}([^A-Za-z0-9_]|$)");
+    }
+
+    private static bool ExpressionProducesRedactedBytes(ExpressionSyntax expression)
+    {
+        switch (expression)
+        {
+            case AwaitExpressionSyntax awaitExpr:
+                return ExpressionProducesRedactedBytes(awaitExpr.Expression);
+
+            case ParenthesizedExpressionSyntax parens:
+                return ExpressionProducesRedactedBytes(parens.Expression);
+
+            case InvocationExpressionSyntax invocation:
+                if (invocation.Expression is MemberAccessExpressionSyntax member
+                    && (member.Name.Identifier.ValueText == "Redact"
+                        || member.Name.Identifier.ValueText == "RedactAsync"))
+                {
+                    return true;
+                }
+
+                if (invocation.Expression is IdentifierNameSyntax id
+                    && (id.Identifier.ValueText == "Redact" || id.Identifier.ValueText == "RedactAsync"))
+                {
+                    return true;
+                }
+
+                // Handle `await x.RedactAsync(...).ConfigureAwait(false)` and similar chains.
+                if (invocation.Expression is MemberAccessExpressionSyntax chained
+                    && chained.Expression is InvocationExpressionSyntax inner)
+                {
+                    return ExpressionProducesRedactedBytes(inner);
+                }
+
+                break;
+
+            case MemberAccessExpressionSyntax propertyAccess:
+                if (propertyAccess.Name.Identifier.ValueText is "Redacted" or "Sanitized"
+                    && propertyAccess.Expression is InvocationExpressionSyntax invokeBefore)
+                {
+                    return ExpressionProducesRedactedBytes(invokeBefore);
+                }
+
+                break;
         }
 
         return false;
@@ -359,7 +655,12 @@ internal static class ChannelSourceIndex
 {
     private static readonly Lazy<string> LazyRepoRoot = new(FindRepoRoot);
 
+    private static readonly Lazy<HashSet<string>> LazyOutboundMemberNames =
+        new(() => CollectGlobalMemberNamesByType("IChannelOutboundPort"));
+
     public static string RepoRoot => LazyRepoRoot.Value;
+
+    public static HashSet<string> GlobalOutboundMemberNames => LazyOutboundMemberNames.Value;
 
     public static string NormalizePath(string path) => path.Replace('\\', '/');
 
@@ -489,6 +790,52 @@ internal static class ChannelSourceIndex
         }
 
         return false;
+    }
+
+    private static HashSet<string> CollectGlobalMemberNamesByType(string typeHint)
+    {
+        var names = new HashSet<string>(System.StringComparer.Ordinal);
+
+        foreach (var sourceFile in EnumerateProductionSourceFiles())
+        {
+            var text = File.ReadAllText(sourceFile);
+            if (!text.Contains(typeHint, System.StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var tree = CSharpSyntaxTree.ParseText(text, path: sourceFile);
+            var root = tree.GetRoot();
+
+            foreach (var field in root.DescendantNodes().OfType<FieldDeclarationSyntax>())
+            {
+                if (field.Declaration.Type.ToString().Contains(typeHint, System.StringComparison.Ordinal))
+                {
+                    foreach (var variable in field.Declaration.Variables)
+                    {
+                        names.Add(variable.Identifier.ValueText);
+                    }
+                }
+            }
+
+            foreach (var property in root.DescendantNodes().OfType<PropertyDeclarationSyntax>())
+            {
+                if (property.Type.ToString().Contains(typeHint, System.StringComparison.Ordinal))
+                {
+                    names.Add(property.Identifier.ValueText);
+                }
+            }
+
+            foreach (var parameter in root.DescendantNodes().OfType<ParameterSyntax>())
+            {
+                if (parameter.Type?.ToString().Contains(typeHint, System.StringComparison.Ordinal) == true)
+                {
+                    names.Add(parameter.Identifier.ValueText);
+                }
+            }
+        }
+
+        return names;
     }
 
     private static string FindRepoRoot()
