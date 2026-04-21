@@ -73,16 +73,10 @@ enum FailureKind {
 }
 
 message ChannelBotRegistrationEntry {
-  string id = 1;
-  aevatar.gagents.channel.abstractions.BotInstanceId bot = 2;
-  aevatar.gagents.channel.abstractions.ChannelId channel = 3;
-  string scope_id = 4;
-  string verification_token = 5;
-  string webhook_url = 6;
-  string nyx_provider_slug = 7;
-  string credential_ref = 8;
-  google.protobuf.Timestamp created_at = 9;
-  bool is_deleted = 10;
+  aevatar.gagents.channel.abstractions.ChannelTransportBinding transport_binding = 1;
+  string webhook_url = 2;
+  google.protobuf.Timestamp created_at = 3;
+  bool is_deleted = 4;
 }
 
 message UserAgentCatalogEntry {

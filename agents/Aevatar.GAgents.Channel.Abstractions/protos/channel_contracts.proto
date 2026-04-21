@@ -42,6 +42,19 @@ message ComposeContext {
   map<string, string> annotations = 3;
 }
 
+message ChannelBotDescriptor {
+  string registration_id = 1;
+  BotInstanceId bot = 2;
+  ChannelId channel = 3;
+  string scope_id = 4;
+}
+
+message ChannelTransportBinding {
+  ChannelBotDescriptor bot = 1;
+  string credential_ref = 2;
+  string verification_token = 3;
+}
+
 message ChannelCapabilities {
   bool supports_ephemeral = 1;
   bool supports_edit = 2;

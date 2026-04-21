@@ -71,10 +71,34 @@ public sealed class ChannelRuntimeProtoTests
             },
             CompletedAtUnixMs = 123,
         };
+        var registration = new ChannelBotRegistrationEntry
+        {
+            TransportBinding = new ChannelTransportBinding
+            {
+                Bot = new ChannelBotDescriptor
+                {
+                    RegistrationId = "bot-reg-1",
+                    Bot = new BotInstanceId { Value = "ops-bot" },
+                    Channel = new ChannelId { Value = "slack" },
+                    ScopeId = "scope-1",
+                },
+                CredentialRef = "vault://bots/ops-bot",
+                VerificationToken = "verify-me",
+            },
+            WebhookUrl = "https://example.test/callback",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            IsDeleted = true,
+        };
 
         completed.Clone().ShouldBe(completed);
+        registration.Clone().ShouldBe(registration);
+        registration.TransportBinding.Bot.RegistrationId.ShouldBe("bot-reg-1");
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("transport_binding")!.FieldNumber.ShouldBe(1);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("is_deleted")!.FieldNumber.ShouldBe(4);
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ConversationTurnCompletedEvent));
+        ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(ChannelBotRegistrationEntry));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(UserAgentCatalogEntry));
         SessionStoreReflection.Descriptor.MessageTypes.Select(x => x.Name)

@@ -122,9 +122,27 @@ public sealed class ChannelAbstractionsProtoTests
             .ShouldContain(nameof(EmitResult));
         ChannelContractsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(StreamChunk));
+        var binding = new ChannelTransportBinding
+        {
+            Bot = new ChannelBotDescriptor
+            {
+                RegistrationId = "bot-reg-1",
+                Bot = new BotInstanceId { Value = "helper" },
+                Channel = new ChannelId { Value = "discord" },
+                ScopeId = "scope-1",
+            },
+            CredentialRef = "vault://bots/helper",
+            VerificationToken = "verify-me",
+        };
+        binding.Clone().ShouldBe(binding);
+        binding.Bot.ScopeId.ShouldBe("scope-1");
         var channelCapabilities = ChannelContractsReflection.Descriptor.MessageTypes
             .Single(x => x.Name == nameof(ChannelCapabilities));
         channelCapabilities.FindFieldByName("transport").FieldNumber.ShouldBe(17);
+        ChannelContractsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(ChannelBotDescriptor));
+        ChannelContractsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(ChannelTransportBinding));
         ScheduleReflection.Descriptor.EnumTypes.Select(x => x.Name)
             .ShouldContain(nameof(ProjectionVerdict));
     }
