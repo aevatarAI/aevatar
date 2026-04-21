@@ -25,6 +25,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             .On<ChannelBotRegisteredEvent>(ApplyRegistered)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
             .On<ChannelBotTokenUpdatedEvent>(ApplyTokenUpdated)
+            .On<ChannelBotTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .OrCurrent();
 
     // ─── Commands ───
@@ -54,22 +55,26 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     [EventHandler]
     public async Task HandleUnregister(ChannelBotUnregisterCommand cmd)
     {
-        var exists = State.Registrations.Any(r => r.Id == cmd.RegistrationId);
-        if (!exists)
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
+        if (entry is null || entry.Tombstoned)
         {
             Logger.LogWarning("Cannot unregister: channel bot registration not found: {Id}", cmd.RegistrationId);
             return;
         }
 
-        await PersistDomainEventAsync(new ChannelBotUnregisteredEvent { RegistrationId = cmd.RegistrationId });
+        await PersistDomainEventAsync(new ChannelBotUnregisteredEvent
+        {
+            RegistrationId = cmd.RegistrationId,
+            TombstoneStateVersion = NextCommittedVersion(),
+        });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
     }
 
     [EventHandler]
     public async Task HandleUpdateToken(ChannelBotUpdateTokenCommand cmd)
     {
-        var exists = State.Registrations.Any(r => r.Id == cmd.RegistrationId);
-        if (!exists)
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
+        if (entry is null || entry.Tombstoned)
         {
             Logger.LogWarning("Cannot update token: channel bot registration not found: {Id}", cmd.RegistrationId);
             return;
@@ -83,21 +88,56 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
     }
 
+    [EventHandler]
+    public async Task HandleCompactTombstones(ChannelBotCompactTombstonesCommand cmd)
+    {
+        if (cmd.SafeStateVersion <= 0)
+            return;
+
+        var registrationIds = State.Registrations
+            .Where(static entry => entry.Tombstoned)
+            .Where(entry => entry.TombstoneStateVersion > 0 && entry.TombstoneStateVersion <= cmd.SafeStateVersion)
+            .Select(static entry => entry.Id)
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (registrationIds.Length == 0)
+            return;
+
+        await PersistDomainEventAsync(new ChannelBotTombstonesCompactedEvent
+        {
+            RegistrationIds = { registrationIds },
+            SafeStateVersion = cmd.SafeStateVersion,
+        });
+    }
+
     // ─── State transitions ───
 
     private static ChannelBotRegistrationStoreState ApplyRegistered(ChannelBotRegistrationStoreState current, ChannelBotRegisteredEvent evt)
     {
         var next = current.Clone();
-        next.Registrations.Add(evt.Entry);
+        var existing = next.Registrations.FirstOrDefault(r => r.Id == evt.Entry.Id);
+        if (existing is not null)
+            next.Registrations.Remove(existing);
+        var entry = evt.Entry.Clone();
+        entry.Tombstoned = false;
+        entry.TombstoneStateVersion = 0;
+        next.Registrations.Add(entry);
         return next;
     }
 
+    // Soft-delete to retain the entry until the durable projector watermark
+    // has advanced past this state version (Channel RFC §7.1.1).
     private static ChannelBotRegistrationStoreState ApplyUnregistered(ChannelBotRegistrationStoreState current, ChannelBotUnregisteredEvent evt)
     {
         var next = current.Clone();
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
-            next.Registrations.Remove(entry);
+        {
+            entry.Tombstoned = true;
+            entry.TombstoneStateVersion = evt.TombstoneStateVersion;
+        }
         return next;
     }
 
@@ -109,4 +149,27 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             entry.NyxUserToken = evt.NyxUserToken;
         return next;
     }
+
+    private static ChannelBotRegistrationStoreState ApplyTombstonesCompacted(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotTombstonesCompactedEvent evt)
+    {
+        if (evt.RegistrationIds.Count == 0)
+            return current;
+
+        var next = current.Clone();
+        var compacted = evt.RegistrationIds
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+        var removable = next.Registrations
+            .Where(entry => compacted.Contains(entry.Id))
+            .ToArray();
+        foreach (var entry in removable)
+            next.Registrations.Remove(entry);
+        return next;
+    }
+
+    private long NextCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + 1;
 }

@@ -93,6 +93,12 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
                 "2"),
             RuntimeAgentType = runtimeAgentType,
         };
+        await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
+            provider,
+            CancellationToken.None,
+            "script-catalog",
+            "script-definition:worker-a-script",
+            "script-definition:worker-b-script");
 
         var (_, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
             provider,
@@ -223,6 +229,11 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
                 "self_generated",
                 "1"),
         };
+        await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
+            provider,
+            CancellationToken.None,
+            "script-catalog",
+            "script-definition:self-evolving-script");
 
         var (_, rootSnapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
             provider,
@@ -315,6 +326,12 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
                 "manual_catalog",
                 "2"),
         };
+        await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
+            provider,
+            CancellationToken.None,
+            "script-catalog",
+            "manual-catalog-definition-v1",
+            "manual-catalog-definition-v2");
 
         var (_, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
             provider,
@@ -406,6 +423,11 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             SendtoSource = sendToSource,
             InvokeSource = invokeSource,
         };
+        await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
+            provider,
+            CancellationToken.None,
+            "sendto-definition-run-interaction-1",
+            "upsert-definition-run-interaction-1");
 
         var (_, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
             provider,

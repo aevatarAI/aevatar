@@ -92,7 +92,7 @@ describe("WorkflowsPage", () => {
       );
     });
 
-    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+    expect(await screen.findByText("Definition summary")).toBeTruthy();
     expect(window.location.search).toContain("workflow=demo_flow");
   });
 
@@ -111,41 +111,36 @@ describe("WorkflowsPage", () => {
 
     await waitFor(() => {
       expect(window.location.search).toBe("");
-      expect(screen.queryByText("Definition Summary")).toBeNull();
+      expect(screen.queryByText("Definition summary")).toBeNull();
     });
   });
 
-  it("stretches the filter group selector to the panel width", async () => {
-    const { container } = renderWithQueryClient(React.createElement(WorkflowsPage));
+  it("renders a compact workflow filter bar with runtime-focused controls", async () => {
+    renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    expect(await screen.findByText("Library Digest")).toBeTruthy();
-    expect(container.querySelector(".ant-select")).toHaveStyle({ width: "100%" });
+    expect(await screen.findByText("Find workflows")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Search workflow, description, group, or primitive")).toBeTruthy();
+    expect(screen.getByText("Workflow catalog")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeTruthy();
   });
 
-  it("renders catalog cards as full-width summaries with in-card actions", async () => {
+  it("renders the catalog as a table with inspect and run actions", async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     expect(await screen.findByText("Closed-world ready")).toBeTruthy();
-    expect(screen.getByText("Group")).toBeTruthy();
-    expect(screen.getByText("Source")).toBeTruthy();
-    expect(screen.getByText("Primitives")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Collection" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Runtime fit" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Primitives" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Inspect" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Inspect workflow demo_flow" }),
-    ).toHaveStyle({
-      width: "100%",
-    });
   });
 
-  it("opens the definition inspector when the catalog card is clicked", async () => {
+  it("opens the definition inspector when the inspect action is clicked", async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Inspect workflow demo_flow" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect" }));
 
-    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+    expect(await screen.findByText("Definition summary")).toBeTruthy();
   });
 
   it("opens the Studio workflow editor from the definition inspector", async () => {
@@ -153,7 +148,7 @@ describe("WorkflowsPage", () => {
 
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+    expect(await screen.findByText("Definition summary")).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Open workflow editor" }),
