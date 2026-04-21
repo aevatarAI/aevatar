@@ -101,9 +101,9 @@ public sealed class ChannelArchitectureTests
         // controllers, workflow triggers) must dispatch through ConversationGAgent command envelopes
         // rather than directly invoking IChannelOutboundPort.ContinueConversationAsync.
         //
-        // We flag production source files whose type names look like proactive callers and check
-        // whether they contain a direct `.ContinueConversationAsync(` invocation. Adapter internals
-        // under agents/channels/** and the abstractions interface itself are allowed.
+        // Match by declared type identifier via Roslyn syntax walk, not by filename, so partial
+        // classes split across arbitrarily-named files (for example `WorkflowAgentGAgent.Schedule.cs`)
+        // still fail the guard.
 
         var proactiveCallerPatterns = new[]
         {
@@ -117,27 +117,47 @@ public sealed class ChannelArchitectureTests
 
         foreach (var sourceFile in ChannelSourceIndex.EnumerateProductionSourceFiles())
         {
-            var normalized = ChannelSourceIndex.NormalizePath(sourceFile);
-            var fileName = Path.GetFileNameWithoutExtension(sourceFile);
-
-            if (!proactiveCallerPatterns.Any(pattern => fileName.Contains(pattern)))
-            {
-                continue;
-            }
-
             var text = File.ReadAllText(sourceFile);
-            if (!text.Contains(".ContinueConversationAsync("))
+            if (!text.Contains(".ContinueConversationAsync(", System.StringComparison.Ordinal))
             {
                 continue;
             }
 
-            violators.Add(normalized);
+            var tree = CSharpSyntaxTree.ParseText(text, path: sourceFile);
+            var root = tree.GetRoot();
+            var normalized = ChannelSourceIndex.NormalizePath(sourceFile);
+
+            foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+            {
+                var typeName = typeDecl.Identifier.ValueText;
+                if (!proactiveCallerPatterns.Any(pattern =>
+                    typeName.Contains(pattern, System.StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                foreach (var invocation in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    if (invocation.Expression is not MemberAccessExpressionSyntax member)
+                    {
+                        continue;
+                    }
+
+                    if (member.Name.Identifier.ValueText != "ContinueConversationAsync")
+                    {
+                        continue;
+                    }
+
+                    var line = tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1;
+                    violators.Add($"{normalized}:{typeName}:line {line}: {invocation.ToString().Trim()}");
+                }
+            }
         }
 
         Assert.True(
             violators.Count == 0,
             "Proactive callers must dispatch through ConversationGAgent command envelopes, not "
-            + "IChannelOutboundPort.ContinueConversationAsync directly. Violating files:\n"
+            + "IChannelOutboundPort.ContinueConversationAsync directly. Violating call sites:\n"
             + string.Join("\n", violators));
     }
 

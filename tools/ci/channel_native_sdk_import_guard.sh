@@ -19,7 +19,13 @@ cd "${REPO_ROOT}"
 # Exclude:
 #   - agents/channels/**/*.cs (adapter-owned surface)
 
-forbidden_pattern='^[[:space:]]*using[[:space:]]+(Larksuite\.Oapi|Telegram\.Bot|SlackNet|Discord\.[A-Za-z0-9_]+)'
+# Match plain, `global`, `static`, and alias `using` forms:
+#   using Telegram.Bot;
+#   global using Telegram.Bot;
+#   using static Telegram.Bot;
+#   using Tg = Telegram.Bot;
+#   global using static Tg = Telegram.Bot;
+forbidden_pattern='^[[:space:]]*(global[[:space:]]+)?using([[:space:]]+static)?[[:space:]]+([A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*)?(Larksuite\.Oapi|Telegram\.Bot|SlackNet|Discord\.[A-Za-z0-9_]+)'
 
 violations=""
 
