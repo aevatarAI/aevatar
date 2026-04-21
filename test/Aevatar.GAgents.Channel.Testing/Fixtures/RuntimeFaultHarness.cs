@@ -38,6 +38,16 @@ public abstract class RuntimeFaultHarness
     public virtual bool SupportsProactiveCommandFailures => false;
 
     /// <summary>
+    /// Returns whether the harness can drive the inbound working buffer to saturation and observe backpressure.
+    /// </summary>
+    public virtual bool SupportsInboundSaturation => false;
+
+    /// <summary>
+    /// Returns whether the harness can exercise the forensic quarantine path (redactor breaker overflow).
+    /// </summary>
+    public virtual bool SupportsQuarantineOverflow => false;
+
+    /// <summary>
     /// Runs one durable-commit, then simulates a crash and verifies the activity is replayed on restart.
     /// </summary>
     /// <remarks>
@@ -109,6 +119,20 @@ public abstract class RuntimeFaultHarness
     public virtual Task<ProactiveCommandOutcome> DrivePermanentAdapterErrorAsync(
         string commandId,
         CancellationToken ct) => throw new NotSupportedException("Harness does not support proactive command simulation.");
+
+    /// <summary>
+    /// Drives the bounded inbound working buffer to capacity and returns what the adapter did: did a backpressure
+    /// signal get raised, and were any committed events silently dropped during saturation.
+    /// </summary>
+    public virtual Task<InboundSaturationOutcome> DriveInboundSaturationAsync(CancellationToken ct) =>
+        throw new NotSupportedException("Harness does not support inbound saturation simulation.");
+
+    /// <summary>
+    /// Overflows the forensic quarantine queue and returns both whether the oldest entry was evicted and whether an
+    /// alert was emitted in response.
+    /// </summary>
+    public virtual Task<QuarantineOverflowOutcome> DriveQuarantineOverflowAsync(CancellationToken ct) =>
+        throw new NotSupportedException("Harness does not support quarantine overflow simulation.");
 }
 
 /// <summary>
@@ -125,3 +149,19 @@ public sealed record ShardLeaderOutcome(long WinnerLeaseEpoch, bool LoserRejecte
 /// <param name="Retryable">Whether the command id is retryable after the recorded failure.</param>
 /// <param name="CredentialUsed">The credential kind actually used for the outbound attempt.</param>
 public sealed record ProactiveCommandOutcome(string? FailureCode, bool Retryable, PrincipalKind CredentialUsed);
+
+/// <summary>
+/// Outcome of driving the inbound working buffer to saturation.
+/// </summary>
+/// <param name="BackpressureSignalRaised">Whether the adapter surfaced a backpressure / overload signal.</param>
+/// <param name="CommittedEventSilentlyDropped">
+/// Whether any committed event was dropped without either entering the working buffer or surfacing an explicit error.
+/// </param>
+public sealed record InboundSaturationOutcome(bool BackpressureSignalRaised, bool CommittedEventSilentlyDropped);
+
+/// <summary>
+/// Outcome of overflowing the forensic quarantine path.
+/// </summary>
+/// <param name="OldestEntryEvicted">Whether the oldest queued entry was evicted in favor of the newer payload.</param>
+/// <param name="AlertEmitted">Whether the overflow event fired an operator-visible alert.</param>
+public sealed record QuarantineOverflowOutcome(bool OldestEntryEvicted, bool AlertEmitted);

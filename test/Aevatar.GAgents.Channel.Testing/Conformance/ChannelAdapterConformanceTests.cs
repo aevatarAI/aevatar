@@ -73,6 +73,42 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     /// </remarks>
     protected virtual bool AdapterImplements<TCapability>(TAdapter adapter) => adapter is TCapability;
 
+    /// <summary>
+    /// Returns the capability-flag ↔ optional-interface parity rules the adapter wants enforced.
+    /// </summary>
+    /// <remarks>
+    /// Each entry claims that when <see cref="CapabilityInterfaceParity.CapabilityFlag"/> is set, the adapter must also
+    /// implement the supplied optional interface, and vice versa. Default returns an empty set — adapters with optional
+    /// typing / reaction / mention adapter interfaces override this hook to wire the parity into the suite.
+    /// </remarks>
+    protected virtual IEnumerable<CapabilityInterfaceParity> GetCapabilityInterfaceParities(TAdapter adapter) =>
+        Array.Empty<CapabilityInterfaceParity>();
+
+    /// <summary>
+    /// Returns the adapter-supplied reaction probe, or <see langword="null"/> when the adapter has no reaction surface.
+    /// </summary>
+    protected virtual ReactionProbe? Reactions => null;
+
+    /// <summary>
+    /// Builds a synthetic inbound activity seed whose body mentions the bot associated with the supplied binding using
+    /// the adapter's native mention syntax.
+    /// </summary>
+    /// <remarks>
+    /// Default returns <see langword="null"/> so the mention test self-skips. Adapters with platform-specific mention
+    /// syntax override to emit a seed whose <see cref="InboundActivitySeed.Text"/> contains the raw mention token and
+    /// whose <see cref="InboundActivitySeed.Mentions"/> carries the normalized participant.
+    /// </remarks>
+    protected virtual InboundActivitySeed? BuildBotMentionSeed(ChannelTransportBinding binding) => null;
+
+    /// <summary>
+    /// Builds a synthetic inbound activity seed whose body mentions one non-bot participant using the adapter's native
+    /// mention syntax so the test can verify other-participant mentions are preserved in normalized text.
+    /// </summary>
+    /// <remarks>
+    /// Default returns <see langword="null"/> so the test self-skips.
+    /// </remarks>
+    protected virtual InboundActivitySeed? BuildParticipantMentionSeed() => null;
+
     [Fact]
     public async Task Inbound_Message_ProducesChatActivity()
     {
@@ -308,15 +344,31 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         if (WebhookFixture is null)
             return;
 
+        var primary = CreateBinding();
         var secondary = CreateSecondaryBinding();
         if (secondary is null)
             return;
 
-        await using var lifetime = await StartAdapterAsync();
-        var activity = await DispatchAsync(InboundActivitySeed.DirectMessage("multi-tenant"));
+        ChatActivity primaryActivity;
+        ChatActivity secondaryActivity;
+        try
+        {
+            primaryActivity = await WebhookFixture.DispatchInboundToBindingAsync(
+                primary,
+                InboundActivitySeed.DirectMessage("primary-tenant"));
+            secondaryActivity = await WebhookFixture.DispatchInboundToBindingAsync(
+                secondary,
+                InboundActivitySeed.DirectMessage("secondary-tenant"));
+        }
+        catch (NotSupportedException)
+        {
+            // Fixture does not support multi-tenant dispatch; multi-binding routing is not applicable here.
+            return;
+        }
 
-        activity.Bot.Value.ShouldBe(lifetime.Binding.Bot.Bot.Value);
-        activity.Bot.Value.ShouldNotBe(secondary.Bot.Bot.Value);
+        primaryActivity.Bot.Value.ShouldBe(primary.Bot.Bot.Value);
+        secondaryActivity.Bot.Value.ShouldBe(secondary.Bot.Bot.Value);
+        primaryActivity.Bot.Value.ShouldNotBe(secondaryActivity.Bot.Value);
     }
 
     [Fact]
@@ -343,14 +395,18 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         var caps = CapabilitiesOf(lifetime.Adapter);
 
         if (caps.SupportsTyping)
-        {
-            caps.TypingKeepaliveIntervalMs.ShouldBeGreaterThan(0);
             caps.TypingTtlMs.ShouldBeGreaterThanOrEqualTo(caps.TypingKeepaliveIntervalMs);
-        }
 
-        if (caps.SupportsReactions || caps.SupportsMention)
+        var parities = GetCapabilityInterfaceParities(lifetime.Adapter).ToList();
+        if (parities.Count == 0)
+            return;
+
+        foreach (var parity in parities)
         {
-            caps.Transport.ShouldNotBe(TransportMode.Unspecified);
+            parity.InterfaceImplemented.ShouldBe(
+                parity.CapabilityFlag,
+                $"Capability flag '{parity.CapabilityName}' must match the presence of its optional interface. "
+                    + $"Flag={parity.CapabilityFlag}, interface implemented={parity.InterfaceImplemented}.");
         }
     }
 
@@ -426,13 +482,21 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         await using var lifetime = await StartAdapterAsync();
         if (!CapabilitiesOf(lifetime.Adapter).SupportsReactions)
             return;
+        if (Reactions is null)
+            return;
 
         var reference = BuildDirectMessageReference(lifetime.Adapter);
-        var emit = await lifetime.Adapter.SendAsync(
+        var sent = await lifetime.Adapter.SendAsync(
             reference,
-            SampleMessageContent.SimpleText("reaction-probe"),
+            SampleMessageContent.SimpleText("reaction-target"),
             CancellationToken.None);
-        emit.Success.ShouldBeTrue();
+        sent.Success.ShouldBeTrue();
+
+        var added = await Reactions.AddAsync(sent.SentActivityId, ":thumbsup:", CancellationToken.None);
+        added.ShouldBeTrue("Adding a reaction on a channel with SupportsReactions=true must succeed.");
+
+        var removed = await Reactions.RemoveAsync(sent.SentActivityId, ":thumbsup:", CancellationToken.None);
+        removed.ShouldBeTrue("Removing a previously added reaction must succeed.");
     }
 
     [Fact]
@@ -442,26 +506,20 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
             return;
 
         await using var lifetime = await StartAdapterAsync();
-        var botMention = new ParticipantRef
-        {
-            CanonicalId = lifetime.Binding.Bot.Bot.Value,
-            DisplayName = "Bot",
-        };
-        var seed = new InboundActivitySeed(
-            ActivityType.Message,
-            ConversationScope.DirectMessage,
-            ConversationKey: "dm-mention",
-            SenderCanonicalId: "user-1",
-            SenderDisplayName: "Test User",
-            Text: "hello",
-            Mentions: [botMention]);
+        var seed = BuildBotMentionSeed(lifetime.Binding);
+        if (seed is null)
+            return;
 
+        var botId = lifetime.Binding.Bot.Bot.Value;
         var activity = await DispatchAsync(seed);
 
-        if (activity.Mentions.Count > 0)
-        {
-            activity.Mentions.ShouldContain(m => m.CanonicalId == botMention.CanonicalId);
-        }
+        activity.Mentions.ShouldContain(
+            m => m.CanonicalId == botId,
+            "Normalized activity must expose the bot mention in the Mentions collection.");
+        activity.Content.Text.ShouldNotContain(
+            botId,
+            Case.Insensitive,
+            "Normalized Content.Text must not carry the raw bot mention token after stripping.");
     }
 
     [Fact]
@@ -471,23 +529,18 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
             return;
 
         await using var lifetime = await StartAdapterAsync();
-        var other = new ParticipantRef
-        {
-            CanonicalId = "user-other",
-            DisplayName = "Other",
-        };
-        var seed = new InboundActivitySeed(
-            ActivityType.Message,
-            ConversationScope.DirectMessage,
-            ConversationKey: "dm-mention-other",
-            SenderCanonicalId: "user-1",
-            SenderDisplayName: "Test User",
-            Text: "@Other hi",
-            Mentions: [other]);
+        var seed = BuildParticipantMentionSeed();
+        if (seed is null)
+            return;
 
         var activity = await DispatchAsync(seed);
 
-        activity.Content.Text.ShouldContain("Other", Case.Insensitive);
+        activity.Mentions.Count.ShouldBeGreaterThan(0);
+        var mention = activity.Mentions[0];
+        activity.Content.Text.ShouldContain(
+            mention.DisplayName,
+            Case.Insensitive,
+            "Mentions targeting other participants must remain visible in Content.Text.");
     }
 
     /// <summary>

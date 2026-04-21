@@ -51,6 +51,32 @@ public sealed class StubChannelAdapterConformanceTests : ChannelAdapterConforman
     protected override ChannelTransportBinding CreateBinding() => _harness.DefaultBinding;
 
     protected override ChannelTransportBinding? CreateSecondaryBinding() => _harness.SecondaryBinding;
+
+    protected override InboundActivitySeed? BuildBotMentionSeed(ChannelTransportBinding binding) => new(
+        ActivityType.Message,
+        ConversationScope.DirectMessage,
+        ConversationKey: "dm-bot-mention",
+        SenderCanonicalId: "user-1",
+        SenderDisplayName: "Test User",
+        Text: $"hi <@{binding.Bot.Bot.Value}> please help",
+        Mentions: [new ParticipantRef
+        {
+            CanonicalId = binding.Bot.Bot.Value,
+            DisplayName = "StubBot",
+        }]);
+
+    protected override InboundActivitySeed? BuildParticipantMentionSeed() => new(
+        ActivityType.Message,
+        ConversationScope.DirectMessage,
+        ConversationKey: "dm-other-mention",
+        SenderCanonicalId: "user-1",
+        SenderDisplayName: "Test User",
+        Text: "ping <@other-user> please review",
+        Mentions: [new ParticipantRef
+        {
+            CanonicalId = "other-user",
+            DisplayName = "other-user",
+        }]);
 }
 
 public sealed class StubChannelAdapterFaultTests : ChannelAdapterFaultTests<StubChannelAdapter>
@@ -189,6 +215,7 @@ public sealed class StubChannelAdapter : IChannelTransport, IChannelOutboundPort
     internal async Task<ChatActivity> InjectInboundAsync(InboundActivitySeed seed, ChannelTransportBinding binding)
     {
         var activityId = seed.PlatformMessageId ?? NextActivityId();
+        var normalizedText = NormalizeText(seed.Text, binding.Bot.Bot, seed.Mentions);
         var activity = new ChatActivity
         {
             Id = activityId,
@@ -208,7 +235,7 @@ public sealed class StubChannelAdapter : IChannelTransport, IChannelOutboundPort
             },
             Content = new MessageContent
             {
-                Text = seed.Text,
+                Text = normalizedText,
                 Disposition = MessageDisposition.Normal,
             },
         };
@@ -224,6 +251,20 @@ public sealed class StubChannelAdapter : IChannelTransport, IChannelOutboundPort
 
         await _inbound.Writer.WriteAsync(activity);
         return activity;
+    }
+
+    private static string NormalizeText(string raw, BotInstanceId bot, IReadOnlyList<ParticipantRef>? mentions)
+    {
+        if (mentions is null || mentions.Count == 0)
+            return raw;
+
+        var text = raw;
+        foreach (var mention in mentions)
+        {
+            if (mention.CanonicalId == bot.Value)
+                text = text.Replace($"<@{mention.CanonicalId}>", string.Empty, StringComparison.Ordinal);
+        }
+        return System.Text.RegularExpressions.Regex.Replace(text, "\\s+", " ").Trim();
     }
 
     private void EnsureReady()
@@ -293,6 +334,16 @@ internal sealed class StubWebhookFixture : WebhookFixture
             return null;
         var binding = _harness.ActiveBinding ?? _harness.DefaultBinding;
         _lastActivity = await _adapter.InjectInboundAsync(_last, binding);
+        return _lastActivity;
+    }
+
+    public override async Task<ChatActivity> DispatchInboundToBindingAsync(
+        ChannelTransportBinding binding,
+        InboundActivitySeed seed,
+        CancellationToken ct = default)
+    {
+        _last = seed;
+        _lastActivity = await _adapter.InjectInboundAsync(seed, binding);
         return _lastActivity;
     }
 

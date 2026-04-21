@@ -38,4 +38,19 @@ public abstract class WebhookFixture
     /// Returns the raw payload bytes recorded by the fixture for the last inbound call.
     /// </summary>
     public abstract byte[]? LastRawPayloadBytes { get; }
+
+    /// <summary>
+    /// Dispatches one synthetic inbound call against a specific bot binding. Fixtures that do not support multi-tenant
+    /// routing leave the default, and multi-tenant conformance tests self-skip.
+    /// </summary>
+    /// <remarks>
+    /// Single-tenant fixtures throw <see cref="NotSupportedException"/>. The conformance suite catches that exception
+    /// and treats the multi-tenant test as not applicable so adapters without multi-binding fixtures still pass.
+    /// </remarks>
+    public virtual Task<ChatActivity> DispatchInboundToBindingAsync(
+        ChannelTransportBinding binding,
+        InboundActivitySeed seed,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "Fixture does not support dispatching through a specific binding. Override to enable multi-tenant routing tests.");
 }

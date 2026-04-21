@@ -154,10 +154,15 @@ public abstract class ChannelAdapterFaultTests<TAdapter>
     [Fact]
     public async Task InboundStream_Saturation_TriggersBackpressureSignal()
     {
-        await using var lifetime = await StartAdapterAsync();
-        var reader = lifetime.Adapter.InboundStream;
-        reader.ShouldNotBeNull();
-        await Task.Yield();
+        if (RuntimeHarness is null || !RuntimeHarness.SupportsInboundSaturation)
+            return;
+
+        var outcome = await RuntimeHarness.DriveInboundSaturationAsync(CancellationToken.None);
+
+        outcome.BackpressureSignalRaised.ShouldBeTrue(
+            "Saturating the bounded inbound working buffer must surface a backpressure signal (RFC §5.8).");
+        outcome.CommittedEventSilentlyDropped.ShouldBeFalse(
+            "Saturation must not silently drop committed events.");
     }
 
     [Fact]
@@ -390,10 +395,15 @@ public abstract class ChannelAdapterFaultTests<TAdapter>
     [Fact]
     public async Task QuarantineOverflow_DropsOldestAndAlerts()
     {
-        if (RuntimeHarness is null || !RuntimeHarness.SupportsRedactorPipeline)
+        if (RuntimeHarness is null || !RuntimeHarness.SupportsQuarantineOverflow)
             return;
 
-        await Task.Yield();
+        var outcome = await RuntimeHarness.DriveQuarantineOverflowAsync(CancellationToken.None);
+
+        outcome.OldestEntryEvicted.ShouldBeTrue(
+            "Quarantine overflow must evict the oldest entry to make room for the newer payload.");
+        outcome.AlertEmitted.ShouldBeTrue(
+            "Quarantine overflow must emit an operator-visible alert so silent forensic loss does not go unnoticed.");
     }
 
     [Fact]
