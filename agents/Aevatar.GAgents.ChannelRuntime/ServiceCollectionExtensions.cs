@@ -103,35 +103,35 @@ public static class ServiceCollectionExtensions
 
         // ─── Agent Registry projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
-            AgentRegistryMaterializationContext,
-            AgentRegistryMaterializationRuntimeLease,
-            ProjectionMaterializationScopeGAgent<AgentRegistryMaterializationContext>>(
-            static scopeKey => new AgentRegistryMaterializationContext
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<UserAgentCatalogMaterializationContext>>(
+            static scopeKey => new UserAgentCatalogMaterializationContext
             {
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             },
-            static context => new AgentRegistryMaterializationRuntimeLease(context));
+            static context => new UserAgentCatalogMaterializationRuntimeLease(context));
         services.AddCurrentStateProjectionMaterializer<
-            AgentRegistryMaterializationContext,
-            AgentRegistryProjector>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentRegistryDocument>,
-            AgentRegistryDocumentMetadataProvider>();
-        services.TryAddSingleton<IAgentRegistryQueryPort, AgentRegistryQueryPort>();
-        services.TryAddSingleton<AgentRegistryProjectionPort>();
-        services.AddHostedService<AgentRegistryStartupService>();
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
+            UserAgentCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
+        services.TryAddSingleton<UserAgentCatalogProjectionPort>();
+        services.AddHostedService<UserAgentCatalogStartupService>();
 
         if (useElasticsearch)
         {
-            services.AddElasticsearchDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogDocument, string>(
                 optionsFactory: _ => BuildElasticsearchOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AgentRegistryDocument>>().Metadata,
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 

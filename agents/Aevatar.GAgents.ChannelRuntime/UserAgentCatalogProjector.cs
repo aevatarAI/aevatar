@@ -5,14 +5,14 @@ using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class AgentRegistryProjector
-    : ICurrentStateProjectionMaterializer<AgentRegistryMaterializationContext>
+public sealed class UserAgentCatalogProjector
+    : ICurrentStateProjectionMaterializer<UserAgentCatalogMaterializationContext>
 {
-    private readonly IProjectionWriteDispatcher<AgentRegistryDocument> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<UserAgentCatalogDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
-    public AgentRegistryProjector(
-        IProjectionWriteDispatcher<AgentRegistryDocument> writeDispatcher,
+    public UserAgentCatalogProjector(
+        IProjectionWriteDispatcher<UserAgentCatalogDocument> writeDispatcher,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
@@ -20,14 +20,14 @@ public sealed class AgentRegistryProjector
     }
 
     public async ValueTask ProjectAsync(
-        AgentRegistryMaterializationContext context,
+        UserAgentCatalogMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (!CommittedStateEventEnvelope.TryUnpackState<AgentRegistryState>(
+        if (!CommittedStateEventEnvelope.TryUnpackState<UserAgentCatalogState>(
                 envelope,
                 out _,
                 out var stateEvent,
@@ -44,7 +44,7 @@ public sealed class AgentRegistryProjector
             if (string.IsNullOrWhiteSpace(entry.AgentId))
                 continue;
 
-            var document = new AgentRegistryDocument
+            var document = new UserAgentCatalogDocument
             {
                 Id = entry.AgentId,
                 Platform = entry.Platform ?? string.Empty,

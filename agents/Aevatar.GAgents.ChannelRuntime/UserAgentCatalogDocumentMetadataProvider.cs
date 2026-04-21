@@ -2,11 +2,11 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class AgentRegistryDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<AgentRegistryDocument>
+public sealed class UserAgentCatalogDocumentMetadataProvider
+    : IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
-        IndexName: "agent-registry",
+        IndexName: "user-agent-catalog",
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,

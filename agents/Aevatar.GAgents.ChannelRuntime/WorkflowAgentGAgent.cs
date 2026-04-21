@@ -266,10 +266,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         if (runtime is null)
             return;
 
-        var actor = await runtime.GetAsync(AgentRegistryGAgent.WellKnownId)
-                    ?? await runtime.CreateAsync<AgentRegistryGAgent>(AgentRegistryGAgent.WellKnownId, ct);
+        var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                    ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
-        var command = new AgentRegistryUpsertCommand
+        var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
             Platform = "lark",
@@ -302,10 +302,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         if (runtime is null)
             return;
 
-        var actor = await runtime.GetAsync(AgentRegistryGAgent.WellKnownId)
-                    ?? await runtime.CreateAsync<AgentRegistryGAgent>(AgentRegistryGAgent.WellKnownId, ct);
+        var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                    ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
-        var command = new AgentRegistryExecutionUpdateCommand
+        var command = new UserAgentCatalogExecutionUpdateCommand
         {
             AgentId = Id,
             Status = status,

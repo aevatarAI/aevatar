@@ -414,11 +414,11 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_CreateDailyReportCardAction_ShouldExecuteAgentBuilder()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
         queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo => Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(callInfo => Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = callInfo.ArgAt<string>(0),
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -529,7 +529,7 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_CreateDailyReportCardAction_ShouldReturnGitHubCredentialsCard_WhenUserCredentialsMissing()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var actorRuntime = Substitute.For<IActorRuntime>();
 
         var handler = new RoutingJsonHandler();
@@ -610,11 +610,11 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_CreateSocialMediaCardAction_ShouldExecuteAgentBuilder()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
         queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo => Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(callInfo => Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = callInfo.ArgAt<string>(0),
                 AgentType = WorkflowAgentDefaults.AgentType,
@@ -731,11 +731,11 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_ListAgentsIntent_ShouldSendInteractiveAgentListCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
             [
-                new AgentRegistryEntry
+                new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -825,9 +825,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_AgentStatusTextCommand_ShouldSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -872,9 +872,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_RunAgentTextCommand_ShouldExecuteTriggerAndSendResultCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -927,10 +927,10 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_DisableAgentTextCommand_ShouldExecuteDisableAndSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -939,7 +939,7 @@ public class ChannelUserGAgentContinuationTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -1063,9 +1063,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_AgentStatusCardAction_ShouldSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -1132,10 +1132,10 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_DeleteAgentCardAction_ShouldExecuteDeleteAndSendResultCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -1143,18 +1143,18 @@ public class ChannelUserGAgentContinuationTests
                     ApiKeyId = "key-1",
                     OwnerNyxUserId = "user-1",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(null));
+                Task.FromResult<UserAgentCatalogEntry?>(null));
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(Array.Empty<AgentRegistryEntry>()));
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(Array.Empty<UserAgentCatalogEntry>()));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
         var registryActor = Substitute.For<IActor>();
-        registryActor.Id.Returns(AgentRegistryGAgent.WellKnownId);
+        registryActor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
 
         var actorRuntime = Substitute.For<IActorRuntime>();
         actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
-        actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
+        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
@@ -1222,17 +1222,17 @@ public class ChannelUserGAgentContinuationTests
         await registryActor.Received(1).HandleEventAsync(
             Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&
-                e.Payload.Is(AgentRegistryTombstoneCommand.Descriptor) &&
-                e.Payload.Unpack<AgentRegistryTombstoneCommand>().AgentId == "skill-runner-1"),
+                e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
+                e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "skill-runner-1"),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task HandleInbound_RunAgentCardAction_ShouldExecuteTriggerAndSendResultCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -1303,9 +1303,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_RunWorkflowAgentCardAction_ShouldPropagateRevisionFeedback()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "workflow-agent-1",
                 AgentType = WorkflowAgentDefaults.AgentType,
@@ -1376,10 +1376,10 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_EnableAgentCardAction_ShouldExecuteEnableAndSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -1388,7 +1388,7 @@ public class ChannelUserGAgentContinuationTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,

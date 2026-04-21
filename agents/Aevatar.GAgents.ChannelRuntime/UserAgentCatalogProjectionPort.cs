@@ -3,23 +3,23 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class AgentRegistryProjectionPort
-    : MaterializationProjectionPortBase<AgentRegistryMaterializationRuntimeLease>
+public sealed class UserAgentCatalogProjectionPort
+    : MaterializationProjectionPortBase<UserAgentCatalogMaterializationRuntimeLease>
 {
-    public AgentRegistryProjectionPort(
-        IProjectionScopeActivationService<AgentRegistryMaterializationRuntimeLease> activationService)
+    public UserAgentCatalogProjectionPort(
+        IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> activationService)
         : base(static () => true, activationService)
     {
     }
 
-    public Task<AgentRegistryMaterializationRuntimeLease?> EnsureProjectionForActorAsync(
+    public Task<UserAgentCatalogMaterializationRuntimeLease?> EnsureProjectionForActorAsync(
         string actorId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
             new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = "agent-registry",
+                ProjectionKind = "user-agent-catalog",
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);

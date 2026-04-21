@@ -3,17 +3,17 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class AgentRegistryStartupService : IHostedService
+public sealed class UserAgentCatalogStartupService : IHostedService
 {
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
 
-    private readonly AgentRegistryProjectionPort _projectionPort;
-    private readonly ILogger<AgentRegistryStartupService> _logger;
+    private readonly UserAgentCatalogProjectionPort _projectionPort;
+    private readonly ILogger<UserAgentCatalogStartupService> _logger;
 
-    public AgentRegistryStartupService(
-        AgentRegistryProjectionPort projectionPort,
-        ILogger<AgentRegistryStartupService> logger)
+    public UserAgentCatalogStartupService(
+        UserAgentCatalogProjectionPort projectionPort,
+        ILogger<UserAgentCatalogStartupService> logger)
     {
         _projectionPort = projectionPort;
         _logger = logger;
@@ -26,10 +26,10 @@ public sealed class AgentRegistryStartupService : IHostedService
         {
             try
             {
-                await _projectionPort.EnsureProjectionForActorAsync(AgentRegistryGAgent.WellKnownId, ct);
+                await _projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
                 _logger.LogInformation(
                     "Agent registry projection scope activated for {ActorId} (attempt {Attempt})",
-                    AgentRegistryGAgent.WellKnownId,
+                    UserAgentCatalogGAgent.WellKnownId,
                     attempt);
                 return;
             }

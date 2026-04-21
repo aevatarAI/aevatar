@@ -9,20 +9,20 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class AgentRegistryProjectorTests
+public sealed class UserAgentCatalogProjectorTests
 {
     private readonly RecordingWriteDispatcher _dispatcher = new();
     private readonly FixedProjectionClock _clock = new(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero));
-    private readonly AgentRegistryProjector _projector;
-    private readonly AgentRegistryMaterializationContext _context;
+    private readonly UserAgentCatalogProjector _projector;
+    private readonly UserAgentCatalogMaterializationContext _context;
 
-    public AgentRegistryProjectorTests()
+    public UserAgentCatalogProjectorTests()
     {
-        _projector = new AgentRegistryProjector(_dispatcher, _clock);
-        _context = new AgentRegistryMaterializationContext
+        _projector = new UserAgentCatalogProjector(_dispatcher, _clock);
+        _context = new UserAgentCatalogMaterializationContext
         {
-            RootActorId = "agent-registry-store",
-            ProjectionKind = "agent-registry-read-model",
+            RootActorId = "user-agent-catalog-store",
+            ProjectionKind = "user-agent-catalog-read-model",
         };
     }
 
@@ -30,11 +30,11 @@ public sealed class AgentRegistryProjectorTests
     public async Task ProjectAsync_WithValidCommittedEvent_UpsertsDocument()
     {
         var createdAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 9, 30, 0, TimeSpan.Zero));
-        var state = new AgentRegistryState
+        var state = new UserAgentCatalogState
         {
             Entries =
             {
-                new AgentRegistryEntry
+                new UserAgentCatalogEntry
                 {
                     AgentId = "agent-1",
                     Platform = "lark",
@@ -81,7 +81,7 @@ public sealed class AgentRegistryProjectorTests
         document.LastError.Should().Be("last-error");
         document.StateVersion.Should().Be(3);
         document.LastEventId.Should().Be("evt-agent-1");
-        document.ActorId.Should().Be("agent-registry-store");
+        document.ActorId.Should().Be("user-agent-catalog-store");
         document.CreatedAt.Should().Be(createdAt.ToDateTimeOffset());
         document.UpdatedAt.Should().Be(_clock.UtcNow);
     }
@@ -89,11 +89,11 @@ public sealed class AgentRegistryProjectorTests
     [Fact]
     public async Task ProjectAsync_WithTombstonedEntry_UpsertsTombstoneState()
     {
-        var state = new AgentRegistryState
+        var state = new UserAgentCatalogState
         {
             Entries =
             {
-                new AgentRegistryEntry
+                new UserAgentCatalogEntry
                 {
                     AgentId = "agent-2",
                     Platform = "lark",
@@ -113,12 +113,12 @@ public sealed class AgentRegistryProjectorTests
     [Fact]
     public async Task ProjectAsync_SkipsBlankAgentId()
     {
-        var state = new AgentRegistryState
+        var state = new UserAgentCatalogState
         {
             Entries =
             {
-                new AgentRegistryEntry { AgentId = "", Platform = "lark" },
-                new AgentRegistryEntry { AgentId = "agent-3", Platform = "lark" },
+                new UserAgentCatalogEntry { AgentId = "", Platform = "lark" },
+                new UserAgentCatalogEntry { AgentId = "agent-3", Platform = "lark" },
             },
         };
 
@@ -128,14 +128,14 @@ public sealed class AgentRegistryProjectorTests
         _dispatcher.Upserts[0].Id.Should().Be("agent-3");
     }
 
-    private static EventEnvelope BuildCommittedEnvelope(string eventId, long version, AgentRegistryState state)
+    private static EventEnvelope BuildCommittedEnvelope(string eventId, long version, UserAgentCatalogState state)
     {
         var occurredAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero));
         return new EventEnvelope
         {
             Id = eventId,
             Timestamp = occurredAt.Clone(),
-            Route = EnvelopeRouteSemantics.CreateObserverPublication("agent-registry-projector-test"),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("user-agent-catalog-projector-test"),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent
@@ -150,14 +150,14 @@ public sealed class AgentRegistryProjectorTests
         };
     }
 
-    private sealed class RecordingWriteDispatcher : IProjectionWriteDispatcher<AgentRegistryDocument>
+    private sealed class RecordingWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogDocument>
     {
-        public List<AgentRegistryDocument> Upserts { get; } = [];
+        public List<UserAgentCatalogDocument> Upserts { get; } = [];
 
         public List<string> Deletes { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(
-            AgentRegistryDocument readModel,
+            UserAgentCatalogDocument readModel,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
