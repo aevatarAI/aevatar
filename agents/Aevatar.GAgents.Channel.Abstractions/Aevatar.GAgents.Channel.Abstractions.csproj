@@ -6,6 +6,7 @@
     <AssemblyName>Aevatar.GAgents.Channel.Abstractions</AssemblyName>
     <RootNamespace>Aevatar.GAgents.Channel.Abstractions</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
