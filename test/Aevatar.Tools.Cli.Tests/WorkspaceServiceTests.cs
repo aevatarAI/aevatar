@@ -40,7 +40,7 @@ public class WorkspaceServiceTests
     }
 
     [Fact]
-    public async Task SaveWorkflowAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
+    public async Task CreateDraftAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
     {
         var store = new InMemoryStudioWorkspaceStore();
         var directory = new StudioWorkspaceDirectory(
@@ -56,8 +56,7 @@ public class WorkspaceServiceTests
 
         var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
 
-        var response = await service.SaveWorkflowAsync(new SaveWorkflowFileRequest(
-            WorkflowId: null,
+        var response = await service.CreateDraftAsync(new SaveWorkflowDraftRequest(
             DirectoryId: directory.DirectoryId,
             WorkflowName: "renamed-workflow",
             FileName: null,
@@ -68,6 +67,195 @@ public class WorkspaceServiceTests
         response.Name.Should().Be("renamed-workflow");
         response.Yaml.Should().StartWith("name: renamed-workflow");
     }
+
+    [Fact]
+    public async Task UpdateSettingsAsync_ShouldTrimTrailingSlash()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+
+        var response = await service.UpdateSettingsAsync(new UpdateWorkspaceSettingsRequest("http://127.0.0.1:5100/"));
+
+        response.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
+    }
+
+    [Fact]
+    public async Task RemoveDirectoryAsync_ShouldKeepBuiltInDirectories()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories:
+            [
+                new StudioWorkspaceDirectory("dir-1", "Built-in", Path.Combine(Path.GetTempPath(), $"built-in-{Guid.NewGuid():N}"), IsBuiltIn: true),
+                new StudioWorkspaceDirectory("dir-2", "Extra", Path.Combine(Path.GetTempPath(), $"extra-{Guid.NewGuid():N}"), IsBuiltIn: false),
+            ],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+
+        var response = await service.RemoveDirectoryAsync("dir-2");
+
+        response.Directories.Should().ContainSingle(directory => directory.DirectoryId == "dir-1");
+    }
+
+    [Fact]
+    public async Task CreateDraftAsync_WhenTargetPathConflictsWithAnotherDraft_ShouldThrowWorkflowDraftPathConflictException()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var directory = CreateDirectory();
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [directory],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+        store.WorkflowFiles.Add(new StoredWorkflowFile(
+            WorkflowId: "existing-workflow",
+            Name: "existing-workflow",
+            FileName: "shared.yaml",
+            FilePath: Path.Combine(directory.Path, "shared.yaml"),
+            DirectoryId: directory.DirectoryId,
+            DirectoryLabel: directory.Label,
+            Yaml: "name: existing-workflow\nsteps: []\n",
+            Layout: null,
+            UpdatedAtUtc: DateTimeOffset.UtcNow));
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+
+        var act = () => service.CreateDraftAsync(new SaveWorkflowDraftRequest(
+            DirectoryId: directory.DirectoryId,
+            WorkflowName: "new-workflow",
+            FileName: "shared.yaml",
+            Yaml: "name: new-workflow\nsteps: []\n"));
+
+        var exception = await act.Should().ThrowAsync<WorkflowDraftPathConflictException>();
+        exception.Which.WorkflowId.Should().Be("new-workflow");
+        exception.Which.ConflictingWorkflowId.Should().Be("existing-workflow");
+    }
+
+    [Fact]
+    public async Task UpdateDraftAsync_WhenWorkflowIsMissing_ShouldThrowWorkflowDraftNotFoundException()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var directory = CreateDirectory();
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [directory],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+
+        var act = () => service.UpdateDraftAsync(
+            "missing-workflow",
+            new SaveWorkflowDraftRequest(
+                DirectoryId: directory.DirectoryId,
+                WorkflowName: "missing-workflow",
+                FileName: null,
+                Yaml: "name: missing-workflow\nsteps: []\n"));
+
+        var exception = await act.Should().ThrowAsync<WorkflowDraftNotFoundException>();
+        exception.Which.WorkflowId.Should().Be("missing-workflow");
+    }
+
+    [Fact]
+    public async Task SaveWorkflowAsync_WhenWorkflowIdIsProvided_ShouldReuseExistingWorkflowId()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var directory = CreateDirectory();
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [directory],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+        store.WorkflowFiles.Add(new StoredWorkflowFile(
+            WorkflowId: "workflow-1",
+            Name: "workflow-1",
+            FileName: "workflow-1.yaml",
+            FilePath: Path.Combine(directory.Path, "workflow-1.yaml"),
+            DirectoryId: directory.DirectoryId,
+            DirectoryLabel: directory.Label,
+            Yaml: "name: workflow-1\nsteps: []\n",
+            Layout: null,
+            UpdatedAtUtc: DateTimeOffset.UtcNow));
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+
+        var response = await service.SaveWorkflowAsync(new SaveWorkflowFileRequest(
+            WorkflowId: "workflow-1",
+            DirectoryId: directory.DirectoryId,
+            WorkflowName: "workflow-1",
+            FileName: "workflow-1-renamed.yaml",
+            Yaml: "name: workflow-1\nsteps: []\n"));
+
+        response.WorkflowId.Should().Be("workflow-1");
+        response.FileName.Should().Be("workflow-1-renamed.yaml");
+        store.LastSavedWorkflowFile.Should().NotBeNull();
+        store.LastSavedWorkflowFile!.WorkflowId.Should().Be("workflow-1");
+    }
+
+    [Fact]
+    public async Task GetWorkflowAsync_ShouldReturnParsedWorkflowDocument()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var directory = CreateDirectory();
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [directory],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+        store.WorkflowFiles.Add(new StoredWorkflowFile(
+            WorkflowId: "workflow-1",
+            Name: "workflow-1",
+            FileName: "workflow-1.yaml",
+            FilePath: Path.Combine(directory.Path, "workflow-1.yaml"),
+            DirectoryId: directory.DirectoryId,
+            DirectoryLabel: directory.Label,
+            Yaml: "name: workflow-1\nsteps: []\n",
+            Layout: null,
+            UpdatedAtUtc: DateTimeOffset.UtcNow));
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+
+        var response = await service.GetWorkflowAsync("workflow-1");
+
+        response.Should().NotBeNull();
+        response!.Document.Should().NotBeNull();
+        response.Document!.Name.Should().Be("workflow-1");
+        response.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ListWorkflowsAsync_ShouldReturnLegacyWorkflowSummaries()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var directory = CreateDirectory();
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [directory],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+        store.WorkflowFiles.Add(new StoredWorkflowFile(
+            WorkflowId: "workflow-1",
+            Name: "workflow-1",
+            FileName: "workflow-1.yaml",
+            FilePath: Path.Combine(directory.Path, "workflow-1.yaml"),
+            DirectoryId: directory.DirectoryId,
+            DirectoryLabel: directory.Label,
+            Yaml: "name: workflow-1\nsteps: []\n",
+            Layout: null,
+            UpdatedAtUtc: DateTimeOffset.UtcNow));
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+
+        var response = await service.ListWorkflowsAsync();
+
+        response.Should().ContainSingle();
+        response[0].WorkflowId.Should().Be("workflow-1");
+        response[0].Name.Should().Be("workflow-1");
+    }
+
+    private static StudioWorkspaceDirectory CreateDirectory() =>
+        new(
+            DirectoryId: "dir-1",
+            Label: "Test Root",
+            Path: Path.Combine(Path.GetTempPath(), $"studio-workflows-{Guid.NewGuid():N}"),
+            IsBuiltIn: false);
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
     {
@@ -92,7 +280,10 @@ public class WorkspaceServiceTests
             Directories: [],
             AppearanceTheme: "blue",
             ColorMode: "light");
+
         public StoredWorkflowFile? LastSavedWorkflowFile { get; private set; }
+
+        public List<StoredWorkflowFile> WorkflowFiles { get; } = [];
 
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(_settings);
@@ -104,14 +295,26 @@ public class WorkspaceServiceTests
         }
 
         public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>([]);
+            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>(WorkflowFiles.ToList());
 
         public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<StoredWorkflowFile?>(null);
+            Task.FromResult<StoredWorkflowFile?>(WorkflowFiles.FirstOrDefault(file =>
+                string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal)));
 
         public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default)
         {
             LastSavedWorkflowFile = workflowFile;
+            var existingIndex = WorkflowFiles.FindIndex(file =>
+                string.Equals(file.WorkflowId, workflowFile.WorkflowId, StringComparison.Ordinal));
+            if (existingIndex >= 0)
+            {
+                WorkflowFiles[existingIndex] = workflowFile;
+            }
+            else
+            {
+                WorkflowFiles.Add(workflowFile);
+            }
+
             return Task.FromResult(workflowFile);
         }
 
