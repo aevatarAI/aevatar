@@ -26,7 +26,14 @@ public static class ServiceCollectionExtensions
     {
         // Memory cache for webhook dedup
         services.AddMemoryCache();
+        services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
+        services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, EventStoreProjectionScopeWatermarkQueryPort>();
+        if (configuration != null)
+        {
+            services.Configure<ChannelRuntimeTombstoneCompactionOptions>(
+                configuration.GetSection("ChannelRuntime:TombstoneCompaction"));
+        }
 
         // Projection pipeline shared infrastructure
         services.AddProjectionReadModelRuntime();
@@ -52,6 +59,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>,
             DeviceRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IDeviceRegistrationQueryPort, DeviceRegistrationQueryPort>();
+        services.TryAddSingleton<DeviceRegistrationProjectionPort>();
+        services.AddHostedService<DeviceRegistrationStartupService>();
 
         if (useElasticsearch)
         {
@@ -101,37 +110,37 @@ public static class ServiceCollectionExtensions
                 static doc => doc.Id, static key => key);
         }
 
-        // ─── Agent Registry projection pipeline ───
+        // ─── User Agent Catalog projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
-            AgentRegistryMaterializationContext,
-            AgentRegistryMaterializationRuntimeLease,
-            ProjectionMaterializationScopeGAgent<AgentRegistryMaterializationContext>>(
-            static scopeKey => new AgentRegistryMaterializationContext
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<UserAgentCatalogMaterializationContext>>(
+            static scopeKey => new UserAgentCatalogMaterializationContext
             {
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             },
-            static context => new AgentRegistryMaterializationRuntimeLease(context));
+            static context => new UserAgentCatalogMaterializationRuntimeLease(context));
         services.AddCurrentStateProjectionMaterializer<
-            AgentRegistryMaterializationContext,
-            AgentRegistryProjector>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentRegistryDocument>,
-            AgentRegistryDocumentMetadataProvider>();
-        services.TryAddSingleton<IAgentRegistryQueryPort, AgentRegistryQueryPort>();
-        services.TryAddSingleton<AgentRegistryProjectionPort>();
-        services.AddHostedService<AgentRegistryStartupService>();
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
+            UserAgentCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
+        services.TryAddSingleton<UserAgentCatalogProjectionPort>();
+        services.AddHostedService<UserAgentCatalogStartupService>();
 
         if (useElasticsearch)
         {
-            services.AddElasticsearchDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogDocument, string>(
                 optionsFactory: _ => BuildElasticsearchOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AgentRegistryDocument>>().Metadata,
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 
@@ -148,6 +157,8 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
+        services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
+        services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
 
         return services;
     }

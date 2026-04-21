@@ -12,6 +12,8 @@ namespace Aevatar.GAgents.ChannelRuntime;
 public sealed class ChannelBotRegistrationProjectionPort
     : MaterializationProjectionPortBase<ChannelBotRegistrationMaterializationRuntimeLease>
 {
+    public const string ProjectionKind = "channel-bot-registration";
+
     public ChannelBotRegistrationProjectionPort(
         IProjectionScopeActivationService<ChannelBotRegistrationMaterializationRuntimeLease> activationService)
         : base(static () => true, activationService)
@@ -25,7 +27,7 @@ public sealed class ChannelBotRegistrationProjectionPort
             new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = "channel-bot-registration",
+                ProjectionKind = ProjectionKind,
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);
