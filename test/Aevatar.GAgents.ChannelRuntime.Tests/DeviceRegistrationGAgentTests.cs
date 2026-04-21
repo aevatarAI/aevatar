@@ -102,7 +102,7 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleUnregister_RemovesEntry()
+    public async Task HandleUnregister_TombstonesEntry()
     {
         var cmd = new DeviceRegisterCommand { ScopeId = "scope-del", HmacKey = "k" };
         await _agent.HandleRegister(cmd);
@@ -111,7 +111,11 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
 
         await _agent.HandleUnregister(new DeviceUnregisterCommand { RegistrationId = registrationId });
 
-        _agent.State.Registrations.Should().BeEmpty();
+        // Entry is retained as a tombstone so the projector can emit a Tombstone verdict
+        // (Channel RFC §7.1.1). A separate housekeeping job cleans watermark-passed tombstones.
+        _agent.State.Registrations.Should().ContainSingle();
+        _agent.State.Registrations[0].Id.Should().Be(registrationId);
+        _agent.State.Registrations[0].Tombstoned.Should().BeTrue();
     }
 
     [Fact]

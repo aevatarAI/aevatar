@@ -30,6 +30,11 @@ message ChannelBotRegistrationEntry {
   // LarkPlatformAdapter resolves it via ICredentialProvider at callback time,
   // raw encrypt_key becomes optional, then removed.
   string credential_ref = 10;
+  // Soft-delete marker retained for projector watermark coordination
+  // (Channel RFC §7.1.1): the registration stays in state after unregister so
+  // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
+  // .DeleteAsync. Housekeeping cleans watermark-passed entries.
+  bool tombstoned = 11;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -91,6 +96,11 @@ message DeviceRegistrationEntry {
   string nyx_conversation_id = 4;         // NyxID conversation ID
   string description = 5;                 // Human-readable label
   google.protobuf.Timestamp created_at = 6;
+  // Soft-delete marker retained for projector watermark coordination
+  // (Channel RFC §7.1.1): the registration stays in state after unregister so
+  // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
+  // .DeleteAsync. Housekeeping cleans watermark-passed entries.
+  bool tombstoned = 7;
 }
 
 message DeviceRegistrationState {
@@ -300,6 +310,9 @@ message SkillRunnerOutboundConfig {
   string nyx_api_key = 3;
   string owner_nyx_user_id = 4;
   string api_key_id = 5;
+  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
+  // AgentRegistry upsert defaults to "lark" for backward compatibility.
+  string platform = 6;
 }
 
 message SkillRunnerState {
@@ -419,6 +432,9 @@ message WorkflowAgentState {
   string last_error = 15;
   bool enabled = 16;
   string scope_id = 17;
+  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
+  // AgentRegistry upsert defaults to "lark" for backward compatibility.
+  string platform = 18;
 }
 
 message InitializeWorkflowAgentCommand {
@@ -435,6 +451,8 @@ message InitializeWorkflowAgentCommand {
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
+  // Channel platform identifier; empty → default "lark" at upsert time.
+  string platform = 14;
 }
 
 message WorkflowAgentInitializedEvent {
@@ -451,6 +469,8 @@ message WorkflowAgentInitializedEvent {
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
+  // Channel platform identifier; empty → default "lark" at upsert time.
+  string platform = 14;
 }
 
 message TriggerWorkflowAgentExecutionCommand {

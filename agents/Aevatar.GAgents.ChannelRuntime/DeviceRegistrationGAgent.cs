@@ -48,8 +48,8 @@ public sealed class DeviceRegistrationGAgent : GAgentBase<DeviceRegistrationStat
     [EventHandler]
     public async Task HandleUnregister(DeviceUnregisterCommand cmd)
     {
-        var exists = State.Registrations.Any(r => r.Id == cmd.RegistrationId);
-        if (!exists)
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
+        if (entry is null || entry.Tombstoned)
         {
             Logger.LogWarning("Cannot unregister: device registration not found: {Id}", cmd.RegistrationId);
             return;
@@ -64,16 +64,22 @@ public sealed class DeviceRegistrationGAgent : GAgentBase<DeviceRegistrationStat
     private static DeviceRegistrationState ApplyRegistered(DeviceRegistrationState current, DeviceRegisteredEvent evt)
     {
         var next = current.Clone();
+        var existing = next.Registrations.FirstOrDefault(r => r.Id == evt.Entry.Id);
+        if (existing is not null)
+            next.Registrations.Remove(existing);
         next.Registrations.Add(evt.Entry);
         return next;
     }
 
+    // Soft-delete to retain the entry for projector watermark coordination
+    // (Channel RFC §7.1.1). A follow-up housekeeping job removes tombstoned
+    // entries once the projection watermark has passed.
     private static DeviceRegistrationState ApplyUnregistered(DeviceRegistrationState current, DeviceUnregisteredEvent evt)
     {
         var next = current.Clone();
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
-            next.Registrations.Remove(entry);
+            entry.Tombstoned = true;
         return next;
     }
 }

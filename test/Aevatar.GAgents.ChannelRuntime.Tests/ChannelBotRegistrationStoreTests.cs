@@ -163,7 +163,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleUnregister_RemovesEntry()
+    public async Task HandleUnregister_TombstonesEntry()
     {
         var cmd = new ChannelBotRegisterCommand
         {
@@ -177,7 +177,11 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 
         await _agent.HandleUnregister(new ChannelBotUnregisterCommand { RegistrationId = registrationId });
 
-        _agent.State.Registrations.Should().BeEmpty();
+        // Entry is retained as a tombstone so the projector can emit a Tombstone verdict
+        // (Channel RFC §7.1.1). A separate housekeeping job cleans watermark-passed tombstones.
+        _agent.State.Registrations.Should().ContainSingle();
+        _agent.State.Registrations[0].Id.Should().Be(registrationId);
+        _agent.State.Registrations[0].Tombstoned.Should().BeTrue();
     }
 
     [Fact]

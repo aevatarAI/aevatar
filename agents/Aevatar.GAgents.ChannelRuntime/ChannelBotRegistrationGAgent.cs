@@ -54,8 +54,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     [EventHandler]
     public async Task HandleUnregister(ChannelBotUnregisterCommand cmd)
     {
-        var exists = State.Registrations.Any(r => r.Id == cmd.RegistrationId);
-        if (!exists)
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
+        if (entry is null || entry.Tombstoned)
         {
             Logger.LogWarning("Cannot unregister: channel bot registration not found: {Id}", cmd.RegistrationId);
             return;
@@ -68,8 +68,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     [EventHandler]
     public async Task HandleUpdateToken(ChannelBotUpdateTokenCommand cmd)
     {
-        var exists = State.Registrations.Any(r => r.Id == cmd.RegistrationId);
-        if (!exists)
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
+        if (entry is null || entry.Tombstoned)
         {
             Logger.LogWarning("Cannot update token: channel bot registration not found: {Id}", cmd.RegistrationId);
             return;
@@ -88,16 +88,22 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     private static ChannelBotRegistrationStoreState ApplyRegistered(ChannelBotRegistrationStoreState current, ChannelBotRegisteredEvent evt)
     {
         var next = current.Clone();
+        var existing = next.Registrations.FirstOrDefault(r => r.Id == evt.Entry.Id);
+        if (existing is not null)
+            next.Registrations.Remove(existing);
         next.Registrations.Add(evt.Entry);
         return next;
     }
 
+    // Soft-delete to retain the entry for projector watermark coordination
+    // (Channel RFC §7.1.1). A follow-up housekeeping job removes tombstoned
+    // entries once the projection watermark has passed.
     private static ChannelBotRegistrationStoreState ApplyUnregistered(ChannelBotRegistrationStoreState current, ChannelBotUnregisteredEvent evt)
     {
         var next = current.Clone();
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
-            next.Registrations.Remove(entry);
+            entry.Tombstoned = true;
         return next;
     }
 
