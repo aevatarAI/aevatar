@@ -79,4 +79,14 @@ public sealed class DefaultAppScopeResolver : IAppScopeResolver
 
         return null;
     }
+
+    public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null)
+    {
+        var context = httpContext ?? _httpContextAccessor.HttpContext;
+        if (context?.User?.Identity?.IsAuthenticated != true)
+            return false;
+
+        var scopeIdValue = context.User.FindFirst(ScopeIdClaimType)?.Value?.Trim();
+        return string.IsNullOrWhiteSpace(scopeIdValue);
+    }
 }

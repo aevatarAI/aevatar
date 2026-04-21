@@ -272,6 +272,8 @@ public sealed class AppStudioScriptDraftRunEndpointTests
         }
 
         public AppScopeContext? Resolve(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => _context;
+
+        public bool HasAuthenticatedRequestWithoutScope(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => false;
     }
 
     private sealed class RecordingScriptDefinitionCommandPort : IScriptDefinitionCommandPort

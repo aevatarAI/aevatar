@@ -39,10 +39,13 @@ public sealed class ExecutionService
 
     public async Task<IReadOnlyList<ExecutionSummary>> ListAsync(CancellationToken cancellationToken = default)
     {
+        var scope = GetScopeFilter();
+        if (scope.FailClosed)
+            return Array.Empty<ExecutionSummary>();
+
         var records = await LoadReconciledExecutionRecordsAsync(cancellationToken);
-        var scopeFilter = ResolveCurrentScopeId();
         return records
-            .Where(record => IsVisibleToCurrentScope(record, scopeFilter))
+            .Where(record => IsVisibleToCurrentScope(record, scope))
             .OrderByDescending(record => record.StartedAtUtc)
             .Select(ToSummary)
             .ToList();
@@ -50,30 +53,50 @@ public sealed class ExecutionService
 
     public async Task<ExecutionDetail?> GetAsync(string executionId, CancellationToken cancellationToken = default)
     {
+        var scope = GetScopeFilter();
+        if (scope.FailClosed)
+            return null;
+
         var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
         if (record is null)
             return null;
 
-        var scopeFilter = ResolveCurrentScopeId();
-        return IsVisibleToCurrentScope(record, scopeFilter) ? ToDetail(record) : null;
+        return IsVisibleToCurrentScope(record, scope) ? ToDetail(record) : null;
     }
 
-    private string? ResolveCurrentScopeId() =>
-        _scopeResolver?.Resolve()?.ScopeId?.Trim();
-
-    private static bool IsVisibleToCurrentScope(StoredExecutionRecord record, string? scopeFilter)
+    private ScopeFilter GetScopeFilter()
     {
-        // When no scope resolver is wired (test doubles, legacy hosts) fall back to the historical
-        // "workspace-global" view so existing callers continue to see every execution.
-        if (scopeFilter is null)
+        var resolved = _scopeResolver?.Resolve()?.ScopeId?.Trim();
+        if (!string.IsNullOrEmpty(resolved))
+            return new ScopeFilter(resolved, FailClosed: false);
+
+        // No scope resolved. If the caller is authenticated (the JWT reached us but no
+        // scope_id was mapped) we must fail closed — treating it as "workspace-global"
+        // would let a broken claims pipeline read or write another tenant's data.
+        // Otherwise we are out-of-request (CLI / background worker / test) and the
+        // historical workspace-global view is appropriate.
+        var unscopedAuthed = _scopeResolver?.HasAuthenticatedRequestWithoutScope() ?? false;
+        return new ScopeFilter(ScopeId: null, FailClosed: unscopedAuthed);
+    }
+
+    private static bool IsVisibleToCurrentScope(StoredExecutionRecord record, ScopeFilter scope)
+    {
+        if (scope.FailClosed)
+            return false;
+
+        // No scope wired — tests / CLI fall back to the historical workspace-global view so
+        // existing callers keep seeing every execution.
+        if (scope.ScopeId is null)
             return true;
 
         // Records without a scope predate scope-aware execution tracking and cannot be proven
         // to belong to the caller. Hide them to avoid cross-scope leakage.
         var recordScopeId = record.ScopeId?.Trim();
         return !string.IsNullOrEmpty(recordScopeId)
-            && string.Equals(recordScopeId, scopeFilter, StringComparison.Ordinal);
+            && string.Equals(recordScopeId, scope.ScopeId, StringComparison.Ordinal);
     }
+
+    private readonly record struct ScopeFilter(string? ScopeId, bool FailClosed);
 
     public async Task<ExecutionDetail> StartAsync(StartExecutionRequest request, CancellationToken cancellationToken = default)
     {
@@ -81,8 +104,10 @@ public sealed class ExecutionService
             throw new InvalidOperationException("scopeId and workflowId are required. Executions must target a registered scope service.");
 
         var requestedScopeId = request.ScopeId!.Trim();
-        var callerScopeId = ResolveCurrentScopeId();
-        if (callerScopeId is not null && !string.Equals(callerScopeId, requestedScopeId, StringComparison.Ordinal))
+        var scope = GetScopeFilter();
+        if (scope.FailClosed)
+            throw new InvalidOperationException("Authenticated caller has no resolvable scope; refuse to start a scoped execution.");
+        if (scope.ScopeId is not null && !string.Equals(scope.ScopeId, requestedScopeId, StringComparison.Ordinal))
             throw new InvalidOperationException("Requested scope does not match the authenticated Studio scope.");
 
         var runtimeBaseUrl = request.RuntimeBaseUrl?.Trim().TrimEnd('/');
@@ -121,8 +146,12 @@ public sealed class ExecutionService
         ResumeExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
+        var scope = GetScopeFilter();
+        if (scope.FailClosed)
+            return null;
+
         var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
-        if (record is null || !IsVisibleToCurrentScope(record, ResolveCurrentScopeId()))
+        if (record is null || !IsVisibleToCurrentScope(record, scope))
         {
             return null;
         }
@@ -197,8 +226,12 @@ public sealed class ExecutionService
         StopExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
+        var scope = GetScopeFilter();
+        if (scope.FailClosed)
+            return null;
+
         var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
-        if (record is null || !IsVisibleToCurrentScope(record, ResolveCurrentScopeId()))
+        if (record is null || !IsVisibleToCurrentScope(record, scope))
         {
             return null;
         }

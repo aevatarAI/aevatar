@@ -158,6 +158,8 @@ public sealed class ActorBackedStoreAdapterTests
             ScopeIdToReturn is not null
                 ? new AppScopeContext(ScopeIdToReturn, "test")
                 : null;
+
+        public bool HasAuthenticatedRequestWithoutScope(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => false;
     }
 
     /// <summary>

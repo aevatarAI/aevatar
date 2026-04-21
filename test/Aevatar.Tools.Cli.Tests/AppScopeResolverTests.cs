@@ -98,6 +98,43 @@ public sealed class AppScopeResolverTests
         scope.Source.Should().Be("header:X-Aevatar-Scope-Id");
     }
 
+    [Fact]
+    public void HasAuthenticatedRequestWithoutScope_ShouldBeTrue_WhenAuthenticatedButNoScopeIdClaim()
+    {
+        var httpContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "oidc-sub-1")],
+                authenticationType: "test")),
+        };
+        var resolver = CreateResolver();
+
+        resolver.HasAuthenticatedRequestWithoutScope(httpContext).Should().BeTrue();
+    }
+
+    [Fact]
+    public void HasAuthenticatedRequestWithoutScope_ShouldBeFalse_WhenScopeIdClaimPresent()
+    {
+        var httpContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("scope_id", "nyx-scope-1")],
+                authenticationType: "test")),
+        };
+        var resolver = CreateResolver();
+
+        resolver.HasAuthenticatedRequestWithoutScope(httpContext).Should().BeFalse();
+    }
+
+    [Fact]
+    public void HasAuthenticatedRequestWithoutScope_ShouldBeFalse_WhenUnauthenticated()
+    {
+        var httpContext = new DefaultHttpContext();
+        var resolver = CreateResolver();
+
+        resolver.HasAuthenticatedRequestWithoutScope(httpContext).Should().BeFalse();
+    }
+
     private static DefaultAppScopeResolver CreateResolver(
         IReadOnlyDictionary<string, string?>? configurationValues = null)
     {

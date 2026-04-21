@@ -318,11 +318,18 @@ public sealed class ExecutionServiceTests
     private sealed class StubAppScopeResolver : IAppScopeResolver
     {
         private readonly AppScopeContext? _context;
+        private readonly bool _authenticatedWithoutScope;
 
-        public StubAppScopeResolver(string? scopeId)
-            => _context = scopeId is null ? null : new AppScopeContext(scopeId, "test:stub");
+        public StubAppScopeResolver(string? scopeId, bool authenticatedWithoutScope = false)
+        {
+            _context = scopeId is null ? null : new AppScopeContext(scopeId, "test:stub");
+            _authenticatedWithoutScope = authenticatedWithoutScope;
+        }
 
         public AppScopeContext? Resolve(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => _context;
+
+        public bool HasAuthenticatedRequestWithoutScope(Microsoft.AspNetCore.Http.HttpContext? httpContext = null)
+            => _authenticatedWithoutScope;
     }
 
     private static HttpResponseMessage CreateSseResponse(string payload) =>
@@ -462,6 +469,65 @@ public sealed class ExecutionServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Requested scope does not match the authenticated Studio scope*");
+    }
+
+    [Fact]
+    public async Task ListAsync_WhenAuthenticatedCallerHasNoScope_ShouldFailClosed()
+    {
+        // Simulates a JWT that reached the endpoint without scope_id (broken provider claims
+        // mapping). The old behaviour fell through to workspace-global visibility; now the
+        // service must refuse to expose anything.
+        var store = new InMemoryStudioWorkspaceStore();
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(
+            handler,
+            store: store,
+            scopeResolver: new StubAppScopeResolver(scopeId: null, authenticatedWithoutScope: true));
+
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-a", scopeId: "scope-a"));
+
+        var summaries = await service.ListAsync();
+
+        summaries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenAuthenticatedCallerHasNoScope_ShouldReturnNull()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(
+            handler,
+            store: store,
+            scopeResolver: new StubAppScopeResolver(scopeId: null, authenticatedWithoutScope: true));
+
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-a", scopeId: "scope-a"));
+
+        var detail = await service.GetAsync("exec-a");
+
+        detail.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrow()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(
+            handler,
+            scopeResolver: new StubAppScopeResolver(scopeId: null, authenticatedWithoutScope: true));
+
+        var act = () => service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "approval",
+            Prompt: "hello",
+            RuntimeBaseUrl: "https://runtime.example",
+            ScopeId: "scope-a",
+            WorkflowId: "workflow-1"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Authenticated caller has no resolvable scope*");
     }
 
     private static StoredExecutionRecord CreateSeedRecord(string executionId, string? scopeId) =>

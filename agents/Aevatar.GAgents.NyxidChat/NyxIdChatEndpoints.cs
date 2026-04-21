@@ -30,14 +30,21 @@ public static class NyxIdChatEndpoints
         group.MapDelete("/{scopeId}/nyxid-chat/conversations/{actorId}", HandleDeleteConversationAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
 
-        // NyxID Channel Bot Relay webhook — receives forwarded platform messages
-        app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync).WithTags("NyxIdRelay");
+        // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
+        // this callback; auth is carried via X-NyxID-User-Token rather than the JWT bearer we
+        // validate in the fallback policy, so the route must stay anonymous. The diag + health
+        // routes under the same prefix are operator probes that also must stay open.
+        app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync)
+            .WithTags("NyxIdRelay")
+            .AllowAnonymous();
         app.MapGet("/api/webhooks/nyxid-relay/health", () => Results.Json(new
         {
             status = "ok",
             endpoint = "/api/webhooks/nyxid-relay",
             last_check = DateTimeOffset.UtcNow,
-        })).WithTags("NyxIdRelay");
+        }))
+            .WithTags("NyxIdRelay")
+            .AllowAnonymous();
 
         // Temporary diagnostic: test NyxID gateway connectivity from this server
         app.MapPost("/api/webhooks/nyxid-relay/diag", async (HttpContext http, CancellationToken ct) =>
@@ -67,7 +74,9 @@ public static class NyxIdChatEndpoints
                 responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
                 serverOutboundIp = "check response headers",
             });
-        }).WithTags("NyxIdRelay");
+        })
+            .WithTags("NyxIdRelay")
+            .AllowAnonymous();
 
         // Access control for relay is handled by NyxID's route configuration.
 
