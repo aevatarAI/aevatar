@@ -115,6 +115,17 @@ public sealed class NyxIdLLMProviderErrorClassificationTests
     }
 
     [Fact]
+    public void ExtractUpstreamStatusAndBody_ShouldReturnNullsForNonClientResultException()
+    {
+        var ex = new InvalidOperationException("local failure", new TimeoutException("timed out"));
+
+        var (status, body) = NyxIdLLMProvider.ExtractUpstreamStatusAndBody(ex);
+
+        status.Should().BeNull();
+        body.Should().BeNull();
+    }
+
+    [Fact]
     public void ClassifyUpstreamFailure_ShouldPreserveInnerException()
     {
         var route = CreateRoute("gateway", "gpt-4");

@@ -50,8 +50,15 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
     {
         var route = await ResolveRouteAsync(request, ct);
-        return await CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken)
-            .ChatAsync(route.Request, ct);
+        var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
+        try
+        {
+            return await provider.ChatAsync(route.Request, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw TranslateUpstreamFailure(ex, route);
+        }
     }
 
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -91,25 +98,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    string? body = null;
-                    int? status = null;
-                    for (var cur = ex; cur != null; cur = cur.InnerException)
-                    {
-                        if (cur is System.ClientModel.ClientResultException cre)
-                        {
-                            status = cre.Status;
-                            var raw = cre.GetRawResponse();
-                            if (raw != null)
-                                body = System.Text.Encoding.UTF8.GetString(raw.Content.ToArray());
-                            break;
-                        }
-                    }
-
-                    _logger?.LogWarning(ex,
-                        "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
-                        status, route.RouteName, route.Endpoint, body);
-
-                    throw ClassifyUpstreamFailure(ex, status, body, route);
+                    throw TranslateUpstreamFailure(ex, route);
                 }
 
                 yield return current;
@@ -119,6 +108,34 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         {
             await enumerator.DisposeAsync();
         }
+    }
+
+    private NyxIdUpstreamException TranslateUpstreamFailure(Exception ex, NyxIdResolvedRoute route)
+    {
+        var (status, body) = ExtractUpstreamStatusAndBody(ex);
+
+        _logger?.LogWarning(ex,
+            "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
+            status, route.RouteName, route.Endpoint, body);
+
+        return ClassifyUpstreamFailure(ex, status, body, route);
+    }
+
+    internal static (int? Status, string? Body) ExtractUpstreamStatusAndBody(Exception ex)
+    {
+        for (var cur = ex; cur != null; cur = cur.InnerException)
+        {
+            if (cur is System.ClientModel.ClientResultException cre)
+            {
+                var raw = cre.GetRawResponse();
+                var body = raw != null
+                    ? System.Text.Encoding.UTF8.GetString(raw.Content.ToArray())
+                    : null;
+                return (cre.Status, body);
+            }
+        }
+
+        return (null, null);
     }
 
     internal static NyxIdUpstreamException ClassifyUpstreamFailure(
