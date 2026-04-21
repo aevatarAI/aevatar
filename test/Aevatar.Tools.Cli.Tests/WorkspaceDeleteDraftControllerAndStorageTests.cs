@@ -16,7 +16,7 @@ namespace Aevatar.Tools.Cli.Tests;
 public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 {
     [Fact]
-    public async Task DeleteWorkflow_WhenScopeIsNotResolved_DeletesWorkspaceDraftAndReturnsNoContent()
+    public async Task DeleteDraft_WhenScopeIsNotResolved_DeletesWorkspaceDraftAndReturnsNoContent()
     {
         var workspaceRoot = Path.Combine(Path.GetTempPath(), $"workspace-delete-{Guid.NewGuid():N}");
         var store = new RecordingWorkspaceStore(workspaceRoot);
@@ -27,14 +27,14 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var workflowPath = Path.Combine(workspaceRoot, "drafts", "hello.yaml");
         var workflowId = WorkspaceService.CreateStableId(workflowPath);
 
-        var result = await controller.DeleteWorkflow(workflowId, null, CancellationToken.None);
+        var result = await controller.DeleteDraft(workflowId, null, CancellationToken.None);
 
         result.Should().BeOfType<NoContentResult>();
         store.DeletedWorkflowIds.Should().ContainSingle().Which.Should().Be(workflowId);
     }
 
     [Fact]
-    public async Task DeleteWorkflow_WhenScopeIsResolved_DeletesScopedDraftAndReturnsNoContent()
+    public async Task DeleteDraft_WhenScopeIsResolved_DeletesScopedDraftAndReturnsNoContent()
     {
         var storagePort = new RecordingWorkflowDraftStore();
         var workflowId = $"workflow-{Guid.NewGuid():N}";
@@ -43,7 +43,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             CreateScopeWorkflowService(storagePort),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
-        var result = await controller.DeleteWorkflow(workflowId, null, CancellationToken.None);
+        var result = await controller.DeleteDraft(workflowId, null, CancellationToken.None);
 
         result.Should().BeOfType<NoContentResult>();
         storagePort.DeletedWorkflows.Should().ContainSingle();
@@ -52,7 +52,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     }
 
     [Fact]
-    public async Task DeleteWorkflow_WhenQueryFallbackIsEnabled_UsesRequestedScopeId()
+    public async Task DeleteDraft_WhenQueryFallbackIsEnabled_UsesRequestedScopeId()
     {
         var storagePort = new RecordingWorkflowDraftStore();
         var workflowId = $"workflow-{Guid.NewGuid():N}";
@@ -65,7 +65,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 AllowUnauthenticatedScopeQueryFallback = true,
             });
 
-        var result = await controller.DeleteWorkflow(workflowId, "scope-1", CancellationToken.None);
+        var result = await controller.DeleteDraft(workflowId, "scope-1", CancellationToken.None);
 
         result.Should().BeOfType<NoContentResult>();
         storagePort.DeletedWorkflows.Should().ContainSingle();
@@ -74,7 +74,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     }
 
     [Fact]
-    public async Task DeleteWorkflow_WhenQueryFallbackIsDisabled_ReturnsUnauthorized()
+    public async Task DeleteDraft_WhenQueryFallbackIsDisabled_ReturnsUnauthorized()
     {
         var storagePort = new RecordingWorkflowDraftStore();
         var controller = CreateController(
@@ -86,7 +86,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 AllowUnauthenticatedScopeQueryFallback = false,
             });
 
-        var result = await controller.DeleteWorkflow("workflow-1", "scope-1", CancellationToken.None);
+        var result = await controller.DeleteDraft("workflow-1", "scope-1", CancellationToken.None);
 
         var unauthorized = result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
         unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
@@ -98,7 +98,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     }
 
     [Fact]
-    public async Task DeleteWorkflow_WhenScopedDeleteThrowsAppApiException_ReturnsStatusCodePayload()
+    public async Task DeleteDraft_WhenScopedDeleteThrowsAppApiException_ReturnsStatusCodePayload()
     {
         var exception = new AppApiException(
             StatusCodes.Status502BadGateway,
@@ -109,7 +109,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             CreateScopeWorkflowService(new ThrowingWorkflowStoragePort(exception)),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
-        var result = await controller.DeleteWorkflow("workflow-1", null, CancellationToken.None);
+        var result = await controller.DeleteDraft("workflow-1", null, CancellationToken.None);
 
         var objectResult = result.Should().BeOfType<ObjectResult>().Subject;
         objectResult.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
@@ -119,14 +119,14 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     }
 
     [Fact]
-    public async Task DeleteWorkflow_WhenDeleteThrowsInvalidOperationException_ReturnsBadRequest()
+    public async Task DeleteDraft_WhenDeleteThrowsInvalidOperationException_ReturnsBadRequest()
     {
         var controller = CreateController(
             new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
-        var result = await controller.DeleteWorkflow(string.Empty, null, CancellationToken.None);
+        var result = await controller.DeleteDraft(string.Empty, null, CancellationToken.None);
 
         var badRequest = result.Should().BeOfType<BadRequestObjectResult>().Subject;
         badRequest.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -391,8 +391,24 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(workflowId))
+            {
+                return Task.FromResult<StoredWorkflowFile?>(null);
+            }
+
+            return Task.FromResult<StoredWorkflowFile?>(new StoredWorkflowFile(
+                WorkflowId: workflowId,
+                Name: Path.GetFileNameWithoutExtension(workflowId),
+                FileName: "hello.yaml",
+                FilePath: Path.Combine(RootDirectory, "drafts", "hello.yaml"),
+                DirectoryId: "dir-1",
+                DirectoryLabel: "Drafts",
+                Yaml: "name: hello\nsteps: []\n",
+                Layout: null,
+                UpdatedAtUtc: DateTimeOffset.UtcNow));
+        }
 
         public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

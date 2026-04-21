@@ -75,7 +75,7 @@ export interface StudioWorkspaceSettings {
   readonly directories: StudioWorkflowDirectory[];
 }
 
-export interface StudioWorkflowSummary {
+export interface StudioWorkflowDraftSummary {
   readonly workflowId: string;
   readonly name: string;
   readonly description: string;
@@ -88,7 +88,15 @@ export interface StudioWorkflowSummary {
   readonly updatedAtUtc: string;
 }
 
-export interface StudioWorkflowFile {
+export interface StudioWorkflowCommittedSummary {
+  readonly workflowId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly stepCount: number;
+  readonly updatedAtUtc?: string | null;
+}
+
+export interface StudioWorkflowDraft {
   readonly workflowId: string;
   readonly name: string;
   readonly fileName: string;
@@ -96,10 +104,17 @@ export interface StudioWorkflowFile {
   readonly directoryId: string;
   readonly directoryLabel: string;
   readonly yaml: string;
-  readonly document?: StudioWorkflowDocument | null;
   readonly layout?: unknown;
-  readonly findings: StudioValidationFinding[];
   readonly updatedAtUtc: string;
+}
+
+export interface StudioCommittedWorkflow {
+  readonly workflowId: string;
+  readonly name: string;
+  readonly yaml: string;
+  readonly document?: StudioWorkflowDocument | null;
+  readonly findings: StudioValidationFinding[];
+  readonly updatedAtUtc?: string | null;
 }
 
 export interface StudioSaveWorkflowInput {
@@ -117,6 +132,13 @@ export interface StudioParseYamlResult {
   readonly graph?: unknown;
   readonly findings: StudioValidationFinding[];
 }
+
+export type StudioWorkflowSummary = StudioWorkflowDraftSummary;
+
+export type StudioWorkflowFile = StudioWorkflowDraft & {
+  readonly document?: StudioWorkflowDocument | null;
+  readonly findings: StudioValidationFinding[];
+};
 
 export interface StudioSerializeYamlResult {
   readonly yaml: string;

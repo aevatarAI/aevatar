@@ -40,7 +40,7 @@ public class WorkspaceServiceTests
     }
 
     [Fact]
-    public async Task SaveWorkflowAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
+    public async Task CreateDraftAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
     {
         var store = new InMemoryStudioWorkspaceStore();
         var directory = new StudioWorkspaceDirectory(
@@ -56,8 +56,7 @@ public class WorkspaceServiceTests
 
         var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
 
-        var response = await service.SaveWorkflowAsync(new SaveWorkflowFileRequest(
-            WorkflowId: null,
+        var response = await service.CreateDraftAsync(new SaveWorkflowDraftRequest(
             DirectoryId: directory.DirectoryId,
             WorkflowName: "renamed-workflow",
             FileName: null,

@@ -291,7 +291,7 @@ describe('studioApi host-session requests', () => {
     );
   });
 
-  it('includes the requested scope when loading a scoped workflow file', async () => {
+  it('includes the requested scope when loading a scoped workflow draft', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -315,7 +315,7 @@ describe('studioApi host-session requests', () => {
         directoryId: 'scope:scope-1',
         directoryLabel: 'scope-1',
         yaml: 'name: scope-demo\nsteps: []\n',
-        findings: [],
+        layout: null,
         updatedAtUtc: '2026-04-16T00:00:00Z',
       }),
     } as Response);
@@ -327,13 +327,13 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflows/workflow-1?scopeId=scope-1');
+    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
   });
 
-  it('includes the requested scope when saving a scoped workflow file', async () => {
+  it('includes the requested scope when updating a scoped workflow draft', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -357,7 +357,7 @@ describe('studioApi host-session requests', () => {
         directoryId: 'scope:scope-1',
         directoryLabel: 'scope-1',
         yaml: 'name: scope-demo\nsteps: []\n',
-        findings: [],
+        layout: null,
         updatedAtUtc: '2026-04-16T00:00:00Z',
       }),
     } as Response);
@@ -375,14 +375,14 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflows?scopeId=scope-1');
-    expect(init?.method).toBe('POST');
+    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
+    expect(init?.method).toBe('PUT');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
   });
 
-  it('includes the requested scope when deleting a scoped workflow file', async () => {
+  it('includes the requested scope when deleting a scoped workflow draft', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -407,7 +407,7 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflows/workflow-1?scopeId=scope-1');
+    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
     expect(init?.method).toBe('DELETE');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',

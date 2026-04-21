@@ -19,20 +19,19 @@ public sealed partial class WorkspaceServiceDeleteDraftTests
         var settings = await environment.Store.GetSettingsAsync();
         var directoryId = settings.Directories.Single().DirectoryId;
 
-        var saved = await environment.Service.SaveWorkflowAsync(new SaveWorkflowFileRequest(
-            WorkflowId: null,
+        var saved = await environment.Service.CreateDraftAsync(new SaveWorkflowDraftRequest(
             DirectoryId: directoryId,
             WorkflowName: "hello-chat",
             FileName: null,
             Yaml: "name: hello-chat\ndescription: saved draft\nsteps: []\n"));
 
-        (await environment.Service.ListWorkflowsAsync())
+        (await environment.Service.ListDraftsAsync())
             .Should()
             .Contain(summary => summary.WorkflowId == saved.WorkflowId);
 
         await environment.Service.DeleteDraftAsync(saved.WorkflowId);
 
-        (await environment.Service.ListWorkflowsAsync())
+        (await environment.Service.ListDraftsAsync())
             .Should()
             .NotContain(summary => summary.WorkflowId == saved.WorkflowId);
     }
@@ -51,8 +50,7 @@ public sealed partial class WorkspaceServiceDeleteDraftTests
             },
         };
 
-        var saved = await environment.Service.SaveWorkflowAsync(new SaveWorkflowFileRequest(
-            WorkflowId: null,
+        var saved = await environment.Service.CreateDraftAsync(new SaveWorkflowDraftRequest(
             DirectoryId: directoryId,
             WorkflowName: "hello-layout",
             FileName: null,
@@ -70,15 +68,15 @@ public sealed partial class WorkspaceServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task DeleteDraftAsync_WhenWorkflowIsMissing_ShouldSucceedIdempotently()
+    public async Task DeleteDraftAsync_WhenWorkflowIsMissing_ShouldThrowWorkflowDraftNotFoundException()
     {
         using var environment = new WorkspaceEnvironment();
-        var missingPath = Path.Combine(environment.HomeDirectory, "workflows", "missing.yaml");
-        var missingWorkflowId = WorkspaceService.CreateStableId(missingPath);
+        var missingWorkflowId = "missing-workflow";
 
         var act = () => environment.Service.DeleteDraftAsync(missingWorkflowId);
 
-        await act.Should().NotThrowAsync();
+        await act.Should().ThrowAsync<WorkflowDraftNotFoundException>()
+            .Where(exception => exception.WorkflowId == missingWorkflowId);
     }
 
     [Theory]
@@ -94,49 +92,50 @@ public sealed partial class WorkspaceServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task DeleteDraftAsync_WhenPathIsOutsideRegisteredDirectory_ShouldRejectAndNotDelete()
-    {
-        using var environment = new WorkspaceEnvironment();
-        var outsidePath = Path.Combine(Path.GetTempPath(), $"studio-delete-draft-outside-{Guid.NewGuid():N}.yaml");
-        await File.WriteAllTextAsync(outsidePath, "name: outside\nsteps: []\n");
-        var outsideWorkflowId = WorkspaceService.CreateStableId(outsidePath);
-
-        try
-        {
-            var act = () => environment.Service.DeleteDraftAsync(outsideWorkflowId);
-
-            await act.Should().ThrowAsync<InvalidOperationException>();
-            File.Exists(outsidePath).Should().BeTrue();
-        }
-        finally
-        {
-            if (File.Exists(outsidePath))
-                File.Delete(outsidePath);
-        }
-    }
-
-    [Fact]
-    public async Task DeleteDraftAsync_WhenPathTraversesOutsideRegisteredDirectory_ShouldRejectAndNotDelete()
+    public async Task DeleteDraftAsync_WhenDraftIsDeletedTwice_ShouldThrowWorkflowDraftNotFoundException()
     {
         using var environment = new WorkspaceEnvironment();
         var settings = await environment.Store.GetSettingsAsync();
-        var registeredDirectory = settings.Directories.Single().Path;
-        var escapePath = Path.GetFullPath(Path.Combine(registeredDirectory, "..", $"studio-delete-draft-escape-{Guid.NewGuid():N}.yaml"));
-        await File.WriteAllTextAsync(escapePath, "name: escape\nsteps: []\n");
-        var traversalWorkflowId = WorkspaceService.CreateStableId(Path.Combine(registeredDirectory, "..", Path.GetFileName(escapePath)));
+        var directoryId = settings.Directories.Single().DirectoryId;
+        var draft = await environment.Service.CreateDraftAsync(new SaveWorkflowDraftRequest(
+            DirectoryId: directoryId,
+            WorkflowName: "delete-twice",
+            FileName: null,
+            Yaml: "name: delete-twice\nsteps: []\n"));
 
-        try
-        {
-            var act = () => environment.Service.DeleteDraftAsync(traversalWorkflowId);
+        await environment.Service.DeleteDraftAsync(draft.WorkflowId);
 
-            await act.Should().ThrowAsync<InvalidOperationException>();
-            File.Exists(escapePath).Should().BeTrue();
-        }
-        finally
-        {
-            if (File.Exists(escapePath))
-                File.Delete(escapePath);
-        }
+        var act = () => environment.Service.DeleteDraftAsync(draft.WorkflowId);
+
+        await act.Should().ThrowAsync<WorkflowDraftNotFoundException>()
+            .Where(exception => exception.WorkflowId == draft.WorkflowId);
+    }
+
+    [Fact]
+    public async Task DeleteDraftAsync_WhenDraftIsRenamed_ShouldDeleteUsingStableWorkflowId()
+    {
+        using var environment = new WorkspaceEnvironment();
+        var settings = await environment.Store.GetSettingsAsync();
+        var directory = settings.Directories.Single();
+        var created = await environment.Service.CreateDraftAsync(new SaveWorkflowDraftRequest(
+            DirectoryId: directory.DirectoryId,
+            WorkflowName: "rename-before-delete",
+            FileName: null,
+            Yaml: "name: rename-before-delete\nsteps: []\n"));
+        var updated = await environment.Service.UpdateDraftAsync(
+            created.WorkflowId,
+            new SaveWorkflowDraftRequest(
+                DirectoryId: directory.DirectoryId,
+                WorkflowName: "rename-before-delete",
+                FileName: "renamed-draft.yaml",
+                Yaml: "name: rename-before-delete\nsteps: []\n"));
+
+        updated.WorkflowId.Should().Be(created.WorkflowId);
+        File.Exists(updated.FilePath).Should().BeTrue();
+
+        await environment.Service.DeleteDraftAsync(created.WorkflowId);
+
+        File.Exists(updated.FilePath).Should().BeFalse();
     }
 
     private sealed class WorkspaceEnvironment : IDisposable

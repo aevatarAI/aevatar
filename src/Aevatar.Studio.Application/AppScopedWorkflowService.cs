@@ -12,6 +12,7 @@ using Aevatar.Studio.Domain.Studio.Models;
 using Microsoft.Extensions.Logging;
 
 using Aevatar.Studio.Application.Studio;
+using Aevatar.Studio.Application.Studio.Services;
 namespace Aevatar.Studio.Application;
 
 public sealed class AppScopedWorkflowService
@@ -52,6 +53,124 @@ public sealed class AppScopedWorkflowService
         _logger = logger;
     }
 
+    public async Task<IReadOnlyList<WorkflowDraftSummary>> ListDraftsAsync(
+        string scopeId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var persistedLayoutWorkflowIds = ListPersistedLayoutWorkflowIds(normalizedScopeId);
+        var draftsById = await ListDraftsByIdAsync(normalizedScopeId, ct);
+        return draftsById.Values
+            .Select(draft => ToDraftWorkflowSummary(
+                normalizedScopeId,
+                draft,
+                persistedLayoutWorkflowIds))
+            .OrderByDescending(static item => item.UpdatedAtUtc)
+            .ToList();
+    }
+
+    public async Task<WorkflowDraftResponse?> GetDraftAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+        var draft = await TryGetDraftAsync(normalizedScopeId, normalizedWorkflowId, ct);
+        return draft == null
+            ? null
+            : ToDraftWorkflowResponse(
+                normalizedScopeId,
+                draft,
+                TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId));
+    }
+
+    public Task<WorkflowDraftResponse> CreateDraftAsync(
+        string scopeId,
+        SaveWorkflowDraftRequest request,
+        CancellationToken ct = default)
+        => SaveDraftAsync(scopeId, workflowId: null, request, ct);
+
+    public Task<WorkflowDraftResponse> UpdateDraftAsync(
+        string scopeId,
+        string workflowId,
+        SaveWorkflowDraftRequest request,
+        CancellationToken ct = default)
+        => SaveDraftAsync(scopeId, NormalizeRequired(workflowId, nameof(workflowId)), request, ct);
+
+    private async Task<WorkflowDraftResponse> SaveDraftAsync(
+        string scopeId,
+        string? workflowId,
+        SaveWorkflowDraftRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var requestedWorkflowName = string.IsNullOrWhiteSpace(request.WorkflowName)
+            ? string.Empty
+            : request.WorkflowName.Trim();
+        var normalizedYaml = NormalizeRequired(request.Yaml, nameof(request.Yaml));
+        if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
+        {
+            normalizedYaml = AlignWorkflowYamlName(normalizedYaml, requestedWorkflowName);
+        }
+
+        var parsed = _yamlDocumentService.Parse(normalizedYaml);
+        var workflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName)
+            ? requestedWorkflowName
+            : !string.IsNullOrWhiteSpace(parsed.Document?.Name)
+            ? parsed.Document.Name.Trim()
+            : NormalizeRequired(request.WorkflowName, nameof(request.WorkflowName));
+        var draftStore = _workflowDraftStore
+            ?? throw new InvalidOperationException("Scoped workflow draft storage is not configured.");
+        var savedAtUtc = DateTimeOffset.UtcNow;
+        var normalizedWorkflowId = string.IsNullOrWhiteSpace(workflowId)
+            ? await CreateScopedWorkflowIdAsync(normalizedScopeId, workflowName, ct)
+            : workflowId;
+
+        if (!string.IsNullOrWhiteSpace(workflowId))
+        {
+            var existingDraft = await draftStore.GetDraftAsync(normalizedScopeId, normalizedWorkflowId, ct);
+            if (existingDraft == null)
+            {
+                throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
+            }
+        }
+
+        // Scoped workspace save persists an editor draft; publish stays on the scope-binding flow.
+        await draftStore.SaveDraftAsync(normalizedScopeId, normalizedWorkflowId, workflowName, normalizedYaml, ct);
+
+        PersistLayout(normalizedScopeId, normalizedWorkflowId, request.Layout);
+
+        return ToDraftWorkflowResponse(
+            normalizedScopeId,
+            new WorkflowDraft(
+                normalizedWorkflowId,
+                workflowName,
+                normalizedYaml,
+                savedAtUtc),
+            request.Layout);
+    }
+
+    public async Task DeleteDraftAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+
+        if (_workflowDraftStore != null)
+        {
+            await _workflowDraftStore.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, ct);
+        }
+
+        DeletePersistedLayout(normalizedScopeId, normalizedWorkflowId);
+    }
+
+    #pragma warning disable CS0618
+    [Obsolete("Use ListDraftsAsync.")]
     public async Task<IReadOnlyList<WorkflowSummary>> ListAsync(
         string scopeId,
         CancellationToken ct = default)
@@ -69,7 +188,7 @@ public sealed class AppScopedWorkflowService
         var persistedLayoutWorkflowIds = ListPersistedLayoutWorkflowIds(normalizedScopeId);
         var summaries = workflows
             .OrderByDescending(static item => item.UpdatedAt)
-            .Select(workflow => ToWorkflowSummary(
+            .Select(workflow => ToLegacyWorkflowSummary(
                 normalizedScopeId,
                 workflow,
                 persistedLayoutWorkflowIds,
@@ -78,9 +197,10 @@ public sealed class AppScopedWorkflowService
                     : null))
             .ToList();
 
-        return MergeDraftSummaries(normalizedScopeId, summaries, draftsById, persistedLayoutWorkflowIds);
+        return MergeLegacyDraftSummaries(normalizedScopeId, summaries, draftsById, persistedLayoutWorkflowIds);
     }
 
+    [Obsolete("Use GetDraftAsync.")]
     public async Task<WorkflowFileResponse?> GetAsync(
         string scopeId,
         string workflowId,
@@ -92,7 +212,7 @@ public sealed class AppScopedWorkflowService
 
         if (draft != null)
         {
-            return ToDraftWorkflowFileResponse(
+            return ToLegacyDraftWorkflowFileResponse(
                 normalizedScopeId,
                 draft,
                 TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId));
@@ -108,22 +228,16 @@ public sealed class AppScopedWorkflowService
                     : await _workflowActorBindingReader.GetAsync(workflow.ActorId, ct);
 
                 var yaml = binding?.WorkflowYaml ?? string.Empty;
-
-                // Fallback: if binding projection hasn't materialized the YAML yet,
-                // try the artifact store which is written synchronously during save.
                 if (string.IsNullOrWhiteSpace(yaml) &&
                     _artifactStore != null &&
                     !string.IsNullOrWhiteSpace(workflow.ServiceKey))
                 {
-                    // Try with known revision ID.
                     if (!string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
                     {
                         var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
                         yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
                     }
 
-                    // If revision ID is empty (deployment snapshot not ready yet),
-                    // scan for the latest revision via the service lifecycle query.
                     if (string.IsNullOrWhiteSpace(yaml) &&
                         _workflowQueryPort != null &&
                         _serviceLifecycleQueryPort != null)
@@ -147,11 +261,11 @@ public sealed class AppScopedWorkflowService
                     }
                 }
 
-                return ToWorkflowFileResponse(
+                return ToLegacyCommittedWorkflowFileResponse(
                     normalizedScopeId,
                     workflow,
                     yaml,
-                    layout: TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId),
+                    TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId),
                     findingsFallbackMessage: "Workflow YAML is not available yet.");
             }
 
@@ -168,14 +282,15 @@ public sealed class AppScopedWorkflowService
         if (detail == null || detail.Workflow == null)
             return null;
 
-        return ToWorkflowFileResponse(
+        return ToLegacyCommittedWorkflowFileResponse(
             normalizedScopeId,
             detail.Workflow,
             detail.Source?.WorkflowYaml ?? string.Empty,
-            layout: TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId),
+            TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId),
             findingsFallbackMessage: "Workflow YAML is not available yet.");
     }
 
+    [Obsolete("Use CreateDraftAsync or UpdateDraftAsync.")]
     public async Task<WorkflowFileResponse> SaveDraftAsync(
         string scopeId,
         SaveWorkflowFileRequest request,
@@ -183,59 +298,18 @@ public sealed class AppScopedWorkflowService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        var requestedWorkflowName = string.IsNullOrWhiteSpace(request.WorkflowName)
-            ? string.Empty
-            : request.WorkflowName.Trim();
-        var normalizedYaml = NormalizeRequired(request.Yaml, nameof(request.Yaml));
-        if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
-        {
-            normalizedYaml = AlignWorkflowYamlName(normalizedYaml, requestedWorkflowName);
-        }
-
-        var parsed = _yamlDocumentService.Parse(normalizedYaml);
-        var workflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName)
-            ? requestedWorkflowName
-            : !string.IsNullOrWhiteSpace(parsed.Document?.Name)
-            ? parsed.Document.Name.Trim()
-            : NormalizeRequired(request.WorkflowName, nameof(request.WorkflowName));
-        var workflowId = string.IsNullOrWhiteSpace(request.WorkflowId)
-            ? StudioDocumentIdNormalizer.Normalize(workflowName, "workflow")
-            : NormalizeRequired(request.WorkflowId, nameof(request.WorkflowId));
-        var draftStore = _workflowDraftStore
-            ?? throw new InvalidOperationException("Scoped workflow draft storage is not configured.");
-        var savedAtUtc = DateTimeOffset.UtcNow;
-
-        // Scoped workspace save persists an editor draft; publish stays on the scope-binding flow.
-        await draftStore.SaveDraftAsync(normalizedScopeId, workflowId, workflowName, normalizedYaml, ct);
-
-        PersistLayout(normalizedScopeId, workflowId, request.Layout);
-
-        return ToDraftWorkflowFileResponse(
-            normalizedScopeId,
-            new WorkflowDraft(
-                workflowId,
-                workflowName,
-                normalizedYaml,
-                savedAtUtc),
+        var nextRequest = new SaveWorkflowDraftRequest(
+            request.DirectoryId,
+            request.WorkflowName,
+            request.FileName,
+            request.Yaml,
             request.Layout);
+        var saved = string.IsNullOrWhiteSpace(request.WorkflowId)
+            ? await CreateDraftAsync(scopeId, nextRequest, ct)
+            : await UpdateDraftAsync(scopeId, request.WorkflowId, nextRequest, ct);
+        return ToLegacyWorkflowFileResponse(saved);
     }
-
-    public async Task DeleteDraftAsync(
-        string scopeId,
-        string workflowId,
-        CancellationToken ct = default)
-    {
-        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
-
-        if (_workflowDraftStore != null)
-        {
-            await _workflowDraftStore.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, ct);
-        }
-
-        DeletePersistedLayout(normalizedScopeId, normalizedWorkflowId);
-    }
+    #pragma warning restore CS0618
 
     private string AlignWorkflowYamlName(string yaml, string workflowName)
     {
@@ -265,7 +339,7 @@ public sealed class AppScopedWorkflowService
     public static string BuildScopeDirectoryId(string scopeId) =>
         $"scope:{NormalizeRequired(scopeId, nameof(scopeId))}";
 
-    private WorkflowFileResponse ToWorkflowFileResponse(
+    private WorkflowCommittedResponse ToWorkflowCommittedResponse(
         string scopeId,
         ScopeWorkflowSummary workflow,
         string yaml,
@@ -288,42 +362,13 @@ public sealed class AppScopedWorkflowService
             ];
         }
 
-        var scopeDirectory = CreateScopeDirectory(scopeId);
-        return new WorkflowFileResponse(
+        return new WorkflowCommittedResponse(
             workflow.WorkflowId,
             !string.IsNullOrWhiteSpace(parse.Document?.Name) ? parse.Document.Name : ResolveWorkflowDisplayName(workflow),
-            $"{workflow.WorkflowId}.yaml",
-            $"{scopeDirectory.Path}/{workflow.WorkflowId}.yaml",
-            scopeDirectory.DirectoryId,
-            scopeDirectory.Label,
             yaml,
             parse.Document,
-            layout,
             findings,
             workflow.UpdatedAt);
-    }
-
-    private WorkflowSummary ToWorkflowSummary(
-        string scopeId,
-        ScopeWorkflowSummary workflow,
-        IReadOnlySet<string> persistedLayoutWorkflowIds,
-        WorkflowDraft? draft)
-    {
-        var parse = !string.IsNullOrWhiteSpace(draft?.Yaml)
-            ? _yamlDocumentService.Parse(draft.Yaml)
-            : null;
-        var scopeDirectory = CreateScopeDirectory(scopeId);
-        return new WorkflowSummary(
-            workflow.WorkflowId,
-            ResolveWorkflowSummaryName(workflow, draft, parse),
-            parse?.Document?.Description ?? string.Empty,
-            $"{workflow.WorkflowId}.yaml",
-            $"{scopeDirectory.Path}/{workflow.WorkflowId}.yaml",
-            scopeDirectory.DirectoryId,
-            scopeDirectory.Label,
-            parse?.Document?.Steps.Count ?? 0,
-            HasPersistedLayout(persistedLayoutWorkflowIds, workflow.WorkflowId),
-            ResolveWorkflowSummaryUpdatedAt(workflow, draft));
     }
 
     private static string ResolveWorkflowDisplayName(ScopeWorkflowSummary workflow)
@@ -334,32 +379,6 @@ public sealed class AppScopedWorkflowService
             return workflow.WorkflowName;
 
         return workflow.WorkflowId;
-    }
-
-    private IReadOnlyList<WorkflowSummary> MergeDraftSummaries(
-        string scopeId,
-        IReadOnlyList<WorkflowSummary> runtimeSummaries,
-        IReadOnlyDictionary<string, WorkflowDraft> draftsById,
-        IReadOnlySet<string> persistedLayoutWorkflowIds)
-    {
-        if (draftsById.Count == 0)
-            return runtimeSummaries;
-
-        var merged = runtimeSummaries.ToDictionary(summary => summary.WorkflowId, StringComparer.Ordinal);
-        foreach (var draft in draftsById.Values)
-        {
-            if (merged.ContainsKey(draft.WorkflowId))
-                continue;
-
-            merged[draft.WorkflowId] = ToDraftWorkflowSummary(
-                scopeId,
-                draft,
-                persistedLayoutWorkflowIds);
-        }
-
-        return merged.Values
-            .OrderByDescending(static item => item.UpdatedAtUtc)
-            .ToList();
     }
 
     private async Task<IReadOnlyDictionary<string, WorkflowDraft>> ListDraftsByIdAsync(
@@ -421,14 +440,14 @@ public sealed class AppScopedWorkflowService
         }
     }
 
-    private WorkflowSummary ToDraftWorkflowSummary(
+    private WorkflowDraftSummary ToDraftWorkflowSummary(
         string scopeId,
         WorkflowDraft draft,
         IReadOnlySet<string> persistedLayoutWorkflowIds)
     {
         var parse = _yamlDocumentService.Parse(draft.Yaml);
         var scopeDirectory = CreateScopeDirectory(scopeId);
-        return new WorkflowSummary(
+        return new WorkflowDraftSummary(
             draft.WorkflowId,
             ResolveDraftWorkflowName(draft, parse),
             parse.Document?.Description ?? string.Empty,
@@ -439,6 +458,63 @@ public sealed class AppScopedWorkflowService
             parse.Document?.Steps.Count ?? 0,
             HasPersistedLayout(persistedLayoutWorkflowIds, draft.WorkflowId),
             draft.UpdatedAtUtc ?? DateTimeOffset.UtcNow);
+    }
+
+    private WorkflowSummary ToLegacyWorkflowSummary(
+        string scopeId,
+        ScopeWorkflowSummary workflow,
+        IReadOnlySet<string> persistedLayoutWorkflowIds,
+        WorkflowDraft? draft)
+    {
+        var parse = !string.IsNullOrWhiteSpace(draft?.Yaml)
+            ? _yamlDocumentService.Parse(draft.Yaml)
+            : null;
+        var scopeDirectory = CreateScopeDirectory(scopeId);
+        return new WorkflowSummary(
+            workflow.WorkflowId,
+            ResolveWorkflowSummaryName(workflow, draft, parse),
+            parse?.Document?.Description ?? string.Empty,
+            $"{workflow.WorkflowId}.yaml",
+            $"{scopeDirectory.Path}/{workflow.WorkflowId}.yaml",
+            scopeDirectory.DirectoryId,
+            scopeDirectory.Label,
+            parse?.Document?.Steps.Count ?? 0,
+            HasPersistedLayout(persistedLayoutWorkflowIds, workflow.WorkflowId),
+            ResolveWorkflowSummaryUpdatedAt(workflow, draft));
+    }
+
+    private IReadOnlyList<WorkflowSummary> MergeLegacyDraftSummaries(
+        string scopeId,
+        IReadOnlyList<WorkflowSummary> runtimeSummaries,
+        IReadOnlyDictionary<string, WorkflowDraft> draftsById,
+        IReadOnlySet<string> persistedLayoutWorkflowIds)
+    {
+        if (draftsById.Count == 0)
+            return runtimeSummaries;
+
+        var merged = runtimeSummaries.ToDictionary(summary => summary.WorkflowId, StringComparer.Ordinal);
+        foreach (var draft in draftsById.Values)
+        {
+            if (merged.ContainsKey(draft.WorkflowId))
+                continue;
+
+            var nextDraftSummary = ToDraftWorkflowSummary(scopeId, draft, persistedLayoutWorkflowIds);
+            merged[draft.WorkflowId] = new WorkflowSummary(
+                nextDraftSummary.WorkflowId,
+                nextDraftSummary.Name,
+                nextDraftSummary.Description,
+                nextDraftSummary.FileName,
+                nextDraftSummary.FilePath,
+                nextDraftSummary.DirectoryId,
+                nextDraftSummary.DirectoryLabel,
+                nextDraftSummary.StepCount,
+                nextDraftSummary.HasLayout,
+                nextDraftSummary.UpdatedAtUtc);
+        }
+
+        return merged.Values
+            .OrderByDescending(static item => item.UpdatedAtUtc)
+            .ToList();
     }
 
     private IReadOnlySet<string> ListPersistedLayoutWorkflowIds(string scopeId)
@@ -486,42 +562,6 @@ public sealed class AppScopedWorkflowService
         string workflowId) =>
         persistedLayoutWorkflowIds.Contains(StudioDocumentIdNormalizer.Normalize(workflowId, "workflow"));
 
-    private WorkflowFileResponse ToDraftWorkflowFileResponse(
-        string scopeId,
-        WorkflowDraft draft,
-        WorkflowLayoutDocument? layout)
-    {
-        var parse = _yamlDocumentService.Parse(draft.Yaml);
-        var scopeDirectory = CreateScopeDirectory(scopeId);
-        return new WorkflowFileResponse(
-            draft.WorkflowId,
-            ResolveDraftWorkflowName(draft, parse),
-            $"{draft.WorkflowId}.yaml",
-            $"{scopeDirectory.Path}/{draft.WorkflowId}.yaml",
-            scopeDirectory.DirectoryId,
-            scopeDirectory.Label,
-            draft.Yaml,
-            parse.Document,
-            layout,
-            parse.Findings,
-            draft.UpdatedAtUtc);
-    }
-
-    private static string ResolveDraftWorkflowName(
-        WorkflowDraft draft,
-        WorkflowParseResult parseResult)
-    {
-        var parsedName = parseResult.Document?.Name?.Trim();
-        if (!string.IsNullOrWhiteSpace(parsedName))
-            return parsedName;
-
-        var storedName = draft.WorkflowName?.Trim();
-        if (!string.IsNullOrWhiteSpace(storedName))
-            return storedName;
-
-        return draft.WorkflowId;
-    }
-
     private static string ResolveWorkflowSummaryName(
         ScopeWorkflowSummary workflow,
         WorkflowDraft? draft,
@@ -549,6 +589,143 @@ public sealed class AppScopedWorkflowService
         }
 
         return workflow.UpdatedAt;
+    }
+
+    private WorkflowDraftResponse ToDraftWorkflowResponse(
+        string scopeId,
+        WorkflowDraft draft,
+        WorkflowLayoutDocument? layout)
+    {
+        var scopeDirectory = CreateScopeDirectory(scopeId);
+        return new WorkflowDraftResponse(
+            draft.WorkflowId,
+            ResolveDraftWorkflowName(draft, _yamlDocumentService.Parse(draft.Yaml)),
+            $"{draft.WorkflowId}.yaml",
+            $"{scopeDirectory.Path}/{draft.WorkflowId}.yaml",
+            scopeDirectory.DirectoryId,
+            scopeDirectory.Label,
+            draft.Yaml,
+            layout,
+            draft.UpdatedAtUtc ?? DateTimeOffset.UtcNow);
+    }
+
+    private WorkflowFileResponse ToLegacyDraftWorkflowFileResponse(
+        string scopeId,
+        WorkflowDraft draft,
+        WorkflowLayoutDocument? layout)
+    {
+        var parse = _yamlDocumentService.Parse(draft.Yaml);
+        var scopeDirectory = CreateScopeDirectory(scopeId);
+        return new WorkflowFileResponse(
+            draft.WorkflowId,
+            ResolveDraftWorkflowName(draft, parse),
+            $"{draft.WorkflowId}.yaml",
+            $"{scopeDirectory.Path}/{draft.WorkflowId}.yaml",
+            scopeDirectory.DirectoryId,
+            scopeDirectory.Label,
+            draft.Yaml,
+            parse.Document,
+            layout,
+            parse.Findings,
+            draft.UpdatedAtUtc);
+    }
+
+    private WorkflowFileResponse ToLegacyCommittedWorkflowFileResponse(
+        string scopeId,
+        ScopeWorkflowSummary workflow,
+        string yaml,
+        WorkflowLayoutDocument? layout,
+        WorkflowParseResult? parseResult = null,
+        string? findingsFallbackMessage = null)
+    {
+        var parse = parseResult ?? _yamlDocumentService.Parse(yaml);
+        var findings = parse.Findings;
+        if (parse.Document == null &&
+            findings.Count == 0 &&
+            !string.IsNullOrWhiteSpace(findingsFallbackMessage))
+        {
+            findings =
+            [
+                new ValidationFinding(
+                    ValidationLevel.Error,
+                    "/",
+                    findingsFallbackMessage),
+            ];
+        }
+
+        var scopeDirectory = CreateScopeDirectory(scopeId);
+        return new WorkflowFileResponse(
+            workflow.WorkflowId,
+            !string.IsNullOrWhiteSpace(parse.Document?.Name) ? parse.Document.Name : ResolveWorkflowDisplayName(workflow),
+            $"{workflow.WorkflowId}.yaml",
+            $"{scopeDirectory.Path}/{workflow.WorkflowId}.yaml",
+            scopeDirectory.DirectoryId,
+            scopeDirectory.Label,
+            yaml,
+            parse.Document,
+            layout,
+            findings,
+            workflow.UpdatedAt);
+    }
+
+    private WorkflowFileResponse ToLegacyWorkflowFileResponse(WorkflowDraftResponse draftResponse)
+    {
+        var parse = _yamlDocumentService.Parse(draftResponse.Yaml);
+        return new WorkflowFileResponse(
+            draftResponse.WorkflowId,
+            draftResponse.Name,
+            draftResponse.FileName,
+            draftResponse.FilePath,
+            draftResponse.DirectoryId,
+            draftResponse.DirectoryLabel,
+            draftResponse.Yaml,
+            parse.Document,
+            draftResponse.Layout,
+            parse.Findings,
+            draftResponse.UpdatedAtUtc);
+    }
+
+    private static string ResolveDraftWorkflowName(
+        WorkflowDraft draft,
+        WorkflowParseResult parseResult)
+    {
+        var parsedName = parseResult.Document?.Name?.Trim();
+        if (!string.IsNullOrWhiteSpace(parsedName))
+            return parsedName;
+
+        var storedName = draft.WorkflowName?.Trim();
+        if (!string.IsNullOrWhiteSpace(storedName))
+            return storedName;
+
+        return draft.WorkflowId;
+    }
+
+    private async Task<string> CreateScopedWorkflowIdAsync(
+        string scopeId,
+        string workflowName,
+        CancellationToken ct)
+    {
+        var baseWorkflowId = StudioDocumentIdNormalizer.Normalize(workflowName, "workflow");
+        var draftStore = _workflowDraftStore
+            ?? throw new InvalidOperationException("Scoped workflow draft storage is not configured.");
+        var existingIds = (await draftStore.ListDraftsAsync(scopeId, ct))
+            .Select(static draft => draft.WorkflowId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!existingIds.Contains(baseWorkflowId))
+        {
+            return baseWorkflowId;
+        }
+
+        for (var suffix = 2; suffix < int.MaxValue; suffix++)
+        {
+            var candidate = $"{baseWorkflowId}-{suffix}";
+            if (!existingIds.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException("Unable to allocate a unique scoped workflow draft id.");
     }
 
     private async Task<T?> SendAsync<T>(

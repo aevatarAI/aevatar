@@ -45,7 +45,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task SaveAsync_ShouldPersistScopedDraftWithoutCallingRuntimePorts()
+    public async Task CreateDraftAsync_ShouldPersistScopedDraftWithoutCallingRuntimePorts()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var runtimePorts = new RuntimePortSpies();
@@ -58,10 +58,9 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             serviceLifecycleQueryPort: runtimePorts.ServiceLifecycleQueryPort,
             workflowDraftStore: storagePort);
 
-        var saved = await service.SaveDraftAsync(
+        var saved = await service.CreateDraftAsync(
             "scope-1",
-            new SaveWorkflowFileRequest(
-                WorkflowId: null,
+            new SaveWorkflowDraftRequest(
                 DirectoryId: "scope:scope-1",
                 WorkflowName: "workflow-1",
                 FileName: null,
@@ -74,7 +73,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task ListAsync_WhenLayoutSidecarExists_ShouldMarkWorkflowSummaryAsHavingLayout()
+    public async Task ListDraftsAsync_WhenLayoutSidecarExists_ShouldMarkWorkflowSummaryAsHavingLayout()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var runtimePorts = new RuntimePortSpies();
@@ -95,7 +94,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         Directory.CreateDirectory(Path.GetDirectoryName(layoutPath)!);
         await File.WriteAllTextAsync(layoutPath, "{}");
 
-        var summaries = await service.ListAsync("scope-1");
+        var summaries = await service.ListDraftsAsync("scope-1");
 
         summaries.Should().ContainSingle();
         summaries[0].WorkflowId.Should().Be("workflow-1");
@@ -150,7 +149,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task SaveAsync_WhenStoragePortThrows_ShouldPropagateAndNotWriteLayoutSidecar()
+    public async Task CreateDraftAsync_WhenStoragePortThrows_ShouldPropagateAndNotWriteLayoutSidecar()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var service = environment.CreateService(
@@ -158,10 +157,9 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 new InvalidOperationException("chrono-storage is unavailable")));
         var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
 
-        var act = () => service.SaveDraftAsync(
+        var act = () => service.CreateDraftAsync(
             "scope-1",
-            new SaveWorkflowFileRequest(
-                WorkflowId: null,
+            new SaveWorkflowDraftRequest(
                 DirectoryId: "scope:scope-1",
                 WorkflowName: "workflow-1",
                 FileName: null,
