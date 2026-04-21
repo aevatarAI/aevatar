@@ -401,6 +401,17 @@ internal static class ChannelReceiverTracker
             }
         }
 
+        // Methods whose return type matches the hint are also receivers — call sites like
+        // `ResolvePort().SendAsync(...)` or `this.ResolveStore().WriteAsync(...)` need the method
+        // identifier in the set so they are flagged.
+        foreach (var method in type.Members.OfType<MethodDeclarationSyntax>())
+        {
+            if (MethodReturnTypeMatches(method, typeHint))
+            {
+                names.Add(method.Identifier.ValueText);
+            }
+        }
+
         return names;
     }
 
@@ -583,12 +594,41 @@ internal static class ChannelReceiverTracker
         {
             IdentifierNameSyntax id => id.Identifier.ValueText,
             MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+            // A method-return receiver such as `ResolvePort().SendAsync(...)` or
+            // `this.ResolveStore().WriteAsync(...)` exposes the callee's name: recurse into the
+            // invocation's callee expression so the leaf resolves to the method identifier.
+            InvocationExpressionSyntax invocation => ExtractLeafName(invocation.Expression),
+            ConditionalAccessExpressionSyntax conditional => ExtractLeafName(conditional.WhenNotNull) ?? ExtractLeafName(conditional.Expression),
+            MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText,
             ParenthesizedExpressionSyntax parens => ExtractLeafName(parens.Expression),
             AwaitExpressionSyntax awaitExpr => ExtractLeafName(awaitExpr.Expression),
             CastExpressionSyntax cast => ExtractLeafName(cast.Expression),
             PostfixUnaryExpressionSyntax postfix => ExtractLeafName(postfix.Operand),
             _ => null,
         };
+    }
+
+    private static bool MethodReturnTypeMatches(MethodDeclarationSyntax method, string typeHint)
+    {
+        if (TypeTextMatches(method.ReturnType, typeHint))
+        {
+            return true;
+        }
+
+        // Unwrap Task<IFoo> / ValueTask<IFoo> / async iterator wrappers — `ResolvePortAsync()`
+        // returning `Task<IChannelOutboundPort>` should still count as a receiver source.
+        if (method.ReturnType is GenericNameSyntax generic)
+        {
+            foreach (var argument in generic.TypeArgumentList.Arguments)
+            {
+                if (TypeTextMatches(argument, typeHint))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool TypeTextMatches(TypeSyntax type, string typeHint)
@@ -831,6 +871,24 @@ internal static class ChannelSourceIndex
                 if (parameter.Type?.ToString().Contains(typeHint, System.StringComparison.Ordinal) == true)
                 {
                     names.Add(parameter.Identifier.ValueText);
+                }
+            }
+
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                var returnText = method.ReturnType.ToString();
+                if (returnText.Contains(typeHint, System.StringComparison.Ordinal))
+                {
+                    names.Add(method.Identifier.ValueText);
+                }
+            }
+
+            foreach (var localFunction in root.DescendantNodes().OfType<LocalFunctionStatementSyntax>())
+            {
+                var returnText = localFunction.ReturnType.ToString();
+                if (returnText.Contains(typeHint, System.StringComparison.Ordinal))
+                {
+                    names.Add(localFunction.Identifier.ValueText);
                 }
             }
         }
