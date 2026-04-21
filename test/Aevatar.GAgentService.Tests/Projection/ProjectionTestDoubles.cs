@@ -45,6 +45,16 @@ internal sealed class RecordingDocumentStore<TReadModel> :
         return Task.FromResult(ProjectionWriteResult.Applied());
     }
 
+    public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+    {
+        var existingIndex = _items.FindIndex(x => string.Equals(_keySelector(x), id, StringComparison.Ordinal));
+        if (existingIndex < 0)
+            return Task.FromResult(ProjectionWriteResult.Duplicate());
+
+        _items.RemoveAt(existingIndex);
+        return Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
     public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(_items.FirstOrDefault(x => string.Equals(_keySelector(x), key, StringComparison.Ordinal)));
 

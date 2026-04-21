@@ -1,0 +1,4 @@
+version: v1
+directories:
+  - agents/Aevatar.GAgents.Channel.Abstractions/protos
+  - agents/Aevatar.GAgents.Channel.Runtime/protos
