@@ -323,6 +323,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         // Send reply via platform adapter.
         var replySucceeded = false;
+        var shouldComplete = forceComplete;
         try
         {
             var delivery = await SendPlatformReplyAsync(session, replyText);
@@ -338,6 +339,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                     session.SessionId,
                     delivery.Detail);
                 RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId, delivery.Detail);
+                if (delivery.FailureKind == PlatformReplyFailureKind.Permanent)
+                {
+                    shouldComplete = true;
+                    RecordDiagnostic("Reply:permanent", session.Platform, session.RegistrationId, delivery.Detail);
+                }
             }
         }
         catch (Exception ex)
@@ -350,7 +356,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         // On reply failure from HandleChatEnd, keep the session open so the
         // timeout can retry. On timeout (forceComplete), always complete.
-        if (!replySucceeded && !forceComplete)
+        if (!replySucceeded && !shouldComplete)
             return;
 
         // Persist completion (removes from pending_sessions via state transition)

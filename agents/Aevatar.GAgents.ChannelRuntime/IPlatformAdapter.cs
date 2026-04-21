@@ -37,6 +37,14 @@ public interface IPlatformAdapter
         CancellationToken ct);
 }
 
+public enum PlatformReplyFailureKind
+{
+    None = 0,
+    Transient = 1,
+    Permanent = 2,
+}
+
 public readonly record struct PlatformReplyDeliveryResult(
     bool Succeeded,
-    string? Detail = null);
+    string? Detail = null,
+    PlatformReplyFailureKind FailureKind = PlatformReplyFailureKind.None);
