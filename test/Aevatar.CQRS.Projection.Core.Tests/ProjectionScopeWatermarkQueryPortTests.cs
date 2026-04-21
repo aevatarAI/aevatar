@@ -9,6 +9,14 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ProjectionScopeWatermarkQueryPortTests
 {
     [Fact]
+    public void Constructor_ThrowsWhenEventStoreIsNull()
+    {
+        var act = () => new EventStoreProjectionScopeWatermarkQueryPort(null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
     public async Task GetLastSuccessfulVersionAsync_ReplaysProjectionScopeWatermark()
     {
         var eventStore = new InMemoryEventStore();
@@ -54,6 +62,21 @@ public sealed class ProjectionScopeWatermarkQueryPortTests
     }
 
     [Fact]
+    public async Task GetLastSuccessfulVersionAsync_ReturnsNullWhenScopeStreamIsEmpty()
+    {
+        var eventStore = new InMemoryEventStore();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "root-actor",
+            "device-registration",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var sut = new EventStoreProjectionScopeWatermarkQueryPort(eventStore);
+
+        var watermark = await sut.GetLastSuccessfulVersionAsync(scopeKey);
+
+        watermark.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetLastSuccessfulVersionAsync_ReturnsNullWhenScopeWasReleased()
     {
         var eventStore = new InMemoryEventStore();
@@ -85,6 +108,76 @@ public sealed class ProjectionScopeWatermarkQueryPortTests
         watermark.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetLastSuccessfulVersionAsync_ReplaysAncillaryEventsAndIgnoresUnsupportedPayloads()
+    {
+        var eventStore = new InMemoryEventStore();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "root-actor",
+            "channel-bot-registration",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
+
+        await eventStore.AppendAsync(
+            scopeActorId,
+            [
+                CreateStateEvent(
+                    1,
+                    new ProjectionScopeStartedEvent
+                    {
+                        RootActorId = scopeKey.RootActorId,
+                        ProjectionKind = scopeKey.ProjectionKind,
+                        Mode = ProjectionScopeMode.DurableMaterialization,
+                    }),
+                CreateStateEvent(
+                    2,
+                    new ProjectionObservationAttachmentUpdatedEvent
+                    {
+                        Attached = true,
+                    }),
+                CreateStateEvent(
+                    3,
+                    new ProjectionScopeDispatchFailedEvent
+                    {
+                        FailureId = "failure-1",
+                        Stage = "dispatch",
+                        EventId = "evt-source",
+                        EventType = "test.event",
+                        SourceVersion = 3,
+                        Reason = "boom",
+                        Envelope = new EventEnvelope { Id = "envelope-1" },
+                    }),
+                CreateStateEvent(
+                    4,
+                    new ProjectionScopeFailureReplayedEvent
+                    {
+                        FailureId = "failure-1",
+                        Succeeded = true,
+                    }),
+                CreateStateEventWithoutPayload(5),
+                CreateStateEvent(
+                    6,
+                    new StringValue
+                    {
+                        Value = "unsupported-but-harmless",
+                    }),
+                CreateStateEvent(
+                    7,
+                    new ProjectionScopeWatermarkAdvancedEvent
+                    {
+                        LastObservedVersion = 13,
+                        LastSuccessfulVersion = 13,
+                    }),
+            ],
+            expectedVersion: 0);
+
+        var sut = new EventStoreProjectionScopeWatermarkQueryPort(eventStore);
+
+        var watermark = await sut.GetLastSuccessfulVersionAsync(scopeKey);
+
+        watermark.Should().Be(13);
+    }
+
     private static StateEvent CreateStateEvent(long version, IMessage payload) =>
         new()
         {
@@ -94,6 +187,16 @@ public sealed class ProjectionScopeWatermarkQueryPortTests
             Timestamp = Timestamp.FromDateTime(DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)),
             EventType = payload.Descriptor.FullName,
             EventData = Any.Pack(payload),
+        };
+
+    private static StateEvent CreateStateEventWithoutPayload(long version) =>
+        new()
+        {
+            AgentId = "projection-scope",
+            EventId = $"evt-{version}",
+            Version = version,
+            Timestamp = Timestamp.FromDateTime(DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)),
+            EventType = string.Empty,
         };
 
     private sealed class InMemoryEventStore : IEventStore
