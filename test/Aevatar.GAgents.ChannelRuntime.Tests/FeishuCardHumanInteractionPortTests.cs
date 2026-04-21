@@ -60,7 +60,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         using var card = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
         card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("orange");
-        var formElement = card.RootElement.GetProperty("elements")[1];
+        var formElement = card.RootElement.GetProperty("body").GetProperty("elements")[1];
         formElement.GetProperty("tag").GetString().Should().Be("form");
         var editedContentInput = formElement.GetProperty("elements")[0];
         editedContentInput.GetProperty("name").GetString().Should().Be("edited_content");
@@ -161,7 +161,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("green");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Approval Recorded");
-        card.RootElement.GetProperty("elements")[0].GetProperty("content").GetString()
+        card.RootElement.GetProperty("body").GetProperty("elements")[0].GetProperty("content").GetString()
             .Should().Contain("posted below");
 
         using var textBody = JsonDocument.Parse(handler.Bodies[1]);
@@ -213,10 +213,10 @@ public sealed class FeishuCardHumanInteractionPortTests
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("red");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Rejection Recorded");
-        card.RootElement.GetProperty("elements")[0].GetProperty("content").GetString()
+        card.RootElement.GetProperty("body").GetProperty("elements")[0].GetProperty("content").GetString()
             .Should().Contain("Need stronger hook");
 
-        var actionElement = card.RootElement.GetProperty("elements")[1];
+        var actionElement = card.RootElement.GetProperty("body").GetProperty("elements")[1];
         actionElement.GetProperty("tag").GetString().Should().Be("action");
         var rerun = actionElement.GetProperty("actions")[0];
         rerun.GetProperty("text").GetProperty("content").GetString().Should().Be("Run Again");
@@ -246,7 +246,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         using var card = JsonDocument.Parse(json);
         card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("blue");
-        card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(1);
+        card.RootElement.GetProperty("body").GetProperty("elements").GetArrayLength().Should().Be(1);
     }
 
     [Fact]
@@ -265,11 +265,11 @@ public sealed class FeishuCardHumanInteractionPortTests
 
         using var card = JsonDocument.Parse(json);
         card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
-        card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(2);
-        card.RootElement.GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
-        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
+        card.RootElement.GetProperty("body").GetProperty("elements").GetArrayLength().Should().Be(2);
+        card.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
+        card.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
             .Should().Be("edited_content");
-        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[1].GetProperty("name").GetString()
+        card.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("elements")[1].GetProperty("name").GetString()
             .Should().Be("user_input");
     }
 
