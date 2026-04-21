@@ -13,11 +13,13 @@ namespace Aevatar.GAgents.Channel.Abstractions;
 /// <typeparam name="TState">The committed actor state message unpacked from the envelope.</typeparam>
 /// <typeparam name="TEntry">The entry type enumerated from the authoritative state.</typeparam>
 /// <typeparam name="TDocument">The read-model document written by the projection dispatcher.</typeparam>
-public abstract class PerEntryDocumentProjector<TState, TEntry, TDocument>
-    : ICurrentStateProjectionMaterializer<IProjectionMaterializationContext>
+/// <typeparam name="TContext">The concrete projection materialization context type surfaced by the DI registration.</typeparam>
+public abstract class PerEntryDocumentProjector<TState, TEntry, TDocument, TContext>
+    : ICurrentStateProjectionMaterializer<TContext>
     where TState : class, IMessage<TState>, new()
     where TEntry : class
     where TDocument : class, IProjectionReadModel<TDocument>, IMessage<TDocument>, new()
+    where TContext : class, IProjectionMaterializationContext
 {
     private readonly IProjectionWriteDispatcher<TDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
@@ -35,7 +37,7 @@ public abstract class PerEntryDocumentProjector<TState, TEntry, TDocument>
 
     /// <inheritdoc />
     public async ValueTask ProjectAsync(
-        IProjectionMaterializationContext context,
+        TContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
@@ -88,7 +90,8 @@ public abstract class PerEntryDocumentProjector<TState, TEntry, TDocument>
     }
 
     /// <summary>
-    /// Extracts every authoritative entry that should be considered by the projection loop.
+    /// Extracts every authoritative entry that should be considered by the projection loop,
+    /// including tombstoned entries retained for watermark coordination.
     /// </summary>
     protected abstract IEnumerable<TEntry> ExtractEntries(TState state);
 
@@ -102,7 +105,7 @@ public abstract class PerEntryDocumentProjector<TState, TEntry, TDocument>
     /// </summary>
     protected abstract TDocument Materialize(
         TEntry entry,
-        IProjectionMaterializationContext context,
+        TContext context,
         StateEvent stateEvent,
         DateTimeOffset updatedAt);
 

@@ -308,6 +308,10 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Delete_Dispatches_Tombstone_Command()
     {
+        // Under state-level tombstone retention (Channel RFC §7.1.1) the projector
+        // issues DeleteAsync on tombstone, so the post-delete projection document —
+        // and its StateVersion — are gone. Confirmation must succeed on document
+        // disappearance alone, without a version-bump signal.
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();
         queryPort.GetAsync("agent-3", Arg.Any<CancellationToken>())
             .Returns(
@@ -321,7 +325,7 @@ public sealed class AgentDeliveryTargetToolTests
                 }),
                 Task.FromResult<AgentRegistryEntry?>(null));
         queryPort.GetStateVersionAsync("agent-3", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(6), Task.FromResult<long?>(7));
+            .Returns(Task.FromResult<long?>(null));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns(AgentRegistryGAgent.WellKnownId);
@@ -354,6 +358,62 @@ public sealed class AgentDeliveryTargetToolTests
                 e.Payload != null &&
                 e.Payload.Is(AgentRegistryTombstoneCommand.Descriptor) &&
                 e.Payload.Unpack<AgentRegistryTombstoneCommand>().AgentId == "agent-3"));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_ConfirmsOnDocumentAbsence_WhenStateVersionIsGoneAfterTombstone()
+    {
+        // Regression guard for #278 review: the prior confirmation loop required
+        // versionAfter > versionBefore before checking document absence. Under
+        // the new tombstone-retention contract DeleteAsync removes the document
+        // (and its StateVersion) outright, so a successful tombstone must still
+        // surface as "deleted" when GetStateVersionAsync permanently returns null.
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("agent-7", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "agent-7",
+                    Platform = "lark",
+                    ConversationId = "oc_chat_7",
+                    NyxProviderSlug = "api-lark-bot",
+                    OwnerNyxUserId = "user-1",
+                }),
+                Task.FromResult<AgentRegistryEntry?>(null));
+        queryPort.GetStateVersionAsync("agent-7", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns(AgentRegistryGAgent.WellKnownId);
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-7","confirm":true}""");
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
         }
         finally
         {

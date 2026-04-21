@@ -26,7 +26,14 @@ public static class ServiceCollectionExtensions
     {
         // Memory cache for webhook dedup
         services.AddMemoryCache();
+        services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
+        services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, EventStoreProjectionScopeWatermarkQueryPort>();
+        if (configuration != null)
+        {
+            services.Configure<ChannelRuntimeTombstoneCompactionOptions>(
+                configuration.GetSection("ChannelRuntime:TombstoneCompaction"));
+        }
 
         // Projection pipeline shared infrastructure
         services.AddProjectionReadModelRuntime();
@@ -52,6 +59,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>,
             DeviceRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IDeviceRegistrationQueryPort, DeviceRegistrationQueryPort>();
+        services.TryAddSingleton<DeviceRegistrationProjectionPort>();
+        services.AddHostedService<DeviceRegistrationStartupService>();
 
         if (useElasticsearch)
         {
@@ -148,6 +157,8 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
+        services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
+        services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
 
         return services;
     }
