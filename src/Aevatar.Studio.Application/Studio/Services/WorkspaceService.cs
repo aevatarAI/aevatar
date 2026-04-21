@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Domain.Studio.Models;
@@ -82,7 +83,7 @@ public sealed class WorkspaceService
         return ToSettingsResponse(updated);
     }
 
-    public async Task<IReadOnlyList<WorkflowSummary>> ListWorkflowsAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<WorkflowDraftSummary>> ListDraftsAsync(CancellationToken cancellationToken = default)
     {
         var files = await _store.ListWorkflowFilesAsync(cancellationToken);
         return files
@@ -91,11 +92,42 @@ public sealed class WorkspaceService
             .Select(file =>
             {
                 var parsed = _yamlDocumentService.Parse(file.Yaml);
-                return ToWorkflowSummary(file, parsed.Document);
+                return ToWorkflowDraftSummary(file, parsed.Document);
             })
             .ToList();
     }
 
+    #pragma warning disable CS0618
+    [Obsolete("Use ListDraftsAsync.")]
+    public async Task<IReadOnlyList<WorkflowSummary>> ListWorkflowsAsync(CancellationToken cancellationToken = default)
+    {
+        return (await ListDraftsAsync(cancellationToken))
+            .Select(summary => new WorkflowSummary(
+                summary.WorkflowId,
+                summary.Name,
+                summary.Description,
+                summary.FileName,
+                summary.FilePath,
+                summary.DirectoryId,
+                summary.DirectoryLabel,
+                summary.StepCount,
+                summary.HasLayout,
+                summary.UpdatedAtUtc))
+            .ToList();
+    }
+
+    public async Task<WorkflowDraftResponse?> GetDraftAsync(string workflowId, CancellationToken cancellationToken = default)
+    {
+        var file = await _store.GetWorkflowFileAsync(workflowId, cancellationToken);
+        if (file is null)
+        {
+            return null;
+        }
+
+        return ToWorkflowDraftResponse(file);
+    }
+
+    [Obsolete("Use GetDraftAsync.")]
     public async Task<WorkflowFileResponse?> GetWorkflowAsync(string workflowId, CancellationToken cancellationToken = default)
     {
         var file = await _store.GetWorkflowFileAsync(workflowId, cancellationToken);
@@ -104,12 +136,55 @@ public sealed class WorkspaceService
             return null;
         }
 
-        return ToWorkflowFileResponse(file);
+        var parse = _yamlDocumentService.Parse(file.Yaml);
+        return new WorkflowFileResponse(
+            file.WorkflowId,
+            file.Name,
+            file.FileName,
+            file.FilePath,
+            file.DirectoryId,
+            file.DirectoryLabel,
+            file.Yaml,
+            parse.Document,
+            file.Layout,
+            parse.Findings,
+            file.UpdatedAtUtc);
     }
 
-    public async Task<WorkflowFileResponse> SaveWorkflowAsync(
+    public Task<WorkflowDraftResponse> CreateDraftAsync(
+        SaveWorkflowDraftRequest request,
+        CancellationToken cancellationToken = default)
+        => SaveDraftAsyncCore(null, request, cancellationToken);
+
+    public Task<WorkflowDraftResponse> UpdateDraftAsync(
+        string workflowId,
+        SaveWorkflowDraftRequest request,
+        CancellationToken cancellationToken = default)
+        => SaveDraftAsyncCore(NormalizeRequired(workflowId, nameof(workflowId)), request, cancellationToken);
+
+    [Obsolete("Use CreateDraftAsync or UpdateDraftAsync.")]
+    public Task<WorkflowDraftResponse> SaveWorkflowAsync(
         SaveWorkflowFileRequest request,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var nextRequest = new SaveWorkflowDraftRequest(
+            request.DirectoryId,
+            request.WorkflowName,
+            request.FileName,
+            request.Yaml,
+            request.Layout);
+        return string.IsNullOrWhiteSpace(request.WorkflowId)
+            ? CreateDraftAsync(nextRequest, cancellationToken)
+            : UpdateDraftAsync(request.WorkflowId, nextRequest, cancellationToken);
+    }
+    #pragma warning restore CS0618
+
+    private async Task<WorkflowDraftResponse> SaveDraftAsyncCore(
+        string? workflowId,
+        SaveWorkflowDraftRequest request,
+        CancellationToken cancellationToken)
     {
         var settings = await _store.GetSettingsAsync(cancellationToken);
         var directory = settings.Directories.FirstOrDefault(item =>
@@ -128,17 +203,38 @@ public sealed class WorkspaceService
         var normalizedFileName = EnsureYamlExtension(string.IsNullOrWhiteSpace(request.FileName)
             ? normalizedName
             : request.FileName.Trim());
+        var targetPath = Path.Combine(directory.Path, normalizedFileName);
+        var existingFiles = await _store.ListWorkflowFilesAsync(cancellationToken);
+        var conflictingFile = existingFiles.FirstOrDefault(file =>
+            string.Equals(file.FilePath, targetPath, StringComparison.OrdinalIgnoreCase));
+        var existingDraft = string.IsNullOrWhiteSpace(workflowId)
+            ? null
+            : await _store.GetWorkflowFileAsync(workflowId, cancellationToken);
 
-        var filePath = string.IsNullOrWhiteSpace(request.WorkflowId)
-            ? Path.Combine(directory.Path, normalizedFileName)
-            : DecodeStableId(request.WorkflowId);
+        if (!string.IsNullOrWhiteSpace(workflowId) && existingDraft is null)
+        {
+            throw new WorkflowDraftNotFoundException(workflowId);
+        }
+
+        var stableWorkflowId = string.IsNullOrWhiteSpace(workflowId)
+            ? GenerateWorkflowId(normalizedName, existingFiles.Select(file => file.WorkflowId))
+            : workflowId;
+
+        if (conflictingFile != null &&
+            !string.Equals(conflictingFile.WorkflowId, stableWorkflowId, StringComparison.Ordinal))
+        {
+            throw new WorkflowDraftPathConflictException(
+                stableWorkflowId,
+                $"{directory.Label}/{normalizedFileName}",
+                conflictingFile.WorkflowId);
+        }
 
         var stored = await _store.SaveWorkflowFileAsync(
             new StoredWorkflowFile(
-                WorkflowId: CreateStableId(filePath),
+                WorkflowId: stableWorkflowId,
                 Name: normalizedName,
-                FileName: Path.GetFileName(filePath),
-                FilePath: filePath,
+                FileName: Path.GetFileName(targetPath),
+                FilePath: targetPath,
                 DirectoryId: directory.DirectoryId,
                 DirectoryLabel: directory.Label,
                 Yaml: normalizedYaml,
@@ -146,65 +242,19 @@ public sealed class WorkspaceService
                 UpdatedAtUtc: DateTimeOffset.UtcNow),
             cancellationToken);
 
-        return ToWorkflowFileResponse(stored);
+        return ToWorkflowDraftResponse(stored);
     }
 
     public async Task DeleteDraftAsync(string workflowId, CancellationToken cancellationToken = default)
     {
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
-        string filePath;
-
-        try
+        var existingDraft = await _store.GetWorkflowFileAsync(normalizedWorkflowId, cancellationToken);
+        if (existingDraft is null)
         {
-            filePath = DecodeStableId(normalizedWorkflowId);
-        }
-        catch (FormatException exception)
-        {
-            throw new InvalidOperationException($"{nameof(workflowId)} is invalid.", exception);
+            throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
         }
 
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            throw new InvalidOperationException($"{nameof(workflowId)} is invalid.");
-        }
-
-        var settings = await _store.GetSettingsAsync(cancellationToken);
-        if (!IsInsideRegisteredDirectory(filePath, settings.Directories))
-        {
-            throw new InvalidOperationException($"{nameof(workflowId)} does not point to a registered workspace directory.");
-        }
-
-        await _store.DeleteWorkflowFileAsync(CreateStableId(filePath), cancellationToken);
-    }
-
-    private static bool IsInsideRegisteredDirectory(
-        string filePath,
-        IReadOnlyList<StudioWorkspaceDirectory> directories)
-    {
-        string fullFile;
-        try
-        {
-            fullFile = Path.GetFullPath(filePath);
-        }
-        catch (Exception exception) when (exception is ArgumentException or PathTooLongException or NotSupportedException)
-        {
-            return false;
-        }
-
-        foreach (var directory in directories)
-        {
-            if (string.IsNullOrWhiteSpace(directory.Path))
-                continue;
-
-            var fullDir = directory.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (fullDir.Length == 0)
-                continue;
-
-            if (fullFile.StartsWith(fullDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
+        await _store.DeleteWorkflowFileAsync(normalizedWorkflowId, cancellationToken);
     }
 
     private string AlignWorkflowYamlName(string yaml, string workflowName)
@@ -225,10 +275,8 @@ public sealed class WorkspaceService
         });
     }
 
-    private WorkflowFileResponse ToWorkflowFileResponse(StoredWorkflowFile file)
-    {
-        var parse = _yamlDocumentService.Parse(file.Yaml);
-        return new WorkflowFileResponse(
+    private static WorkflowDraftResponse ToWorkflowDraftResponse(StoredWorkflowFile file) =>
+        new(
             file.WorkflowId,
             file.Name,
             file.FileName,
@@ -236,11 +284,8 @@ public sealed class WorkspaceService
             file.DirectoryId,
             file.DirectoryLabel,
             file.Yaml,
-            parse.Document,
             file.Layout,
-            parse.Findings,
             file.UpdatedAtUtc);
-    }
 
     private static WorkspaceSettingsResponse ToSettingsResponse(StudioWorkspaceSettings settings) =>
         new(
@@ -253,7 +298,7 @@ public sealed class WorkspaceService
                     directory.IsBuiltIn))
                 .ToList());
 
-    private static WorkflowSummary ToWorkflowSummary(StoredWorkflowFile file, WorkflowDocument? document) =>
+    private static WorkflowDraftSummary ToWorkflowDraftSummary(StoredWorkflowFile file, WorkflowDocument? document) =>
         new(
             file.WorkflowId,
             string.IsNullOrWhiteSpace(document?.Name) ? file.Name : document.Name,
@@ -265,6 +310,27 @@ public sealed class WorkspaceService
             document?.Steps.Count ?? 0,
             file.Layout is not null,
             file.UpdatedAtUtc);
+
+    private static string GenerateWorkflowId(string workflowName, IEnumerable<string> existingWorkflowIds)
+    {
+        var baseId = StudioDocumentIdNormalizer.Normalize(workflowName, "workflow");
+        var usedIds = existingWorkflowIds.ToHashSet(StringComparer.Ordinal);
+        if (!usedIds.Contains(baseId))
+        {
+            return baseId;
+        }
+
+        for (var suffix = 2; suffix < int.MaxValue; suffix++)
+        {
+            var candidate = $"{baseId}-{suffix}";
+            if (!usedIds.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException("Unable to allocate a unique workflow draft id.");
+    }
 
     private static string NormalizeRuntimeBaseUrl(string url)
     {

@@ -2,7 +2,12 @@ using Cronos;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-internal static class SkillRunnerScheduleCalculator
+/// <summary>
+/// Cron/timezone helpers shared by channel-triggered scheduled runners (skill runner,
+/// workflow agent, agent-builder tooling). Pure and stateless; callers wrap the result
+/// with their own lease/persistence bookkeeping.
+/// </summary>
+internal static class ChannelScheduleCalculator
 {
     public static bool TryGetNextOccurrence(
         string cronExpression,
@@ -72,5 +77,11 @@ internal static class SkillRunnerScheduleCalculator
             error = ex.Message;
             return false;
         }
+    }
+
+    public static TimeSpan ComputeDueTime(DateTimeOffset nextRunAtUtc, DateTimeOffset nowUtc)
+    {
+        var delta = nextRunAtUtc - nowUtc;
+        return delta <= TimeSpan.Zero ? TimeSpan.FromSeconds(1) : delta;
     }
 }

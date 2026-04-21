@@ -2,16 +2,16 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class AgentRegistryQueryPort : IAgentRegistryQueryPort
+public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
 {
-    private readonly IProjectionDocumentReader<AgentRegistryDocument, string> _documentReader;
+    private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
 
-    public AgentRegistryQueryPort(IProjectionDocumentReader<AgentRegistryDocument, string> documentReader)
+    public UserAgentCatalogQueryPort(IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 
-    public async Task<AgentRegistryEntry?> GetAsync(string agentId, CancellationToken ct = default)
+    public async Task<UserAgentCatalogEntry?> GetAsync(string agentId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(agentId))
             return null;
@@ -29,7 +29,7 @@ public sealed class AgentRegistryQueryPort : IAgentRegistryQueryPort
         return document?.StateVersion;
     }
 
-    public async Task<IReadOnlyList<AgentRegistryEntry>> QueryAllAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<UserAgentCatalogEntry>> QueryAllAsync(CancellationToken ct = default)
     {
         var result = await _documentReader.QueryAsync(new ProjectionDocumentQuery { Take = 1000 }, ct);
         return result.Items
@@ -38,7 +38,7 @@ public sealed class AgentRegistryQueryPort : IAgentRegistryQueryPort
             .ToArray();
     }
 
-    private static AgentRegistryEntry ToEntry(AgentRegistryDocument document) =>
+    private static UserAgentCatalogEntry ToEntry(UserAgentCatalogDocument document) =>
         new()
         {
             AgentId = document.Id ?? string.Empty,
