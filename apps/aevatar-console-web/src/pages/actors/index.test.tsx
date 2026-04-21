@@ -153,10 +153,8 @@ describe("ActorsPage", () => {
 
     expect(container.textContent).toContain("Aevatar / Platform");
     expect(container.textContent).toContain("Topology");
-    expect(container.textContent).toContain(
-      "Topology 是 Platform 的运行关系追查台，围绕后端真实 workflow run actor 还原 graph、timeline、edge 和 snapshot 证据。",
-    );
     expect(container.textContent).toContain("真实数据");
+    expect(container.textContent).toContain("选择追查对象");
     expect(screen.getByPlaceholderText("输入 Actor ID")).toBeTruthy();
     expect(screen.getByPlaceholderText("筛选 Actor")).toBeTruthy();
     expect(screen.getByRole("button", { name: "刷新列表" })).toBeTruthy();
