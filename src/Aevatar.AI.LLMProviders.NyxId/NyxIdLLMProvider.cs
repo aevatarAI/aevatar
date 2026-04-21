@@ -164,10 +164,10 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                     "Check the model id and route configuration.",
                     upstreamSummary)),
             _ => (
-                NyxIdUpstreamFailureKind.NoResponse,
-                $"Upstream LLM route '{routeName}' did not respond for model '{model}'. "
+                NyxIdUpstreamFailureKind.ProviderError,
+                $"Provider error calling NyxID route '{routeName}' for model '{model}': "
                 + AppendUpstreamDetail(
-                    "Check connectivity to the NyxID service.",
+                    SummarizeSourceMessage(source),
                     upstreamSummary)),
         };
 
@@ -180,6 +180,18 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             return message;
 
         return $"{message} Upstream said: {upstreamSummary}";
+    }
+
+    private static string SummarizeSourceMessage(Exception source)
+    {
+        var raw = source.Message?.Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+            return $"{source.GetType().Name} thrown without a message.";
+
+        var collapsed = raw
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
+        return collapsed.Length > 500 ? collapsed[..500] + "…" : collapsed;
     }
 
     private static string? ExtractUpstreamSummary(string? body)

@@ -79,14 +79,28 @@ public sealed class NyxIdLLMProviderErrorClassificationTests
     }
 
     [Fact]
-    public void ClassifyUpstreamFailure_ShouldReportNoResponse_WhenStatusMissing()
+    public void ClassifyUpstreamFailure_ShouldReportProviderError_AndPreserveSourceMessage_WhenStatusMissing()
     {
         var route = CreateRoute("gateway", "gpt-4");
 
         var ex = NyxIdLLMProvider.ClassifyUpstreamFailure(new Exception("network down"), status: null, body: null, route);
 
-        ex.Kind.Should().Be(NyxIdUpstreamFailureKind.NoResponse);
-        ex.Message.Should().Contain("did not respond");
+        ex.Kind.Should().Be(NyxIdUpstreamFailureKind.ProviderError);
+        ex.Message.Should().Contain("Provider error");
+        ex.Message.Should().Contain("gateway");
+        ex.Message.Should().Contain("gpt-4");
+        ex.Message.Should().Contain("network down");
+    }
+
+    [Fact]
+    public void ClassifyUpstreamFailure_ShouldFallBackToTypeName_WhenSourceMessageIsBlank()
+    {
+        var route = CreateRoute("gateway", "gpt-4");
+
+        var ex = NyxIdLLMProvider.ClassifyUpstreamFailure(new InvalidOperationException(string.Empty), status: null, body: null, route);
+
+        ex.Kind.Should().Be(NyxIdUpstreamFailureKind.ProviderError);
+        ex.Message.Should().Contain(nameof(InvalidOperationException));
     }
 
     [Fact]

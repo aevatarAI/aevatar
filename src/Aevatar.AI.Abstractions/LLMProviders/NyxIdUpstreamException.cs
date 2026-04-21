@@ -40,5 +40,5 @@ public enum NyxIdUpstreamFailureKind
     AuthenticationFailed = 3,
     RequestRejected = 4,
     UpstreamServerError = 5,
-    NoResponse = 6,
+    ProviderError = 6,
 }
