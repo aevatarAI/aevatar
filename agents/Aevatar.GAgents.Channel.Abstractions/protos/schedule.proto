@@ -6,18 +6,30 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
 
 import "google/protobuf/timestamp.proto";
 
+// Carries the stable schedule state owned by schedulable channel actors.
 message ScheduleState {
+  // Whether the schedule is enabled.
   bool enabled = 1;
+  // The cron expression used to compute the schedule.
   string cron = 2;
+  // The IANA timezone identifier used to evaluate the cron expression.
   string timezone = 3;
+  // The next scheduled execution time in UTC.
   google.protobuf.Timestamp next_run_at = 4;
+  // The last completed execution time in UTC.
   google.protobuf.Timestamp last_run_at = 5;
+  // The consecutive scheduler error count.
   int32 error_count = 6;
 }
 
+// Describes how one projector should treat a state entry.
 enum ProjectionVerdict {
+  // Default zero value.
   PROJECTION_VERDICT_UNSPECIFIED = 0;
+  // Upsert the projected document.
   PROJECTION_VERDICT_PROJECT = 1;
+  // Ignore the entry for this materialization pass.
   PROJECTION_VERDICT_SKIP = 2;
+  // Delete the projected document for the entry.
   PROJECTION_VERDICT_TOMBSTONE = 3;
 }
