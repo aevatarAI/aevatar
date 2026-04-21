@@ -97,7 +97,10 @@ public sealed class ChannelArchitectureTests
 
                 foreach (var methodBody in ChannelReceiverTracker.EnumerateMethodBodies(typeDecl))
                 {
-                    var callableReceivers = ChannelReceiverTracker.ExpandLocalAliases(methodBody, typeReceivers);
+                    var callableReceivers = ChannelReceiverTracker.ExpandLocalAliases(
+                        methodBody,
+                        typeReceivers,
+                        "IChannelOutboundPort");
 
                     foreach (var invocation in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
                     {
@@ -243,13 +246,19 @@ public sealed class ChannelArchitectureTests
             foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
             {
                 var blobStoreReceivers = ChannelReceiverTracker.CollectTypeReceiverNames(typeDecl, "IBlobStore");
-                if (blobStoreReceivers.Count == 0)
-                {
-                    continue;
-                }
 
                 foreach (var methodBody in ChannelReceiverTracker.EnumerateMethodBodies(typeDecl))
                 {
+                    var callableBlobStores = ChannelReceiverTracker.ExpandLocalAliases(
+                        methodBody,
+                        blobStoreReceivers,
+                        "IBlobStore");
+
+                    if (callableBlobStores.Count == 0)
+                    {
+                        continue;
+                    }
+
                     var redactedProvenance = ChannelReceiverTracker.CollectRedactedProvenance(methodBody);
 
                     foreach (var invocation in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
@@ -261,7 +270,7 @@ public sealed class ChannelArchitectureTests
                         }
 
                         var receiverName = ChannelReceiverTracker.ExtractLeafName(member.Expression);
-                        if (receiverName is null || !blobStoreReceivers.Contains(receiverName))
+                        if (receiverName is null || !callableBlobStores.Contains(receiverName))
                         {
                             continue;
                         }
@@ -461,9 +470,42 @@ internal static class ChannelReceiverTracker
         }
     }
 
-    public static HashSet<string> ExpandLocalAliases(SyntaxNode methodBody, HashSet<string> seed)
+    public static HashSet<string> ExpandLocalAliases(SyntaxNode methodBody, HashSet<string> seed, string typeHint)
     {
         var set = new HashSet<string>(seed, System.StringComparer.Ordinal);
+
+        // Seed with local declarations whose declared type mentions the hint. This closes the
+        // delegate-based bypass (`Func<IChannelOutboundPort> resolve = ...; resolve().SendAsync(...)`)
+        // as well as `Lazy<IFoo>`, `Task<IFoo>`, `ValueTask<IFoo>`, `IEnumerable<IFoo>`, and plain
+        // `IFoo local = ...` declarations — anything whose type text contains the hint identifier
+        // as a whole-word segment.
+        foreach (var local in methodBody.DescendantNodes().OfType<LocalDeclarationStatementSyntax>())
+        {
+            if (!TypeTextMatches(local.Declaration.Type, typeHint))
+            {
+                continue;
+            }
+
+            foreach (var declarator in local.Declaration.Variables)
+            {
+                set.Add(declarator.Identifier.ValueText);
+            }
+        }
+
+        // Local functions whose return type matches the hint are also receivers.
+        foreach (var localFn in methodBody.DescendantNodes().OfType<LocalFunctionStatementSyntax>())
+        {
+            if (TypeTextMatches(localFn.ReturnType, typeHint))
+            {
+                set.Add(localFn.Identifier.ValueText);
+            }
+        }
+
+        // Lambdas assigned to a variable typed as a delegate returning IFoo are covered by the
+        // local-declaration seeding above (the variable's declared type is `Func<IFoo>`). Lambdas
+        // bound to `var` receive no explicit type annotation and are intentionally out of scope
+        // for this heuristic — enforce them via explicit `Func<IFoo>` typing.
+
         bool changed;
         do
         {
