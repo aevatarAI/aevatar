@@ -152,7 +152,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     [Fact]
     public async Task Inbound_Duplicate_IsDedupedByActivityId()
     {
-        if (WebhookFixture is null)
+        if (WebhookFixture is null && GatewayFixture is null)
             return;
 
         await using var lifetime = await StartAdapterAsync();
@@ -347,7 +347,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     [Fact]
     public async Task Inbound_MultipleBotInstances_RoutedCorrectly()
     {
-        if (WebhookFixture is null)
+        var webhookFixture = WebhookFixture;
+        if (webhookFixture is null)
             return;
 
         var primary = CreateBinding();
@@ -359,10 +360,10 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         ChatActivity secondaryActivity;
         try
         {
-            primaryActivity = await WebhookFixture.DispatchInboundToBindingAsync(
+            primaryActivity = await webhookFixture.DispatchInboundToBindingAsync(
                 primary,
                 InboundActivitySeed.DirectMessage("primary-tenant"));
-            secondaryActivity = await WebhookFixture.DispatchInboundToBindingAsync(
+            secondaryActivity = await webhookFixture.DispatchInboundToBindingAsync(
                 secondary,
                 InboundActivitySeed.DirectMessage("secondary-tenant"));
         }
