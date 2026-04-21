@@ -7,6 +7,7 @@
 - 定义 Agent/Actor/Runtime 的核心接口
 - 定义事件发布、流、模块与持久化接口
 - 定义框架级 connector 契约（`IConnector` / `IConnectorRegistry`）
+- 定义框架级凭证解析契约（`AuthContext` / `ICredentialProvider`）
 - 提供跨项目共享的 Proto 消息
 - 提供少量基础工具类型（如 `AgentId`、时间工具、属性标记）
 
@@ -26,6 +27,7 @@ Aevatar.Foundation.Abstractions/
 ├── Attributes/
 ├── EventModules/
 ├── Connectors/
+├── Credentials/
 ├── Context/
 ├── Propagation/
 ├── Persistence/
@@ -45,6 +47,7 @@ Aevatar.Foundation.Abstractions/
 - `IEventContext`：模块上下文的共性根接口
 - `IEventModule<TContext>`：可插拔事件处理模块（含优先级）
 - `IConnector` / `IConnectorRegistry`：命名 connector 调用契约与注册表
+- `AuthContext` / `ICredentialProvider`：principal-aware 凭证引用与延迟解析契约
 - `IStateStore<TState>` / `IEventStore`：状态与事件持久化契约
 
 ## Proto 说明
