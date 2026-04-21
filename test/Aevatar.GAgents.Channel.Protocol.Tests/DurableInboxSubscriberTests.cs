@@ -88,6 +88,24 @@ public sealed class DurableInboxSubscriberTests
     }
 
     [Fact]
+    public async Task OnNextAsync_AutoStartsWorker_WhenStartWasNotCalled()
+    {
+        // Wiring OnNextAsync directly as a stream handler must not hang if the caller forgets to
+        // call Start() — the subscriber auto-starts the worker on first delivery.
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pipeline = BuildPipeline(async (ctx, next, ct) =>
+        {
+            invoked.TrySetResult();
+            await next();
+        });
+
+        await using var subscriber = BuildSubscriber(pipeline);
+        // Deliberately skip subscriber.Start().
+        await subscriber.OnNextAsync(CreateActivity("act-autostart"));
+        invoked.Task.IsCompletedSuccessfully.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task OnNextAsync_WhenDisposedWithInFlightItems_SignalsRedelivery()
     {
         // If the subscriber is torn down while items are still buffered, the observer for those

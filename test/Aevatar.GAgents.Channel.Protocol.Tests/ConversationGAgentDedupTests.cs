@@ -150,6 +150,29 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleContinueCommandAsync_TransientFailureWithoutRetryAfter_StaysRetriable()
+    {
+        // Runner returns TransientFailure without an explicit retryAfter. Retry policy must derive
+        // from FailureKind (retriable), not from whether RetryAfter was supplied — otherwise the
+        // command id gets consumed and the caller cannot re-dispatch.
+        var runner = new RecordingTurnRunner
+        {
+            ContinueResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-9");
+
+        await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-transient"));
+
+        agent.State.ProcessedCommandIds.ShouldNotContain("cmd-transient");
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
+        var parsed = ConversationContinueFailedEvent.Parser.ParseFrom(events[0].EventData.Value);
+        parsed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.RetryAfterMs);
+        parsed.RetryAfterMs.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task HandleContinueCommandAsync_PermanentFailure_MarksCommandProcessed()
     {
         // Terminal (non-retryable) continue failures consume the command id so a buggy caller's

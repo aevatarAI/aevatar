@@ -70,20 +70,18 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
     }
 
     /// <summary>
-    /// Starts the worker loop that drains the bounded buffer into the pipeline.
+    /// Starts the worker loop that drains the bounded buffer into the pipeline. Idempotent and
+    /// safe to call concurrently; the worker is singleton-captured via <see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>.
+    /// <see cref="OnNextAsync"/> auto-starts if the caller forgot.
     /// </summary>
-    public void Start()
-    {
-        if (_worker is not null)
-            return;
-
-        _worker = Task.Run(() => WorkerLoopAsync(_cts.Token));
-    }
+    public void Start() => EnsureWorkerStarted();
 
     /// <summary>
     /// Delivery handler. Only returns after the pipeline has fully processed the activity, so a
     /// successful return signals "safe to commit" and a throw signals "redeliver". Bounded-buffer
     /// saturation at enqueue time throws <see cref="TimeoutException"/> for the same redelivery path.
+    /// Auto-starts the worker loop on first delivery so the handler can be wired directly to a
+    /// stream subscription without a separate <see cref="Start"/> call.
     /// </summary>
     public async Task OnNextAsync(ChatActivity activity)
     {
@@ -92,6 +90,7 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
         if (_cts.IsCancellationRequested)
             throw new InvalidOperationException("DurableInboxSubscriber is disposed.");
 
+        EnsureWorkerStarted();
         var pending = new PendingItem(activity);
         using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token))
         {
@@ -121,6 +120,21 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(activity);
         var turnCtx = _contextFactory(activity);
         return _pipeline.InvokeAsync(turnCtx, () => Task.CompletedTask, _cts.Token);
+    }
+
+    private void EnsureWorkerStarted()
+    {
+        if (Volatile.Read(ref _worker) is not null)
+            return;
+
+        // Build the task lazily and only publish it if we win the race; concurrent callers see
+        // a single worker without risk of accidentally starting two loops against one bounded channel.
+        var candidate = new Task<Task>(() => WorkerLoopAsync(_cts.Token));
+        var observed = Interlocked.CompareExchange(ref _worker, candidate.Unwrap(), null);
+        if (observed is null)
+        {
+            candidate.Start();
+        }
     }
 
     private async Task WorkerLoopAsync(CancellationToken ct)

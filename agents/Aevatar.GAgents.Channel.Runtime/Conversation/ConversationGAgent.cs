@@ -99,10 +99,7 @@ public sealed class ConversationGAgent : GAgentBase<ConversationGAgentState>
             ErrorSummary = result.ErrorSummary,
             FailedAtUnixMs = nowMs,
         };
-        if (result.RetryAfter is { } retry)
-            failed.RetryAfterMs = (long)retry.TotalMilliseconds;
-        else
-            failed.NotRetryable = new Google.Protobuf.WellKnownTypes.Empty();
+        AssignRetryPolicy(failed, result);
         await PersistDomainEventAsync(failed);
         Logger.LogWarning(
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
@@ -167,14 +164,28 @@ public sealed class ConversationGAgent : GAgentBase<ConversationGAgentState>
             ErrorSummary = result.ErrorSummary,
             FailedAtUnixMs = nowMs,
         };
-        if (result.RetryAfter is { } retry)
-            failed.RetryAfterMs = (long)retry.TotalMilliseconds;
-        else
-            failed.NotRetryable = new Google.Protobuf.WellKnownTypes.Empty();
+        AssignRetryPolicy(failed, result);
         await PersistDomainEventAsync(failed);
         Logger.LogWarning(
             "Continue command failed: cmd={CommandId} code={Code} kind={Kind}",
             cmd.CommandId, result.ErrorCode, result.FailureKind);
+    }
+
+    // Retry policy is driven by FailureKind, not by whether the caller supplied a backoff.
+    // Only PermanentAdapterError terminates the command id; every other kind is retriable and
+    // carries the supplied retry_after_ms (0 when omitted). This preserves transient recovery
+    // paths even when runners report a transient failure without an explicit backoff.
+    private static void AssignRetryPolicy(ConversationContinueFailedEvent failed, ConversationTurnResult result)
+    {
+        if (result.FailureKind == FailureKind.PermanentAdapterError)
+        {
+            failed.NotRetryable = new Google.Protobuf.WellKnownTypes.Empty();
+            return;
+        }
+
+        failed.RetryAfterMs = result.RetryAfter is { } retry
+            ? (long)retry.TotalMilliseconds
+            : 0;
     }
 
     private static string AuthPrincipalForContinue(ConversationContinueRequestedEvent cmd) =>
