@@ -462,6 +462,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                     ? statusProp.GetInt32()
                     : (int?)null;
                 var body = root.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() : null;
+                var message = root.TryGetProperty("message", out var messageProp) ? messageProp.GetString() : null;
 
                 if (TryBuildLarkPlatformErrorDetail(body, status, out var detail, out var failureKind))
                 {
@@ -470,11 +471,12 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                 }
 
                 var nyxDetail = $"nyx_error status={status?.ToString() ?? "unknown"}" +
-                                (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}");
+                                (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
+                                (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
                 failure = new PlatformReplyDeliveryResult(
                     false,
                     nyxDetail,
-                    ClassifyNyxProxyStatus(status));
+                    ClassifyNyxProxyFailure(status, message));
                 return true;
             }
 
@@ -555,9 +557,23 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             _ => PlatformReplyFailureKind.None,
         };
 
+    private static PlatformReplyFailureKind ClassifyNyxProxyFailure(int? status, string? message)
+    {
+        if (status.HasValue)
+            return ClassifyNyxProxyStatus(status);
+
+        // NyxIdApiClient exception envelopes omit status/body and only preserve the exception message.
+        // Treat them as transient so diagnostics retain useful context without promoting them to permanent.
+        return string.IsNullOrWhiteSpace(message)
+            ? PlatformReplyFailureKind.None
+            : PlatformReplyFailureKind.Transient;
+    }
+
     private static PlatformReplyFailureKind ClassifyLarkPlatformError(int errorCode, string? error, int? status)
     {
-        if (errorCode is 2001 or 230001 or 230002)
+        // 230001 means the receive target no longer exists or is invalid; 230002 means the
+        // configured bot/user is not in the target chat. Both require operator/configuration fixes.
+        if (errorCode is 230001 or 230002)
             return PlatformReplyFailureKind.Permanent;
 
         if (string.Equals(error, "token_expired", StringComparison.OrdinalIgnoreCase) ||

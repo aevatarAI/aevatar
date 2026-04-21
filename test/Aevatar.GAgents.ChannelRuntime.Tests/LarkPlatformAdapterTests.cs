@@ -906,6 +906,29 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
+    public async Task SendReplyAsync_preserves_proxy_exception_message_and_marks_it_transient()
+    {
+        var httpClient = new HttpClient(new ThrowingHandler(new HttpRequestException("dns failure")))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("nyx_error status=unknown message=dns failure");
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Transient);
+    }
+
+    [Fact]
     public async Task SendReplyAsync_returns_result_length_when_no_message_id_in_response()
     {
         var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"code":0,"msg":"success","data":{}}""", out _);
@@ -1070,5 +1093,11 @@ public class LarkPlatformAdapterTests
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(exception);
     }
 }
