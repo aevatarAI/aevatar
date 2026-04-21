@@ -85,8 +85,13 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         Array.Empty<CapabilityInterfaceParity>();
 
     /// <summary>
-    /// Returns the adapter-supplied reaction probe, or <see langword="null"/> when the adapter has no reaction surface.
+    /// Returns the adapter-supplied reaction probe.
     /// </summary>
+    /// <remarks>
+    /// Required whenever <see cref="ChannelCapabilities.SupportsReactions"/> is <see langword="true"/>. The reaction
+    /// conformance test fails when the capability is claimed but the probe is <see langword="null"/>, so adapters
+    /// cannot advertise reaction support without exercising it.
+    /// </remarks>
     protected virtual ReactionProbe? Reactions => null;
 
     /// <summary>
@@ -94,9 +99,10 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     /// the adapter's native mention syntax.
     /// </summary>
     /// <remarks>
-    /// Default returns <see langword="null"/> so the mention test self-skips. Adapters with platform-specific mention
-    /// syntax override to emit a seed whose <see cref="InboundActivitySeed.Text"/> contains the raw mention token and
-    /// whose <see cref="InboundActivitySeed.Mentions"/> carries the normalized participant.
+    /// Required whenever <see cref="ChannelCapabilities.SupportsMention"/> is <see langword="true"/>. The mention
+    /// conformance test fails when the capability is claimed but this hook returns <see langword="null"/>. Adapters
+    /// override to emit a seed whose <see cref="InboundActivitySeed.Text"/> contains the raw mention token and whose
+    /// <see cref="InboundActivitySeed.Mentions"/> carries the normalized participant.
     /// </remarks>
     protected virtual InboundActivitySeed? BuildBotMentionSeed(ChannelTransportBinding binding) => null;
 
@@ -105,7 +111,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     /// mention syntax so the test can verify other-participant mentions are preserved in normalized text.
     /// </summary>
     /// <remarks>
-    /// Default returns <see langword="null"/> so the test self-skips.
+    /// Required whenever <see cref="ChannelCapabilities.SupportsMention"/> is <see langword="true"/>.
     /// </remarks>
     protected virtual InboundActivitySeed? BuildParticipantMentionSeed() => null;
 
@@ -482,8 +488,10 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         await using var lifetime = await StartAdapterAsync();
         if (!CapabilitiesOf(lifetime.Adapter).SupportsReactions)
             return;
-        if (Reactions is null)
-            return;
+
+        Reactions.ShouldNotBeNull(
+            "SupportsReactions=true must be backed by an adapter-supplied ReactionProbe; the conformance suite cannot "
+                + "claim reaction coverage without one.");
 
         var reference = BuildDirectMessageReference(lifetime.Adapter);
         var sent = await lifetime.Adapter.SendAsync(
@@ -506,9 +514,13 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
             return;
 
         await using var lifetime = await StartAdapterAsync();
-        var seed = BuildBotMentionSeed(lifetime.Binding);
-        if (seed is null)
+        if (!CapabilitiesOf(lifetime.Adapter).SupportsMention)
             return;
+
+        var seed = BuildBotMentionSeed(lifetime.Binding);
+        seed.ShouldNotBeNull(
+            "SupportsMention=true requires an adapter-supplied BuildBotMentionSeed override; the suite cannot exercise "
+                + "bot-mention stripping without one.");
 
         var botId = lifetime.Binding.Bot.Bot.Value;
         var activity = await DispatchAsync(seed);
@@ -529,9 +541,13 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
             return;
 
         await using var lifetime = await StartAdapterAsync();
-        var seed = BuildParticipantMentionSeed();
-        if (seed is null)
+        if (!CapabilitiesOf(lifetime.Adapter).SupportsMention)
             return;
+
+        var seed = BuildParticipantMentionSeed();
+        seed.ShouldNotBeNull(
+            "SupportsMention=true requires an adapter-supplied BuildParticipantMentionSeed override; the suite cannot "
+                + "exercise other-participant mention preservation without one.");
 
         var activity = await DispatchAsync(seed);
 
