@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.abstractions;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
+
+import "google/protobuf/duration.proto";
+import "chat_activity.proto";
+
+enum ComposeCapability {
+  COMPOSE_CAPABILITY_UNSPECIFIED = 0;
+  COMPOSE_CAPABILITY_EXACT = 1;
+  COMPOSE_CAPABILITY_DEGRADED = 2;
+  COMPOSE_CAPABILITY_UNSUPPORTED = 3;
+}
+
+enum StreamingSupport {
+  STREAMING_SUPPORT_UNSPECIFIED = 0;
+  STREAMING_SUPPORT_NONE = 1;
+  STREAMING_SUPPORT_EDIT_LOOP_RATE_LIMITED = 2;
+  STREAMING_SUPPORT_NATIVE = 3;
+}
+
+enum PrincipalKind {
+  PRINCIPAL_KIND_UNSPECIFIED = 0;
+  PRINCIPAL_KIND_BOT = 1;
+  PRINCIPAL_KIND_ON_BEHALF_OF_USER = 2;
+}
+
+message EmitResult {
+  bool success = 1;
+  string sent_activity_id = 2;
+  ComposeCapability capability = 3;
+  google.protobuf.Duration retry_after = 4;
+  string error_code = 5;
+  string error_message = 6;
+}
+
+message ComposeContext {
+  ConversationReference conversation = 1;
+  ChannelCapabilities capabilities = 2;
+  map<string, string> annotations = 3;
+}
+
+message ChannelCapabilities {
+  bool supports_ephemeral = 1;
+  bool supports_edit = 2;
+  bool supports_delete = 3;
+  bool supports_thread = 4;
+  StreamingSupport streaming = 5;
+  bool supports_files = 6;
+  int32 max_message_length = 7;
+  bool supports_action_buttons = 8;
+  bool supports_confirm_dialog = 9;
+  bool supports_modal = 10;
+  bool supports_mention = 11;
+  bool supports_typing = 12;
+  bool supports_reactions = 13;
+  int32 recommended_stream_debounce_ms = 14;
+  int32 typing_keepalive_interval_ms = 15;
+  int32 typing_ttl_ms = 16;
+}
+
+message AuthContext {
+  PrincipalKind kind = 1;
+  string user_credential_ref = 2;
+  string on_behalf_of_user_id = 3;
+}
+
+message StreamChunk {
+  string delta = 1;
+  int64 sequence_number = 2;
+}

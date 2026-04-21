@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.abstractions;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+message ScheduleState {
+  bool enabled = 1;
+  string cron = 2;
+  string timezone = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  google.protobuf.Timestamp last_run_at = 5;
+  int32 error_count = 6;
+}
+
+enum ProjectionVerdict {
+  PROJECTION_VERDICT_UNSPECIFIED = 0;
+  PROJECTION_VERDICT_PROJECT = 1;
+  PROJECTION_VERDICT_SKIP = 2;
+  PROJECTION_VERDICT_TOMBSTONE = 3;
+}
