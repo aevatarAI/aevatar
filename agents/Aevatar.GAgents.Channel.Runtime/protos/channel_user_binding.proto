@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+import "google/protobuf/timestamp.proto";
+import "chat_activity.proto";
+
+message ChannelUserBindingState {
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 2;
+  string sender_canonical_id = 3;
+  string credential_ref = 4;
+  string preferences_json = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message BindUserCredentialCommand {
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 2;
+  string sender_canonical_id = 3;
+  string credential_ref = 4;
+}
+
+message UnbindUserCredentialCommand {
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 2;
+  string sender_canonical_id = 3;
+}
+
+message UpdateUserPreferencesCommand {
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 2;
+  string sender_canonical_id = 3;
+  string preferences_json = 4;
+}
+
+message UserCredentialBoundEvent {
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 2;
+  string sender_canonical_id = 3;
+  string credential_ref = 4;
+  google.protobuf.Timestamp bound_at = 5;
+}
+
+message UserCredentialUnboundEvent {
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 2;
+  string sender_canonical_id = 3;
+  google.protobuf.Timestamp unbound_at = 4;
+}
+
+message UserPreferencesUpdatedEvent {
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 2;
+  string sender_canonical_id = 3;
+  string preferences_json = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}

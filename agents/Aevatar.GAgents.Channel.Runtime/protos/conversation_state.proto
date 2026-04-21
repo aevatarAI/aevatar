@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+import "chat_activity.proto";
+
+message ConversationGAgentState {
+  aevatar.gagents.channel.abstractions.ConversationReference conversation = 1;
+  repeated string processed_message_ids = 2;
+  repeated string processed_command_ids = 3;
+  repeated PendingSession pending_sessions = 4;
+  int64 last_updated_unix_ms = 5;
+}
+
+message PendingSession {
+  string session_id = 1;
+  string correlation_id = 2;
+  int64 started_at_unix_ms = 3;
+}
