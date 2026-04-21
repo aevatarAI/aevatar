@@ -377,8 +377,12 @@ public class ChannelUserGAgentContinuationTests
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Create Daily Report Agent");
+        card.RootElement.GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
+        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
+            .Should().Be("github_username");
 
         agent.State.PendingSessions.Should().BeEmpty();
         agent.State.ProcessedMessageIds.Should().Contain("om_msg_1");
@@ -404,8 +408,12 @@ public class ChannelUserGAgentContinuationTests
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Create Social Media Agent");
+        card.RootElement.GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
+        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
+            .Should().Be("topic");
 
         agent.State.PendingSessions.Should().BeEmpty();
         agent.State.ProcessedMessageIds.Should().Contain("om_msg_1");

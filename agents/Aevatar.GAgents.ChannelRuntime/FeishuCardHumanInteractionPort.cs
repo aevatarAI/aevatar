@@ -92,21 +92,25 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         if (SupportsApproveReject(request))
         {
-            elements.Add(BuildEditedContentInput());
-            elements.Add(BuildFeedbackInput());
-            elements.Add(new
-            {
-                tag = "action",
-                actions = new object[]
+            elements.Add(BuildForm(
+                "human_interaction_form",
+                BuildEditedContentInput(),
+                BuildFeedbackInput(),
+                new
                 {
-                    BuildActionButton("Approve", "primary", request, approved: true),
-                    BuildActionButton("Reject", "default", request, approved: false),
-                },
-            });
+                    tag = "action",
+                    actions = new object[]
+                    {
+                        BuildActionButton("Approve", "primary", request, approved: true),
+                        BuildActionButton("Reject", "default", request, approved: false),
+                    },
+                }
+            ));
         }
 
         return JsonSerializer.Serialize(new
         {
+            schema = "2.0",
             config = new
             {
                 wide_screen_mode = true,
@@ -174,6 +178,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         return JsonSerializer.Serialize(new
         {
+            schema = "2.0",
             config = new
             {
                 wide_screen_mode = true,
@@ -284,6 +289,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         {
             tag = "button",
             type = style,
+            name = approved ? "approve" : "reject",
+            form_action_type = "submit",
             text = new
             {
                 tag = "plain_text",
@@ -296,6 +303,14 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 step_id = request.StepId,
                 approved,
             },
+        };
+
+    private static object BuildForm(string name, params object[] elements) =>
+        new
+        {
+            tag = "form",
+            name,
+            elements,
         };
 
     private static object BuildAgentActionButton(
