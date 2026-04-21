@@ -68,14 +68,18 @@ public sealed class FeishuCardHumanInteractionPortTests
         var feedbackInput = formElement.GetProperty("elements")[1];
         feedbackInput.GetProperty("name").GetString().Should().Be("user_input");
 
-        var actionElement = formElement.GetProperty("elements")[2];
-        actionElement.GetProperty("tag").GetString().Should().Be("action");
-        var approve = actionElement.GetProperty("actions")[0];
+        var approve = formElement.GetProperty("elements")[2];
+        approve.GetProperty("tag").GetString().Should().Be("button");
         approve.GetProperty("form_action_type").GetString().Should().Be("submit");
         approve.GetProperty("value").GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
         approve.GetProperty("value").GetProperty("run_id").GetString().Should().Be("run-1");
         approve.GetProperty("value").GetProperty("step_id").GetString().Should().Be("approval-1");
         approve.GetProperty("value").GetProperty("approved").GetBoolean().Should().BeTrue();
+
+        var reject = formElement.GetProperty("elements")[3];
+        reject.GetProperty("tag").GetString().Should().Be("button");
+        reject.GetProperty("form_action_type").GetString().Should().Be("submit");
+        reject.GetProperty("value").GetProperty("approved").GetBoolean().Should().BeFalse();
     }
 
     [Fact]
