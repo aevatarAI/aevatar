@@ -96,15 +96,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 "human_interaction_form",
                 BuildEditedContentInput(),
                 BuildFeedbackInput(),
-                new
-                {
-                    tag = "action",
-                    actions = new object[]
-                    {
-                        BuildActionButton("Approve", "primary", request, approved: true),
-                        BuildActionButton("Reject", "default", request, approved: false),
-                    },
-                }
+                BuildActionButton("Approve", "primary", request, approved: true),
+                BuildActionButton("Reject", "default", request, approved: false)
             ));
         }
 

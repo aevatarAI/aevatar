@@ -270,7 +270,7 @@ public class LarkPlatformAdapterTests
 
         using var card = JsonDocument.Parse(cardJson);
         var formElement = card.RootElement.GetProperty("body").GetProperty("elements")[1];
-        var approveActionValue = formElement.GetProperty("elements")[2].GetProperty("actions")[0].GetProperty("value").Clone();
+        var approveActionValue = formElement.GetProperty("elements")[2].GetProperty("value").Clone();
 
         var payload = new
         {
