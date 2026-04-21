@@ -58,18 +58,20 @@ public sealed class FeishuCardHumanInteractionPortTests
         body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
 
         using var card = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("orange");
-        var editedContentInput = card.RootElement.GetProperty("elements")[1];
-        editedContentInput.GetProperty("tag").GetString().Should().Be("input");
+        var formElement = card.RootElement.GetProperty("elements")[1];
+        formElement.GetProperty("tag").GetString().Should().Be("form");
+        var editedContentInput = formElement.GetProperty("elements")[0];
         editedContentInput.GetProperty("name").GetString().Should().Be("edited_content");
 
-        var feedbackInput = card.RootElement.GetProperty("elements")[2];
-        feedbackInput.GetProperty("tag").GetString().Should().Be("input");
+        var feedbackInput = formElement.GetProperty("elements")[1];
         feedbackInput.GetProperty("name").GetString().Should().Be("user_input");
 
-        var actionElement = card.RootElement.GetProperty("elements")[3];
+        var actionElement = formElement.GetProperty("elements")[2];
         actionElement.GetProperty("tag").GetString().Should().Be("action");
         var approve = actionElement.GetProperty("actions")[0];
+        approve.GetProperty("form_action_type").GetString().Should().Be("submit");
         approve.GetProperty("value").GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
         approve.GetProperty("value").GetProperty("run_id").GetString().Should().Be("run-1");
         approve.GetProperty("value").GetProperty("step_id").GetString().Should().Be("approval-1");
@@ -242,6 +244,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         });
 
         using var card = JsonDocument.Parse(json);
+        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("blue");
         card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(1);
     }
@@ -261,9 +264,13 @@ public sealed class FeishuCardHumanInteractionPortTests
         });
 
         using var card = JsonDocument.Parse(json);
-        card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(4);
-        card.RootElement.GetProperty("elements")[1].GetProperty("name").GetString().Should().Be("edited_content");
-        card.RootElement.GetProperty("elements")[2].GetProperty("name").GetString().Should().Be("user_input");
+        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
+        card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(2);
+        card.RootElement.GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
+        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
+            .Should().Be("edited_content");
+        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[1].GetProperty("name").GetString()
+            .Should().Be("user_input");
     }
 
     [Fact]
@@ -278,6 +285,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         });
 
         using var card = JsonDocument.Parse(json);
+        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("green");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Approval Recorded");
