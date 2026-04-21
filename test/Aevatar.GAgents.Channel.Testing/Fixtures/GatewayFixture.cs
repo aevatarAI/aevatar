@@ -30,9 +30,13 @@ public abstract class GatewayFixture
     public abstract Task DropConnectionWithoutPreStopAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Publishes one synthetic gateway event so the adapter surfaces it as a <see cref="ChatActivity"/>.
+    /// Publishes one synthetic gateway event and returns the normalized activity the adapter emitted in response.
     /// </summary>
-    public abstract Task PublishEventAsync(InboundActivitySeed seed, CancellationToken ct = default);
+    /// <remarks>
+    /// Conformance tests consume the returned activity directly, so gateway-only adapters do not need any additional
+    /// override to satisfy the inbound test matrix.
+    /// </remarks>
+    public abstract Task<ChatActivity> PublishEventAsync(InboundActivitySeed seed, CancellationToken ct = default);
 
     /// <summary>
     /// Gets the sequence number the fixture currently considers authoritative on the platform side.

@@ -54,6 +54,12 @@ public abstract class ChannelAdapterFaultTests<TAdapter>
     protected virtual IPayloadRedactor? Redactor => null;
 
     /// <summary>
+    /// Returns the adapter-owned streaming fault probe that drives and observes RFC §5.8 streaming fault scenarios.
+    /// Adapters with no streaming support can leave this <see langword="null"/>; streaming fault tests then self-skip.
+    /// </summary>
+    protected virtual StreamingFaultProbe? StreamingProbe => null;
+
+    /// <summary>
     /// Credential value the fault fixtures place into the raw payload. Leakage assertions verify this substring never
     /// reappears in persisted blob refs or in emit error messages.
     /// </summary>
@@ -198,8 +204,12 @@ public abstract class ChannelAdapterFaultTests<TAdapter>
         await using var lifetime = await StartAdapterAsync();
         if (CapabilitiesOf(lifetime.Adapter).Streaming == StreamingSupport.None)
             return;
+        if (StreamingProbe is null)
+            return;
 
-        await Task.Yield();
+        var interrupted = await StreamingProbe.DisposeWithoutCompleteMarksInterruptedAsync(CancellationToken.None);
+        interrupted.ShouldBeTrue(
+            "Disposing a StreamingHandle without CompleteAsync must mark the in-flight message as interrupted (RFC §5.8).");
     }
 
     [Fact]
@@ -208,8 +218,12 @@ public abstract class ChannelAdapterFaultTests<TAdapter>
         await using var lifetime = await StartAdapterAsync();
         if (CapabilitiesOf(lifetime.Adapter).Streaming == StreamingSupport.None)
             return;
+        if (StreamingProbe is null)
+            return;
 
-        await Task.Yield();
+        var reachedTerminal = await StreamingProbe.IntentDegradesMidwayReachesTerminalStateAsync(CancellationToken.None);
+        reachedTerminal.ShouldBeTrue(
+            "A streaming handle whose intent degrades mid-stream must still reach a terminal state instead of stalling.");
     }
 
     [Fact]
@@ -302,8 +316,12 @@ public abstract class ChannelAdapterFaultTests<TAdapter>
         await using var lifetime = await StartAdapterAsync();
         if (CapabilitiesOf(lifetime.Adapter).Streaming == StreamingSupport.None)
             return;
+        if (StreamingProbe is null)
+            return;
 
-        await Task.Yield();
+        var idempotent = await StreamingProbe.AppendIdempotentBySequenceNumberAsync(CancellationToken.None);
+        idempotent.ShouldBeTrue(
+            "StreamingHandle.AppendAsync must be idempotent by sequence number and must not dedupe by content (RFC §5.8).");
     }
 
     [Fact]

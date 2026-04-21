@@ -533,11 +533,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
             return await WebhookFixture.DispatchInboundAsync(seed, ct);
 
         if (GatewayFixture is not null)
-        {
-            await GatewayFixture.PublishEventAsync(seed, ct);
-            throw new NotSupportedException(
-                "Gateway fixtures must override DispatchAsync or expose a way to observe the emitted activity.");
-        }
+            return await GatewayFixture.PublishEventAsync(seed, ct);
 
         throw new InvalidOperationException("No inbound fixture configured.");
     }
