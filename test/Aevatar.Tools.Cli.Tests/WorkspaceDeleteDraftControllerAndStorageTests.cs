@@ -1,6 +1,7 @@
 using System.Net;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Domain.Studio.Models;
@@ -131,6 +132,31 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var badRequest = result.Should().BeOfType<BadRequestObjectResult>().Subject;
         badRequest.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         badRequest.Value.Should().BeEquivalentTo(new { message = "workflowId is required." });
+    }
+
+    [Fact]
+    public async Task CreateDraft_WhenDirectoryIdIsUnknown_ReturnsBadRequest()
+    {
+        var controller = CreateController(
+            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver());
+
+        var result = await controller.CreateDraft(
+            new SaveWorkflowDraftRequest(
+                DirectoryId: "missing-directory",
+                WorkflowName: "workflow-1",
+                FileName: null,
+                Yaml: "name: workflow-1\nsteps: []\n"),
+            null,
+            CancellationToken.None);
+
+        var badRequest = result.Result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        badRequest.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        badRequest.Value.Should().BeEquivalentTo(new
+        {
+            message = "Workflow directory 'missing-directory' was not found.",
+        });
     }
 
     [Fact]
@@ -325,7 +351,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
 
         public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromResult<WorkflowDraft?>(null);
+            Task.FromResult<WorkflowDraft?>(string.IsNullOrWhiteSpace(workflowId)
+                ? null
+                : new WorkflowDraft(
+                    workflowId,
+                    workflowId,
+                    $"name: {workflowId}\nsteps: []\n",
+                    DateTimeOffset.UtcNow));
 
         public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct)
         {
@@ -350,7 +382,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
 
         public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromResult<WorkflowDraft?>(null);
+            Task.FromResult<WorkflowDraft?>(string.IsNullOrWhiteSpace(workflowId)
+                ? null
+                : new WorkflowDraft(
+                    workflowId,
+                    workflowId,
+                    $"name: {workflowId}\nsteps: []\n",
+                    DateTimeOffset.UtcNow));
 
         public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
             Task.FromException(_exception);

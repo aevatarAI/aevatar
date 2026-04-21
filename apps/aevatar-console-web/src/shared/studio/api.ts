@@ -42,6 +42,7 @@ import type {
 } from "./models";
 import { normalizeStudioScopeBindingImplementationKind } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
+import { scopesApi } from "@/shared/api/scopesApi";
 import {
   expectArray,
   expectRecord,
@@ -55,6 +56,10 @@ import {
 import { readResponseError } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
+import type {
+  ScopeWorkflowDetail,
+  ScopeWorkflowSummary,
+} from "@/shared/models/scopes";
 import { getOrnnRuntimeConfig } from "./ornnConfig";
 
 const JSON_HEADERS = {
@@ -102,6 +107,63 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
+}
+
+function toScopeWorkflowDirectoryId(scopeId: string): string {
+  return `scope:${scopeId}`;
+}
+
+function toScopeWorkflowPath(scopeId: string, workflowId: string): string {
+  return `scope://${scopeId}/${workflowId}.yaml`;
+}
+
+function resolveScopeWorkflowName(workflow: ScopeWorkflowSummary): string {
+  return workflow.displayName?.trim() || workflow.workflowName?.trim() || workflow.workflowId;
+}
+
+function toCommittedWorkflowSummary(
+  scopeId: string,
+  workflow: ScopeWorkflowSummary
+): StudioWorkflowSummary {
+  return {
+    workflowId: workflow.workflowId,
+    name: resolveScopeWorkflowName(workflow),
+    description: "",
+    fileName: `${workflow.workflowId}.yaml`,
+    filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
+    directoryId: toScopeWorkflowDirectoryId(scopeId),
+    directoryLabel: scopeId,
+    stepCount: 0,
+    hasLayout: false,
+    updatedAtUtc: workflow.updatedAt,
+  };
+}
+
+function toCommittedWorkflowFile(
+  scopeId: string,
+  detail: ScopeWorkflowDetail
+): StudioWorkflowFile {
+  const workflow = detail.workflow;
+  if (!workflow) {
+    throw new Error("Not Found");
+  }
+
+  return {
+    workflowId: workflow.workflowId,
+    name: resolveScopeWorkflowName(workflow),
+    fileName: `${workflow.workflowId}.yaml`,
+    filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
+    directoryId: toScopeWorkflowDirectoryId(scopeId),
+    directoryLabel: scopeId,
+    yaml: detail.source?.workflowYaml ?? "",
+    document: null,
+    findings: [],
+    updatedAtUtc: workflow.updatedAt,
+  };
+}
+
+function selectLatestTimestamp(left: string, right: string): string {
+  return Date.parse(left) >= Date.parse(right) ? left : right;
 }
 
 function withOptionalScopeId(
@@ -267,6 +329,26 @@ function decodeStudioUserConfigModelsResponse(
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
+async function requestJsonOrNull<T>(
+  input: string,
+  init?: RequestInit
+): Promise<T | null> {
+  const response = await studioHostFetch(input, init);
+  if (response.status === 404) {
+    return null;
+  }
+
   if (!response.ok) {
     throw new Error(await readResponseError(response));
   }
@@ -909,19 +991,79 @@ export const studioApi = {
   },
 
   listWorkflows(scopeId?: string | null): Promise<StudioWorkflowSummary[]> {
-    return this.listWorkflowDrafts(scopeId);
+    const normalizedScopeId = trimOptional(scopeId);
+    if (!normalizedScopeId) {
+      return this.listWorkflowDrafts(scopeId);
+    }
+
+    return Promise.all([
+      this.listWorkflowDrafts(normalizedScopeId),
+      scopesApi.listWorkflows(normalizedScopeId),
+    ]).then(([drafts, committed]) => {
+      const merged = new Map<string, StudioWorkflowSummary>();
+
+      for (const workflow of committed) {
+        merged.set(
+          workflow.workflowId,
+          toCommittedWorkflowSummary(normalizedScopeId, workflow)
+        );
+      }
+
+      for (const draft of drafts) {
+        const existing = merged.get(draft.workflowId);
+        merged.set(
+          draft.workflowId,
+          existing
+            ? {
+                ...draft,
+                updatedAtUtc: selectLatestTimestamp(
+                  draft.updatedAtUtc,
+                  existing.updatedAtUtc
+                ),
+              }
+            : draft
+        );
+      }
+
+      return Array.from(merged.values()).sort(
+        (left, right) =>
+          Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc)
+      );
+    });
   },
 
   async getWorkflow(
     workflowId: string,
     scopeId?: string | null
   ): Promise<StudioWorkflowFile> {
-    const draft = await this.getWorkflowDraft(workflowId, scopeId);
-    return {
-      ...draft,
-      document: null,
-      findings: [],
-    };
+    const normalizedScopeId = trimOptional(scopeId);
+    if (!normalizedScopeId) {
+      const draft = await this.getWorkflowDraft(workflowId, scopeId);
+      return {
+        ...draft,
+        document: null,
+        findings: [],
+      };
+    }
+
+    const draft = await requestJsonOrNull<StudioWorkflowDraft>(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
+        normalizedScopeId
+      )
+    );
+    if (draft) {
+      return {
+        ...draft,
+        document: null,
+        findings: [],
+      };
+    }
+
+    return toCommittedWorkflowFile(
+      normalizedScopeId,
+      await scopesApi.getWorkflowDetail(normalizedScopeId, workflowId)
+    );
   },
 
   saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {

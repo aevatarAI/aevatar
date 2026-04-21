@@ -196,6 +196,10 @@ public sealed class WorkspaceController : ControllerBase
         {
             return Conflict(CreateDraftPathConflictPayload(exception));
         }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
     }
 
     [HttpPut("workflow-drafts/{workflowId}")]

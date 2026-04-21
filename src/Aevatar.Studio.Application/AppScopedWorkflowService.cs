@@ -160,11 +160,15 @@ public sealed class AppScopedWorkflowService
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
-
-        if (_workflowDraftStore != null)
+        var draftStore = _workflowDraftStore
+            ?? throw new InvalidOperationException("Scoped workflow draft storage is not configured.");
+        var existingDraft = await draftStore.GetDraftAsync(normalizedScopeId, normalizedWorkflowId, ct);
+        if (existingDraft == null)
         {
-            await _workflowDraftStore.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, ct);
+            throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
         }
+
+        await draftStore.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, ct);
 
         DeletePersistedLayout(normalizedScopeId, normalizedWorkflowId);
     }
