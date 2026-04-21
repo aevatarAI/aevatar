@@ -101,7 +101,7 @@ public static class ServiceCollectionExtensions
                 static doc => doc.Id, static key => key);
         }
 
-        // ─── Agent Registry projection pipeline ───
+        // ─── User Agent Catalog projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
             UserAgentCatalogMaterializationContext,
             UserAgentCatalogMaterializationRuntimeLease,
@@ -115,23 +115,23 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
             UserAgentCatalogProjector>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentRegistryDocument>,
-            AgentRegistryDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
+            UserAgentCatalogDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
         services.AddHostedService<UserAgentCatalogStartupService>();
 
         if (useElasticsearch)
         {
-            services.AddElasticsearchDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogDocument, string>(
                 optionsFactory: _ => BuildElasticsearchOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AgentRegistryDocument>>().Metadata,
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 

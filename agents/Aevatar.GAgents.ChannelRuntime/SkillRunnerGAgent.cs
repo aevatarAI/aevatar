@@ -372,7 +372,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
-        var command = new AgentRegistryUpsertCommand
+        var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
             Platform = "lark",
@@ -408,7 +408,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
-        var command = new AgentRegistryExecutionUpdateCommand
+        var command = new UserAgentCatalogExecutionUpdateCommand
         {
             AgentId = Id,
             Status = status,

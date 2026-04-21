@@ -7,30 +7,30 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class UserAgentCatalogGAgent : GAgentBase<AgentRegistryState>
+public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
-    public const string WellKnownId = "agent-registry-store";
+    public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
 
-    protected override AgentRegistryState TransitionState(AgentRegistryState current, IMessage evt) =>
+    protected override UserAgentCatalogState TransitionState(UserAgentCatalogState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<AgentRegistryUpsertedEvent>(ApplyUpserted)
-            .On<AgentRegistryExecutionUpdatedEvent>(ApplyExecutionUpdated)
-            .On<AgentRegistryTombstonedEvent>(ApplyTombstoned)
+            .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
+            .On<UserAgentCatalogExecutionUpdatedEvent>(ApplyExecutionUpdated)
+            .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
             .OrCurrent();
 
     [EventHandler]
-    public async Task HandleUpsertAsync(AgentRegistryUpsertCommand command)
+    public async Task HandleUpsertAsync(UserAgentCatalogUpsertCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.AgentId))
         {
-            Logger.LogWarning("Cannot upsert agent registry entry with empty agent id");
+            Logger.LogWarning("Cannot upsert user agent catalog entry with empty agent id");
             return;
         }
 
         var existing = State.Entries.FirstOrDefault(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        var entry = new AgentRegistryEntry
+        var entry = new UserAgentCatalogEntry
         {
             AgentId = command.AgentId.Trim(),
             Platform = MergeNonEmpty(command.Platform, existing?.Platform),
@@ -54,35 +54,35 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<AgentRegistryState>
             LastError = existing?.LastError ?? string.Empty,
         };
 
-        await PersistDomainEventAsync(new AgentRegistryUpsertedEvent
+        await PersistDomainEventAsync(new UserAgentCatalogUpsertedEvent
         {
             Entry = entry,
         });
     }
 
     [EventHandler]
-    public async Task HandleTombstoneAsync(AgentRegistryTombstoneCommand command)
+    public async Task HandleTombstoneAsync(UserAgentCatalogTombstoneCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.AgentId))
         {
-            Logger.LogWarning("Cannot tombstone agent registry entry with empty agent id");
+            Logger.LogWarning("Cannot tombstone user agent catalog entry with empty agent id");
             return;
         }
 
         if (State.Entries.All(x => !string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal)))
         {
-            Logger.LogWarning("Cannot tombstone missing agent registry entry: {AgentId}", command.AgentId);
+            Logger.LogWarning("Cannot tombstone missing user agent catalog entry: {AgentId}", command.AgentId);
             return;
         }
 
-        await PersistDomainEventAsync(new AgentRegistryTombstonedEvent
+        await PersistDomainEventAsync(new UserAgentCatalogTombstonedEvent
         {
             AgentId = command.AgentId.Trim(),
         });
     }
 
     [EventHandler]
-    public async Task HandleExecutionUpdateAsync(AgentRegistryExecutionUpdateCommand command)
+    public async Task HandleExecutionUpdateAsync(UserAgentCatalogExecutionUpdateCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.AgentId))
         {
@@ -92,11 +92,11 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<AgentRegistryState>
 
         if (State.Entries.All(x => !string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal)))
         {
-            Logger.LogWarning("Cannot update execution state for missing agent registry entry: {AgentId}", command.AgentId);
+            Logger.LogWarning("Cannot update execution state for missing user agent catalog entry: {AgentId}", command.AgentId);
             return;
         }
 
-        await PersistDomainEventAsync(new AgentRegistryExecutionUpdatedEvent
+        await PersistDomainEventAsync(new UserAgentCatalogExecutionUpdatedEvent
         {
             AgentId = command.AgentId.Trim(),
             Status = command.Status?.Trim() ?? string.Empty,
@@ -107,7 +107,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<AgentRegistryState>
         });
     }
 
-    private static AgentRegistryState ApplyUpserted(AgentRegistryState current, AgentRegistryUpsertedEvent evt)
+    private static UserAgentCatalogState ApplyUpserted(UserAgentCatalogState current, UserAgentCatalogUpsertedEvent evt)
     {
         var next = current.Clone();
         var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.Entry.AgentId, StringComparison.Ordinal));
@@ -118,7 +118,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<AgentRegistryState>
         return next;
     }
 
-    private static AgentRegistryState ApplyTombstoned(AgentRegistryState current, AgentRegistryTombstonedEvent evt)
+    private static UserAgentCatalogState ApplyTombstoned(UserAgentCatalogState current, UserAgentCatalogTombstonedEvent evt)
     {
         var next = current.Clone();
         var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));
@@ -130,7 +130,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<AgentRegistryState>
         return next;
     }
 
-    private static AgentRegistryState ApplyExecutionUpdated(AgentRegistryState current, AgentRegistryExecutionUpdatedEvent evt)
+    private static UserAgentCatalogState ApplyExecutionUpdated(UserAgentCatalogState current, UserAgentCatalogExecutionUpdatedEvent evt)
     {
         var next = current.Clone();
         var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));

@@ -191,9 +191,9 @@ message ChannelBotRegistrationDocument {
   string credential_ref = 13;
 }
 
-// ─── Agent Registry (actor-backed delivery target store) ───
+// ─── User Agent Catalog (actor-backed delivery target store) ───
 
-message AgentRegistryEntry {
+message UserAgentCatalogEntry {
   string agent_id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -216,11 +216,11 @@ message AgentRegistryEntry {
   string last_error = 20;
 }
 
-message AgentRegistryState {
-  repeated AgentRegistryEntry entries = 1;
+message UserAgentCatalogState {
+  repeated UserAgentCatalogEntry entries = 1;
 }
 
-message AgentRegistryUpsertCommand {
+message UserAgentCatalogUpsertCommand {
   string agent_id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -236,28 +236,11 @@ message AgentRegistryUpsertCommand {
   string status = 13;
 }
 
-message AgentRegistryTombstoneCommand {
+message UserAgentCatalogTombstoneCommand {
   string agent_id = 1;
 }
 
-message AgentRegistryExecutionUpdateCommand {
-  string agent_id = 1;
-  string status = 2;
-  google.protobuf.Timestamp last_run_at = 3;
-  google.protobuf.Timestamp next_run_at = 4;
-  int32 error_count = 5;
-  string last_error = 6;
-}
-
-message AgentRegistryUpsertedEvent {
-  AgentRegistryEntry entry = 1;
-}
-
-message AgentRegistryTombstonedEvent {
-  string agent_id = 1;
-}
-
-message AgentRegistryExecutionUpdatedEvent {
+message UserAgentCatalogExecutionUpdateCommand {
   string agent_id = 1;
   string status = 2;
   google.protobuf.Timestamp last_run_at = 3;
@@ -266,7 +249,24 @@ message AgentRegistryExecutionUpdatedEvent {
   string last_error = 6;
 }
 
-message AgentRegistryDocument {
+message UserAgentCatalogUpsertedEvent {
+  UserAgentCatalogEntry entry = 1;
+}
+
+message UserAgentCatalogTombstonedEvent {
+  string agent_id = 1;
+}
+
+message UserAgentCatalogExecutionUpdatedEvent {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
+}
+
+message UserAgentCatalogDocument {
   string id = 1;
   string platform = 2;
   string conversation_id = 3;

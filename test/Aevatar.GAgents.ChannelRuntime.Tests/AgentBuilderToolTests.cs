@@ -97,7 +97,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -432,7 +432,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionAsync("workflow-agent-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
         queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "workflow-agent-1",
                 AgentType = WorkflowAgentDefaults.AgentType,
@@ -580,7 +580,7 @@ public sealed class AgentBuilderToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -588,9 +588,9 @@ public sealed class AgentBuilderToolTests
                     ApiKeyId = "key-1",
                     OwnerNyxUserId = "user-1",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(null));
+                Task.FromResult<UserAgentCatalogEntry?>(null));
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(Array.Empty<AgentRegistryEntry>()));
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(Array.Empty<UserAgentCatalogEntry>()));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
@@ -644,8 +644,8 @@ public sealed class AgentBuilderToolTests
             await registryActor.Received(1).HandleEventAsync(
                 Arg.Is<EventEnvelope>(e =>
                     e.Payload != null &&
-                    e.Payload.Is(AgentRegistryTombstoneCommand.Descriptor) &&
-                    e.Payload.Unpack<AgentRegistryTombstoneCommand>().AgentId == "skill-runner-1"),
+                    e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
+                    e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "skill-runner-1"),
                 Arg.Any<CancellationToken>());
 
             handler.Requests.Should().ContainSingle(x =>
@@ -663,7 +663,7 @@ public sealed class AgentBuilderToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -722,7 +722,7 @@ public sealed class AgentBuilderToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -774,7 +774,7 @@ public sealed class AgentBuilderToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "workflow-agent-1",
                 AgentType = WorkflowAgentDefaults.AgentType,
@@ -838,7 +838,7 @@ public sealed class AgentBuilderToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -847,7 +847,7 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -910,7 +910,7 @@ public sealed class AgentBuilderToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -919,7 +919,7 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -982,7 +982,7 @@ public sealed class AgentBuilderToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "workflow-agent-1",
                     AgentType = WorkflowAgentDefaults.AgentType,
@@ -991,7 +991,7 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "workflow-agent-1",
                     AgentType = WorkflowAgentDefaults.AgentType,

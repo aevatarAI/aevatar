@@ -28,7 +28,7 @@ public sealed class UserAgentCatalogStartupService : IHostedService
             {
                 await _projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
                 _logger.LogInformation(
-                    "Agent registry projection scope activated for {ActorId} (attempt {Attempt})",
+                    "User agent catalog projection scope activated for {ActorId} (attempt {Attempt})",
                     UserAgentCatalogGAgent.WellKnownId,
                     attempt);
                 return;
@@ -41,7 +41,7 @@ public sealed class UserAgentCatalogStartupService : IHostedService
             {
                 _logger.LogWarning(
                     ex,
-                    "Failed to activate agent registry projection scope (attempt {Attempt}/{MaxRetries})",
+                    "Failed to activate user agent catalog projection scope (attempt {Attempt}/{MaxRetries})",
                     attempt,
                     MaxRetries);
 
@@ -53,7 +53,7 @@ public sealed class UserAgentCatalogStartupService : IHostedService
         }
 
         _logger.LogError(
-            "Agent registry projection scope activation failed after {MaxRetries} attempts",
+            "User agent catalog projection scope activation failed after {MaxRetries} attempts",
             MaxRetries);
     }
 

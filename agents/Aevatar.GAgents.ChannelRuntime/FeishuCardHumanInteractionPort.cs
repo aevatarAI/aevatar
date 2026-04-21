@@ -126,7 +126,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
     internal static string BuildApprovalResolutionCardJson(
         HumanApprovalResolution resolution,
-        AgentRegistryEntry? target = null)
+        UserAgentCatalogEntry? target = null)
     {
         var lines = new List<string>
         {
@@ -191,7 +191,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         });
     }
 
-    private async Task<AgentRegistryEntry> ResolveTargetAsync(
+    private async Task<UserAgentCatalogEntry> ResolveTargetAsync(
         string deliveryTargetId,
         CancellationToken cancellationToken)
     {
@@ -206,21 +206,21 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     }
 
     private static bool ShouldSendApprovedContent(
-        AgentRegistryEntry target,
+        UserAgentCatalogEntry target,
         HumanApprovalResolution resolution) =>
         resolution.Approved &&
         !string.IsNullOrWhiteSpace(resolution.ResolvedContent) &&
         string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
 
     private static bool ShouldOfferRerun(
-        AgentRegistryEntry? target,
+        UserAgentCatalogEntry? target,
         HumanApprovalResolution resolution) =>
         target is not null &&
         !resolution.Approved &&
         string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
 
     private async Task SendInteractiveCardAsync(
-        AgentRegistryEntry target,
+        UserAgentCatalogEntry target,
         string cardJson,
         string emptyResponseMessage,
         string failurePrefix,
@@ -250,7 +250,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     }
 
     private async Task SendTextMessageAsync(
-        AgentRegistryEntry target,
+        UserAgentCatalogEntry target,
         string text,
         string emptyResponseMessage,
         string failurePrefix,

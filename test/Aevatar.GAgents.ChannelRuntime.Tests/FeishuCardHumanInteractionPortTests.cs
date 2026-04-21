@@ -17,7 +17,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     {
         var registry = Substitute.For<IUserAgentCatalogQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-1",
                 Platform = "lark",
@@ -81,7 +81,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     {
         var registry = Substitute.For<IUserAgentCatalogQueryPort>();
         registry.GetAsync("missing-agent", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(null));
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(null));
 
         var port = new FeishuCardHumanInteractionPort(
             registry,
@@ -99,7 +99,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     {
         var registry = Substitute.For<IUserAgentCatalogQueryPort>();
         registry.GetAsync("agent-2", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-2",
                 Platform = "telegram",
@@ -121,7 +121,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     {
         var registry = Substitute.For<IUserAgentCatalogQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-1",
                 Platform = "lark",
@@ -173,7 +173,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     {
         var registry = Substitute.For<IUserAgentCatalogQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-1",
                 Platform = "lark",
