@@ -50,8 +50,15 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
     {
         var route = await ResolveRouteAsync(request, ct);
-        return await CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken)
-            .ChatAsync(route.Request, ct);
+        var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
+        try
+        {
+            return await provider.ChatAsync(route.Request, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw TranslateUpstreamFailure(ex, route);
+        }
     }
 
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -91,28 +98,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    string? body = null;
-                    int? status = null;
-                    for (var cur = ex; cur != null; cur = cur.InnerException)
-                    {
-                        if (cur is System.ClientModel.ClientResultException cre)
-                        {
-                            status = cre.Status;
-                            var raw = cre.GetRawResponse();
-                            if (raw != null)
-                                body = System.Text.Encoding.UTF8.GetString(raw.Content.ToArray());
-                            break;
-                        }
-                    }
-
-                    _logger?.LogWarning(ex,
-                        "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
-                        status, route.RouteName, route.Endpoint, body);
-
-                    var detail = $"{ex.Message} | endpoint={route.Endpoint}, model={route.Request.Model}, route={route.RouteName}";
-                    if (!string.IsNullOrWhiteSpace(body))
-                        detail += $" | NyxID response: {body}";
-                    throw new InvalidOperationException(detail, ex);
+                    throw TranslateUpstreamFailure(ex, route);
                 }
 
                 yield return current;
@@ -122,6 +108,134 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         {
             await enumerator.DisposeAsync();
         }
+    }
+
+    private NyxIdUpstreamException TranslateUpstreamFailure(Exception ex, NyxIdResolvedRoute route)
+    {
+        var (status, body) = ExtractUpstreamStatusAndBody(ex);
+
+        _logger?.LogWarning(ex,
+            "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
+            status, route.RouteName, route.Endpoint, body);
+
+        return ClassifyUpstreamFailure(ex, status, body, route);
+    }
+
+    internal static (int? Status, string? Body) ExtractUpstreamStatusAndBody(Exception ex)
+    {
+        for (var cur = ex; cur != null; cur = cur.InnerException)
+        {
+            if (cur is System.ClientModel.ClientResultException cre)
+            {
+                var raw = cre.GetRawResponse();
+                var body = raw != null
+                    ? System.Text.Encoding.UTF8.GetString(raw.Content.ToArray())
+                    : null;
+                return (cre.Status, body);
+            }
+        }
+
+        return (null, null);
+    }
+
+    internal static NyxIdUpstreamException ClassifyUpstreamFailure(
+        Exception source,
+        int? status,
+        string? body,
+        NyxIdResolvedRoute route)
+    {
+        var model = route.Request.Model;
+        var routeName = route.RouteName;
+        var upstreamSummary = ExtractUpstreamSummary(body);
+
+        var (kind, message) = status switch
+        {
+            503 => (
+                NyxIdUpstreamFailureKind.ServiceUnavailable,
+                $"Upstream LLM route '{routeName}' is temporarily unavailable (HTTP 503) for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Please retry shortly or select a different route/model.",
+                    upstreamSummary)),
+            429 => (
+                NyxIdUpstreamFailureKind.RateLimited,
+                $"Upstream LLM route '{routeName}' is rate limited (HTTP 429) for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Wait a moment before retrying.",
+                    upstreamSummary)),
+            401 or 403 => (
+                NyxIdUpstreamFailureKind.AuthenticationFailed,
+                $"Upstream LLM route '{routeName}' rejected the request with HTTP {status} for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Your session may have expired — try signing in again.",
+                    upstreamSummary)),
+            >= 500 => (
+                NyxIdUpstreamFailureKind.UpstreamServerError,
+                $"Upstream LLM route '{routeName}' returned server error HTTP {status} for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "The upstream service is unhealthy — retry later or switch routes.",
+                    upstreamSummary)),
+            >= 400 => (
+                NyxIdUpstreamFailureKind.RequestRejected,
+                $"Upstream LLM route '{routeName}' rejected the request with HTTP {status} for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Check the model id and route configuration.",
+                    upstreamSummary)),
+            _ => (
+                NyxIdUpstreamFailureKind.ProviderError,
+                $"Provider error calling NyxID route '{routeName}' for model '{model}': "
+                + AppendUpstreamDetail(
+                    SummarizeSourceMessage(source),
+                    upstreamSummary)),
+        };
+
+        return new NyxIdUpstreamException(kind, status, routeName, model, message, source);
+    }
+
+    private static string AppendUpstreamDetail(string message, string? upstreamSummary)
+    {
+        if (string.IsNullOrWhiteSpace(upstreamSummary))
+            return message;
+
+        return $"{message} Upstream said: {upstreamSummary}";
+    }
+
+    private static string SummarizeSourceMessage(Exception source)
+    {
+        var raw = source.Message?.Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+            return $"{source.GetType().Name} thrown without a message.";
+
+        var collapsed = raw
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
+        return collapsed.Length > 500 ? collapsed[..500] + "…" : collapsed;
+    }
+
+    private static string? ExtractUpstreamSummary(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind == System.Text.Json.JsonValueKind.Object
+                && error.TryGetProperty("message", out var messageEl)
+                && messageEl.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                var upstream = messageEl.GetString()?.Trim();
+                return string.IsNullOrWhiteSpace(upstream) ? null : upstream;
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Body wasn't valid JSON; fall through to raw trimming below.
+        }
+
+        var trimmed = body.Trim();
+        return trimmed.Length > 200 ? trimmed[..200] + "…" : trimmed;
     }
 
     internal Task<NyxIdResolvedRoute> ResolveRouteAsync(LLMRequest request, CancellationToken ct = default)
