@@ -245,7 +245,11 @@ public sealed class ConversationGAgent : GAgentBase<ConversationGAgentState>
         ConversationContinueFailedEvent evt)
     {
         var next = current.Clone();
-        if (!string.IsNullOrEmpty(evt.CommandId))
+        // Only terminal failures (NotRetryable oneof) consume the command id. `retry_after_ms`
+        // failures must stay retriable — if we appended them here the next redispatch of the same
+        // logical command id would come back as DuplicateCommand instead of executing.
+        if (!string.IsNullOrEmpty(evt.CommandId)
+            && evt.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
         {
             AppendBounded(next.ProcessedCommandIds, evt.CommandId, ProcessedIdsCap);
         }

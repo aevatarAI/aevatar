@@ -124,6 +124,52 @@ public sealed class ConversationGAgentDedupTests
         parsed.RetryAfterMs.ShouldBe(250);
     }
 
+    [Fact]
+    public async Task HandleContinueCommandAsync_TransientFailure_LeavesCommandRetriable()
+    {
+        // Retriable continue failures (retry_after_ms) must NOT mark the command id as processed —
+        // callers expect to re-dispatch the same command id after the back-off elapses.
+        var runner = new RecordingTurnRunner
+        {
+            ContinueResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later", TimeSpan.FromMilliseconds(250)),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-7");
+
+        await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-retry"));
+
+        agent.State.ProcessedCommandIds.ShouldNotContain("cmd-retry");
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
+
+        // A subsequent retry succeeds rather than being rejected as DuplicateCommand.
+        runner.ContinueResultFactory = null;
+        await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-retry"));
+        runner.ContinueCount.ShouldBe(2);
+        agent.State.ProcessedCommandIds.ShouldContain("cmd-retry");
+    }
+
+    [Fact]
+    public async Task HandleContinueCommandAsync_PermanentFailure_MarksCommandProcessed()
+    {
+        // Terminal (non-retryable) continue failures consume the command id so a buggy caller's
+        // redispatch is collapsed to DuplicateCommand rather than re-executing the failing turn.
+        var runner = new RecordingTurnRunner
+        {
+            ContinueResultFactory = _ => ConversationTurnResult.PermanentFailure("permanent_error", "bad input"),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-8");
+
+        await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-permanent"));
+
+        agent.State.ProcessedCommandIds.ShouldContain("cmd-permanent");
+        runner.ContinueCount.ShouldBe(1);
+
+        // Redispatch of the same id is now rejected as DuplicateCommand; runner is not invoked again.
+        await agent.HandleContinueCommandAsync(CreateContinueCommand("cmd-permanent"));
+        runner.ContinueCount.ShouldBe(1);
+    }
+
     private static (ConversationGAgent agent, IEventStore store) CreateAgent(RecordingTurnRunner runner, string agentId)
     {
         var store = new InMemoryEventStore();
@@ -211,6 +257,7 @@ public sealed class ConversationGAgentDedupTests
         public int InboundCount;
         public int ContinueCount;
         public Func<ChatActivity, ConversationTurnResult>? InboundResultFactory { get; set; }
+        public Func<ConversationContinueRequestedEvent, ConversationTurnResult>? ContinueResultFactory { get; set; }
 
         public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct)
         {
@@ -224,8 +271,10 @@ public sealed class ConversationGAgentDedupTests
         public Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct)
         {
             Interlocked.Increment(ref ContinueCount);
-            return Task.FromResult(
-                ConversationTurnResult.Sent("sent:" + command.CommandId, new MessageContent { Text = "ack" }, "bot"));
+            var result = ContinueResultFactory is null
+                ? ConversationTurnResult.Sent("sent:" + command.CommandId, new MessageContent { Text = "ack" }, "bot")
+                : ContinueResultFactory(command);
+            return Task.FromResult(result);
         }
     }
 }

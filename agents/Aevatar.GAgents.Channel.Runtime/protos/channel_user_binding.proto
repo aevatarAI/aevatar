@@ -7,12 +7,27 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 import "google/protobuf/timestamp.proto";
 import "chat_activity.proto";
 
+// Typed preference surface stored on the per-user-per-bot binding actor. New preferences land as
+// new fields here — do not introduce a generic string/JSON bag; runtime state must stay proto-typed
+// (CLAUDE.md Metadata decision tree).
+message ChannelUserPreferences {
+  // BCP-47 locale tag (e.g. "en-US", "zh-CN"). Empty means "inherit channel default".
+  string locale = 1;
+  // IANA timezone (e.g. "America/Los_Angeles"). Empty means "inherit channel default".
+  string timezone = 2;
+  // Suppresses per-user notifications where the target channel supports muting.
+  bool mute_notifications = 3;
+  // Optional topic tags the user has opted out of (channel-specific semantics; MVP keeps this a
+  // narrow typed list rather than a free-form bag).
+  repeated string muted_topics = 4;
+}
+
 message ChannelUserBindingState {
   aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
   aevatar.gagents.channel.abstractions.ChannelId channel = 2;
   string sender_canonical_id = 3;
   string credential_ref = 4;
-  string preferences_json = 5;
+  ChannelUserPreferences preferences = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
 }
@@ -34,7 +49,7 @@ message UpdateUserPreferencesCommand {
   aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
   aevatar.gagents.channel.abstractions.ChannelId channel = 2;
   string sender_canonical_id = 3;
-  string preferences_json = 4;
+  ChannelUserPreferences preferences = 4;
 }
 
 message UserCredentialBoundEvent {
@@ -56,6 +71,6 @@ message UserPreferencesUpdatedEvent {
   aevatar.gagents.channel.abstractions.BotInstanceId bot = 1;
   aevatar.gagents.channel.abstractions.ChannelId channel = 2;
   string sender_canonical_id = 3;
-  string preferences_json = 4;
+  ChannelUserPreferences preferences = 4;
   google.protobuf.Timestamp updated_at = 5;
 }

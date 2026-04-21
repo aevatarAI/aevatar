@@ -72,7 +72,8 @@ public sealed class ChannelUserBindingGAgent : GAgentBase<ChannelUserBindingStat
     }
 
     /// <summary>
-    /// Persists one preferences delta (opaque JSON blob owned by the caller).
+    /// Persists a typed preferences snapshot. Callers supply a full <see cref="ChannelUserPreferences"/>
+    /// message; the grain replaces the stored snapshot atomically.
     /// </summary>
     [EventHandler]
     public async Task HandleUpdatePreferencesAsync(UpdateUserPreferencesCommand cmd)
@@ -85,7 +86,7 @@ public sealed class ChannelUserBindingGAgent : GAgentBase<ChannelUserBindingStat
             Bot = cmd.Bot?.Clone() ?? new BotInstanceId(),
             Channel = cmd.Channel?.Clone() ?? new ChannelId(),
             SenderCanonicalId = cmd.SenderCanonicalId,
-            PreferencesJson = cmd.PreferencesJson ?? string.Empty,
+            Preferences = cmd.Preferences?.Clone() ?? new ChannelUserPreferences(),
             UpdatedAt = now,
         });
     }
@@ -118,7 +119,7 @@ public sealed class ChannelUserBindingGAgent : GAgentBase<ChannelUserBindingStat
         next.Bot = evt.Bot?.Clone();
         next.Channel = evt.Channel?.Clone();
         next.SenderCanonicalId = evt.SenderCanonicalId;
-        next.PreferencesJson = evt.PreferencesJson ?? string.Empty;
+        next.Preferences = evt.Preferences?.Clone() ?? new ChannelUserPreferences();
         next.CreatedAt ??= evt.UpdatedAt;
         next.UpdatedAt = evt.UpdatedAt;
         return next;

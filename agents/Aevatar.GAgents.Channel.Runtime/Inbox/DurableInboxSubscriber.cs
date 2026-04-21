@@ -12,14 +12,18 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <para>
 /// The subscriber owns one bounded <see cref="System.Threading.Channels.Channel{T}"/> working
 /// buffer (default capacity <see cref="DefaultBufferCapacity"/>, <see cref="BoundedChannelFullMode.Wait"/>,
-/// producer timeout <see cref="DefaultProducerTimeout"/>). If a producer can't enqueue within the
+/// producer timeout <see cref="DefaultProducerTimeout"/>). If a producer cannot enqueue within the
 /// timeout, it throws so the stream observer propagates the exception and the persistent provider
 /// re-delivers.
 /// </para>
 /// <para>
-/// Delivery handler <see cref="OnNextAsync"/> completes <em>before</em> it returns, so a successful
-/// return signals "pipeline fully awaited → safe to commit the stream offset". If the pipeline
-/// throws, the exception propagates and triggers redelivery per Orleans persistent-stream semantics.
+/// Each enqueued activity carries its own <see cref="TaskCompletionSource"/>; the worker loop awaits
+/// <see cref="ChannelPipeline.InvokeAsync"/> and then signals the completion source with either the
+/// success or the pipeline exception. <see cref="OnNextAsync"/> only returns after that completion
+/// source signals, so a successful return guarantees the pipeline really finished and the stream
+/// provider may commit. A pipeline fault propagates back through the completion source so the
+/// observer throws and the provider re-delivers. This preserves the <c>return → commit,
+/// throw → redeliver</c> contract even under a buffered worker.
 /// </para>
 /// </remarks>
 public sealed class DurableInboxSubscriber : IAsyncDisposable
@@ -34,7 +38,7 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
     private readonly IServiceProvider _services;
     private readonly Func<ChatActivity, ITurnContext> _contextFactory;
     private readonly ILogger<DurableInboxSubscriber> _logger;
-    private readonly System.Threading.Channels.Channel<ChatActivity> _buffer;
+    private readonly System.Threading.Channels.Channel<PendingItem> _buffer;
     private readonly TimeSpan _producerTimeout;
     private readonly CancellationTokenSource _cts = new();
     private Task? _worker;
@@ -56,7 +60,7 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
         _contextFactory = contextFactory;
         _logger = logger;
         _producerTimeout = producerTimeout ?? DefaultProducerTimeout;
-        _buffer = System.Threading.Channels.Channel.CreateBounded<ChatActivity>(new BoundedChannelOptions(bufferCapacity)
+        _buffer = System.Threading.Channels.Channel.CreateBounded<PendingItem>(new BoundedChannelOptions(bufferCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
@@ -76,26 +80,35 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
     }
 
     /// <summary>
-    /// Delivery handler. Returns successfully when the activity has reached the pipeline without
-    /// throwing; throws when the buffer is full past the configured timeout or the pipeline faults.
+    /// Delivery handler. Only returns after the pipeline has fully processed the activity, so a
+    /// successful return signals "safe to commit" and a throw signals "redeliver". Bounded-buffer
+    /// saturation at enqueue time throws <see cref="TimeoutException"/> for the same redelivery path.
     /// </summary>
     public async Task OnNextAsync(ChatActivity activity)
     {
         ArgumentNullException.ThrowIfNull(activity);
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-        timeoutCts.CancelAfter(_producerTimeout);
+        if (_cts.IsCancellationRequested)
+            throw new InvalidOperationException("DurableInboxSubscriber is disposed.");
 
-        try
+        var pending = new PendingItem(activity);
+        using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token))
         {
-            await _buffer.Writer.WriteAsync(activity, timeoutCts.Token);
+            timeoutCts.CancelAfter(_producerTimeout);
+            try
+            {
+                await _buffer.Writer.WriteAsync(pending, timeoutCts.Token);
+            }
+            catch (OperationCanceledException ex) when (!_cts.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"DurableInboxSubscriber buffer full for {_producerTimeout.TotalMilliseconds}ms; triggering redelivery.",
+                    ex);
+            }
         }
-        catch (OperationCanceledException ex) when (!_cts.IsCancellationRequested)
-        {
-            throw new TimeoutException(
-                $"DurableInboxSubscriber buffer full for {_producerTimeout.TotalMilliseconds}ms; triggering redelivery.",
-                ex);
-        }
+
+        // Block until the worker has actually finished (successful → commit; throw → redeliver).
+        await pending.Completion.Task.ConfigureAwait(false);
     }
 
     /// <summary>
@@ -113,26 +126,46 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
     {
         try
         {
-            await foreach (var activity in _buffer.Reader.ReadAllAsync(ct))
+            await foreach (var pending in _buffer.Reader.ReadAllAsync(ct))
             {
                 try
                 {
-                    var turnCtx = _contextFactory(activity);
+                    var turnCtx = _contextFactory(pending.Activity);
                     await _pipeline.InvokeAsync(turnCtx, () => Task.CompletedTask, ct);
+                    pending.Completion.TrySetResult();
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    pending.Completion.TrySetCanceled(ct);
+                    throw;
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(
                         ex,
-                        "Durable inbox worker failed for activity {ActivityId}; caller is expected to redeliver",
-                        activity?.Id);
-                    throw;
+                        "Durable inbox worker failed for activity {ActivityId}; propagating redelivery",
+                        pending.Activity?.Id);
+                    pending.Completion.TrySetException(ex);
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // Normal shutdown.
+            // Normal shutdown — any still-waiting OnNextAsync callers get cancelled via DrainPending.
+        }
+        finally
+        {
+            DrainPending();
+        }
+    }
+
+    private void DrainPending()
+    {
+        // Signal any observers still waiting on enqueued-but-not-processed items so they don't hang.
+        while (_buffer.Reader.TryRead(out var pending))
+        {
+            pending.Completion.TrySetException(
+                new InvalidOperationException("DurableInboxSubscriber stopped before activity was processed; redelivery expected."));
         }
     }
 
@@ -155,6 +188,20 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
                 _logger.LogInformation(ex, "DurableInboxSubscriber worker terminated with exception during dispose");
             }
         }
+        DrainPending();
         _cts.Dispose();
+    }
+
+    private sealed class PendingItem
+    {
+        public PendingItem(ChatActivity activity)
+        {
+            Activity = activity;
+            Completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public ChatActivity Activity { get; }
+
+        public TaskCompletionSource Completion { get; }
     }
 }
