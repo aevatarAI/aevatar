@@ -234,7 +234,12 @@ public sealed class ChannelArchitectureTests
         foreach (var sourceFile in ChannelSourceIndex.EnumerateProductionSourceFiles())
         {
             var text = File.ReadAllText(sourceFile);
-            if (!text.Contains("IBlobStore", System.StringComparison.Ordinal))
+
+            // Cheap short-circuit: only files that invoke a member named WriteAsync can possibly
+            // violate. The file-level `IBlobStore` filter is intentionally absent — a consumer
+            // that reaches the store through a wrapper (`_holder.Store.WriteAsync(...)`) never
+            // mentions `IBlobStore` in its own text but still needs to be analyzed.
+            if (!text.Contains(".WriteAsync", System.StringComparison.Ordinal))
             {
                 continue;
             }
@@ -254,11 +259,6 @@ public sealed class ChannelArchitectureTests
                         blobStoreReceivers,
                         "IBlobStore");
 
-                    if (callableBlobStores.Count == 0)
-                    {
-                        continue;
-                    }
-
                     var redactedProvenance = ChannelReceiverTracker.CollectRedactedProvenance(methodBody);
 
                     foreach (var invocation in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
@@ -270,7 +270,17 @@ public sealed class ChannelArchitectureTests
                         }
 
                         var receiverName = ChannelReceiverTracker.ExtractLeafName(member.Expression);
-                        if (receiverName is null || !callableBlobStores.Contains(receiverName))
+                        if (receiverName is null)
+                        {
+                            continue;
+                        }
+
+                        // Consult the per-method set plus the repo-global index of members
+                        // declared as IBlobStore — the global lookup catches cross-file wrapper
+                        // forwarding (`_holder.Store.WriteAsync(...)` where `Store` is declared
+                        // elsewhere as `IBlobStore`).
+                        if (!callableBlobStores.Contains(receiverName)
+                            && !ChannelSourceIndex.GlobalBlobStoreMemberNames.Contains(receiverName))
                         {
                             continue;
                         }
@@ -940,9 +950,14 @@ internal static class ChannelSourceIndex
     private static readonly Lazy<HashSet<string>> LazyOutboundMemberNames =
         new(() => CollectGlobalMemberNamesByType("IChannelOutboundPort"));
 
+    private static readonly Lazy<HashSet<string>> LazyBlobStoreMemberNames =
+        new(() => CollectGlobalMemberNamesByType("IBlobStore"));
+
     public static string RepoRoot => LazyRepoRoot.Value;
 
     public static HashSet<string> GlobalOutboundMemberNames => LazyOutboundMemberNames.Value;
+
+    public static HashSet<string> GlobalBlobStoreMemberNames => LazyBlobStoreMemberNames.Value;
 
     public static string NormalizePath(string path) => path.Replace('\\', '/');
 
