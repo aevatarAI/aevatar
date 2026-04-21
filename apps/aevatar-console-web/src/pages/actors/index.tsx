@@ -436,20 +436,27 @@ const topologySelectionPanelStyle: React.CSSProperties = {
   padding: 16,
 };
 
+const topologyGraphManagedSelectionClassName =
+  "graph-canvas-self-managed-selection";
+
 const TopologyNodeCard: React.FC<{
   node: WorkflowActorGraphNode;
-}> = ({ node }) => {
+  selected?: boolean;
+}> = ({ node, selected = false }) => {
   const tone = graphNodeTone(node.nodeType);
 
   return (
     <div
       style={{
         background: "#fff",
-        border: `1px solid ${tone.border}`,
+        border: `1px solid ${selected ? "rgba(59, 130, 246, 0.5)" : tone.border}`,
         borderRadius: 18,
-        boxShadow: "0 14px 30px rgba(15, 23, 42, 0.08)",
+        boxShadow: selected
+          ? "0 0 0 2px rgba(59, 130, 246, 0.14), 0 18px 34px rgba(15, 23, 42, 0.12)"
+          : "0 14px 30px rgba(15, 23, 42, 0.08)",
         minWidth: 212,
         padding: "12px 14px",
+        transition: "border-color 160ms ease, box-shadow 160ms ease",
       }}
     >
       <Space size={8} style={{ marginBottom: 8 }}>
@@ -467,7 +474,14 @@ const TopologyNodeCard: React.FC<{
           {node.nodeType}
         </Tag>
       </Space>
-      <Typography.Text strong style={{ display: "block", fontSize: 13 }}>
+      <Typography.Text
+        strong
+        style={{
+          color: selected ? "#1D4ED8" : undefined,
+          display: "block",
+          fontSize: 13,
+        }}
+      >
         {graphNodeTitle(node)}
       </Typography.Text>
       <Typography.Text
@@ -485,7 +499,10 @@ const TopologyNodeCard: React.FC<{
   );
 };
 
-function buildGraphCanvasNodes(subgraph: WorkflowActorGraphSubgraph): Node[] {
+function buildGraphCanvasNodes(
+  subgraph: WorkflowActorGraphSubgraph,
+  selectedNodeId?: string,
+): Node[] {
   const groups = new Map<number, WorkflowActorGraphNode[]>();
   for (const node of subgraph.nodes) {
     const lane = graphLane(node.nodeType);
@@ -510,8 +527,12 @@ function buildGraphCanvasNodes(subgraph: WorkflowActorGraphSubgraph): Node[] {
     const index = laneNodes.findIndex((item) => item.nodeId === node.nodeId);
 
     return {
+      className: topologyGraphManagedSelectionClassName,
       data: {
-        label: React.createElement(TopologyNodeCard, { node }),
+        label: React.createElement(TopologyNodeCard, {
+          node,
+          selected: node.nodeId === selectedNodeId,
+        }),
       },
       id: node.nodeId,
       position: {
@@ -762,8 +783,8 @@ export const TopologyExplorerPage: React.FC<{
     initialRouteRef.current.runId,
   );
   const graphCanvasNodes = useMemo(
-    () => buildGraphCanvasNodes(selectedSubgraph),
-    [selectedSubgraph],
+    () => buildGraphCanvasNodes(selectedSubgraph, selectedNode?.nodeId),
+    [selectedNode?.nodeId, selectedSubgraph],
   );
   const graphCanvasEdges = useMemo(
     () => buildGraphCanvasEdges(selectedSubgraph),
@@ -1227,18 +1248,8 @@ export const TopologyExplorerPage: React.FC<{
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Platform"
-      description={
-        detailOnly
-          ? "Topology 详情页用于深度追查单个 workflow run actor 的 graph、timeline、edge 和 snapshot 证据。"
-          : "Topology 是 Platform 的运行关系追查台，围绕后端真实 workflow run actor 还原 graph、timeline、edge 和 snapshot 证据。"
-      }
       extra={
-        <Space size={8}>
-          <Tag color="blue">真实数据</Tag>
-          <Typography.Text type="secondary">
-            {detailOnly ? "单对象深度追查" : "Actor-first investigation"}
-          </Typography.Text>
-        </Space>
+        <Tag color="blue">真实数据</Tag>
       }
       title="Topology"
     >
@@ -1273,14 +1284,7 @@ export const TopologyExplorerPage: React.FC<{
                 {detailOnly ? "追查详情" : "追查入口"}
               </Typography.Text>
               <Typography.Text strong style={{ fontSize: 22 }}>
-                {detailOnly
-                  ? "围绕一个 actor 深挖关系图和事件证据"
-                  : "先从真实 actor 列表锁定对象，再进入关系追查"}
-              </Typography.Text>
-              <Typography.Text style={{ color: token.colorTextSecondary }}>
-                {detailOnly
-                  ? "当前页只服务单个追查对象，列表筛选和快速预览已经收回到 Topology 首页。"
-                  : "后端当前提供 actor 列表、snapshot、timeline 和 graph subgraph，页面默认走 actor-first 追查。"}
+                {detailOnly ? "追查对象" : "选择追查对象"}
               </Typography.Text>
             </div>
             <div
@@ -1331,7 +1335,7 @@ export const TopologyExplorerPage: React.FC<{
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
-                {detailOnly ? "切换 Actor" : "直接打开 Actor ID"}
+                Actor ID
               </Typography.Text>
               <Input
                 onChange={(event) => setActorInput(event.target.value)}
@@ -1346,7 +1350,7 @@ export const TopologyExplorerPage: React.FC<{
             {!detailOnly ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
-                  筛选可追查对象
+                  筛选 Actor
                 </Typography.Text>
                 <Input
                   onChange={(event) => setActorKeyword(event.target.value)}
@@ -1361,16 +1365,9 @@ export const TopologyExplorerPage: React.FC<{
             style={{
               alignItems: "center",
               display: "flex",
-              flexWrap: "wrap",
-              gap: 10,
-              justifyContent: "space-between",
+              justifyContent: "flex-end",
             }}
           >
-            <Typography.Text style={{ color: token.colorTextSecondary }}>
-              {detailOnly
-                ? "如果需要换对象，请修改 actorId 或返回列表页重新选择。"
-                : "先在真实 actor 列表里打开预览，或直接输入 Actor ID 打开详情页。"}
-            </Typography.Text>
             <Space size={8}>
               <Button onClick={handleLoadFocus} type="primary">
                 {detailOnly ? "刷新追查对象" : "打开追查详情"}
