@@ -154,12 +154,15 @@ public sealed class ActorBackedStoreAdapterTests
     {
         public string? ScopeIdToReturn { get; set; }
 
+        public bool AuthenticatedWithoutScope { get; set; }
+
         public AppScopeContext? Resolve(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) =>
             ScopeIdToReturn is not null
                 ? new AppScopeContext(ScopeIdToReturn, "test")
                 : null;
 
-        public bool HasAuthenticatedRequestWithoutScope(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => false;
+        public bool HasAuthenticatedRequestWithoutScope(Microsoft.AspNetCore.Http.HttpContext? httpContext = null)
+            => AuthenticatedWithoutScope;
     }
 
     /// <summary>
@@ -881,6 +884,35 @@ public sealed class ActorBackedStoreAdapterTests
     // ════════════════════════════════════════════════════════════
     // ConnectorCatalogStore: command dispatch
     // ════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task ConnectorCatalogStore_SaveCatalog_WhenAuthenticatedWithoutScope_Throws()
+    {
+        // Verifies ResolveScopeIdOrDefault refuses to route to the shared "connector-catalog-default"
+        // actor when the caller is authenticated but the resolver cannot map them to a scope.
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver
+        {
+            ScopeIdToReturn = null,
+            AuthenticatedWithoutScope = true,
+        };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
+        var store = new ActorBackedConnectorCatalogStore(
+            new FakeStudioActorBootstrap(runtime),
+            new FakeActorDispatchPort(runtime),
+            scopeResolver,
+            workspaceStore,
+            EmptyReader<ConnectorCatalogCurrentStateDocument>(),
+            logger);
+
+        var catalog = new StoredConnectorCatalog("test", "test", true, []);
+
+        var act = () => store.SaveConnectorCatalogAsync(catalog);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*refusing to route to the shared default*");
+    }
 
     [Fact]
     public async Task ConnectorCatalogStore_SaveCatalog_SendsCatalogSavedEvent()
