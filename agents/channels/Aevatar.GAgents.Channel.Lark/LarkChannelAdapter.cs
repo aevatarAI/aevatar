@@ -27,6 +27,7 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
     private readonly ILogger<LarkChannelAdapter> _logger;
     private readonly System.Threading.Channels.Channel<ChatActivity> _inboundBuffer;
     private readonly ChannelCapabilities _capabilities;
+    private readonly bool _captureInboundActivities;
 
     private ChannelTransportBinding? _binding;
     private LarkCredentialSnapshot _botCredential = new(string.Empty, string.Empty);
@@ -39,12 +40,14 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         LarkMessageComposer composer,
         IPayloadRedactor payloadRedactor,
         ILogger<LarkChannelAdapter> logger,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        bool captureInboundActivities = true)
     {
         _credentialProvider = credentialProvider ?? throw new ArgumentNullException(nameof(credentialProvider));
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _payloadRedactor = payloadRedactor ?? throw new ArgumentNullException(nameof(payloadRedactor));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _captureInboundActivities = captureInboundActivities;
         _httpClient = httpClient ?? new HttpClient
         {
             BaseAddress = LarkChannelDefaults.DefaultBaseAddress,
@@ -271,7 +274,8 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         }
 
         activity.RawPayloadBlobRef = BuildBlobRef(sanitizedPayload);
-        await _inboundBuffer.Writer.WriteAsync(activity, ct);
+        if (_captureInboundActivities)
+            await _inboundBuffer.Writer.WriteAsync(activity, ct);
         return new LarkWebhookResponse(200, null, activity, sanitizedPayload);
     }
 
@@ -471,8 +475,8 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
 
     private ConversationReference BuildConversation(string chatType, string senderId, string chatId) =>
         string.Equals(chatType, "p2p", StringComparison.OrdinalIgnoreCase)
-            ? ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.DirectMessage, null, "dm", senderId)
-            : ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.Group, null, "group", chatId);
+            ? ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.DirectMessage, chatId, "dm", senderId)
+            : ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.Group, chatId, "group", chatId);
 
     private ConversationReference? TryBuildCardActionConversation(JsonElement eventObject, string senderId, string chatId)
     {
@@ -493,11 +497,11 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
                 return null;
             }
 
-            return ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.DirectMessage, null, "dm", senderId);
+            return ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.DirectMessage, chatId, "dm", senderId);
         }
 
         if (string.Equals(chatType, "group", StringComparison.OrdinalIgnoreCase))
-            return ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.Group, null, "group", chatId);
+            return ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.Group, chatId, "group", chatId);
 
         _logger.LogWarning("Lark card action chat_type {ChatType} is unsupported for chat {ChatId}; dropping callback.", chatType, chatId);
         return null;

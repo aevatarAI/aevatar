@@ -64,6 +64,7 @@ public static class ChannelCallbackEndpoints
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] ILarkConversationIngressRuntime larkIngressRuntime,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -84,6 +85,9 @@ public static class ChannelCallbackEndpoints
             RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "platform_mismatch");
             return Results.BadRequest(new { error = "Platform mismatch" });
         }
+
+        if (string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
+            return await larkIngressRuntime.HandleAsync(http, registration, ct);
 
         // Resolve adapter
         var adapter = adapters.FirstOrDefault(a =>
