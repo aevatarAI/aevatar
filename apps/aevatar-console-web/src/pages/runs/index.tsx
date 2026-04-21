@@ -10,7 +10,13 @@ import {
   type WorkflowResumeRequest,
   type WorkflowSignalRequest,
 } from "@aevatar-react-sdk/types";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import {
+  AppstoreOutlined,
+  ArrowLeftOutlined,
+  DeploymentUnitOutlined,
+  InfoCircleOutlined,
+  SendOutlined,
+} from "@ant-design/icons";
 import type { ProFormInstance } from "@ant-design/pro-components";
 import {
   PageContainer,
@@ -138,11 +144,93 @@ const runsWorkbenchHeaderTitleStyle: React.CSSProperties = {
 
 const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
   alignItems: "center",
+  backdropFilter: "blur(10px)",
+  background:
+    "linear-gradient(180deg, rgba(248, 250, 252, 0.9) 0%, rgba(255, 255, 255, 0.78) 100%)",
+  border: "1px solid rgba(226, 232, 240, 0.95)",
+  borderRadius: 16,
   display: "flex",
   flexWrap: "wrap",
   gap: 8,
   justifyContent: "flex-end",
+  padding: 4,
 };
+
+const runsWorkbenchHeaderToolbarClassName = "runs-workbench-header-toolbar";
+const runsWorkbenchHeaderButtonClassName = "runs-workbench-header-button";
+const runsWorkbenchHeaderButtonAccentClassName =
+  "runs-workbench-header-button-accent";
+
+const runsWorkbenchHeaderToolbarCss = `
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName} {
+  align-items: center;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 12px;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  color: var(--ant-color-text);
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 600;
+  gap: 8px;
+  height: 38px;
+  padding-inline: 14px;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName}:hover,
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName}:focus {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 1) 0%, rgba(239, 246, 255, 0.92) 100%);
+  border-color: rgba(59, 130, 246, 0.3);
+  box-shadow:
+    0 10px 22px rgba(59, 130, 246, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  color: var(--ant-color-primary);
+  transform: translateY(-1px);
+}
+
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName} .anticon {
+  font-size: 14px;
+}
+
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonAccentClassName} {
+  background:
+    linear-gradient(180deg, rgba(239, 246, 255, 0.98) 0%, rgba(219, 234, 254, 0.88) 100%);
+  border-color: rgba(59, 130, 246, 0.28);
+  box-shadow:
+    0 10px 22px rgba(59, 130, 246, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  color: var(--ant-color-primary);
+}
+
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonAccentClassName}:hover,
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonAccentClassName}:focus {
+  background:
+    linear-gradient(180deg, rgba(219, 234, 254, 1) 0%, rgba(191, 219, 254, 0.96) 100%);
+  border-color: rgba(37, 99, 235, 0.38);
+  box-shadow:
+    0 14px 28px rgba(37, 99, 235, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.98);
+  color: #1d4ed8;
+}
+
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName}[disabled],
+.${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName}[disabled]:hover {
+  background: rgba(248, 250, 252, 0.86);
+  border-color: rgba(226, 232, 240, 0.9);
+  box-shadow: none;
+  color: var(--ant-color-text-tertiary);
+  transform: none;
+}
+`;
 
 const runsSetupStateStyle: React.CSSProperties = {
   display: "flex",
@@ -205,25 +293,172 @@ const runsChatTraceWrapStyle: React.CSSProperties = {
 };
 
 const runsChatComposerCardStyle: React.CSSProperties = {
-  alignItems: "flex-end",
-  background: "var(--ant-color-bg-container)",
-  border: "1px solid var(--ant-color-border-secondary)",
-  borderRadius: 16,
+  background:
+    "linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%)",
+  border: "1px solid rgba(148, 163, 184, 0.18)",
+  borderRadius: 20,
+  boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)",
   display: "flex",
-  flexDirection: "row",
-  gap: 8,
-  padding: "10px 12px",
+  flexDirection: "column",
+  gap: 12,
+  padding: "14px 16px 16px",
+  position: "relative",
 };
 
 const runsChatComposerActionsStyle: React.CSSProperties = {
   display: "flex",
   flex: "0 0 auto",
+  flexDirection: "column",
+  gap: 10,
 };
 
 const runsChatComposerInputWrapStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
 };
+
+const runsChatComposerHeaderStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 12,
+  justifyContent: "space-between",
+};
+
+const runsChatComposerLabelStyle: React.CSSProperties = {
+  color: "var(--ant-color-primary)",
+  fontSize: 12,
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  lineHeight: 1,
+  textTransform: "uppercase",
+};
+
+const runsChatComposerHintStyle: React.CSSProperties = {
+  color: "var(--ant-color-text-secondary)",
+  fontSize: 12,
+};
+
+const runsChatComposerSendButtonStyle: React.CSSProperties = {
+  borderRadius: 14,
+  boxShadow: "0 12px 24px rgba(22, 119, 255, 0.2)",
+  fontWeight: 600,
+  height: 46,
+  paddingInline: 20,
+};
+
+const runsChatComposerTextareaStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  boxShadow: "none",
+  color: "var(--ant-color-text)",
+  fontSize: 15,
+  lineHeight: 1.65,
+  padding: 0,
+};
+
+const runsChatComposerClassName = "runs-chat-composer";
+const runsChatComposerBodyClassName = "runs-chat-composer-body";
+const runsChatComposerInputShellClassName = "runs-chat-composer-input-shell";
+const runsChatComposerInputClassName = "runs-chat-composer-input";
+const runsChatComposerActionsClassName = "runs-chat-composer-actions";
+
+const runsChatComposerCss = `
+.${runsChatComposerClassName} {
+  overflow: hidden;
+}
+
+.${runsChatComposerClassName}::before {
+  background:
+    radial-gradient(circle at top right, rgba(22, 119, 255, 0.14), transparent 55%);
+  content: "";
+  height: 220px;
+  pointer-events: none;
+  position: absolute;
+  right: -36px;
+  top: -88px;
+  width: 220px;
+}
+
+.${runsChatComposerClassName} > * {
+  position: relative;
+  z-index: 1;
+}
+
+.${runsChatComposerBodyClassName} {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.${runsChatComposerInputShellClassName} {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.98) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  min-width: 0;
+  padding: 14px 16px 12px;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.${runsChatComposerInputShellClassName}:focus-within {
+  border-color: rgba(22, 119, 255, 0.36);
+  box-shadow:
+    0 0 0 4px rgba(22, 119, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  transform: translateY(-1px);
+}
+
+.${runsChatComposerInputClassName},
+.${runsChatComposerInputClassName}:hover,
+.${runsChatComposerInputClassName}:focus {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.${runsChatComposerInputClassName} {
+  color: var(--ant-color-text);
+  font-size: 15px;
+  line-height: 1.65;
+  padding: 0 !important;
+}
+
+.${runsChatComposerInputClassName}::placeholder {
+  color: var(--ant-color-text-tertiary);
+}
+
+.${runsChatComposerActionsClassName} {
+  align-items: flex-end;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+@media (max-width: 960px) {
+  .${runsChatComposerBodyClassName} {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .${runsChatComposerActionsClassName} {
+    align-items: stretch;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .${runsChatComposerActionsClassName} .ant-btn {
+    width: 100%;
+  }
+}
+`;
 
 function resolveRequestedServiceId(
   request: Pick<
@@ -1873,24 +2108,31 @@ const RunsPage: React.FC = () => {
               />
             </Popover>
           </div>
-          <div style={runsWorkbenchHeaderActionStyle}>
+          <div
+            className={runsWorkbenchHeaderToolbarClassName}
+            style={runsWorkbenchHeaderActionStyle}
+          >
+            <style>{runsWorkbenchHeaderToolbarCss}</style>
             {teamAdvancedHref ? (
               <Button
-                size="small"
+                className={`${runsWorkbenchHeaderButtonClassName} ${runsWorkbenchHeaderButtonAccentClassName}`}
+                icon={<ArrowLeftOutlined />}
                 onClick={() => history.push(teamAdvancedHref)}
               >
                 返回团队高级编辑
               </Button>
             ) : null}
             <Button
-              size="small"
+              className={runsWorkbenchHeaderButtonClassName}
+              icon={<AppstoreOutlined />}
               onClick={() => history.push(buildRuntimeWorkflowsHref())}
             >
               Workflow catalog
             </Button>
             <Button
-              size="small"
+              className={runsWorkbenchHeaderButtonClassName}
               disabled={!actorId && !session.runId}
+              icon={<DeploymentUnitOutlined />}
               onClick={() =>
                 history.push(
                   buildRuntimeExplorerHref({
@@ -1954,36 +2196,59 @@ const RunsPage: React.FC = () => {
                   title="Conversation"
                 />
               </div>
-              <div style={runsChatComposerCardStyle}>
-                <div style={runsChatComposerInputWrapStyle}>
-                  <Input.TextArea
-                    aria-label="Prompt"
-                    autoSize={{ minRows: 2, maxRows: 6 }}
-                    onChange={(event) =>
-                      handleComposerPromptChange(event.target.value)
-                    }
-                    onKeyDown={(event) => {
-                      if (
-                        event.key === "Enter" &&
-                        !event.shiftKey &&
-                        !event.nativeEvent.isComposing
-                      ) {
-                        event.preventDefault();
-                        void handleSubmitComposer();
-                      }
-                    }}
-                    placeholder="Describe the task to run."
-                    value={composerPrompt}
-                  />
+              <div
+                className={runsChatComposerClassName}
+                style={runsChatComposerCardStyle}
+              >
+                <style>{runsChatComposerCss}</style>
+                <div style={runsChatComposerHeaderStyle}>
+                  <div style={runsChatComposerLabelStyle}>Prompt</div>
+                  <Typography.Text style={runsChatComposerHintStyle}>
+                    Enter to send
+                  </Typography.Text>
                 </div>
-                <div style={runsChatComposerActionsStyle}>
-                  <Button
-                    loading={streaming}
-                    onClick={() => void handleSubmitComposer()}
-                    type="primary"
+                <div className={runsChatComposerBodyClassName}>
+                  <div style={runsChatComposerInputWrapStyle}>
+                    <div
+                      className={runsChatComposerInputShellClassName}
+                    >
+                      <Input.TextArea
+                        aria-label="Prompt"
+                        autoSize={{ minRows: 2, maxRows: 6 }}
+                        className={runsChatComposerInputClassName}
+                        onChange={(event) =>
+                          handleComposerPromptChange(event.target.value)
+                        }
+                        onKeyDown={(event) => {
+                          if (
+                            event.key === "Enter" &&
+                            !event.shiftKey &&
+                            !event.nativeEvent.isComposing
+                          ) {
+                            event.preventDefault();
+                            void handleSubmitComposer();
+                          }
+                        }}
+                        placeholder="Describe the task to run."
+                        style={runsChatComposerTextareaStyle}
+                        value={composerPrompt}
+                      />
+                    </div>
+                  </div>
+                  <div
+                    className={runsChatComposerActionsClassName}
+                    style={runsChatComposerActionsStyle}
                   >
-                    Send
-                  </Button>
+                    <Button
+                      icon={<SendOutlined />}
+                      loading={streaming}
+                      onClick={() => void handleSubmitComposer()}
+                      style={runsChatComposerSendButtonStyle}
+                      type="primary"
+                    >
+                      Send
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
