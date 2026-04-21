@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -380,8 +381,8 @@ public class ChannelUserGAgentContinuationTests
         card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Create Daily Report Agent");
-        card.RootElement.GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
-        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
+        card.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
+        card.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
             .Should().Be("github_username");
 
         agent.State.PendingSessions.Should().BeEmpty();
@@ -411,8 +412,8 @@ public class ChannelUserGAgentContinuationTests
         card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Create Social Media Agent");
-        card.RootElement.GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
-        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
+        card.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
+        card.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
             .Should().Be("topic");
 
         agent.State.PendingSessions.Should().BeEmpty();
@@ -422,11 +423,11 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_CreateDailyReportCardAction_ShouldExecuteAgentBuilder()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
         queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo => Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(callInfo => Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = callInfo.ArgAt<string>(0),
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -535,9 +536,117 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
+    public async Task HandleInbound_CreateDailyReportCardSubmitFromRenderedForm_ShouldExecuteAgentBuilder()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = callInfo.ArgAt<string>(0),
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-github","slug":"api-github"},
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+                serviceCollection.AddSingleton(nyxClient);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var launchInbound = BuildInboundEvent();
+        launchInbound.Text = "/daily-report";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(launchInbound);
+
+        adapter.Replies.Should().ContainSingle();
+        var submitInbound = await BuildCardSubmitInboundEventAsync(
+            adapter.Replies[0].ReplyText,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["github_username"] = "alice",
+                ["repositories"] = "aevatarAI/aevatar",
+                ["schedule_time"] = "09:00",
+                ["schedule_timezone"] = "UTC",
+            },
+            "evt_daily_submit_1");
+
+        await agent.HandleInbound(submitInbound);
+
+        adapter.Replies.Should().HaveCount(2);
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[1].ReplyText).Should().BeTrue();
+        adapter.Replies[1].ReplyText.Should().Contain("Daily report agent created: skill-runner-");
+        adapter.Replies[1].ReplyText.Should().Contain("View Agents");
+        agent.State.ProcessedMessageIds.Should().Contain("evt_daily_submit_1");
+
+        await skillRunnerActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
+                e.Payload.Unpack<InitializeSkillRunnerCommand>().TemplateName == "daily_report" &&
+                e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.ConversationId == "oc_chat_1"),
+            Arg.Any<CancellationToken>());
+
+        await skillRunnerActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
+                e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "create_agent"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleInbound_CreateDailyReportCardAction_ShouldReturnGitHubCredentialsCard_WhenUserCredentialsMissing()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var actorRuntime = Substitute.For<IActorRuntime>();
 
         var handler = new RoutingJsonHandler();
@@ -618,11 +727,11 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_CreateSocialMediaCardAction_ShouldExecuteAgentBuilder()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
         queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo => Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(callInfo => Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = callInfo.ArgAt<string>(0),
                 AgentType = WorkflowAgentDefaults.AgentType,
@@ -737,13 +846,127 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
+    public async Task HandleInbound_CreateSocialMediaCardSubmitFromRenderedForm_ShouldExecuteAgentBuilder()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = callInfo.ArgAt<string>(0),
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+                Status = WorkflowAgentDefaults.StatusRunning,
+            }));
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<WorkflowAgentGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(workflowAgentActor));
+
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+        workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ScopeWorkflowUpsertResult(
+                new ScopeWorkflowSummary(
+                    "scope-1",
+                    "social-media-workflow-agent-1",
+                    "Social Media Approval workflow-agent-1",
+                    "service-key",
+                    "social_media_workflow_agent_1",
+                    "workflow-actor-1",
+                    "rev-1",
+                    "deploy-1",
+                    "active",
+                    DateTimeOffset.UtcNow),
+                "rev-1",
+                "workflow-actor-prefix",
+                "workflow-actor-1")));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+                serviceCollection.AddSingleton(workflowCommandPort);
+                serviceCollection.AddSingleton(nyxClient);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var launchInbound = BuildInboundEvent();
+        launchInbound.Text = "/social-media";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(launchInbound);
+
+        adapter.Replies.Should().ContainSingle();
+        var submitInbound = await BuildCardSubmitInboundEventAsync(
+            adapter.Replies[0].ReplyText,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["topic"] = "Launch update for the new workflow feature",
+                ["audience"] = "Developers",
+                ["style"] = "Confident and concise",
+                ["schedule_time"] = "09:00",
+                ["schedule_timezone"] = "UTC",
+            },
+            "evt_social_submit_1");
+
+        await agent.HandleInbound(submitInbound);
+
+        adapter.Replies.Should().HaveCount(2);
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[1].ReplyText).Should().BeTrue();
+        adapter.Replies[1].ReplyText.Should().Contain("Social media agent created: workflow-agent-");
+        adapter.Replies[1].ReplyText.Should().Contain("View Agents");
+        agent.State.ProcessedMessageIds.Should().Contain("evt_social_submit_1");
+
+        await workflowAgentActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(InitializeWorkflowAgentCommand.Descriptor) &&
+                e.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowActorId == "workflow-actor-1" &&
+                e.Payload.Unpack<InitializeWorkflowAgentCommand>().ConversationId == "oc_chat_1"),
+            Arg.Any<CancellationToken>());
+
+        await workflowAgentActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
+                e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "create_agent"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleInbound_ListAgentsIntent_ShouldSendInteractiveAgentListCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
             [
-                new AgentRegistryEntry
+                new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -833,9 +1056,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_AgentStatusTextCommand_ShouldSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -880,9 +1103,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_RunAgentTextCommand_ShouldExecuteTriggerAndSendResultCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -935,10 +1158,10 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_DisableAgentTextCommand_ShouldExecuteDisableAndSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -947,7 +1170,7 @@ public class ChannelUserGAgentContinuationTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -1071,9 +1294,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_AgentStatusCardAction_ShouldSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -1140,10 +1363,10 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_DeleteAgentCardAction_ShouldExecuteDeleteAndSendResultCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -1151,18 +1374,18 @@ public class ChannelUserGAgentContinuationTests
                     ApiKeyId = "key-1",
                     OwnerNyxUserId = "user-1",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(null));
+                Task.FromResult<UserAgentCatalogEntry?>(null));
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(Array.Empty<AgentRegistryEntry>()));
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(Array.Empty<UserAgentCatalogEntry>()));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
         var registryActor = Substitute.For<IActor>();
-        registryActor.Id.Returns(AgentRegistryGAgent.WellKnownId);
+        registryActor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
 
         var actorRuntime = Substitute.For<IActorRuntime>();
         actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
-        actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
+        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
@@ -1230,17 +1453,17 @@ public class ChannelUserGAgentContinuationTests
         await registryActor.Received(1).HandleEventAsync(
             Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&
-                e.Payload.Is(AgentRegistryTombstoneCommand.Descriptor) &&
-                e.Payload.Unpack<AgentRegistryTombstoneCommand>().AgentId == "skill-runner-1"),
+                e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
+                e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "skill-runner-1"),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task HandleInbound_RunAgentCardAction_ShouldExecuteTriggerAndSendResultCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -1311,9 +1534,9 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_RunWorkflowAgentCardAction_ShouldPropagateRevisionFeedback()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "workflow-agent-1",
                 AgentType = WorkflowAgentDefaults.AgentType,
@@ -1384,10 +1607,10 @@ public class ChannelUserGAgentContinuationTests
     [Fact]
     public async Task HandleInbound_EnableAgentCardAction_ShouldExecuteEnableAndSendStatusCard()
     {
-        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -1396,7 +1619,7 @@ public class ChannelUserGAgentContinuationTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
-                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -1693,6 +1916,110 @@ public class ChannelUserGAgentContinuationTests
         RegistrationScopeId = "scope-1",
         NyxProviderSlug = "api-lark-bot",
     };
+
+    private static async Task<ChannelInboundEvent> BuildCardSubmitInboundEventAsync(
+        string cardJson,
+        IReadOnlyDictionary<string, string> formValues,
+        string eventId)
+    {
+        var actionValue = ExtractPrimaryFormActionValue(cardJson);
+        var payload = new
+        {
+            schema = "2.0",
+            header = new
+            {
+                event_type = "card.action.trigger",
+                token = "verify-token",
+                event_id = eventId,
+            },
+            @event = new
+            {
+                @operator = new
+                {
+                    open_id = "ou_123",
+                },
+                context = new
+                {
+                    open_chat_id = "oc_chat_1",
+                    open_message_id = "om_card_msg_1",
+                },
+                action = new
+                {
+                    value = actionValue,
+                    form_value = formValues,
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var adapter = new LarkPlatformAdapter(NullLogger<LarkPlatformAdapter>.Instance);
+        var registration = BuildLarkRegistration();
+        var inbound = await adapter.ParseInboundAsync(http, registration);
+
+        inbound.Should().NotBeNull();
+        return ToChannelInboundEvent(inbound!, registration);
+    }
+
+    private static JsonElement ExtractPrimaryFormActionValue(string cardJson)
+    {
+        using var card = JsonDocument.Parse(cardJson);
+        var form = card.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(element => element.GetProperty("tag").GetString() == "form");
+        var action = form
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(element => element.GetProperty("tag").GetString() == "action");
+        return action.GetProperty("actions")[0].GetProperty("value").Clone();
+    }
+
+    private static HttpContext CreateHttpContext(object payload)
+    {
+        var json = JsonSerializer.Serialize(payload);
+        var context = new DefaultHttpContext();
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        context.Request.ContentType = "application/json";
+        context.Request.EnableBuffering();
+        return context;
+    }
+
+    private static ChannelBotRegistrationEntry BuildLarkRegistration() => new()
+    {
+        Id = "reg-1",
+        Platform = "lark",
+        NyxProviderSlug = "api-lark-bot",
+        NyxUserToken = "org-token",
+        VerificationToken = "verify-token",
+        ScopeId = "scope-1",
+        CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+    };
+
+    private static ChannelInboundEvent ToChannelInboundEvent(
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration)
+    {
+        var inboundEvent = new ChannelInboundEvent
+        {
+            Text = inbound.Text,
+            SenderId = inbound.SenderId,
+            SenderName = inbound.SenderName,
+            ConversationId = inbound.ConversationId,
+            MessageId = inbound.MessageId ?? string.Empty,
+            ChatType = inbound.ChatType ?? string.Empty,
+            Platform = inbound.Platform,
+            RegistrationId = registration.Id,
+            RegistrationToken = registration.NyxUserToken,
+            RegistrationScopeId = registration.ScopeId,
+            NyxProviderSlug = registration.NyxProviderSlug,
+        };
+
+        foreach (var pair in inbound.Extra)
+            inboundEvent.Extra[pair.Key] = pair.Value;
+
+        return inboundEvent;
+    }
 
     private static EventEnvelope BuildTopologyEnvelope(
         string publisherActorId,

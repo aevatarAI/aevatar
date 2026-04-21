@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Core.Compatibility;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -32,7 +33,7 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
         if (!_meta.AllowSelfHandling && envelope.Route?.PublisherActorId == _agent.Id) return false;
         if (_meta.OnlySelfHandling && envelope.Route.GetTopologyAudience() != TopologyAudience.Self) return false;
         if (envelope.Payload == null) return false;
-        return envelope.Payload.TypeUrl == GetTypeUrl(_meta.ParameterType);
+        return ProtobufContractCompatibility.MatchesPayload(envelope.Payload, _meta.ParameterType);
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -58,25 +59,33 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
         catch { return null; }
     }
 
-    private static string GetTypeUrl(System.Type type)
-    {
-        var prop = type.GetProperty("Descriptor",
-            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-        if (prop?.GetValue(null) is Google.Protobuf.Reflection.MessageDescriptor desc)
-            return "type.googleapis.com/" + desc.FullName;
-        return "type.googleapis.com/" + type.FullName;
-    }
-
     private static Func<Any, IMessage>? CompileUnpacker(System.Type messageType)
     {
         try
         {
-            var unpack = typeof(Any).GetMethods()
-                .First(m => m.Name == nameof(Any.Unpack) && m.IsGenericMethodDefinition && m.GetParameters().Length == 0);
+            var unpack = typeof(StaticHandlerAdapter).GetMethod(
+                nameof(UnpackCompatible),
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (unpack == null)
+                return null;
+
             var p = Expression.Parameter(typeof(Any), "any");
-            var call = Expression.Call(p, unpack.MakeGenericMethod(messageType));
+            var call = Expression.Call(unpack.MakeGenericMethod(messageType), p);
             return Expression.Lambda<Func<Any, IMessage>>(Expression.Convert(call, typeof(IMessage)), p).Compile();
         }
         catch { return null; }
+    }
+
+    private static IMessage UnpackCompatible<TMessage>(Any any)
+        where TMessage : class, IMessage<TMessage>, new()
+    {
+        if (ProtobufContractCompatibility.TryUnpack<TMessage>(any, out var message) &&
+            message != null)
+        {
+            return message;
+        }
+
+        throw new InvalidOperationException(
+            $"Could not unpack payload '{any.TypeUrl}' into '{typeof(TMessage).FullName}'.");
     }
 }

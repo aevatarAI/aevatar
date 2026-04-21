@@ -102,7 +102,7 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleUnregister_RemovesEntry()
+    public async Task HandleUnregister_TombstonesEntry()
     {
         var cmd = new DeviceRegisterCommand { ScopeId = "scope-del", HmacKey = "k" };
         await _agent.HandleRegister(cmd);
@@ -111,7 +111,33 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
 
         await _agent.HandleUnregister(new DeviceUnregisterCommand { RegistrationId = registrationId });
 
-        _agent.State.Registrations.Should().BeEmpty();
+        // Entry is retained as a tombstone so the projector can emit a Tombstone verdict
+        // (Channel RFC §7.1.1). A separate housekeeping job cleans watermark-passed tombstones.
+        _agent.State.Registrations.Should().ContainSingle();
+        _agent.State.Registrations[0].Id.Should().Be(registrationId);
+        _agent.State.Registrations[0].Tombstoned.Should().BeTrue();
+        _agent.State.Registrations[0].TombstoneStateVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleCompactTombstones_RemovesOnlyWatermarkSafeEntries()
+    {
+        await _agent.HandleRegister(new DeviceRegisterCommand { ScopeId = "scope-a", HmacKey = "key-a" });
+        var tombstonedId = _agent.State.Registrations[0].Id;
+        await _agent.HandleUnregister(new DeviceUnregisterCommand { RegistrationId = tombstonedId });
+
+        await _agent.HandleRegister(new DeviceRegisterCommand { ScopeId = "scope-b", HmacKey = "key-b" });
+        var liveId = _agent.State.Registrations[1].Id;
+
+        await _agent.HandleCompactTombstones(new DeviceCompactTombstonesCommand { SafeStateVersion = 1 });
+        _agent.State.Registrations.Select(x => x.Id).Should().Contain(tombstonedId);
+        _agent.State.Registrations.Select(x => x.Id).Should().Contain(liveId);
+
+        await _agent.HandleCompactTombstones(new DeviceCompactTombstonesCommand { SafeStateVersion = 2 });
+
+        _agent.State.Registrations.Should().ContainSingle();
+        _agent.State.Registrations[0].Id.Should().Be(liveId);
+        _agent.State.Registrations[0].Tombstoned.Should().BeFalse();
     }
 
     [Fact]

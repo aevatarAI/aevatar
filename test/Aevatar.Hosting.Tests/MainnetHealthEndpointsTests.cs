@@ -21,6 +21,8 @@ public sealed class MainnetHealthEndpointsTests
     public async Task MainnetHost_ShouldExposeHealthEndpoints_AndDocumentThemInOpenApi()
     {
         using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
         using var documentProvider = new EnvironmentVariableScope(
             "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
         using var documentElasticsearch = new EnvironmentVariableScope(
