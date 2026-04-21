@@ -53,4 +53,23 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     {
         payload.ShouldBeOfType<TelegramNativePayload>().Text.Length.ShouldBeLessThanOrEqualTo(maxLength);
     }
+
+    [Fact]
+    public void Compose_WhitespaceOnlyIntent_DoesNotInventPlaceholderText()
+    {
+        var composer = CreateComposer();
+        var payload = composer.Compose(new MessageContent
+        {
+            Text = "   ",
+            Disposition = MessageDisposition.Normal,
+        }, CreateContext());
+
+        payload.Text.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Options_DefaultLongPollingTimeout_UsesTelegramFriendlyDefault()
+    {
+        new TelegramChannelAdapterOptions().LongPollingTimeoutSeconds.ShouldBe(30);
+    }
 }

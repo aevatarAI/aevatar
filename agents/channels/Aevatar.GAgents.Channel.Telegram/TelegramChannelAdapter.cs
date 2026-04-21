@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -5,6 +7,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using ICredentialProvider = Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider;
@@ -30,7 +33,6 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
     private readonly ILogger<TelegramChannelAdapter> _logger;
     private readonly TelegramChannelAdapterOptions _options;
     private ChannelTransportBinding? _binding;
-    private string? _botToken;
     private bool _initialized;
     private bool _receiving;
     private bool _stopped;
@@ -204,6 +206,14 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
                 Capabilities = Capabilities,
             };
             var payload = _composer.Compose(content, context);
+            if (payload.Attachment is null && string.IsNullOrWhiteSpace(payload.Text))
+            {
+                return EmitResult.Failed(
+                    "telegram_empty_message",
+                    "Telegram text sends require non-empty message content.",
+                    capability: payload.Capability);
+            }
+
             var botToken = await ResolveBotTokenAsync(ct);
 
             TelegramSentActivity sent;
@@ -284,6 +294,14 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
                 Conversation = to.Clone(),
                 Capabilities = Capabilities,
             });
+            if (string.IsNullOrWhiteSpace(payload.Text))
+            {
+                return EmitResult.Failed(
+                    "telegram_empty_message",
+                    "Telegram text updates require non-empty message content.",
+                    capability: payload.Capability);
+            }
+
             if (payload.Attachment is not null)
             {
                 return EmitResult.Failed(
@@ -326,6 +344,10 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
         Aevatar.GAgents.Channel.Abstractions.AuthContext auth,
         CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(reference);
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(auth);
+
         if (auth.Kind == PrincipalKind.OnBehalfOfUser)
         {
             return EmitResult.Failed(
@@ -342,10 +364,29 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
         var offset = 0;
         while (!ct.IsCancellationRequested)
         {
+            string botToken;
+            try
+            {
+                botToken = await ResolveBotTokenAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (TaskCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogError(ex, "Telegram long polling stopped because bot credentials could not be resolved.");
+                break;
+            }
+
             try
             {
                 var updates = await _apiClient.GetUpdatesAsync(
-                    await ResolveBotTokenAsync(ct),
+                    botToken,
                     offset <= 0 ? null : offset,
                     _options.LongPollingTimeoutSeconds,
                     ct);
@@ -366,10 +407,15 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
             {
                 break;
             }
+            catch (ApiRequestException ex) when (IsTerminalAuthFailure(ex))
+            {
+                _logger.LogError(ex, "Telegram long polling stopped because bot authorization failed.");
+                break;
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Telegram long polling iteration failed.");
-                await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                await Task.Delay(TimeSpan.FromSeconds(1), _options.TimeProvider, ct);
             }
         }
     }
@@ -454,7 +500,7 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
             ReplyToActivityId = message.ReplyToMessage is not null
                 ? TelegramConversationTarget.BuildActivityId(message.Chat.Id, message.ReplyToMessage.MessageId)
                 : string.Empty,
-            RawPayloadBlobRef = $"telegram://update/{updateId}",
+            RawPayloadBlobRef = string.Empty,
         };
         return true;
     }
@@ -493,7 +539,7 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
                 Disposition = MessageDisposition.Normal,
             },
             ReplyToActivityId = TelegramConversationTarget.BuildActivityId(callback.Message.Chat.Id, callback.Message.MessageId),
-            RawPayloadBlobRef = $"telegram://update/{updateId}",
+            RawPayloadBlobRef = string.Empty,
         };
         return true;
     }
@@ -512,7 +558,16 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
     {
         if (string.IsNullOrWhiteSpace(binding.VerificationToken))
             return true;
-        if (string.Equals(secretToken, binding.VerificationToken, StringComparison.Ordinal))
+
+        if (string.IsNullOrEmpty(secretToken))
+        {
+            _logger.LogWarning("Telegram webhook secret token mismatch.");
+            return false;
+        }
+
+        var expected = Encoding.UTF8.GetBytes(binding.VerificationToken);
+        var actual = Encoding.UTF8.GetBytes(secretToken);
+        if (expected.Length == actual.Length && CryptographicOperations.FixedTimeEquals(expected, actual))
             return true;
 
         _logger.LogWarning("Telegram webhook secret token mismatch.");
@@ -521,14 +576,11 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
 
     private async Task<string> ResolveBotTokenAsync(CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(_botToken))
-            return _botToken;
         if (_binding is null)
             throw new InvalidOperationException("Adapter binding is unavailable.");
 
-        _botToken = await _credentialProvider.ResolveBotCredentialAsync(_binding, ct)
+        return await _credentialProvider.ResolveBotCredentialAsync(_binding, ct)
             ?? throw new InvalidOperationException("Telegram bot credential could not be resolved.");
-        return _botToken;
     }
 
     private async Task<TelegramAttachmentContent?> ResolveAttachmentAsync(AttachmentRef attachment, CancellationToken ct)
@@ -554,6 +606,8 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
 
     private static string SanitizeError(string message) =>
         string.IsNullOrWhiteSpace(message) ? "telegram_error" : message.Replace(Environment.NewLine, " ", StringComparison.Ordinal).Trim();
+
+    private static bool IsTerminalAuthFailure(ApiRequestException ex) => ex.ErrorCode is 401 or 403;
 
     private readonly record struct TelegramConversationTarget(long ChatId, int MessageId)
     {
@@ -582,9 +636,6 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
                 return new TelegramConversationTarget(chatId, messageId);
             }
 
-            if (int.TryParse(activityId, out messageId))
-                return new TelegramConversationTarget(0, messageId);
-
             throw new InvalidOperationException("Telegram activity id is invalid.");
         }
 
@@ -598,11 +649,13 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
         private readonly string _activityId;
         private readonly TimeProvider _timeProvider;
         private readonly TimeSpan _debounce;
+        private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private readonly HashSet<long> _acceptedSequenceNumbers = [];
         private readonly Dictionary<long, string> _chunks = new();
         private string _currentText;
-        private long _maxSequenceSeen;
         private bool _completed;
         private CancellationTokenSource? _flushCts;
+        private long _flushGeneration;
 
         public TelegramStreamingHandle(
             TelegramChannelAdapter adapter,
@@ -620,71 +673,107 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
             _debounce = debounce;
         }
 
-        public override Task AppendAsync(StreamChunk chunk)
+        public override async Task AppendAsync(StreamChunk chunk)
         {
-            if (_completed)
-                return Task.CompletedTask;
-            if (chunk.SequenceNumber <= _maxSequenceSeen && _chunks.ContainsKey(chunk.SequenceNumber))
-                return Task.CompletedTask;
+            ArgumentNullException.ThrowIfNull(chunk);
 
-            _maxSequenceSeen = Math.Max(_maxSequenceSeen, chunk.SequenceNumber);
-            _chunks[chunk.SequenceNumber] = chunk.Delta;
-            ScheduleFlush();
-            return Task.CompletedTask;
+            CancellationTokenSource? previousFlush = null;
+            await _writeGate.WaitAsync(CancellationToken.None);
+            try
+            {
+                if (_completed || !_acceptedSequenceNumbers.Add(chunk.SequenceNumber))
+                    return;
+
+                _chunks[chunk.SequenceNumber] = chunk.Delta;
+                previousFlush = _flushCts;
+                _flushCts = new CancellationTokenSource();
+                _ = FlushLaterAsync(++_flushGeneration, _flushCts.Token);
+            }
+            finally
+            {
+                _writeGate.Release();
+            }
+
+            CancelPendingFlush(previousFlush);
         }
 
         public override async Task CompleteAsync(MessageContent final)
         {
-            if (_completed)
-                return;
+            ArgumentNullException.ThrowIfNull(final);
 
-            _completed = true;
-            CancelPendingFlush();
-            await _adapter.UpdateAsync(_reference, _activityId, final, CancellationToken.None);
+            Task? finalWrite = null;
+            await _writeGate.WaitAsync(CancellationToken.None);
+            try
+            {
+                if (_completed)
+                    return;
+
+                _completed = true;
+                CancelPendingFlush(_flushCts);
+                _flushCts = null;
+                finalWrite = _adapter.UpdateAsync(_reference, _activityId, final, CancellationToken.None);
+                await finalWrite;
+            }
+            finally
+            {
+                _writeGate.Release();
+            }
         }
 
         public override async ValueTask DisposeAsync()
         {
-            if (_completed)
-                return;
-
-            _completed = true;
-            CancelPendingFlush();
-            var interrupted = new MessageContent
-            {
-                Text = string.IsNullOrWhiteSpace(_currentText) ? "(interrupted)" : $"{_currentText}\n\n(interrupted)",
-                Disposition = MessageDisposition.Normal,
-            };
+            Task? interruptedWrite = null;
+            await _writeGate.WaitAsync(CancellationToken.None);
             try
             {
-                await _adapter.UpdateAsync(_reference, _activityId, interrupted, CancellationToken.None);
+                if (_completed)
+                    return;
+
+                _completed = true;
+                CancelPendingFlush(_flushCts);
+                _flushCts = null;
+                var interrupted = new MessageContent
+                {
+                    Text = string.IsNullOrWhiteSpace(_currentText) ? "(interrupted)" : $"{_currentText}\n\n(interrupted)",
+                    Disposition = MessageDisposition.Normal,
+                };
+                interruptedWrite = _adapter.UpdateAsync(_reference, _activityId, interrupted, CancellationToken.None);
+                await interruptedWrite;
             }
             catch
             {
             }
+            finally
+            {
+                _writeGate.Release();
+            }
         }
 
-        private void ScheduleFlush()
-        {
-            CancelPendingFlush();
-            _flushCts = new CancellationTokenSource();
-            _ = FlushLaterAsync(_flushCts.Token);
-        }
-
-        private async Task FlushLaterAsync(CancellationToken ct)
+        private async Task FlushLaterAsync(long generation, CancellationToken ct)
         {
             try
             {
                 if (_debounce > TimeSpan.Zero)
-                    await Task.Delay(_debounce, ct);
+                    await Task.Delay(_debounce, _timeProvider, ct);
 
-                _currentText += string.Concat(_chunks.OrderBy(static pair => pair.Key).Select(static pair => pair.Value));
-                _chunks.Clear();
-                await _adapter.UpdateAsync(_reference, _activityId, new MessageContent
+                await _writeGate.WaitAsync(ct);
+                try
                 {
-                    Text = _currentText,
-                    Disposition = MessageDisposition.Normal,
-                }, ct);
+                    if (_completed || ct.IsCancellationRequested || generation != _flushGeneration || _chunks.Count == 0)
+                        return;
+
+                    _currentText += string.Concat(_chunks.OrderBy(static pair => pair.Key).Select(static pair => pair.Value));
+                    _chunks.Clear();
+                    await _adapter.UpdateAsync(_reference, _activityId, new MessageContent
+                    {
+                        Text = _currentText,
+                        Disposition = MessageDisposition.Normal,
+                    }, ct);
+                }
+                finally
+                {
+                    _writeGate.Release();
+                }
             }
             catch (OperationCanceledException)
             {
@@ -694,14 +783,13 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
             }
         }
 
-        private void CancelPendingFlush()
+        private static void CancelPendingFlush(CancellationTokenSource? flushCts)
         {
-            if (_flushCts is null)
+            if (flushCts is null)
                 return;
 
-            _flushCts.Cancel();
-            _flushCts.Dispose();
-            _flushCts = null;
+            flushCts.Cancel();
+            flushCts.Dispose();
         }
     }
 }

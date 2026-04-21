@@ -4,6 +4,7 @@ using Aevatar.GAgents.Channel.Telegram;
 using Aevatar.GAgents.Channel.Testing;
 using Shouldly;
 using global::Telegram.Bot;
+using global::Telegram.Bot.Exceptions;
 using global::Telegram.Bot.Types;
 
 namespace Aevatar.GAgents.Channel.Telegram.Tests;
@@ -97,9 +98,11 @@ public sealed class TelegramChannelAdapterModeTests
             supergroupActivity.ShouldNotBeNull();
             supergroupActivity.Conversation.Scope.ShouldBe(ConversationScope.Group);
             supergroupActivity.Conversation.CanonicalKey.ShouldContain("supergroup");
+            supergroupActivity.RawPayloadBlobRef.ShouldBeEmpty();
             channelActivity.ShouldNotBeNull();
             channelActivity.Conversation.Scope.ShouldBe(ConversationScope.Channel);
             channelActivity.Conversation.CanonicalKey.ShouldContain("channel");
+            channelActivity.RawPayloadBlobRef.ShouldBeEmpty();
         }
         finally
         {
@@ -123,14 +126,73 @@ public sealed class TelegramChannelAdapterModeTests
                 SampleMessageContent.SimpleText("seed"),
                 CancellationToken.None);
 
+            var releaseEdit = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Api.BlockNextEditCompletion = releaseEdit;
             await handle.AppendAsync(new StreamChunk
             {
                 SequenceNumber = 1,
                 Delta = " plus",
             });
-            await handle.CompleteAsync(SampleMessageContent.SimpleText("seed plus final"));
+            await harness.Api.FirstEditCallAsync.WaitAsync(TimeSpan.FromSeconds(5));
 
-            harness.Api.SendCalls.ShouldContain(call => call.Kind == "edit" && call.Text == "seed plus final");
+            var completeTask = handle.CompleteAsync(SampleMessageContent.SimpleText("seed plus final"));
+            completeTask.IsCompleted.ShouldBeFalse();
+
+            releaseEdit.TrySetResult(true);
+            await completeTask;
+
+            harness.Api.SendCalls.Count(call => call.Kind == "edit").ShouldBe(2);
+            harness.Api.SendCalls[^1].Kind.ShouldBe("edit");
+            harness.Api.SendCalls[^1].Text.ShouldBe("seed plus final");
+        }
+        finally
+        {
+            await adapter.StopReceivingAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task StartReceiving_LongPollingAuthFailure_StopsRetryLoop()
+    {
+        var harness = new TelegramAdapterHarness(TransportMode.LongPolling);
+        var adapter = harness.Reset(TransportMode.LongPolling);
+        harness.Api.EnqueuePollException(new ApiRequestException("unauthorized", 401));
+
+        await adapter.InitializeAsync(harness.DefaultBinding, CancellationToken.None);
+        await adapter.StartReceivingAsync(CancellationToken.None);
+
+        try
+        {
+            await harness.Api.FirstPollCallAsync.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            await adapter.StopReceivingAsync(CancellationToken.None);
+        }
+
+        harness.Api.PollCallCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task SendAsync_WhitespaceOnlyTextWithoutAttachment_ReturnsFailure()
+    {
+        var harness = new TelegramAdapterHarness();
+        var adapter = harness.Reset();
+        await adapter.InitializeAsync(harness.DefaultBinding, CancellationToken.None);
+        await adapter.StartReceivingAsync(CancellationToken.None);
+
+        var reference = ConversationReference.TelegramPrivate(BotInstanceId.From("telegram-primary-bot"), "42");
+        try
+        {
+            var emit = await adapter.SendAsync(reference, new MessageContent
+            {
+                Text = "   ",
+                Disposition = MessageDisposition.Normal,
+            }, CancellationToken.None);
+
+            emit.Success.ShouldBeFalse();
+            emit.ErrorCode.ShouldBe("telegram_empty_message");
+            harness.Api.SendCalls.ShouldBeEmpty();
         }
         finally
         {

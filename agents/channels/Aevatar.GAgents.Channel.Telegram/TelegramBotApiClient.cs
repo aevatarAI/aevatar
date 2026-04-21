@@ -71,7 +71,6 @@ public sealed class TelegramBotApiClient : ITelegramApiClient
             chatId,
             CreateInputFile(attachment),
             caption: caption,
-            parseMode: ParseMode.Html,
             replyParameters: replyToMessageId.HasValue ? new ReplyParameters { MessageId = replyToMessageId.Value } : null,
             replyMarkup: replyMarkup,
             cancellationToken: ct);
@@ -93,7 +92,6 @@ public sealed class TelegramBotApiClient : ITelegramApiClient
             chatId,
             CreateInputFile(attachment),
             caption: caption,
-            parseMode: ParseMode.Html,
             replyParameters: replyToMessageId.HasValue ? new ReplyParameters { MessageId = replyToMessageId.Value } : null,
             replyMarkup: replyMarkup,
             cancellationToken: ct);
@@ -114,7 +112,6 @@ public sealed class TelegramBotApiClient : ITelegramApiClient
             chatId,
             messageId,
             text,
-            parseMode: ParseMode.Html,
             replyMarkup: replyMarkup,
             cancellationToken: ct);
         return new TelegramSentActivity(chatId, message.MessageId);

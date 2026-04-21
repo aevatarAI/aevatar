@@ -15,7 +15,7 @@ public sealed class TelegramChannelAdapterOptions
     /// <summary>
     /// Gets or sets the long-polling timeout in seconds.
     /// </summary>
-    public int LongPollingTimeoutSeconds { get; init; } = 2;
+    public int LongPollingTimeoutSeconds { get; init; } = 30;
 
     /// <summary>
     /// Gets or sets the debounce window used by streaming edit loops.

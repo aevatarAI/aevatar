@@ -100,8 +100,6 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramNativePay
         }
 
         var text = builder.ToString().Trim();
-        if (string.IsNullOrWhiteSpace(text))
-            text = "(empty)";
         return text.Length <= maxLength ? text : text[..maxLength];
     }
 
