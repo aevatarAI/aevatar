@@ -125,9 +125,9 @@ NyxID only stores bot credentials and proxies outbound API calls (api-lark-bot, 
 
 ### Token Lifecycle Warning
 
-Registration stores the current NyxID session token for outbound API calls. **Session tokens expire** — when the token expires, the bot will receive messages but **fail silently on replies** (HTTP 401 token_expired from NyxID proxy). If the user reports "bot stopped replying", the most likely cause is an expired token.
+Registration stores the current NyxID access token for outbound API calls and should also store the matching refresh token. **Session tokens expire** — when the token expires, the bot will receive messages but **fail silently on replies** (HTTP 401 token_expired from NyxID proxy). If the user reports "bot stopped replying", the most likely cause is an expired token.
 
-**To fix:** refresh the token with `channel_registrations action=update_token registration_id=<id>` — this captures your current session token and updates the registration. No need to delete and re-register.
+**To fix:** refresh the token with `channel_registrations action=update_token registration_id=<id>` — this captures your current session access token and refresh token, updates the registration, and restores Lark auto-refresh. No need to delete and re-register.
 
 ### Step 1: Ensure NyxID has the bot's outbound service
 
@@ -147,7 +147,7 @@ For **Telegram**:
 
 → Returns the registration ID and the callback URL.
 
-**After registration, inform the user:** The bot's outbound replies depend on your NyxID session token, which will eventually expire. When the bot stops replying, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
+**After registration, inform the user:** The bot's outbound replies depend on your NyxID session tokens. Aevatar will auto-refresh when a refresh token is stored. If the bot ever stops replying after re-auth, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
 
 ### Step 3: Configure platform webhook
 

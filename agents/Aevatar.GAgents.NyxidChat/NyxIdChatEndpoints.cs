@@ -182,6 +182,8 @@ public static class NyxIdChatEndpoints
                     chatRequest.InputParts.Add(part.ToProto());
             }
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
+            if (TryExtractRefreshToken(http) is { } refreshToken)
+                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRefreshToken] = refreshToken;
             chatRequest.Metadata["scope_id"] = scopeId;
             await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
             await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
@@ -649,6 +651,24 @@ public static class NyxIdChatEndpoints
         return null;
     }
 
+    private static string? TryExtractRefreshToken(HttpContext http)
+    {
+        if (http.Request.Headers.TryGetValue("X-Nyx-Refresh-Token", out var headerValue))
+        {
+            var token = headerValue.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(token))
+                return token.Trim();
+        }
+
+        if (http.Request.Cookies.TryGetValue("nyx_refresh_token", out var cookieValue) &&
+            !string.IsNullOrWhiteSpace(cookieValue))
+        {
+            return cookieValue.Trim();
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Decode the JWT payload (without verification) to extract the 'sub' claim.
     /// Used by the relay endpoint to resolve the user's scope ID for chrono-storage
@@ -848,6 +868,8 @@ public static class NyxIdChatEndpoints
                 ScopeId = scopeId,
             };
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
+            if (TryExtractRefreshToken(http) is { } refreshToken)
+                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRefreshToken] = refreshToken;
             chatRequest.Metadata["scope_id"] = scopeId;
             chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
             chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";

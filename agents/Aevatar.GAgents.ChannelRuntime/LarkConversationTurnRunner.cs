@@ -155,7 +155,10 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
-        var delivery = await adapter.SendReplyAsync(replyText, inbound, registration, _nyxClient, cts.Token);
+        var replyService = _services.GetService<ChannelPlatformReplyService>();
+        var delivery = replyService is not null
+            ? await replyService.DeliverAsync(adapter, replyText, inbound, registration, cts.Token)
+            : await adapter.SendReplyAsync(replyText, inbound, registration, _nyxClient, cts.Token);
         if (!delivery.Succeeded)
         {
             _logger.LogWarning(

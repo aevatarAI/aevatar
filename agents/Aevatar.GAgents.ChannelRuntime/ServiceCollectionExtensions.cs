@@ -100,6 +100,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
+        services.TryAddSingleton<ChannelBotRegistrationTokenRefreshService>();
+        services.TryAddSingleton<ChannelPlatformReplyService>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)

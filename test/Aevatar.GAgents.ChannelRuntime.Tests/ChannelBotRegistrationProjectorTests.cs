@@ -39,6 +39,7 @@ public sealed class ChannelBotRegistrationProjectorTests
                     Platform = "lark",
                     NyxProviderSlug = "lark-provider",
                     NyxUserToken = "token-abc",
+                    NyxRefreshToken = "refresh-abc",
                     VerificationToken = "verify-123",
                     ScopeId = "scope-x",
                     WebhookUrl = "https://example.com/callback/bot-reg-1",
@@ -55,6 +56,7 @@ public sealed class ChannelBotRegistrationProjectorTests
         doc.Platform.Should().Be("lark");
         doc.NyxProviderSlug.Should().Be("lark-provider");
         doc.NyxUserToken.Should().Be("token-abc");
+        doc.NyxRefreshToken.Should().Be("refresh-abc");
         doc.VerificationToken.Should().Be("verify-123");
         doc.ScopeId.Should().Be("scope-x");
         doc.WebhookUrl.Should().Be("https://example.com/callback/bot-reg-1");

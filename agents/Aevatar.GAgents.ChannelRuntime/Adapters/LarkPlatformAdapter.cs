@@ -479,6 +479,15 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         }
     }
 
+    internal static bool IsRefreshableAuthFailure(PlatformReplyDeliveryResult result)
+    {
+        if (result.Succeeded || string.IsNullOrWhiteSpace(result.Detail))
+            return false;
+
+        return result.Detail.Contains("lark_error=token_expired", StringComparison.OrdinalIgnoreCase) ||
+               result.Detail.Contains("lark_error=invalid_auth", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool TryBuildLarkFailureResult(string? result, out PlatformReplyDeliveryResult failure)
     {
         failure = default;

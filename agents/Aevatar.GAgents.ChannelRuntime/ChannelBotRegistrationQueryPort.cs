@@ -48,6 +48,7 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             Platform = document.Platform ?? string.Empty,
             NyxProviderSlug = document.NyxProviderSlug ?? string.Empty,
             NyxUserToken = document.NyxUserToken ?? string.Empty,
+            NyxRefreshToken = document.NyxRefreshToken ?? string.Empty,
             VerificationToken = document.VerificationToken ?? string.Empty,
             ScopeId = document.ScopeId ?? string.Empty,
             WebhookUrl = document.WebhookUrl ?? string.Empty,

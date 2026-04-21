@@ -39,6 +39,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
             NyxUserToken = cmd.NyxUserToken,
+            NyxRefreshToken = cmd.NyxRefreshToken,
             VerificationToken = cmd.VerificationToken,
             ScopeId = cmd.ScopeId,
             WebhookUrl = cmd.WebhookUrl,
@@ -84,6 +85,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         {
             RegistrationId = cmd.RegistrationId,
             NyxUserToken = cmd.NyxUserToken,
+            NyxRefreshToken = cmd.NyxRefreshToken,
         });
         Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
     }
@@ -146,7 +148,10 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var next = current.Clone();
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
+        {
             entry.NyxUserToken = evt.NyxUserToken;
+            entry.NyxRefreshToken = evt.NyxRefreshToken;
+        }
         return next;
     }
 

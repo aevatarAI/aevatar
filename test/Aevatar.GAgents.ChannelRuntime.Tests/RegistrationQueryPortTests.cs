@@ -120,6 +120,7 @@ public sealed class RegistrationQueryPortTests
                 Platform = "lark",
                 NyxProviderSlug = "lark-provider",
                 NyxUserToken = "token-abc",
+                NyxRefreshToken = "refresh-abc",
                 VerificationToken = "verify-123",
                 ScopeId = "scope-x",
                 WebhookUrl = "https://example.com/callback/bot-1",
@@ -136,6 +137,7 @@ public sealed class RegistrationQueryPortTests
         result.Platform.Should().Be("lark");
         result.NyxProviderSlug.Should().Be("lark-provider");
         result.NyxUserToken.Should().Be("token-abc");
+        result.NyxRefreshToken.Should().Be("refresh-abc");
         result.VerificationToken.Should().Be("verify-123");
         result.ScopeId.Should().Be("scope-x");
         result.WebhookUrl.Should().Be("https://example.com/callback/bot-1");

@@ -363,6 +363,7 @@ public static class ChannelCallbackEndpoints
             Platform = platformNormalized,
             NyxProviderSlug = request.NyxProviderSlug.Trim(),
             NyxUserToken = request.NyxUserToken.Trim(),
+            NyxRefreshToken = request.NyxRefreshToken?.Trim() ?? string.Empty,
             VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
@@ -412,6 +413,7 @@ public static class ChannelCallbackEndpoints
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
             callback_url = $"{callbackPath}/{registrationId}",
+            auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.NyxRefreshToken),
             projection_ready = materialized,
             projection_warning = materialized
                 ? null
@@ -492,6 +494,7 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = "nyx_user_token is required" });
 
         var newToken = request.NyxUserToken.Trim();
+        var newRefreshToken = ResolveUpdatedRefreshToken(request.NyxRefreshToken, exists.NyxRefreshToken);
 
         // Snapshot projection version. Orphaned documents retain a stale version
         // that never advances — this lets us detect the actor dropping the command.
@@ -503,6 +506,7 @@ public static class ChannelCallbackEndpoints
         {
             RegistrationId = registrationId,
             NyxUserToken = newToken,
+            NyxRefreshToken = newRefreshToken,
         };
 
         var cmdEnvelope = new EventEnvelope
@@ -527,7 +531,9 @@ public static class ChannelCallbackEndpoints
             if (versionAfter <= versionBefore)
                 continue;
             var after = await queryPort.GetAsync(registrationId, ct);
-            if (after is not null && string.Equals(after.NyxUserToken, newToken, StringComparison.Ordinal))
+            if (after is not null &&
+                string.Equals(after.NyxUserToken, newToken, StringComparison.Ordinal) &&
+                string.Equals(after.NyxRefreshToken, newRefreshToken, StringComparison.Ordinal))
             {
                 confirmed = true;
                 break;
@@ -545,7 +551,20 @@ public static class ChannelCallbackEndpoints
             }, statusCode: 500);
         }
 
-        return Results.Ok(new { status = "token_updated", registration_id = registrationId });
+        return Results.Ok(new
+        {
+            status = "token_updated",
+            registration_id = registrationId,
+            auto_refresh_ready = !string.IsNullOrWhiteSpace(newRefreshToken),
+        });
+    }
+
+    internal static string ResolveUpdatedRefreshToken(string? requestedRefreshToken, string? existingRefreshToken)
+    {
+        if (requestedRefreshToken is null)
+            return existingRefreshToken?.Trim() ?? string.Empty;
+
+        return requestedRefreshToken.Trim();
     }
 
     /// <summary>
@@ -598,6 +617,8 @@ public static class ChannelCallbackEndpoints
             nyx_provider_slug = registration.NyxProviderSlug,
             nyx_user_token_present = !string.IsNullOrWhiteSpace(registration.NyxUserToken),
             nyx_user_token_length = registration.NyxUserToken?.Length ?? 0,
+            nyx_refresh_token_present = !string.IsNullOrWhiteSpace(registration.NyxRefreshToken),
+            nyx_refresh_token_length = registration.NyxRefreshToken?.Length ?? 0,
             scope_id = registration.ScopeId,
             target_chat_id = chatId,
         };
@@ -620,7 +641,10 @@ public static class ChannelCallbackEndpoints
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var delivery = await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
+            var replyService = http.RequestServices.GetService<ChannelPlatformReplyService>();
+            var delivery = replyService is not null
+                ? await replyService.DeliverAsync(adapter, message, inbound, registration, cts.Token)
+                : await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
             if (!delivery.Succeeded)
             {
                 return Results.Json(new
@@ -686,6 +710,7 @@ public static class ChannelCallbackEndpoints
         string? Platform,
         string? NyxProviderSlug,
         string? NyxUserToken,
+        string? NyxRefreshToken,
         string? VerificationToken,
         string? ScopeId,
         string? WebhookBaseUrl,
@@ -693,5 +718,5 @@ public static class ChannelCallbackEndpoints
 
     private sealed record TestReplyRequest(string? ChatId, string? Message);
 
-    private sealed record UpdateTokenRequest(string? NyxUserToken);
+    private sealed record UpdateTokenRequest(string? NyxUserToken, string? NyxRefreshToken);
 }

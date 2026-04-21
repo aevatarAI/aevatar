@@ -52,6 +52,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             Platform = "lark",
             NyxProviderSlug = "api-lark-bot",
             NyxUserToken = "token-123",
+            NyxRefreshToken = "refresh-123",
             VerificationToken = "verify-456",
             ScopeId = "scope-1",
         };
@@ -63,6 +64,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.Platform.Should().Be("lark");
         entry.NyxProviderSlug.Should().Be("api-lark-bot");
         entry.NyxUserToken.Should().Be("token-123");
+        entry.NyxRefreshToken.Should().Be("refresh-123");
         entry.VerificationToken.Should().Be("verify-456");
         entry.ScopeId.Should().Be("scope-1");
         entry.Id.Should().NotBeNullOrWhiteSpace();
@@ -91,6 +93,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             Platform = "lark",
             NyxProviderSlug = "api-lark-bot",
             NyxUserToken = "token-abc",
+            NyxRefreshToken = "refresh-abc",
             VerificationToken = "verify-xyz",
             ScopeId = "scope-x",
             WebhookUrl = "https://example.com/callback",
@@ -103,6 +106,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.Platform.Should().Be("lark");
         entry.NyxProviderSlug.Should().Be("api-lark-bot");
         entry.NyxUserToken.Should().Be("token-abc");
+        entry.NyxRefreshToken.Should().Be("refresh-abc");
         entry.VerificationToken.Should().Be("verify-xyz");
         entry.ScopeId.Should().Be("scope-x");
         entry.WebhookUrl.Should().Be("https://example.com/callback");
@@ -254,10 +258,12 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         {
             RegistrationId = registrationId,
             NyxUserToken = "new-token",
+            NyxRefreshToken = "new-refresh-token",
         });
 
         _agent.State.Registrations.Should().HaveCount(1);
         _agent.State.Registrations[0].NyxUserToken.Should().Be("new-token");
+        _agent.State.Registrations[0].NyxRefreshToken.Should().Be("new-refresh-token");
     }
 
     [Fact]

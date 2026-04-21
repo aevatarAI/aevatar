@@ -33,7 +33,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
         "Manage Aevatar channel bot registrations (Lark, Telegram, Discord). " +
         "Actions: list, register, delete, update_token. " +
         "Use this to set up platform bot callbacks so users can chat with agents via messaging apps. " +
-        "Use update_token to refresh the NyxID access token on an existing registration when the old token expires.";
+        "Use update_token to refresh the NyxID access token on an existing registration when the old token expires. " +
+        "When available, store the matching NyxID refresh token too so Lark outbound replies can auto-refresh.";
 
     public string ParametersSchema => """
         {
@@ -69,6 +70,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Opaque credential reference for the platform secret (for register, optional). For Lark this should resolve to either the raw encrypt key or a JSON secret containing encrypt_key."
             },
+            "nyx_refresh_token": {
+              "type": "string",
+              "description": "NyxID refresh token to store alongside the access token (for register, update_token). If omitted, the tool falls back to nyxid.refresh_token metadata when available; update_token otherwise preserves the stored refresh token."
+            },
             "registration_id": {
               "type": "string",
               "description": "Registration ID (for delete, update_token)"
@@ -86,6 +91,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
+        var refreshTokenMetadata = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdRefreshToken);
 
         // Lazy resolve at call time — silo is fully started, all services available
         var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
@@ -100,15 +106,51 @@ public sealed class ChannelRegistrationTool : IAgentTool
         return action switch
         {
             "list" => await ListAsync(queryPort, ct),
-            "register" => await RegisterAsync(queryPort, actorRuntime, token, root, ct),
+            "register" => await RegisterAsync(queryPort, actorRuntime, token, ResolveRegisterRefreshToken(root, refreshTokenMetadata), root, ct),
             "delete" => await DeleteAsync(queryPort, actorRuntime, root, ct),
-            "update_token" => await UpdateTokenAsync(queryPort, actorRuntime, token, root, ct),
+            "update_token" => await UpdateTokenAsync(queryPort, actorRuntime, token, refreshTokenMetadata, root, ct),
             _ => await ListAsync(queryPort, ct),
         };
     }
 
     private static string? GetStr(JsonElement el, string prop) =>
         el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static bool TryGetProvidedString(JsonElement el, string prop, out string? value)
+    {
+        if (el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
+        {
+            value = v.GetString();
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    internal static string ResolveRegisterRefreshToken(JsonElement args, string? metadataRefreshToken)
+    {
+        if (TryGetProvidedString(args, "nyx_refresh_token", out var explicitRefreshToken))
+            return explicitRefreshToken?.Trim() ?? string.Empty;
+
+        return !string.IsNullOrWhiteSpace(metadataRefreshToken)
+            ? metadataRefreshToken.Trim()
+            : string.Empty;
+    }
+
+    internal static string ResolveUpdateRefreshToken(
+        JsonElement args,
+        string? metadataRefreshToken,
+        string? existingRefreshToken)
+    {
+        if (TryGetProvidedString(args, "nyx_refresh_token", out var explicitRefreshToken))
+            return explicitRefreshToken?.Trim() ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(metadataRefreshToken))
+            return metadataRefreshToken.Trim();
+
+        return existingRefreshToken?.Trim() ?? string.Empty;
+    }
 
     private async Task<string> ListAsync(IChannelBotRegistrationQueryPort queryPort, CancellationToken ct)
     {
@@ -129,7 +171,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
     private async Task<string> RegisterAsync(
         IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
-        string token, JsonElement args, CancellationToken ct)
+        string token, string refreshToken, JsonElement args, CancellationToken ct)
     {
         var platform = GetStr(args, "platform");
         if (string.IsNullOrWhiteSpace(platform))
@@ -161,6 +203,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             Platform = platform.Trim().ToLowerInvariant(),
             NyxProviderSlug = nyxProviderSlug.Trim(),
             NyxUserToken = token,
+            NyxRefreshToken = refreshToken,
             VerificationToken = GetStr(args, "verification_token")?.Trim() ?? string.Empty,
             ScopeId = GetStr(args, "scope_id")?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl,
@@ -203,13 +246,14 @@ public sealed class ChannelRegistrationTool : IAgentTool
             nyx_provider_slug = cmd.NyxProviderSlug,
             callback_url = $"{callbackPath}/{registrationId}",
             webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
+            auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.NyxRefreshToken),
             note = confirmedId == null ? "Registration submitted but projection not yet confirmed. Try 'list' after a few seconds." : "",
         });
     }
 
     private async Task<string> UpdateTokenAsync(
         IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
-        string token, JsonElement args, CancellationToken ct)
+        string token, string? metadataRefreshToken, JsonElement args, CancellationToken ct)
     {
         var registrationId = GetStr(args, "registration_id") ?? GetStr(args, "id");
         if (string.IsNullOrWhiteSpace(registrationId))
@@ -218,6 +262,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var exists = await queryPort.GetAsync(registrationId, ct);
         if (exists is null)
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
+        var refreshToken = ResolveUpdateRefreshToken(args, metadataRefreshToken, exists.NyxRefreshToken);
 
         // Snapshot the projection version before dispatch. An orphaned projection
         // document (from a deleted registration) retains a stale version that never
@@ -233,6 +278,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             RegistrationId = registrationId,
             NyxUserToken = token,
+            NyxRefreshToken = refreshToken,
         };
 
         var envelope = new EventEnvelope
@@ -258,7 +304,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
             if (versionAfter <= versionBefore)
                 continue;
             var after = await queryPort.GetAsync(registrationId, ct);
-            if (after is not null && string.Equals(after.NyxUserToken, token, StringComparison.Ordinal))
+            if (after is not null &&
+                string.Equals(after.NyxUserToken, token, StringComparison.Ordinal) &&
+                string.Equals(after.NyxRefreshToken, refreshToken, StringComparison.Ordinal))
             {
                 confirmed = true;
                 break;
@@ -281,7 +329,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
             status = "token_updated",
             registration_id = registrationId,
             platform = exists.Platform,
-            note = "NyxID access token has been refreshed. Bot replies should work again.",
+            auto_refresh_ready = !string.IsNullOrWhiteSpace(refreshToken),
+            note = !string.IsNullOrWhiteSpace(refreshToken)
+                ? "NyxID access and refresh tokens have been updated. Lark outbound replies can auto-refresh."
+                : "NyxID access token has been refreshed, but no refresh token was stored. Manual re-auth will still be required when it expires.",
         });
     }
 
