@@ -532,8 +532,10 @@ internal static class ChannelReceiverTracker
                     continue;
                 }
 
-                if (ExtractLeafName(init) is { } leaf
-                    && set.Contains(leaf)
+                // `ReturnExpressionMatches` subsumes the plain leaf case plus `??` / `?:` /
+                // `switch` branch enumeration, so `var alias = port ?? throw ...;` joins the set
+                // when `port` is already known.
+                if (ReturnExpressionMatches(init, set)
                     && set.Add(declarator.Identifier.ValueText))
                 {
                     changed = true;
@@ -554,8 +556,7 @@ internal static class ChannelReceiverTracker
                     continue;
                 }
 
-                if (ExtractLeafName(assignment.Right) is { } rhsLeaf
-                    && set.Contains(rhsLeaf)
+                if (ReturnExpressionMatches(assignment.Right, set)
                     && set.Add(lhs.Identifier.ValueText))
                 {
                     changed = true;
@@ -720,7 +721,7 @@ internal static class ChannelReceiverTracker
     {
         if (body is ExpressionSyntax expression)
         {
-            return ExtractLeafName(expression) is { } leaf && set.Contains(leaf);
+            return ReturnExpressionMatches(expression, set);
         }
 
         if (body is BlockSyntax block)
@@ -731,9 +732,7 @@ internal static class ChannelReceiverTracker
                 && n is not LocalFunctionStatementSyntax)
                 .OfType<ReturnStatementSyntax>())
             {
-                if (ret.Expression is { } returnExpr
-                    && ExtractLeafName(returnExpr) is { } leaf
-                    && set.Contains(leaf))
+                if (ret.Expression is { } returnExpr && ReturnExpressionMatches(returnExpr, set))
                 {
                     return true;
                 }
@@ -741,6 +740,81 @@ internal static class ChannelReceiverTracker
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Returns true when at least one branch of <paramref name="expression"/> evaluates to a name
+    /// already present in <paramref name="set"/>. Splits `a ?? b`, `cond ? a : b`, and
+    /// `switch { ... }` so an attacker cannot wrap a known receiver in an innocuous-looking
+    /// expression (`_outbound ?? throw ...`, `_flag ? _store : throw ...`, etc.) and slip past
+    /// the leaf-name check. `throw` expressions contribute no receiver and are skipped.
+    /// </summary>
+    private static bool ReturnExpressionMatches(ExpressionSyntax expression, HashSet<string> set)
+    {
+        foreach (var candidate in EnumerateReceiverBranches(expression))
+        {
+            if (ExtractLeafName(candidate) is { } leaf && set.Contains(leaf))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<ExpressionSyntax> EnumerateReceiverBranches(ExpressionSyntax expression)
+    {
+        expression = UnwrapExpression(expression);
+
+        switch (expression)
+        {
+            case ThrowExpressionSyntax:
+                // `throw ...` produces no receiver — do not yield a candidate.
+                yield break;
+
+            case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression):
+                foreach (var branch in EnumerateReceiverBranches(binary.Left))
+                {
+                    yield return branch;
+                }
+                foreach (var branch in EnumerateReceiverBranches(binary.Right))
+                {
+                    yield return branch;
+                }
+                yield break;
+
+            case ConditionalExpressionSyntax conditional:
+                foreach (var branch in EnumerateReceiverBranches(conditional.WhenTrue))
+                {
+                    yield return branch;
+                }
+                foreach (var branch in EnumerateReceiverBranches(conditional.WhenFalse))
+                {
+                    yield return branch;
+                }
+                yield break;
+
+            case SwitchExpressionSyntax switchExpr:
+                foreach (var arm in switchExpr.Arms)
+                {
+                    foreach (var branch in EnumerateReceiverBranches(arm.Expression))
+                    {
+                        yield return branch;
+                    }
+                }
+                yield break;
+
+            case AwaitExpressionSyntax awaitExpr:
+                foreach (var branch in EnumerateReceiverBranches(awaitExpr.Expression))
+                {
+                    yield return branch;
+                }
+                yield break;
+
+            default:
+                yield return expression;
+                yield break;
+        }
     }
 
     private static bool InitializerExpressionMatchesTypeHint(ExpressionSyntax expression, string typeHint)
