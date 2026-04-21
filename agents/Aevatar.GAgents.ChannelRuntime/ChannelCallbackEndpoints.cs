@@ -61,7 +61,7 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         string platform,
         string registrationId,
-        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] ILarkConversationIngressRuntime larkIngressRuntime,
@@ -72,7 +72,7 @@ public static class ChannelCallbackEndpoints
         var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
 
         // Resolve registration from projection read model
-        var registration = await queryPort.GetAsync(registrationId, ct);
+        var registration = await runtimeQueryPort.GetAsync(registrationId, ct);
         if (registration is null)
         {
             logger.LogWarning("Channel callback for unknown registration: {RegistrationId}", registrationId);

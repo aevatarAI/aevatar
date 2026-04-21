@@ -64,7 +64,7 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_DoesNotProjectLegacyEncryptKey()
+    public async Task ProjectAsync_PreservesLegacyEncryptKey_ForRuntimeFallback()
     {
         var state = new ChannelBotRegistrationStoreState
         {
@@ -85,7 +85,7 @@ public sealed class ChannelBotRegistrationProjectorTests
         await _projector.ProjectAsync(_context, envelope, CancellationToken.None);
 
         _dispatcher.Upserts.Should().HaveCount(1);
-        _dispatcher.Upserts[0].EncryptKey.Should().BeEmpty();
+        _dispatcher.Upserts[0].EncryptKey.Should().Be("my-encrypt-key-456");
     }
 
     [Fact]

@@ -309,6 +309,40 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
+    public async Task BotRuntimeQueryPort_GetAsync_PreservesLegacyEncryptKey()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("bot-runtime-enc", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
+            {
+                Id = "bot-runtime-enc",
+                Platform = "lark",
+                EncryptKey = "legacy-encrypt-key",
+                CredentialRef = string.Empty,
+            }));
+
+        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(reader);
+        var result = await queryPort.GetAsync("bot-runtime-enc");
+
+        result.Should().NotBeNull();
+        result!.EncryptKey.Should().Be("legacy-encrypt-key");
+        result.CredentialRef.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BotRuntimeQueryPort_GetAsync_ReturnsNull_WhenDocumentNotFound()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("missing-runtime", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(null));
+
+        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(reader);
+        var result = await queryPort.GetAsync("missing-runtime");
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
     public async Task BotQueryPort_QueryAllAsync_DoesNotExposeLegacyEncryptKey()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();

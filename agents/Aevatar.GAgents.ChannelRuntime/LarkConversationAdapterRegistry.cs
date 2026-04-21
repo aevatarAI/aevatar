@@ -130,12 +130,13 @@ internal sealed class LarkConversationAdapterRegistry : IAsyncDisposable
             ct.ThrowIfCancellationRequested();
 
             var credentialRef = registration.CredentialRef?.Trim() ?? string.Empty;
+            var legacyEncryptKey = registration.EncryptKey?.Trim() ?? string.Empty;
             var bindingCredentialRef = credentialRef.Length == 0
                 ? $"channel-registration:lark:{registration.Id ?? string.Empty}"
                 : credentialRef;
 
             var secretJson = credentialRef.Length == 0
-                ? BuildSecretJson(string.Empty)
+                ? BuildSecretJson(legacyEncryptKey)
                 : BuildSecretJson(await ResolveSecretAsync(credentialRef, credentialProvider, ct));
 
             return new AdapterSnapshot(

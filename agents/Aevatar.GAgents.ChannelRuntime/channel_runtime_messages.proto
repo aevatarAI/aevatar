@@ -29,6 +29,7 @@ message ChannelBotRegistrationEntry {
   // .DeleteAsync. Housekeeping cleans watermark-passed entries.
   bool tombstoned = 11;
   int64 tombstone_state_version = 12;
+  string nyx_refresh_token = 13;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -171,6 +172,7 @@ message ChannelBotRegisterCommand {
   // Late-bound credential reference (Channel RFC §17.3). See
   // ChannelBotRegistrationEntry.credential_ref for runtime contract.
   string credential_ref = 9;
+  string nyx_refresh_token = 10;
 }
 
 message ChannelBotUnregisterCommand {
@@ -180,6 +182,7 @@ message ChannelBotUnregisterCommand {
 message ChannelBotUpdateTokenCommand {
   string registration_id = 1;
   string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
 }
 
 message ChannelBotCompactTombstonesCommand {
@@ -195,6 +198,7 @@ message ChannelBotTombstonesCompactedEvent {
 message ChannelBotTokenUpdatedEvent {
   string registration_id = 1;
   string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
 }
 
 // Projection read model for channel bot registrations
@@ -210,10 +214,11 @@ message ChannelBotRegistrationDocument {
   google.protobuf.Timestamp updated_at_utc = 9;
   string actor_id = 10;                     // Source actor ID
   string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
-  string encrypt_key = 12;                   // Deprecated legacy raw field retained only for historical documents; projector no longer emits it.
+  string encrypt_key = 12;                   // Deprecated legacy raw field retained for runtime fallback until old registrations are backfilled to credential_ref.
   // Late-bound credential reference (Channel RFC §17.3). See
   // ChannelBotRegistrationEntry.credential_ref for runtime contract.
   string credential_ref = 13;
+  string nyx_refresh_token = 14;
 }
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───

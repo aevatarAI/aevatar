@@ -86,6 +86,73 @@ public sealed class LarkConversationAdapterRegistryTests
         response.Activity!.Content.Text.Should().Be("hello");
     }
 
+    [Fact]
+    public async Task GetAsync_WithoutCredentialRef_FallsBackToLegacyEncryptKey()
+    {
+        const string encryptKey = "legacy-encrypt-key";
+
+        var services = new ServiceCollection();
+        using var serviceProvider = services.BuildServiceProvider();
+
+        await using var registry = new LarkConversationAdapterRegistry(
+            new LarkMessageComposer(),
+            new LarkPayloadRedactor(),
+            new StubHttpClientFactory(),
+            NullLoggerFactory.Instance,
+            serviceProvider);
+
+        var adapter = await registry.GetAsync(new ChannelBotRegistrationEntry
+        {
+            Id = "reg-legacy",
+            Platform = "lark",
+            ScopeId = "scope-1",
+            EncryptKey = encryptKey,
+        }, CancellationToken.None);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema = "2.0",
+            header = new
+            {
+                event_type = "im.message.receive_v1",
+            },
+            @event = new
+            {
+                sender = new
+                {
+                    sender_id = new
+                    {
+                        open_id = "user-open-1",
+                    },
+                    sender_type = "user",
+                },
+                message = new
+                {
+                    chat_id = "group-1",
+                    message_id = "msg-1",
+                    message_type = "text",
+                    chat_type = "group",
+                    content = JsonSerializer.Serialize(new { text = "hello" }),
+                },
+            },
+        });
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        const string nonce = "nonce";
+        var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(
+            Encoding.UTF8.GetBytes(payload),
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["X-Lark-Request-Timestamp"] = timestamp,
+                ["X-Lark-Request-Nonce"] = nonce,
+                ["X-Lark-Signature"] = ComputeLarkSignature(timestamp, nonce, encryptKey, payload),
+            }));
+
+        response.StatusCode.Should().Be(200);
+        response.Activity.Should().NotBeNull();
+        response.Activity!.Content.Text.Should().Be("hello");
+    }
+
     private sealed class StubHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) =>

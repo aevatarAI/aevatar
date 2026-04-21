@@ -48,6 +48,8 @@ public sealed class ChannelBotRegistrationProjector
             VerificationToken = entry.VerificationToken ?? string.Empty,
             WebhookUrl = entry.WebhookUrl ?? string.Empty,
             NyxUserToken = entry.NyxUserToken ?? string.Empty,
+            NyxRefreshToken = entry.NyxRefreshToken ?? string.Empty,
+            EncryptKey = entry.EncryptKey ?? string.Empty,
             CredentialRef = entry.CredentialRef ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
