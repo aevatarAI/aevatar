@@ -448,11 +448,34 @@ public sealed class LarkConversationHostCutoverTests
             .GetProperty("elements")
             .EnumerateArray()
             .First(element => element.GetProperty("tag").GetString() == "form");
-        var action = form
-            .GetProperty("elements")
-            .EnumerateArray()
-            .First(element => element.GetProperty("tag").GetString() == "action");
-        return action.GetProperty("actions")[0].GetProperty("value").Clone();
+        foreach (var element in form.GetProperty("elements").EnumerateArray())
+        {
+            if (!element.TryGetProperty("tag", out var tagProperty))
+            {
+                continue;
+            }
+
+            var tag = tagProperty.GetString();
+            if (string.Equals(tag, "button", StringComparison.OrdinalIgnoreCase) &&
+                element.TryGetProperty("value", out var buttonValue))
+            {
+                return buttonValue.Clone();
+            }
+
+            if (string.Equals(tag, "action", StringComparison.OrdinalIgnoreCase) &&
+                element.TryGetProperty("actions", out var actions))
+            {
+                foreach (var action in actions.EnumerateArray())
+                {
+                    if (action.TryGetProperty("value", out var actionValue))
+                    {
+                        return actionValue.Clone();
+                    }
+                }
+            }
+        }
+
+        throw new InvalidOperationException("No primary form action value found in card payload.");
     }
 
     private sealed class StubReplyGenerator(string reply) : IConversationReplyGenerator

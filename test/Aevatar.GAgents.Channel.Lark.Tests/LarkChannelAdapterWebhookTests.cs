@@ -199,7 +199,7 @@ public sealed class LarkChannelAdapterWebhookTests
             },
         });
 
-        var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(Encoding.UTF8.GetBytes(payload)));
+        var response = await adapter.HandleWebhookAsync(CreateSignedRequest(payload, "encrypt-key"));
 
         response.StatusCode.ShouldBe(200);
         response.Activity.ShouldNotBeNull();
@@ -254,9 +254,52 @@ public sealed class LarkChannelAdapterWebhookTests
             },
         });
 
-        var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(Encoding.UTF8.GetBytes(payload)));
+        var response = await adapter.HandleWebhookAsync(CreateSignedRequest(payload, "encrypt-key"));
 
         response.StatusCode.ShouldBe(200);
+        response.Activity.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task HandleWebhookAsync_PlaintextCallbackWithEncryptKeyAndMissingSignature_Returns401()
+    {
+        var harness = new LarkAdapterHarness();
+        var adapter = harness.Reset();
+        await adapter.InitializeAsync(harness.DefaultBinding, CancellationToken.None);
+        await adapter.StartReceivingAsync(CancellationToken.None);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema = "2.0",
+            header = new
+            {
+                event_type = "im.message.receive_v1",
+                token = harness.DefaultBinding.VerificationToken,
+            },
+            @event = new
+            {
+                sender = new
+                {
+                    sender_id = new
+                    {
+                        open_id = "user-open-1",
+                    },
+                    sender_type = "user",
+                },
+                message = new
+                {
+                    chat_id = "group-1",
+                    message_id = "msg-1",
+                    message_type = "text",
+                    chat_type = "group",
+                    content = JsonSerializer.Serialize(new { text = "hello" }),
+                },
+            },
+        });
+
+        var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(Encoding.UTF8.GetBytes(payload)));
+
+        response.StatusCode.ShouldBe(401);
         response.Activity.ShouldBeNull();
     }
 
@@ -337,10 +380,24 @@ public sealed class LarkChannelAdapterWebhookTests
             },
         });
 
-        var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(Encoding.UTF8.GetBytes(payload)));
+        var response = await adapter.HandleWebhookAsync(CreateSignedRequest(payload, "encrypt-key"));
 
         response.StatusCode.ShouldBe(503);
         response.Activity.ShouldBeNull();
+    }
+
+    private static LarkWebhookRequest CreateSignedRequest(string payload, string encryptKey)
+    {
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        const string nonce = "nonce";
+        return new LarkWebhookRequest(
+            Encoding.UTF8.GetBytes(payload),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["X-Lark-Request-Timestamp"] = timestamp,
+                ["X-Lark-Request-Nonce"] = nonce,
+                ["X-Lark-Signature"] = LarkChannelAdapter.ComputeLarkSignature(timestamp, nonce, encryptKey, payload),
+            });
     }
 
     private sealed class ThrowingRedactor : IPayloadRedactor

@@ -348,6 +348,9 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(conversation.Partition))
             return conversation.Partition;
 
+        if (conversation.Scope == ConversationScope.DirectMessage)
+            return string.Empty;
+
         return ResolveLastCanonicalSegment(conversation.CanonicalKey);
     }
 

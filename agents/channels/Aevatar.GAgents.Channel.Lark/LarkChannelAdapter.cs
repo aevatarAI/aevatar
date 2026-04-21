@@ -189,6 +189,15 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
             var root = bodyDocument.RootElement;
             var encrypted = TryReadString(root, "encrypt");
             var decryptedText = rawText;
+            var isUrlVerification = TryReadString(root, "type") == "url_verification";
+            if (!string.IsNullOrWhiteSpace(_botCredential.EncryptKey) &&
+                string.IsNullOrWhiteSpace(encrypted) &&
+                !isUrlVerification &&
+                !VerifySignature(request.Headers, _botCredential.EncryptKey, rawText))
+            {
+                return new LarkWebhookResponse(StatusCode: 401, ResponseBody: null, Activity: null, SanitizedPayload: null);
+            }
+
             if (!string.IsNullOrWhiteSpace(encrypted) && !string.IsNullOrWhiteSpace(_botCredential.EncryptKey))
             {
                 if (!VerifySignature(request.Headers, _botCredential.EncryptKey, rawText))
