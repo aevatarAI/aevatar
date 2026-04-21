@@ -119,6 +119,7 @@ export interface StudioCommittedWorkflow {
 
 export interface StudioSaveWorkflowInput {
   readonly workflowId?: string | null;
+  readonly draftExists?: boolean | null;
   readonly scopeId?: string | null;
   readonly directoryId: string;
   readonly workflowName: string;
@@ -137,6 +138,7 @@ export type StudioWorkflowSummary = StudioWorkflowDraftSummary;
 
 export type StudioWorkflowFile = StudioWorkflowDraft & {
   readonly document?: StudioWorkflowDocument | null;
+  readonly draftExists?: boolean;
   readonly findings: StudioValidationFinding[];
 };
 

@@ -157,8 +157,21 @@ function toCommittedWorkflowFile(
     directoryLabel: scopeId,
     yaml: detail.source?.workflowYaml ?? "",
     document: null,
+    draftExists: false,
     findings: [],
     updatedAtUtc: workflow.updatedAt,
+  };
+}
+
+function toWorkflowFile(
+  draft: StudioWorkflowDraft,
+  draftExists: boolean
+): StudioWorkflowFile {
+  return {
+    ...draft,
+    document: null,
+    draftExists,
+    findings: [],
   };
 }
 
@@ -1039,11 +1052,7 @@ export const studioApi = {
     const normalizedScopeId = trimOptional(scopeId);
     if (!normalizedScopeId) {
       const draft = await this.getWorkflowDraft(workflowId, scopeId);
-      return {
-        ...draft,
-        document: null,
-        findings: [],
-      };
+      return toWorkflowFile(draft, true);
     }
 
     const draft = await requestJsonOrNull<StudioWorkflowDraft>(
@@ -1053,11 +1062,7 @@ export const studioApi = {
       )
     );
     if (draft) {
-      return {
-        ...draft,
-        document: null,
-        findings: [],
-      };
+      return toWorkflowFile(draft, true);
     }
 
     return toCommittedWorkflowFile(
@@ -1067,10 +1072,14 @@ export const studioApi = {
   },
 
   saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
-    const request = input.workflowId?.trim()
+    const normalizedWorkflowId = trimOptional(input.workflowId);
+    const shouldUpdate =
+      Boolean(normalizedWorkflowId) &&
+      (input.draftExists ?? Boolean(normalizedWorkflowId));
+    const request = shouldUpdate && normalizedWorkflowId
       ? this.updateWorkflowDraft({
           ...input,
-          workflowId: input.workflowId.trim(),
+          workflowId: normalizedWorkflowId,
         })
       : this.createWorkflowDraft({
           scopeId: input.scopeId,
@@ -1080,11 +1089,7 @@ export const studioApi = {
           yaml: input.yaml,
           layout: input.layout,
         });
-    return request.then((draft) => ({
-      ...draft,
-      document: null,
-      findings: [],
-    }));
+    return request.then((draft) => toWorkflowFile(draft, true));
   },
 
   deleteWorkflow(

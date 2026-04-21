@@ -116,22 +116,18 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     public async Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default)
     {
         var settings = await GetSettingsAsync(cancellationToken);
-        var draftIndex = await ReadWorkflowDraftIndexAsync(cancellationToken);
-        var draftEntries = draftIndex.Entries
-            .Select(entry => new WorkflowDraftIndexEntry(entry.WorkflowId, NormalizePath(entry.FilePath)))
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.WorkflowId) && !string.IsNullOrWhiteSpace(entry.FilePath))
-            .ToList();
+        var (draftEntries, indexChanged) = await ReadManagedWorkflowDraftEntriesAsync(settings.Directories, cancellationToken);
+        var pathComparer = GetPathComparer();
         var entriesByPath = draftEntries
-            .GroupBy(static entry => entry.FilePath, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(static entry => entry.FilePath, pathComparer)
             .ToDictionary(
                 static group => group.Key,
                 static group => group.First(),
-                StringComparer.OrdinalIgnoreCase);
+                pathComparer);
         var usedWorkflowIds = draftEntries
             .Select(static entry => entry.WorkflowId)
             .ToHashSet(StringComparer.Ordinal);
         var results = new List<StoredWorkflowFile>();
-        var indexChanged = false;
 
         foreach (var directory in settings.Directories)
         {
@@ -171,11 +167,6 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
             }
         }
 
-        if (draftEntries.RemoveAll(entry => !File.Exists(entry.FilePath)) > 0)
-        {
-            indexChanged = true;
-        }
-
         if (indexChanged)
         {
             await WriteWorkflowDraftIndexAsync(new WorkflowDraftIndexDocument(draftEntries), cancellationToken);
@@ -195,15 +186,14 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     public async Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default)
     {
         var normalizedFilePath = NormalizePath(workflowFile.FilePath);
-        var draftIndex = await ReadWorkflowDraftIndexAsync(cancellationToken);
-        var draftEntries = draftIndex.Entries
-            .Select(entry => new WorkflowDraftIndexEntry(entry.WorkflowId, NormalizePath(entry.FilePath)))
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.WorkflowId) && !string.IsNullOrWhiteSpace(entry.FilePath))
-            .ToList();
+        var settings = await GetSettingsAsync(cancellationToken);
+        var (draftEntries, _) = await ReadManagedWorkflowDraftEntriesAsync(settings.Directories, cancellationToken);
         var existingEntryIndex = draftEntries.FindIndex(entry =>
             string.Equals(entry.WorkflowId, workflowFile.WorkflowId, StringComparison.Ordinal));
         var previousPath = existingEntryIndex >= 0 ? draftEntries[existingEntryIndex].FilePath : null;
         var targetLayoutPath = GetLayoutFilePath(normalizedFilePath);
+        var isSamePath = !string.IsNullOrWhiteSpace(previousPath) &&
+                         AreEquivalentPaths(previousPath, normalizedFilePath);
 
         Directory.CreateDirectory(Path.GetDirectoryName(normalizedFilePath)!);
         await File.WriteAllTextAsync(normalizedFilePath, workflowFile.Yaml, Encoding.UTF8, cancellationToken);
@@ -212,8 +202,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
         {
             await WriteJsonAsync(targetLayoutPath, workflowFile.Layout, cancellationToken);
         }
-        else if (!string.IsNullOrWhiteSpace(previousPath) &&
-                 !string.Equals(previousPath, normalizedFilePath, StringComparison.OrdinalIgnoreCase))
+        else if (!string.IsNullOrWhiteSpace(previousPath) && !isSamePath)
         {
             var previousLayoutPath = GetLayoutFilePath(previousPath);
             if (File.Exists(previousLayoutPath))
@@ -223,8 +212,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(previousPath) &&
-            !string.Equals(previousPath, normalizedFilePath, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(previousPath) && !isSamePath)
         {
             if (File.Exists(previousPath))
             {
@@ -261,11 +249,8 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
 
     public async Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default)
     {
-        var draftIndex = await ReadWorkflowDraftIndexAsync(cancellationToken);
-        var draftEntries = draftIndex.Entries
-            .Select(entry => new WorkflowDraftIndexEntry(entry.WorkflowId, NormalizePath(entry.FilePath)))
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.WorkflowId) && !string.IsNullOrWhiteSpace(entry.FilePath))
-            .ToList();
+        var settings = await GetSettingsAsync(cancellationToken);
+        var (draftEntries, _) = await ReadManagedWorkflowDraftEntriesAsync(settings.Directories, cancellationToken);
         var existingEntry = draftEntries.FirstOrDefault(entry =>
             string.Equals(entry.WorkflowId, workflowId, StringComparison.Ordinal));
         if (existingEntry is null)
@@ -703,6 +688,24 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
 
     private static string NormalizePath(string path) => Path.GetFullPath(path);
 
+    private static StringComparer GetPathComparer() =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static bool AreEquivalentPaths(string left, string right) =>
+        string.Equals(NormalizePath(left), NormalizePath(right), GetPathComparison());
+
+    private static StringComparison GetPathComparison() =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static bool IsPathWithinDirectory(string path, string directoryPath)
+    {
+        var relativePath = Path.GetRelativePath(directoryPath, path);
+        return !string.IsNullOrWhiteSpace(relativePath) &&
+               !string.Equals(relativePath, "..", StringComparison.Ordinal) &&
+               !relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+               !Path.IsPathRooted(relativePath);
+    }
+
     private static string CreateWorkflowDraftId(string workflowName, IReadOnlySet<string> usedWorkflowIds)
     {
         var baseId = StudioDocumentIdNormalizer.Normalize(workflowName, "workflow");
@@ -727,6 +730,36 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     {
         return await ReadJsonAsync<WorkflowDraftIndexDocument>(_workflowDraftIndexFilePath, cancellationToken)
             ?? new WorkflowDraftIndexDocument([]);
+    }
+
+    private async Task<(List<WorkflowDraftIndexEntry> Entries, bool Changed)> ReadManagedWorkflowDraftEntriesAsync(
+        IReadOnlyList<StudioWorkspaceDirectory> directories,
+        CancellationToken cancellationToken)
+    {
+        var managedDirectories = directories
+            .Select(directory => NormalizePath(directory.Path))
+            .ToList();
+        var entries = (await ReadWorkflowDraftIndexAsync(cancellationToken)).Entries
+            .Select(entry => new WorkflowDraftIndexEntry(entry.WorkflowId, NormalizePath(entry.FilePath)))
+            .ToList();
+        var filteredEntries = new List<WorkflowDraftIndexEntry>(entries.Count);
+        var changed = false;
+
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.WorkflowId) ||
+                string.IsNullOrWhiteSpace(entry.FilePath) ||
+                !File.Exists(entry.FilePath) ||
+                !managedDirectories.Any(directoryPath => IsPathWithinDirectory(entry.FilePath, directoryPath)))
+            {
+                changed = true;
+                continue;
+            }
+
+            filteredEntries.Add(entry);
+        }
+
+        return (filteredEntries, changed);
     }
 
     private Task WriteWorkflowDraftIndexAsync(

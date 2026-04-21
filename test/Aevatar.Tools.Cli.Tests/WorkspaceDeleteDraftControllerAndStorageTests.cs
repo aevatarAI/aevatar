@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -160,6 +161,88 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     }
 
     [Fact]
+    public async Task LegacySaveWorkflowRoute_ReturnsWorkflowFileResponse()
+    {
+        var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-{Guid.NewGuid():N}"));
+        var controller = CreateController(
+            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver());
+
+        var result = await controller.SaveWorkflow(
+            new SaveWorkflowFileRequest(
+                WorkflowId: null,
+                DirectoryId: "dir-1",
+                WorkflowName: "legacy-save",
+                FileName: null,
+                Yaml: "name: legacy-save\nsteps: []\n"),
+            null,
+            CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<WorkflowFileResponse>().Subject;
+        payload.WorkflowId.Should().Be("legacy-save");
+        payload.Name.Should().Be("legacy-save");
+        payload.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LegacyGetWorkflowRoute_ReturnsWorkflowFileResponse()
+    {
+        var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-{Guid.NewGuid():N}"));
+        store.SavedWorkflowFile = new StoredWorkflowFile(
+            WorkflowId: "workflow-1",
+            Name: "legacy-get",
+            FileName: "legacy-get.yaml",
+            FilePath: Path.Combine(store.RootDirectory, "legacy-get.yaml"),
+            DirectoryId: "dir-1",
+            DirectoryLabel: "Drafts",
+            Yaml: "name: legacy-get\nsteps: []\n",
+            Layout: null,
+            UpdatedAtUtc: DateTimeOffset.UtcNow);
+        var controller = CreateController(
+            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver());
+
+        var result = await controller.GetWorkflow("workflow-1", null, CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<WorkflowFileResponse>().Subject;
+        payload.WorkflowId.Should().Be("workflow-1");
+        payload.Name.Should().Be("legacy-get");
+        payload.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LegacyListWorkflowsRoute_ReturnsWorkflowSummaries()
+    {
+        var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-{Guid.NewGuid():N}"));
+        store.SavedWorkflowFile = new StoredWorkflowFile(
+            WorkflowId: "workflow-1",
+            Name: "legacy-list",
+            FileName: "legacy-list.yaml",
+            FilePath: Path.Combine(store.RootDirectory, "legacy-list.yaml"),
+            DirectoryId: "dir-1",
+            DirectoryLabel: "Drafts",
+            Yaml: "name: legacy-list\nsteps: []\n",
+            Layout: null,
+            UpdatedAtUtc: DateTimeOffset.UtcNow);
+        var controller = CreateController(
+            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver());
+
+        var result = await controller.ListWorkflows(null, CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeAssignableTo<IReadOnlyList<WorkflowSummary>>().Subject;
+        payload.Should().ContainSingle();
+        payload[0].WorkflowId.Should().Be("workflow-1");
+        payload[0].Name.Should().Be("legacy-list");
+    }
+
+    [Fact]
     public async Task DeleteDraftAsync_WhenWorkflowIdIsBlank_DoesNotSendRequest()
     {
         var handler = new RecordingHttpMessageHandler(HttpStatusCode.NoContent);
@@ -295,8 +378,15 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
     {
+        private static readonly Regex NameRegex = new(@"(?m)^name:\s*(.+?)\s*$", RegexOptions.Compiled);
+
         public WorkflowParseResult Parse(string yaml) =>
-            new(new WorkflowDocument { Name = "workflow" }, []);
+            new(new WorkflowDocument
+            {
+                Name = NameRegex.Match(yaml ?? string.Empty) is var match && match.Success
+                    ? match.Groups[1].Value.Trim()
+                    : "workflow",
+            }, []);
 
         public string Serialize(WorkflowDocument document) =>
             $"name: {document.Name}\nsteps: []\n";
@@ -407,6 +497,8 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
         public List<string> DeletedWorkflowIds { get; } = [];
 
+        public StoredWorkflowFile? SavedWorkflowFile { get; set; }
+
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new StudioWorkspaceSettings(
                 RuntimeBaseUrl: "http://127.0.0.1:5100",
@@ -427,13 +519,19 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             throw new NotSupportedException();
 
         public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>(SavedWorkflowFile is null ? [] : [SavedWorkflowFile]);
 
         public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(workflowId))
             {
                 return Task.FromResult<StoredWorkflowFile?>(null);
+            }
+
+            if (SavedWorkflowFile is not null &&
+                string.Equals(SavedWorkflowFile.WorkflowId, workflowId, StringComparison.Ordinal))
+            {
+                return Task.FromResult<StoredWorkflowFile?>(SavedWorkflowFile);
             }
 
             return Task.FromResult<StoredWorkflowFile?>(new StoredWorkflowFile(
@@ -448,8 +546,11 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 UpdatedAtUtc: DateTimeOffset.UtcNow));
         }
 
-        public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default)
+        {
+            SavedWorkflowFile = workflowFile;
+            return Task.FromResult(workflowFile);
+        }
 
         public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

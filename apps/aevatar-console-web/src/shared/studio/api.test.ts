@@ -497,9 +497,57 @@ describe('studioApi host-session requests', () => {
       directoryLabel: 'scope-1',
       yaml: 'name: published-demo\nsteps: []\n',
       document: null,
+      draftExists: false,
       findings: [],
       updatedAtUtc: '2026-04-16T00:00:00Z',
     });
+  });
+
+  it('creates a scoped workflow draft on first save when the loaded workflow is committed-only', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        workflowId: 'workflow-1',
+        name: 'scope-demo',
+        fileName: 'scope-demo.yaml',
+        filePath: 'scope://scope-1/workflow-1.yaml',
+        directoryId: 'scope:scope-1',
+        directoryLabel: 'scope-1',
+        yaml: 'name: scope-demo\nsteps: []\n',
+        layout: null,
+        updatedAtUtc: '2026-04-16T00:00:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.saveWorkflow({
+      workflowId: 'workflow-1',
+      draftExists: false,
+      scopeId: 'scope-1',
+      directoryId: 'scope:scope-1',
+      workflowName: 'scope-demo',
+      yaml: 'name: scope-demo\nsteps: []\n',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/workspace/workflow-drafts?scopeId=scope-1');
+    expect(init?.method).toBe('POST');
   });
 
   it('includes the requested scope when updating a scoped workflow draft', async () => {
