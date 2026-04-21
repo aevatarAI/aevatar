@@ -42,6 +42,7 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
     private readonly TimeSpan _producerTimeout;
     private readonly CancellationTokenSource _cts = new();
     private Task? _worker;
+    private PendingItem? _inFlight;
 
     /// <summary>
     /// Creates one subscriber. Use <see cref="OnNextAsync"/> as the delivery handler passed to
@@ -128,6 +129,8 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
         {
             await foreach (var pending in _buffer.Reader.ReadAllAsync(ct))
             {
+                ArgumentNullException.ThrowIfNull(pending);
+                _inFlight = pending;
                 try
                 {
                     var turnCtx = _contextFactory(pending.Activity);
@@ -136,7 +139,8 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    pending.Completion.TrySetCanceled(ct);
+                    pending.Completion.TrySetException(CreateRedeliveryException(
+                        "DurableInboxSubscriber stopped while the activity was in flight; redelivery expected."));
                     throw;
                 }
                 catch (Exception ex)
@@ -144,8 +148,13 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
                     _logger.LogWarning(
                         ex,
                         "Durable inbox worker failed for activity {ActivityId}; propagating redelivery",
-                        pending.Activity?.Id);
+                        pending.Activity.Id);
                     pending.Completion.TrySetException(ex);
+                }
+                finally
+                {
+                    if (ReferenceEquals(_inFlight, pending))
+                        _inFlight = null;
                 }
             }
         }
@@ -161,12 +170,24 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
 
     private void DrainPending()
     {
+        FailInFlight();
+
         // Signal any observers still waiting on enqueued-but-not-processed items so they don't hang.
         while (_buffer.Reader.TryRead(out var pending))
         {
-            pending.Completion.TrySetException(
-                new InvalidOperationException("DurableInboxSubscriber stopped before activity was processed; redelivery expected."));
+            pending.Completion.TrySetException(CreateRedeliveryException(
+                "DurableInboxSubscriber stopped before activity was processed; redelivery expected."));
         }
+    }
+
+    private void FailInFlight()
+    {
+        var inFlight = _inFlight;
+        if (inFlight is null)
+            return;
+
+        inFlight.Completion.TrySetException(CreateRedeliveryException(
+            "DurableInboxSubscriber stopped while the activity was in flight; redelivery expected."));
     }
 
     /// <inheritdoc />
@@ -174,7 +195,12 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
     {
         _cts.Cancel();
         _buffer.Writer.TryComplete();
-        if (_worker is not null)
+        DrainPending();
+
+        // Do not block forever on an uncooperative pipeline that ignores cancellation; observers
+        // have already been signalled for redelivery above. If the worker exits promptly, observe
+        // its final status. Otherwise log and let the host tear the process down normally.
+        if (_worker is not null && _worker.IsCompleted)
         {
             try
             {
@@ -188,9 +214,15 @@ public sealed class DurableInboxSubscriber : IAsyncDisposable
                 _logger.LogInformation(ex, "DurableInboxSubscriber worker terminated with exception during dispose");
             }
         }
-        DrainPending();
+        else if (_worker is not null)
+        {
+            _logger.LogInformation(
+                "DurableInboxSubscriber dispose returned before worker exit; in-flight middleware ignored cancellation.");
+        }
         _cts.Dispose();
     }
+
+    private static InvalidOperationException CreateRedeliveryException(string message) => new(message);
 
     private sealed class PendingItem
     {
