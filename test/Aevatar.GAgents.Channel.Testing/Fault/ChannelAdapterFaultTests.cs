@@ -144,11 +144,13 @@ public abstract class ChannelAdapterFaultTests<TAdapter>
         if (GatewayFixture is null)
             return;
 
-        var snapshot = await GatewayFixture.StartAsync();
+        await GatewayFixture.StartAsync();
         await GatewayFixture.DropConnectionWithoutPreStopAsync();
         var resumed = await GatewayFixture.StartAsync();
 
-        (resumed.IsResumed == false || GatewayFixture.AuthoritativeSequenceNumber >= 0).ShouldBeTrue();
+        resumed.EventGapDetected.ShouldBeTrue(
+            "Dropping a gateway connection without pre-stop must cause the adapter to detect an event-sequence gap "
+                + "on reconnect so the bot can reconcile or replay (RFC §10.4).");
     }
 
     [Fact]

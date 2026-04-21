@@ -49,4 +49,9 @@ public abstract class GatewayFixture
 /// </summary>
 /// <param name="ResumeTokenAtStart">The RESUME token the adapter holds after connecting.</param>
 /// <param name="IsResumed">Whether the fixture satisfied the handshake as a RESUME rather than IDENTIFY.</param>
-public sealed record GatewaySessionSnapshot(string ResumeTokenAtStart, bool IsResumed);
+/// <param name="EventGapDetected">
+/// Whether the adapter detected an event-sequence gap on this reconnect — for example, because a previous pod
+/// dropped without persisting its latest last-seen seq via pre-stop. The assertion for
+/// <c>Gateway_PreStopMissing_DetectsEventGap</c> reads this flag.
+/// </param>
+public sealed record GatewaySessionSnapshot(string ResumeTokenAtStart, bool IsResumed, bool EventGapDetected = false);

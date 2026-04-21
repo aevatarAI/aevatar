@@ -95,6 +95,16 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     protected virtual ReactionProbe? Reactions => null;
 
     /// <summary>
+    /// Returns the adapter-supplied typing probe.
+    /// </summary>
+    /// <remarks>
+    /// Required whenever <see cref="ChannelCapabilities.SupportsTyping"/> is <see langword="true"/>. The four typing
+    /// conformance tests fail when the capability is claimed but the probe is <see langword="null"/>, so adapters
+    /// cannot advertise typing support without exercising keepalive / TTL / breaker / idempotent start-stop behavior.
+    /// </remarks>
+    protected virtual TypingProbe? Typing => null;
+
+    /// <summary>
     /// Builds a synthetic inbound activity seed whose body mentions the bot associated with the supplied binding using
     /// the adapter's native mention syntax.
     /// </summary>
@@ -420,7 +430,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     [Fact]
     public async Task ParticipantRef_CanonicalId_StableAcrossDisplayNameChanges()
     {
-        if (WebhookFixture is null)
+        if (WebhookFixture is null && GatewayFixture is null)
             return;
 
         await using var lifetime = await StartAdapterAsync();
@@ -449,7 +459,13 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
             return;
 
-        CapabilitiesOf(lifetime.Adapter).TypingKeepaliveIntervalMs.ShouldBeGreaterThan(0);
+        Typing.ShouldNotBeNull(
+            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify keepalive behavior "
+                + "without one.");
+
+        var fired = await Typing.KeepaliveFiresWithinIntervalAsync(CancellationToken.None);
+        fired.ShouldBeTrue(
+            "Typing must surface at least one keepalive event within the declared TypingKeepaliveIntervalMs window.");
     }
 
     [Fact]
@@ -459,8 +475,13 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
             return;
 
-        CapabilitiesOf(lifetime.Adapter).TypingTtlMs
-            .ShouldBeGreaterThan(CapabilitiesOf(lifetime.Adapter).TypingKeepaliveIntervalMs - 1);
+        Typing.ShouldNotBeNull(
+            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify TTL auto-stop "
+                + "without one.");
+
+        var autoStopped = await Typing.AutoStopsAfterTtlAsync(CancellationToken.None);
+        autoStopped.ShouldBeTrue(
+            "Typing must auto-stop after TypingTtlMs even if business code never calls stop (RFC §8.1).");
     }
 
     [Fact]
@@ -470,7 +491,14 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
             return;
 
-        CapabilitiesOf(lifetime.Adapter).TypingTtlMs.ShouldBeGreaterThan(0);
+        Typing.ShouldNotBeNull(
+            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify the keepalive "
+                + "circuit breaker without one.");
+
+        var tripped = await Typing.CircuitBreakerTripsAfterConsecutiveFailuresAsync(CancellationToken.None);
+        tripped.ShouldBeTrue(
+            "Consecutive keepalive failures must trip the circuit breaker so broken typing state does not keep "
+                + "hammering the platform (RFC §8.1).");
     }
 
     [Fact]
@@ -480,7 +508,12 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
             return;
 
-        await Should.NotThrowAsync(() => lifetime.Adapter.StopReceivingAsync(CancellationToken.None));
+        Typing.ShouldNotBeNull(
+            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify start/stop "
+                + "idempotency without one.");
+
+        var idempotent = await Typing.StartStopIsIdempotentAsync(CancellationToken.None);
+        idempotent.ShouldBeTrue("Repeated typing start/stop must be idempotent (RFC §8.1).");
     }
 
     [Fact]
@@ -511,7 +544,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     [Fact]
     public async Task Mention_BotMention_StrippedFromTextButPresentInMentions()
     {
-        if (WebhookFixture is null)
+        if (WebhookFixture is null && GatewayFixture is null)
             return;
 
         await using var lifetime = await StartAdapterAsync();
@@ -538,7 +571,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     [Fact]
     public async Task Mention_OtherParticipantMention_PreservedInText()
     {
-        if (WebhookFixture is null)
+        if (WebhookFixture is null && GatewayFixture is null)
             return;
 
         await using var lifetime = await StartAdapterAsync();
