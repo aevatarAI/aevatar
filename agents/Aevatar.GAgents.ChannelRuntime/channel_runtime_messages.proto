@@ -16,6 +16,20 @@ message ChannelBotRegistrationEntry {
   google.protobuf.Timestamp created_at = 7;
   string webhook_url = 8;  // Full callback URL configured via setWebhook
   string encrypt_key = 9;  // Lark Encrypt Key — used for signature verification AND event decryption
+  // Late-bound credential reference (Channel RFC §17.3).
+  //
+  // Phase 0 status (this PR): the field is persisted end-to-end (command →
+  // entry → event → state → projector → document → query port). NO caller
+  // surface exposes it yet (ChannelCallbackEndpoints / ChannelRegistrationTool
+  // do not accept credential_ref), and NO consumer reads it yet
+  // (LarkPlatformAdapter still uses EncryptKey). Setting credential_ref by
+  // protobuf-level dispatch today persists through state but has no runtime
+  // effect.
+  //
+  // Phase 1 (main Channel RFC PR): host surfaces accept credential_ref,
+  // LarkPlatformAdapter resolves it via ICredentialProvider at callback time,
+  // raw encrypt_key becomes optional, then removed.
+  string credential_ref = 10;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -138,6 +152,9 @@ message ChannelBotRegisterCommand {
   string webhook_url = 6;
   string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
   string encrypt_key = 8;   // Lark Encrypt Key for signature verification + event decryption
+  // Late-bound credential reference (Channel RFC §17.3). See
+  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
+  string credential_ref = 9;
 }
 
 message ChannelBotUnregisterCommand {
@@ -169,6 +186,9 @@ message ChannelBotRegistrationDocument {
   string actor_id = 10;                     // Source actor ID
   string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
   string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
+  // Late-bound credential reference (Channel RFC §17.3). See
+  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
+  string credential_ref = 13;
 }
 
 // ─── Agent Registry (actor-backed delivery target store) ───

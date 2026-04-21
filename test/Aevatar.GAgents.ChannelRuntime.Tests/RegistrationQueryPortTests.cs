@@ -142,6 +142,25 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
+    public async Task BotQueryPort_GetAsync_PropagatesCredentialRef()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("bot-credref", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
+            {
+                Id = "bot-credref",
+                Platform = "lark",
+                CredentialRef = "secrets://lark/encrypt-key/bot-credref",
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.GetAsync("bot-credref");
+
+        result.Should().NotBeNull();
+        result!.CredentialRef.Should().Be("secrets://lark/encrypt-key/bot-credref");
+    }
+
+    [Fact]
     public async Task BotQueryPort_GetAsync_ReturnsNull_WhenDocumentNotFound()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();

@@ -1026,10 +1026,19 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     {
         public List<TReadModel> Upserts { get; } = [];
 
+        public List<string> Deletes { get; } = [];
+
         public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

@@ -133,12 +133,21 @@ public sealed class ScriptDefinitionSnapshotProjectorTests
     {
         public ScriptDefinitionSnapshotDocument? LastUpsert { get; private set; }
 
+        public string? LastDeletedId { get; private set; }
+
         public Task<ProjectionWriteResult> UpsertAsync(
             ScriptDefinitionSnapshotDocument readModel,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastUpsert = readModel.Clone();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastDeletedId = id;
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

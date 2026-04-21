@@ -52,5 +52,6 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             ScopeId = document.ScopeId ?? string.Empty,
             WebhookUrl = document.WebhookUrl ?? string.Empty,
             EncryptKey = document.EncryptKey ?? string.Empty,
+            CredentialRef = document.CredentialRef ?? string.Empty,
         };
 }

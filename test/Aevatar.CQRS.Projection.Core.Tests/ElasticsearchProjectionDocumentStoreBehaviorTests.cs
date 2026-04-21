@@ -491,6 +491,153 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             .WithMessage("*dynamically indexed read model*");
     }
 
+    [Fact]
+    public async Task DeleteAsync_WhenDocumentDeleted_ShouldReturnApplied()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"deleted"}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var result = await store.DeleteAsync("actor-1");
+
+        result.IsApplied.Should().BeTrue();
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "DELETE" && r.PathAndQuery.EndsWith("/_doc/actor-1"));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenDocumentNotFound_ShouldReturnDuplicate()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"not_found"}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var result = await store.DeleteAsync("actor-ghost");
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenAutoCreateIndexEnabled_ShouldNotBootstrapIndexBeforeDelete()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"error":{"type":"index_not_found_exception"},"status":404}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+                MissingIndexBehavior = ElasticsearchMissingIndexBehavior.WarnAndReturnEmpty,
+            },
+            handler);
+
+        var result = await store.DeleteAsync("actor-ghost");
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "DELETE" && r.PathAndQuery.EndsWith("/_doc/actor-ghost"));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenIndexMissingAndWarnBehavior_ShouldReturnDuplicate()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"error":{"type":"index_not_found_exception"},"status":404}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+                MissingIndexBehavior = ElasticsearchMissingIndexBehavior.WarnAndReturnEmpty,
+            },
+            handler);
+
+        var result = await store.DeleteAsync("actor-ghost");
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenIndexMissingAndThrowBehavior_ShouldThrow()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"error":{"type":"index_not_found_exception"},"status":404}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+
+        Func<Task> act = () => store.DeleteAsync("actor-1");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*index*not found*");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenIdIsBlank_ShouldThrow()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+
+        Func<Task> act = () => store.DeleteAsync("   ");
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenReadModelUsesDynamicIndexScope_ShouldThrowUnsupported()
+    {
+        var options = new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestDynamicStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "script-native-read-models",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            indexScopeSelector: model => model.DocumentIndexScope,
+            httpMessageHandler: new ScriptedHttpMessageHandler());
+
+        Func<Task> act = () => store.DeleteAsync("actor-1");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*dynamically indexed read model*");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenMalformedResponseBody_ShouldFallBackToApplied()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, "not valid json"));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var result = await store.DeleteAsync("actor-1");
+
+        // 2xx with unparseable body: treat as Applied (conservative default vs dropping the delete).
+        result.IsApplied.Should().BeTrue();
+    }
+
     private static ElasticsearchProjectionDocumentStore<TestStoreReadModel, string> CreateStore(
         ElasticsearchProjectionDocumentStoreOptions options,
         HttpMessageHandler handler)
