@@ -297,7 +297,8 @@ public sealed class ExecutionServiceTests
     private static (ExecutionService Service, InMemoryStudioWorkspaceStore Store) CreateService(
         RecordingHttpMessageHandler handler,
         IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null,
-        InMemoryStudioWorkspaceStore? store = null)
+        InMemoryStudioWorkspaceStore? store = null,
+        IAppScopeResolver? scopeResolver = null)
     {
         var httpClient = new HttpClient(handler)
         {
@@ -309,8 +310,19 @@ public sealed class ExecutionServiceTests
             new ExecutionService(
                 store,
                 new StubHttpClientFactory(httpClient),
-                authSnapshotProvider),
+                authSnapshotProvider,
+                scopeResolver: scopeResolver),
             store);
+    }
+
+    private sealed class StubAppScopeResolver : IAppScopeResolver
+    {
+        private readonly AppScopeContext? _context;
+
+        public StubAppScopeResolver(string? scopeId)
+            => _context = scopeId is null ? null : new AppScopeContext(scopeId, "test:stub");
+
+        public AppScopeContext? Resolve(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => _context;
     }
 
     private static HttpResponseMessage CreateSseResponse(string payload) =>
@@ -372,6 +384,103 @@ public sealed class ExecutionServiceTests
             return response;
         }
     }
+
+    [Fact]
+    public async Task ListAsync_WhenScopeResolverReturnsScope_ShouldOnlyReturnMatchingRecords()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(
+            handler,
+            store: store,
+            scopeResolver: new StubAppScopeResolver("scope-a"));
+
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-a", scopeId: "scope-a"));
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-b", scopeId: "scope-b"));
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-legacy", scopeId: null));
+
+        var summaries = await service.ListAsync();
+
+        summaries.Select(s => s.ExecutionId).Should().BeEquivalentTo(["exec-a"]);
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenScopeDoesNotMatch_ShouldReturnNull()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(
+            handler,
+            store: store,
+            scopeResolver: new StubAppScopeResolver("scope-a"));
+
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-b", scopeId: "scope-b"));
+
+        var detail = await service.GetAsync("exec-b");
+
+        detail.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListAsync_WhenScopeResolverReturnsNull_ShouldReturnAllRecords()
+    {
+        // Resolver wired but current request is out-of-scope / anonymous (e.g. background worker).
+        // We fall back to the historical workspace-global view so existing single-user flows keep working.
+        var store = new InMemoryStudioWorkspaceStore();
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(
+            handler,
+            store: store,
+            scopeResolver: new StubAppScopeResolver(null));
+
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-a", scopeId: "scope-a"));
+        await store.SaveExecutionAsync(CreateSeedRecord("exec-b", scopeId: "scope-b"));
+
+        var summaries = await service.ListAsync();
+
+        summaries.Select(s => s.ExecutionId).Should().BeEquivalentTo(["exec-a", "exec-b"]);
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenRequestedScopeDoesNotMatchCaller_ShouldThrow()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(
+            handler,
+            scopeResolver: new StubAppScopeResolver("scope-a"));
+
+        var act = () => service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "approval",
+            Prompt: "hello",
+            RuntimeBaseUrl: "https://runtime.example",
+            ScopeId: "scope-b",
+            WorkflowId: "workflow-1"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Requested scope does not match the authenticated Studio scope*");
+    }
+
+    private static StoredExecutionRecord CreateSeedRecord(string executionId, string? scopeId) =>
+        new(
+            ExecutionId: executionId,
+            WorkflowName: "approval",
+            Prompt: "hello",
+            RuntimeBaseUrl: "https://runtime.example",
+            Status: "running",
+            StartedAtUtc: DateTimeOffset.UtcNow,
+            CompletedAtUtc: null,
+            ActorId: null,
+            Error: null,
+            Frames: [],
+            ObservationSessionId: null,
+            ObservationActive: false,
+            LastObservedAtUtc: null,
+            ScopeId: scopeId,
+            WorkflowId: "workflow-1");
 
     private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceStore
     {

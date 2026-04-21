@@ -20,24 +20,29 @@ public sealed class ExecutionService
     private readonly IUserConfigQueryPort? _userConfigStore;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IStudioBackendRequestAuthSnapshotProvider? _authSnapshotProvider;
+    private readonly IAppScopeResolver? _scopeResolver;
     private readonly string _observationSessionId = Guid.NewGuid().ToString("N");
 
     public ExecutionService(
         IStudioWorkspaceStore store,
         IHttpClientFactory httpClientFactory,
         IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null,
-        IUserConfigQueryPort? userConfigStore = null)
+        IUserConfigQueryPort? userConfigStore = null,
+        IAppScopeResolver? scopeResolver = null)
     {
         _store = store;
         _httpClientFactory = httpClientFactory;
         _authSnapshotProvider = authSnapshotProvider;
         _userConfigStore = userConfigStore;
+        _scopeResolver = scopeResolver;
     }
 
     public async Task<IReadOnlyList<ExecutionSummary>> ListAsync(CancellationToken cancellationToken = default)
     {
         var records = await LoadReconciledExecutionRecordsAsync(cancellationToken);
+        var scopeFilter = ResolveCurrentScopeId();
         return records
+            .Where(record => IsVisibleToCurrentScope(record, scopeFilter))
             .OrderByDescending(record => record.StartedAtUtc)
             .Select(ToSummary)
             .ToList();
@@ -46,13 +51,39 @@ public sealed class ExecutionService
     public async Task<ExecutionDetail?> GetAsync(string executionId, CancellationToken cancellationToken = default)
     {
         var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
-        return record is null ? null : ToDetail(record);
+        if (record is null)
+            return null;
+
+        var scopeFilter = ResolveCurrentScopeId();
+        return IsVisibleToCurrentScope(record, scopeFilter) ? ToDetail(record) : null;
+    }
+
+    private string? ResolveCurrentScopeId() =>
+        _scopeResolver?.Resolve()?.ScopeId?.Trim();
+
+    private static bool IsVisibleToCurrentScope(StoredExecutionRecord record, string? scopeFilter)
+    {
+        // When no scope resolver is wired (test doubles, legacy hosts) fall back to the historical
+        // "workspace-global" view so existing callers continue to see every execution.
+        if (scopeFilter is null)
+            return true;
+
+        // Records without a scope predate scope-aware execution tracking and cannot be proven
+        // to belong to the caller. Hide them to avoid cross-scope leakage.
+        var recordScopeId = record.ScopeId?.Trim();
+        return !string.IsNullOrEmpty(recordScopeId)
+            && string.Equals(recordScopeId, scopeFilter, StringComparison.Ordinal);
     }
 
     public async Task<ExecutionDetail> StartAsync(StartExecutionRequest request, CancellationToken cancellationToken = default)
     {
         if (!ShouldUsePublishedWorkflowRun(request))
             throw new InvalidOperationException("scopeId and workflowId are required. Executions must target a registered scope service.");
+
+        var requestedScopeId = request.ScopeId!.Trim();
+        var callerScopeId = ResolveCurrentScopeId();
+        if (callerScopeId is not null && !string.Equals(callerScopeId, requestedScopeId, StringComparison.Ordinal))
+            throw new InvalidOperationException("Requested scope does not match the authenticated Studio scope.");
 
         var runtimeBaseUrl = request.RuntimeBaseUrl?.Trim().TrimEnd('/');
         if (string.IsNullOrWhiteSpace(runtimeBaseUrl))
@@ -91,7 +122,7 @@ public sealed class ExecutionService
         CancellationToken cancellationToken = default)
     {
         var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
-        if (record is null)
+        if (record is null || !IsVisibleToCurrentScope(record, ResolveCurrentScopeId()))
         {
             return null;
         }
@@ -167,7 +198,7 @@ public sealed class ExecutionService
         CancellationToken cancellationToken = default)
     {
         var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
-        if (record is null)
+        if (record is null || !IsVisibleToCurrentScope(record, ResolveCurrentScopeId()))
         {
             return null;
         }
