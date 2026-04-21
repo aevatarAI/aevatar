@@ -689,13 +689,16 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     private static string NormalizePath(string path) => Path.GetFullPath(path);
 
     private static StringComparer GetPathComparer() =>
-        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        UsesCaseInsensitivePaths() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static bool AreEquivalentPaths(string left, string right) =>
         string.Equals(NormalizePath(left), NormalizePath(right), GetPathComparison());
 
     private static StringComparison GetPathComparison() =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        UsesCaseInsensitivePaths() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static bool UsesCaseInsensitivePaths() =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
 
     private static bool IsPathWithinDirectory(string path, string directoryPath)
     {

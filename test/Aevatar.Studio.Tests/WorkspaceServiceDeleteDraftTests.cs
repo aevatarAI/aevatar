@@ -138,6 +138,31 @@ public sealed partial class WorkspaceServiceDeleteDraftTests
         File.Exists(updated.FilePath).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task UpdateDraftAsync_WhenRenameDiffersOnlyByCase_ShouldKeepRenamedDraftFile()
+    {
+        using var environment = new WorkspaceEnvironment();
+        var settings = await environment.Store.GetSettingsAsync();
+        var directory = settings.Directories.Single();
+        var created = await environment.Service.CreateDraftAsync(new SaveWorkflowDraftRequest(
+            DirectoryId: directory.DirectoryId,
+            WorkflowName: "case-only-rename",
+            FileName: "Foo.yaml",
+            Yaml: "name: case-only-rename\nsteps: []\n"));
+
+        var updated = await environment.Service.UpdateDraftAsync(
+            created.WorkflowId,
+            new SaveWorkflowDraftRequest(
+                DirectoryId: directory.DirectoryId,
+                WorkflowName: "case-only-rename",
+                FileName: "foo.yaml",
+                Yaml: "name: case-only-rename\nsteps: []\n"));
+
+        updated.WorkflowId.Should().Be(created.WorkflowId);
+        updated.FilePath.Should().EndWith("foo.yaml");
+        File.Exists(updated.FilePath).Should().BeTrue();
+    }
+
     private sealed class WorkspaceEnvironment : IDisposable
     {
         private readonly string? _previousHome;
