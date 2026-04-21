@@ -21,8 +21,8 @@ public sealed class UserAgentCatalogProjectorTests
         _projector = new UserAgentCatalogProjector(_dispatcher, _clock);
         _context = new UserAgentCatalogMaterializationContext
         {
-            RootActorId = "agent-registry-store",
-            ProjectionKind = "user-agent-catalog-read-model",
+            RootActorId = UserAgentCatalogGAgent.WellKnownId,
+            ProjectionKind = "agent-registry",
         };
     }
 
@@ -87,7 +87,7 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WithTombstonedEntry_UpsertsTombstoneState()
+    public async Task ProjectAsync_WithTombstonedEntry_DeletesDocument()
     {
         var state = new UserAgentCatalogState
         {
@@ -104,10 +104,29 @@ public sealed class UserAgentCatalogProjectorTests
 
         await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-agent-2", 4, state), CancellationToken.None);
 
-        _dispatcher.Upserts.Should().ContainSingle();
-        _dispatcher.Upserts[0].Id.Should().Be("agent-2");
-        _dispatcher.Upserts[0].Tombstoned.Should().BeTrue();
-        _dispatcher.Upserts[0].StateVersion.Should().Be(4);
+        _dispatcher.Upserts.Should().BeEmpty();
+        _dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-2");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WithMixedLiveAndTombstonedEntries_DispatchesBothVerdicts()
+    {
+        // Verifies the watermark-coordination contract: live and tombstoned entries
+        // in the same committed snapshot dispatch upserts + deletes in one pass so
+        // the read model stays aligned with the authoritative state version.
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry { AgentId = "agent-live", Platform = "lark" },
+                new UserAgentCatalogEntry { AgentId = "agent-dead", Platform = "lark", Tombstoned = true },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-mixed", 9, state), CancellationToken.None);
+
+        _dispatcher.Upserts.Should().ContainSingle().Which.Id.Should().Be("agent-live");
+        _dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-dead");
     }
 
     [Fact]

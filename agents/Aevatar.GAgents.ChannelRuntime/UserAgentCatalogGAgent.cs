@@ -17,6 +17,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
             .On<UserAgentCatalogExecutionUpdatedEvent>(ApplyExecutionUpdated)
             .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
+            .On<UserAgentCatalogTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .OrCurrent();
 
     [EventHandler]
@@ -78,6 +79,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         await PersistDomainEventAsync(new UserAgentCatalogTombstonedEvent
         {
             AgentId = command.AgentId.Trim(),
+            TombstoneStateVersion = NextCommittedVersion(),
         });
     }
 
@@ -107,6 +109,30 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         });
     }
 
+    [EventHandler]
+    public async Task HandleCompactTombstonesAsync(UserAgentCatalogCompactTombstonesCommand command)
+    {
+        if (command.SafeStateVersion <= 0)
+            return;
+
+        var agentIds = State.Entries
+            .Where(static entry => entry.Tombstoned)
+            .Where(entry => entry.TombstoneStateVersion > 0 && entry.TombstoneStateVersion <= command.SafeStateVersion)
+            .Select(static entry => entry.AgentId)
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (agentIds.Length == 0)
+            return;
+
+        await PersistDomainEventAsync(new UserAgentCatalogTombstonesCompactedEvent
+        {
+            AgentIds = { agentIds },
+            SafeStateVersion = command.SafeStateVersion,
+        });
+    }
+
     private static UserAgentCatalogState ApplyUpserted(UserAgentCatalogState current, UserAgentCatalogUpsertedEvent evt)
     {
         var next = current.Clone();
@@ -114,7 +140,10 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         if (existing != null)
             next.Entries.Remove(existing);
 
-        next.Entries.Add(evt.Entry);
+        var entry = evt.Entry.Clone();
+        entry.Tombstoned = false;
+        entry.TombstoneStateVersion = 0;
+        next.Entries.Add(entry);
         return next;
     }
 
@@ -127,6 +156,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 
         existing.Tombstoned = true;
         existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        existing.TombstoneStateVersion = evt.TombstoneStateVersion;
         return next;
     }
 
@@ -145,6 +175,29 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         existing.LastError = evt.LastError ?? string.Empty;
         return next;
     }
+
+    private static UserAgentCatalogState ApplyTombstonesCompacted(
+        UserAgentCatalogState current,
+        UserAgentCatalogTombstonesCompactedEvent evt)
+    {
+        if (evt.AgentIds.Count == 0)
+            return current;
+
+        var next = current.Clone();
+        var compacted = evt.AgentIds
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+        var removable = next.Entries
+            .Where(entry => compacted.Contains(entry.AgentId))
+            .ToArray();
+        foreach (var entry in removable)
+            next.Entries.Remove(entry);
+        return next;
+    }
+
+    private long NextCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + 1;
 
     private static string MergeNonEmpty(string? incoming, string? existing)
     {

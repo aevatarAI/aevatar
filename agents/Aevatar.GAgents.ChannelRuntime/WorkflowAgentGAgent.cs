@@ -2,9 +2,9 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -15,18 +15,25 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
 {
-    private RuntimeCallbackLease? _nextRunLease;
+    private ChannelScheduleRunner? _scheduler;
+
+    private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
+        callbackId: WorkflowAgentDefaults.TriggerCallbackId,
+        schedulableSource: () => State,
+        triggerFactory: () => new TriggerWorkflowAgentExecutionCommand { Reason = "schedule" },
+        persistNextRunEventAsync: nextRunUtc => PersistDomainEventAsync(new WorkflowAgentNextRunScheduledEvent
+        {
+            NextRunAt = Timestamp.FromDateTimeOffset(nextRunUtc),
+        }),
+        scheduleTimeoutAsync: (id, dueTime, evt, ct) => ScheduleSelfDurableTimeoutAsync(id, dueTime, evt, ct: ct),
+        cancelCallbackAsync: (lease, ct) => CancelDurableCallbackAsync(lease, ct),
+        logger: Logger,
+        ownerDescription: $"Workflow agent {Id}");
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-
-        if (State.Enabled &&
-            !string.IsNullOrWhiteSpace(State.ScheduleCron) &&
-            (State.NextRunAt == null || State.NextRunAt.ToDateTimeOffset() <= DateTimeOffset.UtcNow))
-        {
-            await ScheduleNextRunAsync(DateTimeOffset.UtcNow, ct);
-        }
+        await Scheduler.BootstrapOnActivateAsync(ct);
     }
 
     protected override WorkflowAgentState TransitionState(WorkflowAgentState current, IMessage evt) =>
@@ -64,11 +71,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             ApiKeyId = command.ApiKeyId?.Trim() ?? string.Empty,
             Enabled = command.Enabled,
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
+            Platform = command.Platform?.Trim() ?? string.Empty,
         });
 
-        if (State.Enabled && !string.IsNullOrWhiteSpace(State.ScheduleCron))
-            await ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
-
+        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpsertRegistryAsync(State.Enabled ? WorkflowAgentDefaults.StatusRunning : WorkflowAgentDefaults.StatusDisabled, CancellationToken.None);
     }
 
@@ -92,14 +98,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
                 CommandId = receipt.CommandId,
             });
 
-            await ScheduleNextRunAsync(now, CancellationToken.None);
+            await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
             await UpdateRegistryExecutionAsync(
-                WorkflowAgentDefaults.StatusRunning,
-                State.LastRunAt,
-                State.NextRunAt,
-                0,
-                string.Empty,
-                CancellationToken.None);
+                WorkflowAgentDefaults.StatusRunning, State.LastRunAt, State.NextRunAt,
+                0, string.Empty, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -110,25 +112,17 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
                 Error = ex.Message,
             });
 
-            await ScheduleNextRunAsync(now, CancellationToken.None);
+            await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
             await UpdateRegistryExecutionAsync(
-                WorkflowAgentDefaults.StatusError,
-                State.LastRunAt,
-                State.NextRunAt,
-                State.ErrorCount,
-                State.LastError,
-                CancellationToken.None);
+                WorkflowAgentDefaults.StatusError, State.LastRunAt, State.NextRunAt,
+                State.ErrorCount, State.LastError, CancellationToken.None);
         }
     }
 
     [EventHandler]
     public async Task HandleDisableAsync(DisableWorkflowAgentCommand command)
     {
-        if (_nextRunLease != null)
-        {
-            await CancelDurableCallbackAsync(_nextRunLease, CancellationToken.None);
-            _nextRunLease = null;
-        }
+        await Scheduler.CancelAsync(CancellationToken.None);
 
         await PersistDomainEventAsync(new WorkflowAgentDisabledEvent
         {
@@ -136,12 +130,8 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         });
 
         await UpdateRegistryExecutionAsync(
-            WorkflowAgentDefaults.StatusDisabled,
-            State.LastRunAt,
-            null,
-            State.ErrorCount,
-            State.LastError,
-            CancellationToken.None);
+            WorkflowAgentDefaults.StatusDisabled, State.LastRunAt, null,
+            State.ErrorCount, State.LastError, CancellationToken.None);
     }
 
     [EventHandler]
@@ -155,26 +145,19 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             });
         }
 
-        await ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpdateRegistryExecutionAsync(
-            WorkflowAgentDefaults.StatusRunning,
-            State.LastRunAt,
-            State.NextRunAt,
-            State.ErrorCount,
-            State.LastError,
-            CancellationToken.None);
+            WorkflowAgentDefaults.StatusRunning, State.LastRunAt, State.NextRunAt,
+            State.ErrorCount, State.LastError, CancellationToken.None);
     }
 
     private async Task<WorkflowChatRunAcceptedReceipt> DispatchWorkflowRunAsync(
-        string? reason,
-        string? revisionFeedback,
-        CancellationToken ct)
+        string? reason, string? revisionFeedback, CancellationToken ct)
     {
         var dispatchService = Services.GetService<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>();
         if (dispatchService is null)
             throw new InvalidOperationException("Workflow run dispatch service is not registered.");
 
-        var metadata = BuildExecutionMetadata();
         var request = new WorkflowChatRunRequest(
             Prompt: BuildExecutionPrompt(reason, revisionFeedback),
             WorkflowName: State.WorkflowName,
@@ -182,7 +165,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             SessionId: null,
             InputParts: null,
             WorkflowYamls: null,
-            Metadata: metadata,
+            Metadata: BuildExecutionMetadata(),
             ScopeId: State.ScopeId);
 
         var dispatch = await dispatchService.DispatchAsync(request, ct);
@@ -192,41 +175,6 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         return dispatch.Receipt;
     }
 
-    private async Task ScheduleNextRunAsync(DateTimeOffset fromUtc, CancellationToken ct)
-    {
-        if (!State.Enabled || string.IsNullOrWhiteSpace(State.ScheduleCron))
-            return;
-
-        if (!SkillRunnerScheduleCalculator.TryGetNextOccurrence(
-                State.ScheduleCron,
-                State.ScheduleTimezone,
-                fromUtc,
-                out var nextRunAtUtc,
-                out var error))
-        {
-            Logger.LogWarning("Workflow agent {ActorId} could not compute next run: {Error}", Id, error);
-            return;
-        }
-
-        var dueTime = nextRunAtUtc - DateTimeOffset.UtcNow;
-        if (dueTime <= TimeSpan.Zero)
-            dueTime = TimeSpan.FromSeconds(1);
-
-        if (_nextRunLease != null)
-            await CancelDurableCallbackAsync(_nextRunLease, ct);
-
-        _nextRunLease = await ScheduleSelfDurableTimeoutAsync(
-            WorkflowAgentDefaults.TriggerCallbackId,
-            dueTime,
-            new TriggerWorkflowAgentExecutionCommand { Reason = "schedule" },
-            ct: ct);
-
-        await PersistDomainEventAsync(new WorkflowAgentNextRunScheduledEvent
-        {
-            NextRunAt = Timestamp.FromDateTimeOffset(nextRunAtUtc),
-        });
-    }
-
     private IReadOnlyDictionary<string, string> BuildExecutionMetadata()
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -234,10 +182,8 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             [LLMRequestMetadataKeys.NyxIdAccessToken] = State.NyxApiKey ?? string.Empty,
             [ChannelMetadataKeys.ConversationId] = State.ConversationId ?? string.Empty,
         };
-
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
-
         return metadata;
     }
 
@@ -253,9 +199,9 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             $"Trigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}",
         };
 
-        var normalizedFeedback = NormalizeOptional(revisionFeedback);
-        if (normalizedFeedback is not null)
-            lines.Add($"Revision feedback: {normalizedFeedback}");
+        var normalized = NormalizeOptional(revisionFeedback);
+        if (normalized is not null)
+            lines.Add($"Revision feedback: {normalized}");
 
         return string.Join('\n', lines);
     }
@@ -263,8 +209,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
     {
         var runtime = Services.GetService<IActorRuntime>();
-        if (runtime is null)
-            return;
+        if (runtime is null) return;
 
         var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
@@ -272,7 +217,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = "lark",
+            Platform = ResolvePlatform(State.Platform),
             ConversationId = State.ConversationId ?? string.Empty,
             NyxProviderSlug = State.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.NyxApiKey ?? string.Empty,
@@ -291,46 +236,31 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
     }
 
     private async Task UpdateRegistryExecutionAsync(
-        string status,
-        Timestamp? lastRunAt,
-        Timestamp? nextRunAt,
-        int errorCount,
-        string? lastError,
-        CancellationToken ct)
+        string status, Timestamp? lastRunAt, Timestamp? nextRunAt,
+        int errorCount, string? lastError, CancellationToken ct)
     {
         var runtime = Services.GetService<IActorRuntime>();
-        if (runtime is null)
-            return;
+        if (runtime is null) return;
 
         var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
         var command = new UserAgentCatalogExecutionUpdateCommand
         {
-            AgentId = Id,
-            Status = status,
-            LastRunAt = lastRunAt,
-            NextRunAt = nextRunAt,
-            ErrorCount = errorCount,
-            LastError = lastError ?? string.Empty,
+            AgentId = Id, Status = status,
+            LastRunAt = lastRunAt, NextRunAt = nextRunAt,
+            ErrorCount = errorCount, LastError = lastError ?? string.Empty,
         };
-
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
     }
 
-    private static EventEnvelope BuildDirectEnvelope(string actorId, IMessage payload)
+    private static EventEnvelope BuildDirectEnvelope(string actorId, IMessage payload) => new()
     {
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actorId },
-            },
-        };
-    }
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        Payload = Any.Pack(payload),
+        Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
+    };
 
     private static WorkflowAgentState ApplyInitialized(WorkflowAgentState current, WorkflowAgentInitializedEvent evt)
     {
@@ -348,6 +278,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         next.ApiKeyId = evt.ApiKeyId ?? string.Empty;
         next.Enabled = evt.Enabled;
         next.ScopeId = evt.ScopeId ?? string.Empty;
+        next.Platform = evt.Platform ?? string.Empty;
         return next;
     }
 
@@ -392,9 +323,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
     }
 
     private static string NormalizeTimezone(string? scheduleTimezone) =>
-        string.IsNullOrWhiteSpace(scheduleTimezone)
-            ? WorkflowAgentDefaults.DefaultTimezone
-            : scheduleTimezone.Trim();
+        string.IsNullOrWhiteSpace(scheduleTimezone) ? WorkflowAgentDefaults.DefaultTimezone : scheduleTimezone.Trim();
+
+    private static string ResolvePlatform(string? platform) =>
+        string.IsNullOrWhiteSpace(platform) ? WorkflowAgentDefaults.DefaultPlatform : platform.Trim();
 
     private static string? NormalizeOptional(string? value)
     {
@@ -402,19 +334,18 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         return normalized.Length == 0 ? null : normalized;
     }
 
-    private static string MapDispatchError(WorkflowChatRunStartError error) =>
-        error switch
-        {
-            WorkflowChatRunStartError.AgentNotFound => "Workflow actor not found.",
-            WorkflowChatRunStartError.WorkflowNotFound => "Workflow definition not found.",
-            WorkflowChatRunStartError.AgentTypeNotSupported => "Actor is not workflow-capable.",
-            WorkflowChatRunStartError.ProjectionDisabled => "Workflow projection is disabled.",
-            WorkflowChatRunStartError.WorkflowBindingMismatch => "Workflow binding mismatch.",
-            WorkflowChatRunStartError.AgentWorkflowNotConfigured => "Workflow actor is not bound to a workflow.",
-            WorkflowChatRunStartError.InvalidWorkflowYaml => "Workflow YAML is invalid.",
-            WorkflowChatRunStartError.WorkflowNameMismatch => "Workflow name does not match the bound workflow.",
-            WorkflowChatRunStartError.PromptRequired => "Workflow prompt is required.",
-            WorkflowChatRunStartError.ConflictingScopeId => "Workflow scope_id is conflicting.",
-            _ => "Workflow run dispatch failed.",
-        };
+    private static string MapDispatchError(WorkflowChatRunStartError error) => error switch
+    {
+        WorkflowChatRunStartError.AgentNotFound => "Workflow actor not found.",
+        WorkflowChatRunStartError.WorkflowNotFound => "Workflow definition not found.",
+        WorkflowChatRunStartError.AgentTypeNotSupported => "Actor is not workflow-capable.",
+        WorkflowChatRunStartError.ProjectionDisabled => "Workflow projection is disabled.",
+        WorkflowChatRunStartError.WorkflowBindingMismatch => "Workflow binding mismatch.",
+        WorkflowChatRunStartError.AgentWorkflowNotConfigured => "Workflow actor is not bound to a workflow.",
+        WorkflowChatRunStartError.InvalidWorkflowYaml => "Workflow YAML is invalid.",
+        WorkflowChatRunStartError.WorkflowNameMismatch => "Workflow name does not match the bound workflow.",
+        WorkflowChatRunStartError.PromptRequired => "Workflow prompt is required.",
+        WorkflowChatRunStartError.ConflictingScopeId => "Workflow scope_id is conflicting.",
+        _ => "Workflow run dispatch failed.",
+    };
 }

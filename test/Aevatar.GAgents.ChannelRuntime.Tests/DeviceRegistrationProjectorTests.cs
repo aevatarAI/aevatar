@@ -108,6 +108,49 @@ public sealed class DeviceRegistrationProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WithTombstonedEntry_DeletesDocument()
+    {
+        // Channel RFC §7.1.1 — tombstoned entries drive IProjectionWriteDispatcher.DeleteAsync
+        // so the read model document is removed under projector watermark coordination.
+        var state = new DeviceRegistrationState
+        {
+            Registrations =
+            {
+                new DeviceRegistrationEntry
+                {
+                    Id = "reg-dead",
+                    ScopeId = "scope-a",
+                    HmacKey = "k",
+                    Tombstoned = true,
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-tomb", 4, state), CancellationToken.None);
+
+        _dispatcher.Upserts.Should().BeEmpty();
+        _dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("reg-dead");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WithMixedLiveAndTombstonedEntries_DispatchesBothVerdicts()
+    {
+        var state = new DeviceRegistrationState
+        {
+            Registrations =
+            {
+                new DeviceRegistrationEntry { Id = "reg-live", ScopeId = "scope-a", HmacKey = "k1" },
+                new DeviceRegistrationEntry { Id = "reg-dead", ScopeId = "scope-b", HmacKey = "k2", Tombstoned = true },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-mixed", 5, state), CancellationToken.None);
+
+        _dispatcher.Upserts.Should().ContainSingle().Which.Id.Should().Be("reg-live");
+        _dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("reg-dead");
+    }
+
+    [Fact]
     public async Task ProjectAsync_SkipsEntryWithBlankId()
     {
         var state = new DeviceRegistrationState

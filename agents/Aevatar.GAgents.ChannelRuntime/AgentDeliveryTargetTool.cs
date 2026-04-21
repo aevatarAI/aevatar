@@ -289,7 +289,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
         var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
 
@@ -309,15 +308,14 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
+        // Tombstone triggers IProjectionWriteDispatcher.DeleteAsync (Channel RFC §7.1.1),
+        // which also removes the document's projected StateVersion. Gate confirmation
+        // purely on document absence — versionAfter would be null after the delete lands.
         var confirmed = false;
         for (var attempt = 0; attempt < 10; attempt++)
         {
             if (attempt > 0)
                 await Task.Delay(500, ct);
-
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
 
             if (await queryPort.GetAsync(agentId, ct) == null)
             {

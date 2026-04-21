@@ -177,7 +177,7 @@ public sealed class AgentBuilderTool : IAgentTool
             return """{"error":"schedule_cron is required for create_agent"}""";
 
         var scheduleTimezone = args.Str("schedule_timezone") ?? SkillRunnerDefaults.DefaultTimezone;
-        if (!SkillRunnerScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
+        if (!ChannelScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
             return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
 
         var conversationId = args.Str("conversation_id")
@@ -291,7 +291,7 @@ public sealed class AgentBuilderTool : IAgentTool
             return """{"error":"schedule_cron is required for create_agent"}""";
 
         var scheduleTimezone = args.Str("schedule_timezone") ?? WorkflowAgentDefaults.DefaultTimezone;
-        if (!SkillRunnerScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
+        if (!ChannelScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
             return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
 
         var conversationId = args.Str("conversation_id")

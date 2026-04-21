@@ -8,8 +8,8 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,8 +20,8 @@ namespace Aevatar.GAgents.ChannelRuntime;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
-    private RuntimeCallbackLease? _nextRunLease;
-    private RuntimeCallbackLease? _retryLease;
+    private ChannelScheduleRunner? _scheduler;
+    private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
 
     public SkillRunnerGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -36,16 +36,23 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _nyxIdApiClient = nyxIdApiClient;
     }
 
+    private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
+        callbackId: SkillRunnerDefaults.TriggerCallbackId,
+        schedulableSource: () => State,
+        triggerFactory: () => new TriggerSkillRunnerExecutionCommand { Reason = "schedule" },
+        persistNextRunEventAsync: nextRunUtc => PersistDomainEventAsync(new SkillRunnerNextRunScheduledEvent
+        {
+            NextRunAt = Timestamp.FromDateTimeOffset(nextRunUtc),
+        }),
+        scheduleTimeoutAsync: (id, dueTime, evt, ct) => ScheduleSelfDurableTimeoutAsync(id, dueTime, evt, ct: ct),
+        cancelCallbackAsync: (lease, ct) => CancelDurableCallbackAsync(lease, ct),
+        logger: Logger,
+        ownerDescription: $"Skill runner {Id}");
+
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-
-        if (State.Enabled &&
-            !string.IsNullOrWhiteSpace(State.ScheduleCron) &&
-            (State.NextRunAt == null || State.NextRunAt.ToDateTimeOffset() <= DateTimeOffset.UtcNow))
-        {
-            await ScheduleNextRunAsync(DateTimeOffset.UtcNow, ct);
-        }
+        await Scheduler.BootstrapOnActivateAsync(ct);
     }
 
     protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(SkillRunnerState state)
@@ -108,9 +115,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             MaxHistoryMessages = command.MaxHistoryMessages,
         });
 
-        if (State.Enabled && !string.IsNullOrWhiteSpace(State.ScheduleCron))
-            await ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
-
+        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpsertRegistryAsync(State.Enabled ? SkillRunnerDefaults.StatusRunning : SkillRunnerDefaults.StatusDisabled, CancellationToken.None);
     }
 
@@ -135,7 +140,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
 
             await CancelRetryLeaseAsync(CancellationToken.None);
-            await ScheduleNextRunAsync(now, CancellationToken.None);
+            await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
             await UpdateRegistryExecutionAsync(
                 SkillRunnerDefaults.StatusRunning,
                 Timestamp.FromDateTimeOffset(now),
@@ -165,7 +170,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
-            await ScheduleNextRunAsync(now, CancellationToken.None);
+            await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
             await UpdateRegistryExecutionAsync(SkillRunnerDefaults.StatusError, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, CancellationToken.None);
         }
     }
@@ -173,29 +178,20 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task ScheduleRetryAsync(int retryAttempt, CancellationToken ct)
     {
         await CancelRetryLeaseAsync(ct);
-
         _retryLease = await ScheduleSelfDurableTimeoutAsync(
             SkillRunnerDefaults.RetryCallbackId,
             SkillRunnerDefaults.RetryBackoff,
-            new TriggerSkillRunnerExecutionCommand
-            {
-                Reason = "retry",
-                RetryAttempt = retryAttempt,
-            },
+            new TriggerSkillRunnerExecutionCommand { Reason = "retry", RetryAttempt = retryAttempt },
             ct: ct);
-
         Logger.LogInformation(
             "Skill runner {ActorId} scheduled retry attempt {Attempt} in {Backoff}",
-            Id,
-            retryAttempt,
-            SkillRunnerDefaults.RetryBackoff);
+            Id, retryAttempt, SkillRunnerDefaults.RetryBackoff);
     }
 
     private async Task CancelRetryLeaseAsync(CancellationToken ct)
     {
         if (_retryLease == null)
             return;
-
         await CancelDurableCallbackAsync(_retryLease, ct);
         _retryLease = null;
     }
@@ -203,12 +199,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     [EventHandler]
     public async Task HandleDisableAsync(DisableSkillRunnerCommand command)
     {
-        if (_nextRunLease != null)
-        {
-            await CancelDurableCallbackAsync(_nextRunLease, CancellationToken.None);
-            _nextRunLease = null;
-        }
-
+        await Scheduler.CancelAsync(CancellationToken.None);
         await CancelRetryLeaseAsync(CancellationToken.None);
 
         await PersistDomainEventAsync(new SkillRunnerDisabledEvent
@@ -230,14 +221,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
         }
 
-        await ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpdateRegistryExecutionAsync(
-            SkillRunnerDefaults.StatusRunning,
-            State.LastRunAt,
-            State.NextRunAt,
-            State.ErrorCount,
-            State.LastError,
-            CancellationToken.None);
+            SkillRunnerDefaults.StatusRunning, State.LastRunAt, State.NextRunAt,
+            State.ErrorCount, State.LastError, CancellationToken.None);
     }
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
@@ -254,9 +241,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
 
         var output = content.ToString().Trim();
-        return string.IsNullOrWhiteSpace(output)
-            ? "No update generated."
-            : output;
+        return string.IsNullOrWhiteSpace(output) ? "No update generated." : output;
     }
 
     private async Task SendOutputAsync(string output, CancellationToken ct)
@@ -287,57 +272,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             State.OutboundConfig.NyxApiKey,
             State.OutboundConfig.NyxProviderSlug,
             "open-apis/im/v1/messages?receive_id_type=chat_id",
-            "POST",
-            body,
-            null,
-            ct);
+            "POST", body, null, ct);
     }
 
     private async Task TrySendFailureAsync(string error, CancellationToken ct)
     {
-        try
-        {
-            await SendOutputAsync($"Skill runner failed: {error}", ct);
-        }
+        try { await SendOutputAsync($"Skill runner failed: {error}", ct); }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Skill runner {ActorId} failed to send failure notification", Id);
         }
-    }
-
-    private async Task ScheduleNextRunAsync(DateTimeOffset fromUtc, CancellationToken ct)
-    {
-        if (!State.Enabled || string.IsNullOrWhiteSpace(State.ScheduleCron))
-            return;
-
-        if (!SkillRunnerScheduleCalculator.TryGetNextOccurrence(
-                State.ScheduleCron,
-                State.ScheduleTimezone,
-                fromUtc,
-                out var nextRunAtUtc,
-                out var error))
-        {
-            Logger.LogWarning("Skill runner {ActorId} could not compute next run: {Error}", Id, error);
-            return;
-        }
-
-        var dueTime = nextRunAtUtc - DateTimeOffset.UtcNow;
-        if (dueTime <= TimeSpan.Zero)
-            dueTime = TimeSpan.FromSeconds(1);
-
-        if (_nextRunLease != null)
-            await CancelDurableCallbackAsync(_nextRunLease, ct);
-
-        _nextRunLease = await ScheduleSelfDurableTimeoutAsync(
-            SkillRunnerDefaults.TriggerCallbackId,
-            dueTime,
-            new TriggerSkillRunnerExecutionCommand { Reason = "schedule" },
-            ct: ct);
-
-        await PersistDomainEventAsync(new SkillRunnerNextRunScheduledEvent
-        {
-            NextRunAt = Timestamp.FromDateTimeOffset(nextRunAtUtc),
-        });
     }
 
     private IReadOnlyDictionary<string, string> BuildExecutionMetadata()
@@ -347,10 +291,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             [LLMRequestMetadataKeys.NyxIdAccessToken] = State.OutboundConfig?.NyxApiKey ?? string.Empty,
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
-
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
-
         return metadata;
     }
 
@@ -359,15 +301,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var prompt = string.IsNullOrWhiteSpace(State.ExecutionPrompt)
             ? "Execute the configured skill now and return plain text only."
             : State.ExecutionPrompt;
-
         return $"{prompt}\nCurrent UTC time: {now:O}\nTrigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}";
     }
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
     {
         var runtime = Services.GetService<IActorRuntime>();
-        if (runtime is null)
-            return;
+        if (runtime is null) return;
 
         var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
@@ -375,7 +315,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = "lark",
+            Platform = ResolvePlatform(State.OutboundConfig?.Platform),
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
@@ -394,46 +334,31 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     }
 
     private async Task UpdateRegistryExecutionAsync(
-        string status,
-        Timestamp? lastRunAt,
-        Timestamp? nextRunAt,
-        int errorCount,
-        string? lastError,
-        CancellationToken ct)
+        string status, Timestamp? lastRunAt, Timestamp? nextRunAt,
+        int errorCount, string? lastError, CancellationToken ct)
     {
         var runtime = Services.GetService<IActorRuntime>();
-        if (runtime is null)
-            return;
+        if (runtime is null) return;
 
         var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
         var command = new UserAgentCatalogExecutionUpdateCommand
         {
-            AgentId = Id,
-            Status = status,
-            LastRunAt = lastRunAt,
-            NextRunAt = nextRunAt,
-            ErrorCount = errorCount,
-            LastError = lastError ?? string.Empty,
+            AgentId = Id, Status = status,
+            LastRunAt = lastRunAt, NextRunAt = nextRunAt,
+            ErrorCount = errorCount, LastError = lastError ?? string.Empty,
         };
-
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
     }
 
-    private static EventEnvelope BuildDirectEnvelope(string actorId, IMessage payload)
+    private static EventEnvelope BuildDirectEnvelope(string actorId, IMessage payload) => new()
     {
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actorId },
-            },
-        };
-    }
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        Payload = Any.Pack(payload),
+        Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
+    };
 
     private static SkillRunnerState ApplyInitialized(SkillRunnerState current, SkillRunnerInitializedEvent evt)
     {
@@ -451,12 +376,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.Model = evt.Model ?? string.Empty;
         next.Temperature = evt.Temperature;
         next.MaxTokens = evt.MaxTokens;
-        next.MaxToolRounds = evt.MaxToolRounds;
-        next.MaxHistoryMessages = evt.MaxHistoryMessages;
-        if (!evt.HasMaxToolRounds)
-            next.MaxToolRounds = SkillRunnerDefaults.DefaultMaxToolRounds;
-        if (!evt.HasMaxHistoryMessages)
-            next.MaxHistoryMessages = SkillRunnerDefaults.DefaultMaxHistoryMessages;
+        next.MaxToolRounds = evt.HasMaxToolRounds ? evt.MaxToolRounds : SkillRunnerDefaults.DefaultMaxToolRounds;
+        next.MaxHistoryMessages = evt.HasMaxHistoryMessages ? evt.MaxHistoryMessages : SkillRunnerDefaults.DefaultMaxHistoryMessages;
         return next;
     }
 
@@ -502,12 +423,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     }
 
     private static string NormalizeProviderName(string? providerName) =>
-        string.IsNullOrWhiteSpace(providerName)
-            ? SkillRunnerDefaults.DefaultProviderName
-            : providerName.Trim();
+        string.IsNullOrWhiteSpace(providerName) ? SkillRunnerDefaults.DefaultProviderName : providerName.Trim();
 
     private static string NormalizeTimezone(string? scheduleTimezone) =>
-        string.IsNullOrWhiteSpace(scheduleTimezone)
-            ? SkillRunnerDefaults.DefaultTimezone
-            : scheduleTimezone.Trim();
+        string.IsNullOrWhiteSpace(scheduleTimezone) ? SkillRunnerDefaults.DefaultTimezone : scheduleTimezone.Trim();
+
+    private static string ResolvePlatform(string? platform) =>
+        string.IsNullOrWhiteSpace(platform) ? SkillRunnerDefaults.DefaultPlatform : platform.Trim();
 }

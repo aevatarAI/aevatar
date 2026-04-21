@@ -6,6 +6,8 @@ namespace Aevatar.GAgents.ChannelRuntime;
 public sealed class UserAgentCatalogProjectionPort
     : MaterializationProjectionPortBase<UserAgentCatalogMaterializationRuntimeLease>
 {
+    public const string ProjectionKind = UserAgentCatalogStorageContracts.ProjectionKind;
+
     public UserAgentCatalogProjectionPort(
         IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> activationService)
         : base(static () => true, activationService)
@@ -19,7 +21,7 @@ public sealed class UserAgentCatalogProjectionPort
             new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = UserAgentCatalogStorageContracts.ProjectionKind,
+                ProjectionKind = ProjectionKind,
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);

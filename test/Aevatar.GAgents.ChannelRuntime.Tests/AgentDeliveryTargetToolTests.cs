@@ -321,7 +321,7 @@ public sealed class AgentDeliveryTargetToolTests
                 }),
                 Task.FromResult<UserAgentCatalogEntry?>(null));
         queryPort.GetStateVersionAsync("agent-3", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(6), Task.FromResult<long?>(7));
+            .Returns(Task.FromResult<long?>(null));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
@@ -354,6 +354,62 @@ public sealed class AgentDeliveryTargetToolTests
                 e.Payload != null &&
                 e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
                 e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "agent-3"));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_ConfirmsOnDocumentAbsence_WhenStateVersionIsGoneAfterTombstone()
+    {
+        // Regression guard for #278 review: the prior confirmation loop required
+        // versionAfter > versionBefore before checking document absence. Under
+        // the new tombstone-retention contract DeleteAsync removes the document
+        // (and its StateVersion) outright, so a successful tombstone must still
+        // surface as "deleted" when GetStateVersionAsync permanently returns null.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetAsync("agent-7", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-7",
+                    Platform = "lark",
+                    ConversationId = "oc_chat_7",
+                    NyxProviderSlug = "api-lark-bot",
+                    OwnerNyxUserId = "user-1",
+                }),
+                Task.FromResult<UserAgentCatalogEntry?>(null));
+        queryPort.GetStateVersionAsync("agent-7", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-7","confirm":true}""");
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
         }
         finally
         {
