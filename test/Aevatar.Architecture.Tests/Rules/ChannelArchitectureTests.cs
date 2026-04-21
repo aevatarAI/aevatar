@@ -514,11 +514,11 @@ internal static class ChannelReceiverTracker
             }
         }
 
-        // Lambdas bound to `var` without an explicit type cast (for example
-        // `var resolve = () => ...`) carry no syntactic type hint. Without a semantic model we
-        // cannot infer their return type — those remain a known limitation. Any explicit typing
-        // (`Func<IFoo> resolve = ...;` or `var resolve = (Func<IFoo>)(() => ...)`) is covered by
-        // the declaration / cast branches above.
+        // Lambdas and anonymous methods bound to `var` have no declared type, but we can still
+        // infer their return type when the body references a receiver that is already known. For
+        // example `var resolve = () => _outbound;` — once `_outbound` lives in the set, invoking
+        // `resolve()` also produces a known receiver, so the next fixed-point iteration adds
+        // `resolve`.
 
         bool changed;
         do
@@ -527,9 +527,20 @@ internal static class ChannelReceiverTracker
 
             foreach (var declarator in methodBody.DescendantNodes().OfType<VariableDeclaratorSyntax>())
             {
-                if (declarator.Initializer?.Value is { } init
-                    && ExtractLeafName(init) is { } leaf
+                if (declarator.Initializer?.Value is not { } init)
+                {
+                    continue;
+                }
+
+                if (ExtractLeafName(init) is { } leaf
                     && set.Contains(leaf)
+                    && set.Add(declarator.Identifier.ValueText))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                if (IsLambdaReturningKnownReceiver(init, set)
                     && set.Add(declarator.Identifier.ValueText))
                 {
                     changed = true;
@@ -538,9 +549,20 @@ internal static class ChannelReceiverTracker
 
             foreach (var assignment in methodBody.DescendantNodes().OfType<AssignmentExpressionSyntax>())
             {
-                if (assignment.Left is IdentifierNameSyntax lhs
-                    && ExtractLeafName(assignment.Right) is { } rhsLeaf
+                if (assignment.Left is not IdentifierNameSyntax lhs)
+                {
+                    continue;
+                }
+
+                if (ExtractLeafName(assignment.Right) is { } rhsLeaf
                     && set.Contains(rhsLeaf)
+                    && set.Add(lhs.Identifier.ValueText))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                if (IsLambdaReturningKnownReceiver(assignment.Right, set)
                     && set.Add(lhs.Identifier.ValueText))
                 {
                     changed = true;
@@ -662,6 +684,63 @@ internal static class ChannelReceiverTracker
             PostfixUnaryExpressionSyntax postfix => ExtractLeafName(postfix.Operand),
             _ => null,
         };
+    }
+
+    private static bool IsLambdaReturningKnownReceiver(ExpressionSyntax expression, HashSet<string> set)
+    {
+        expression = UnwrapExpression(expression);
+
+        return expression switch
+        {
+            LambdaExpressionSyntax lambda => AnyLambdaReturnInSet(lambda.Body, set),
+            AnonymousMethodExpressionSyntax anon => AnyLambdaReturnInSet(anon.Body, set),
+            _ => false,
+        };
+    }
+
+    private static ExpressionSyntax UnwrapExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parens:
+                    expression = parens.Expression;
+                    break;
+                case CastExpressionSyntax cast:
+                    expression = cast.Expression;
+                    break;
+                default:
+                    return expression;
+            }
+        }
+    }
+
+    private static bool AnyLambdaReturnInSet(Microsoft.CodeAnalysis.SyntaxNode body, HashSet<string> set)
+    {
+        if (body is ExpressionSyntax expression)
+        {
+            return ExtractLeafName(expression) is { } leaf && set.Contains(leaf);
+        }
+
+        if (body is BlockSyntax block)
+        {
+            foreach (var ret in block.DescendantNodes(descendIntoChildren: n =>
+                n is not LambdaExpressionSyntax
+                && n is not AnonymousMethodExpressionSyntax
+                && n is not LocalFunctionStatementSyntax)
+                .OfType<ReturnStatementSyntax>())
+            {
+                if (ret.Expression is { } returnExpr
+                    && ExtractLeafName(returnExpr) is { } leaf
+                    && set.Contains(leaf))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool InitializerExpressionMatchesTypeHint(ExpressionSyntax expression, string typeHint)
