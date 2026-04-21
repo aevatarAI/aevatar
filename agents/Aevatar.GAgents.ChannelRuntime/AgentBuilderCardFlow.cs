@@ -563,12 +563,11 @@ internal static class AgentBuilderCardFlow
                         BuildInput("repositories", "Repositories (Optional)", "owner/repo, owner/repo"),
                         BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
                         BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                        BuildAction(
-                            BuildSubmitButton("Create Agent", "primary", "submit_daily_report", new
-                            {
-                                agent_builder_action = DailyReportAction,
-                                run_immediately = true,
-                            }))),
+                        BuildSubmitButton("Create Agent", "primary", "submit_daily_report", new
+                        {
+                            agent_builder_action = DailyReportAction,
+                            run_immediately = true,
+                        })),
                     new
                     {
                         tag = "action",
@@ -620,12 +619,11 @@ internal static class AgentBuilderCardFlow
                         BuildInput("style", "Style (Optional)", "Confident, concise, product-focused"),
                         BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
                         BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                        BuildAction(
-                            BuildSubmitButton("Create Agent", "primary", "submit_social_media", new
-                            {
-                                agent_builder_action = SocialMediaAction,
-                                run_immediately = true,
-                            }))),
+                        BuildSubmitButton("Create Agent", "primary", "submit_social_media", new
+                        {
+                            agent_builder_action = SocialMediaAction,
+                            run_immediately = true,
+                        })),
                     new
                     {
                         tag = "action",
@@ -648,13 +646,6 @@ internal static class AgentBuilderCardFlow
             tag = "form",
             name,
             elements,
-        };
-
-    private static object BuildAction(params object[] actions) =>
-        new
-        {
-            tag = "action",
-            actions,
         };
 
     private static object BuildInput(string name, string label, string placeholder)

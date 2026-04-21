@@ -1968,11 +1968,13 @@ public class ChannelUserGAgentContinuationTests
             .GetProperty("elements")
             .EnumerateArray()
             .First(element => element.GetProperty("tag").GetString() == "form");
-        var action = form
+        var button = form
             .GetProperty("elements")
             .EnumerateArray()
-            .First(element => element.GetProperty("tag").GetString() == "action");
-        return action.GetProperty("actions")[0].GetProperty("value").Clone();
+            .First(element =>
+                element.GetProperty("tag").GetString() == "button" &&
+                element.GetProperty("form_action_type").GetString() == "submit");
+        return button.GetProperty("value").Clone();
     }
 
     private static HttpContext CreateHttpContext(object payload)
