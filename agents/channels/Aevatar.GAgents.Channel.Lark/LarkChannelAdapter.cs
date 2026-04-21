@@ -14,11 +14,11 @@ namespace Aevatar.GAgents.Channel.Lark;
 public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
 {
     private static readonly Regex MentionRegex = new(
-        "<at\\s+user_id=\\\"(?<id>[^\\\"]+)\\\"(?:>)(?<label>.*?)</at>",
+        "<at\\s+user_id=\\\"(?<id>[^\\\"]+)\\\">(?<label>.*?)</at>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
     private static readonly ChannelId LarkChannel = ChannelId.From("lark");
-    private static readonly ChannelCapabilities LarkCapabilities = LarkMessageComposer.DefaultCapabilities.Clone();
+    private static readonly TimeSpan SignatureValidityWindow = TimeSpan.FromMinutes(5);
 
     private readonly HttpClient _httpClient;
     private readonly FoundationCredentialProvider _credentialProvider;
@@ -26,6 +26,7 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
     private readonly IPayloadRedactor _payloadRedactor;
     private readonly ILogger<LarkChannelAdapter> _logger;
     private readonly System.Threading.Channels.Channel<ChatActivity> _inboundBuffer;
+    private readonly ChannelCapabilities _capabilities;
 
     private ChannelTransportBinding? _binding;
     private LarkCredentialSnapshot _botCredential = new(string.Empty, string.Empty);
@@ -46,8 +47,9 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _httpClient = httpClient ?? new HttpClient
         {
-            BaseAddress = new Uri("https://open.feishu.cn", UriKind.Absolute),
+            BaseAddress = LarkChannelDefaults.DefaultBaseAddress,
         };
+        _capabilities = LarkMessageComposer.DefaultCapabilities.Clone();
         _inboundBuffer = System.Threading.Channels.Channel.CreateBounded<ChatActivity>(new System.Threading.Channels.BoundedChannelOptions(256)
         {
             SingleReader = true,
@@ -60,7 +62,7 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
 
     public TransportMode TransportMode => TransportMode.Webhook;
 
-    public ChannelCapabilities Capabilities => LarkCapabilities;
+    public ChannelCapabilities Capabilities => _capabilities.Clone();
 
     public System.Threading.Channels.ChannelReader<ChatActivity> InboundStream => _inboundBuffer.Reader;
 
@@ -336,6 +338,10 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         if (string.IsNullOrWhiteSpace(chatId))
             return null;
 
+        var conversation = TryBuildCardActionConversation(eventObject, senderId, chatId);
+        if (conversation is null)
+            return null;
+
         return new ChatActivity
         {
             Id = TryReadString(header, "event_id")
@@ -344,7 +350,7 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
             Type = ActivityType.CardAction,
             ChannelId = Channel.Clone(),
             Bot = _binding!.Bot.Bot.Clone(),
-            Conversation = ConversationReference.Create(Channel, _binding.Bot.Bot, ConversationScope.Group, null, "group", chatId),
+            Conversation = conversation,
             From = new ParticipantRef
             {
                 CanonicalId = senderId,
@@ -352,8 +358,8 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
             },
             Content = new MessageContent
             {
-                Text = eventObject.GetRawText(),
                 Disposition = MessageDisposition.Normal,
+                CardAction = BuildCardActionSubmission(eventObject),
             },
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
@@ -468,6 +474,64 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
             ? ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.DirectMessage, null, "dm", senderId)
             : ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.Group, null, "group", chatId);
 
+    private ConversationReference? TryBuildCardActionConversation(JsonElement eventObject, string senderId, string chatId)
+    {
+        var chatType = TryReadNestedString(eventObject, "context", "chat_type")
+                       ?? TryReadNestedString(eventObject, "context", "open_chat_type")
+                       ?? TryReadNestedString(eventObject, "context", "conversation_type");
+        if (string.IsNullOrWhiteSpace(chatType))
+        {
+            _logger.LogWarning("Lark card action missing chat_type for chat {ChatId}; dropping callback.", chatId);
+            return null;
+        }
+
+        if (string.Equals(chatType, "p2p", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(senderId))
+            {
+                _logger.LogWarning("Lark card action missing sender id for p2p chat {ChatId}; dropping callback.", chatId);
+                return null;
+            }
+
+            return ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.DirectMessage, null, "dm", senderId);
+        }
+
+        if (string.Equals(chatType, "group", StringComparison.OrdinalIgnoreCase))
+            return ConversationReference.Create(Channel, _binding!.Bot.Bot, ConversationScope.Group, null, "group", chatId);
+
+        _logger.LogWarning("Lark card action chat_type {ChatType} is unsupported for chat {ChatId}; dropping callback.", chatType, chatId);
+        return null;
+    }
+
+    private static CardActionSubmission BuildCardActionSubmission(JsonElement eventObject)
+    {
+        var submission = new CardActionSubmission
+        {
+            SourceMessageId = TryReadNestedString(eventObject, "context", "open_message_id")
+                              ?? TryReadNestedString(eventObject, "context", "message_id")
+                              ?? string.Empty,
+        };
+
+        if (!eventObject.TryGetProperty("action", out var action))
+            return submission;
+
+        submission.ActionId =
+            TryReadNestedString(action, "value", "action_id") ??
+            TryReadString(action, "action_id") ??
+            string.Empty;
+
+        if (action.TryGetProperty("value", out var value))
+        {
+            submission.SubmittedValue = TryReadString(value, "value") ?? TryReadScalar(value) ?? string.Empty;
+            CopyScalarValues(value, submission.Arguments, excludedKeys: ["action_id", "value"]);
+        }
+
+        if (action.TryGetProperty("form_value", out var formValue))
+            CopyScalarValues(formValue, submission.FormFields);
+
+        return submission;
+    }
+
     private static List<ParticipantRef> ParseMentions(string text, string botId, out string normalizedText)
     {
         var mentions = new List<ParticipantRef>();
@@ -507,12 +571,33 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         if (!headers.TryGetValue("X-Lark-Signature", out var signature) || string.IsNullOrWhiteSpace(signature))
             return false;
 
-        headers.TryGetValue("X-Lark-Request-Timestamp", out var timestamp);
+        if (!headers.TryGetValue("X-Lark-Request-Timestamp", out var timestamp) ||
+            !TryParseSignatureTimestamp(timestamp, out var requestTime))
+        {
+            return false;
+        }
+
+        var age = DateTimeOffset.UtcNow - requestTime;
+        if (age.Duration() > SignatureValidityWindow)
+            return false;
+
         headers.TryGetValue("X-Lark-Request-Nonce", out var nonce);
         var expected = ComputeLarkSignature(timestamp ?? string.Empty, nonce ?? string.Empty, encryptKey, body);
         return CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(expected),
             Encoding.UTF8.GetBytes(signature.Trim().ToLowerInvariant()));
+    }
+
+    private static bool TryParseSignatureTimestamp(string? timestamp, out DateTimeOffset requestTime)
+    {
+        requestTime = default;
+        if (!long.TryParse(timestamp, out var raw))
+            return false;
+
+        requestTime = timestamp!.Length > 10
+            ? DateTimeOffset.FromUnixTimeMilliseconds(raw)
+            : DateTimeOffset.FromUnixTimeSeconds(raw);
+        return true;
     }
 
     private static string? ExtractTextContent(JsonElement message)
@@ -562,6 +647,34 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         }
 
         return null;
+    }
+
+    private static string? TryReadScalar(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.String => element.GetString(),
+        JsonValueKind.Number => element.GetRawText(),
+        JsonValueKind.True => bool.TrueString,
+        JsonValueKind.False => bool.FalseString,
+        _ => null,
+    };
+
+    private static void CopyScalarValues(
+        JsonElement element,
+        Google.Protobuf.Collections.MapField<string, string> target,
+        params string[] excludedKeys)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (excludedKeys.Contains(property.Name, StringComparer.Ordinal))
+                continue;
+
+            var scalar = TryReadScalar(property.Value);
+            if (scalar is not null)
+                target[property.Name] = scalar;
+        }
     }
 
     private static string MapErrorCode(HttpStatusCode statusCode, string body)

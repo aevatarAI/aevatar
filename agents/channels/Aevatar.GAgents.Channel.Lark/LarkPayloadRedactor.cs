@@ -59,7 +59,7 @@ public sealed class LarkPayloadRedactor : IPayloadRedactor
                     continue;
                 }
 
-                if (name is "content" or "form_value" or "value")
+                if (name is "form_value")
                 {
                     obj[name] = "[redacted]";
                     modified = true;

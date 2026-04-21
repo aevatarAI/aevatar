@@ -54,7 +54,7 @@ internal sealed class LarkAdapterHarness
             NullLogger<LarkChannelAdapter>.Instance,
             new HttpClient(HttpHandler)
             {
-                BaseAddress = new Uri("https://open.feishu.cn", UriKind.Absolute),
+                BaseAddress = LarkChannelDefaults.DefaultBaseAddress,
             });
         Webhook = new LarkWebhookFixture(adapter, DefaultBinding, EncryptKey);
         StreamingProbe = new LarkStreamingProbe(adapter, HttpHandler);
@@ -241,10 +241,14 @@ internal sealed class LarkWebhookFixture(
         _lastBody = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload));
         _lastHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["X-Lark-Request-Timestamp"] = "100",
+            ["X-Lark-Request-Timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
             ["X-Lark-Request-Nonce"] = "nonce",
-            ["X-Lark-Signature"] = LarkChannelAdapter.ComputeLarkSignature("100", "nonce", encryptKey, Encoding.UTF8.GetString(_lastBody)),
         };
+        _lastHeaders["X-Lark-Signature"] = LarkChannelAdapter.ComputeLarkSignature(
+            _lastHeaders["X-Lark-Request-Timestamp"],
+            "nonce",
+            encryptKey,
+            Encoding.UTF8.GetString(_lastBody));
 
         var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(_lastBody, _lastHeaders), ct);
         _lastPersistedBlobRef = response.Activity?.RawPayloadBlobRef;

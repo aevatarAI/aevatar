@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 
@@ -152,9 +153,13 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
     private static string Truncate(string? value, int maxLength)
     {
         var text = value ?? string.Empty;
-        if (maxLength <= 0 || text.Length <= maxLength)
+        if (maxLength <= 0)
             return text;
 
-        return text[..maxLength];
+        var textInfo = new StringInfo(text);
+        if (textInfo.LengthInTextElements <= maxLength)
+            return text;
+
+        return textInfo.SubstringByTextElements(0, maxLength);
     }
 }

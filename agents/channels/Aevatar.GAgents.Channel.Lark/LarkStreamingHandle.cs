@@ -8,8 +8,7 @@ internal sealed class LarkStreamingHandle : StreamingHandle
     private readonly ConversationReference _conversation;
     private readonly string _activityId;
     private readonly MessageContent _template;
-    private readonly HashSet<long> _appliedSequences = [];
-    private readonly List<string> _deltas = [];
+    private readonly SortedDictionary<long, string> _deltasBySequence = [];
     private bool _completed;
 
     public LarkStreamingHandle(
@@ -27,11 +26,11 @@ internal sealed class LarkStreamingHandle : StreamingHandle
     public override async Task AppendAsync(StreamChunk chunk)
     {
         ArgumentNullException.ThrowIfNull(chunk);
-        if (_completed || !_appliedSequences.Add(chunk.SequenceNumber))
+        if (_completed || _deltasBySequence.ContainsKey(chunk.SequenceNumber))
             return;
 
-        _deltas.Add(chunk.Delta ?? string.Empty);
-        await _adapter.UpdateAsync(_conversation, _activityId, BuildMessage(string.Concat(_deltas)), CancellationToken.None);
+        _deltasBySequence[chunk.SequenceNumber] = chunk.Delta ?? string.Empty;
+        await _adapter.UpdateAsync(_conversation, _activityId, BuildMessage(string.Concat(_deltasBySequence.Values)), CancellationToken.None);
     }
 
     public override async Task CompleteAsync(MessageContent final)
@@ -50,7 +49,7 @@ internal sealed class LarkStreamingHandle : StreamingHandle
             return;
 
         _completed = true;
-        var interruptedText = string.Concat(_deltas);
+        var interruptedText = string.Concat(_deltasBySequence.Values);
         if (string.IsNullOrWhiteSpace(interruptedText))
             interruptedText = _template.Text;
         interruptedText = string.IsNullOrWhiteSpace(interruptedText)

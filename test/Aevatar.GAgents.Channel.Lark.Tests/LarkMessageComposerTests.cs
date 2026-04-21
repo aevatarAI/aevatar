@@ -41,4 +41,29 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var native = payload.ShouldBeOfType<LarkOutboundMessage>();
         native.PlainText.Length.ShouldBeLessThanOrEqualTo(maxLength);
     }
+
+    [Fact]
+    public void Compose_WhenTextContainsSurrogatePair_DoesNotSplitTextElement()
+    {
+        var payload = CreateComposer().Compose(
+            new MessageContent
+            {
+                Text = "A🙂B",
+            },
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = new ChannelCapabilities
+                {
+                    MaxMessageLength = 2,
+                },
+            });
+
+        payload.PlainText.ShouldBe("A🙂");
+    }
 }
