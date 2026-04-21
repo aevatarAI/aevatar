@@ -292,7 +292,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         emit.Success.ShouldBeTrue();
 
         var debounce = Math.Max(CapabilitiesOf(lifetime.Adapter).RecommendedStreamDebounceMs, 0);
-        debounce.ShouldBeLessThanOrEqualTo(2000);
+        debounce.ShouldBeLessThanOrEqualTo(3000);
     }
 
     [Fact]

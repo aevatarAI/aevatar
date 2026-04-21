@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>Aevatar.GAgents.Channel.Telegram.Tests</AssemblyName>
+    <RootNamespace>Aevatar.GAgents.Channel.Telegram.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
+    <ProjectReference Include="..\..\agents\channels\Aevatar.GAgents.Channel.Telegram\Aevatar.GAgents.Channel.Telegram.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Testing\Aevatar.GAgents.Channel.Testing.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

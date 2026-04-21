@@ -45,6 +45,26 @@ public sealed class ChannelAbstractionsSurfaceTests
     }
 
     [Fact]
+    public void ConversationReferenceHelpers_ShouldBuildTelegramCanonicalKeys()
+    {
+        var bot = BotInstanceId.From("telegram-bot");
+
+        var direct = ConversationReference.TelegramPrivate(bot, "42");
+        var group = ConversationReference.TelegramGroup(bot, "-1001");
+        var supergroup = ConversationReference.TelegramGroup(bot, "-1002", isSupergroup: true);
+        var channel = ConversationReference.TelegramChannel(bot, "-1003");
+
+        direct.CanonicalKey.ShouldBe("telegram:private:42");
+        direct.Scope.ShouldBe(ConversationScope.DirectMessage);
+        group.CanonicalKey.ShouldBe("telegram:group:-1001");
+        group.Scope.ShouldBe(ConversationScope.Group);
+        supergroup.CanonicalKey.ShouldBe("telegram:supergroup:-1002");
+        supergroup.Scope.ShouldBe(ConversationScope.Group);
+        channel.CanonicalKey.ShouldBe("telegram:channel:-1003");
+        channel.Scope.ShouldBe(ConversationScope.Channel);
+    }
+
+    [Fact]
     public void EmitResultHelpers_ShouldCaptureRetryDelay()
     {
         var sent = EmitResult.Sent("msg-1");
