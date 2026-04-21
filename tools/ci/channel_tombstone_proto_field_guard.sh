@@ -7,12 +7,19 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 # RFC §14.1 Layer 1 guard #4: every tombstone-capable Channel catalog / bot /
-# device registration proto must carry `bool is_deleted`.
+# device registration proto must carry a tombstone marker field.
 #
-# Scope: every .proto file under agents/ (both the new dotted
-# Aevatar.GAgents.Channel.* tree and legacy Aevatar.GAgents.ChannelRuntime/
-# tree). Issue #265 item 1.4 enforces the tombstone contract without
-# carve-outs.
+# Two naming conventions are accepted:
+#   - `bool is_deleted` — used in the new dotted Aevatar.GAgents.Channel.*
+#     abstractions tree (agents/Aevatar.GAgents.Channel.Runtime/protos/**).
+#   - `bool tombstoned` — used in the legacy Aevatar.GAgents.ChannelRuntime
+#     tree and the Channel RFC §7.1.1 projector watermark coordination
+#     pattern. Implementations on that side also carry
+#     `int64 tombstone_state_version`, but only the boolean is enforced
+#     here.
+#
+# Scope: every .proto file under agents/. Issue #265 item 1.4 enforces the
+# tombstone contract without carve-outs.
 #
 # Messages checked:
 #   UserAgentCatalogEntry
@@ -26,6 +33,7 @@ import sys
 
 MESSAGES = ("UserAgentCatalogEntry", "ChannelBotRegistrationEntry", "DeviceRegistrationEntry")
 MESSAGE_PATTERN = re.compile(r"^\s*message\s+(\w+)\s*\{", re.MULTILINE)
+TOMBSTONE_FIELD_PATTERN = re.compile(r"\bbool\s+(is_deleted|tombstoned)\s*=\s*\d+\s*;")
 
 root = Path("agents")
 if not root.is_dir():
@@ -66,13 +74,14 @@ for path in proto_files:
             continue
 
         body = text[body_start + 1:body_end]
-        if not re.search(r"\bbool\s+is_deleted\s*=\s*\d+\s*;", body):
-            violations.append(f"{path}:{message_name}: missing 'bool is_deleted' tombstone field")
+        if not TOMBSTONE_FIELD_PATTERN.search(body):
+            violations.append(
+                f"{path}:{message_name}: missing 'bool is_deleted' or 'bool tombstoned' tombstone field")
 
 if violations:
     for violation in violations:
         print(violation)
-    print("channel_tombstone_proto_field_guard: tombstone proto field 'bool is_deleted' is required.")
+    print("channel_tombstone_proto_field_guard: a tombstone proto field ('bool is_deleted' or 'bool tombstoned') is required.")
     sys.exit(1)
 
 print("channel_tombstone_proto_field_guard: ok")

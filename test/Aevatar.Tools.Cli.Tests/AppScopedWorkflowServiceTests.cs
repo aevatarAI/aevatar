@@ -13,6 +13,7 @@ using System.Text.RegularExpressions;
 
 namespace Aevatar.Tools.Cli.Tests;
 
+#pragma warning disable CS0618
 public sealed class AppScopedWorkflowServiceTests
 {
     [Fact]
@@ -577,3 +578,4 @@ public sealed class AppScopedWorkflowServiceTests
         string ScopeId,
         WorkflowDraft Workflow);
 }
+#pragma warning restore CS0618

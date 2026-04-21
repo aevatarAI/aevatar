@@ -2441,6 +2441,7 @@ const StudioPage: React.FC = () => {
     try {
       const savedWorkflow = await studioApi.saveWorkflow({
         workflowId: activeWorkflowFile?.workflowId || undefined,
+        draftExists: activeWorkflowFile?.draftExists,
         scopeId: resolvedStudioScopeId || undefined,
         directoryId,
         workflowName,

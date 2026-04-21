@@ -26,6 +26,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Testing\Aevatar.GAgents.Channel.Testing.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="test_projector_contracts.proto" GrpcServices="None" />

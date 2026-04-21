@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.GAgents.ChannelRuntime;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
@@ -12,6 +13,9 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 public sealed class RuntimeActorGrainStateStoreTests
 {
+    private const string LegacyUserAgentCatalogStateClrName =
+        "Aevatar.GAgents.ChannelRuntime." + "Agent" + "Registry" + "State";
+
     [Fact]
     public async Task RuntimeActorGrainStateStore_ShouldRoundtripProtobufState()
     {
@@ -60,6 +64,62 @@ public sealed class RuntimeActorGrainStateStoreTests
         var loaded = await store.LoadAsync("actor-1");
 
         loaded.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RuntimeActorGrainStateStore_ShouldLoadLegacyClrTypeName_ForRenamedUserAgentCatalogState()
+    {
+        var runtimeState = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
+        var stateProxy = (RuntimeActorPersistentStateProxy)(object)runtimeState;
+        var stored = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-compat-1",
+                    AgentType = "skill_runner",
+                    TemplateName = "daily_report",
+                },
+            },
+        };
+        stateProxy.State.AgentStateTypeName = LegacyUserAgentCatalogStateClrName;
+        stateProxy.State.AgentStateSnapshot = stored.ToByteArray();
+        var store = new RuntimeActorGrainStateStore<UserAgentCatalogState>(runtimeState);
+
+        var loaded = await store.LoadAsync("actor-1");
+
+        loaded.Should().NotBeNull();
+        loaded!.Entries.Should().ContainSingle(x => x.AgentId == "agent-compat-1");
+    }
+
+    [Fact]
+    public async Task RuntimeActorGrainEventSourcingSnapshotStore_ShouldLoadLegacyClrTypeName_ForRenamedUserAgentCatalogState()
+    {
+        var runtimeState = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
+        var stateProxy = (RuntimeActorPersistentStateProxy)(object)runtimeState;
+        var stored = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-compat-2",
+                    AgentType = "workflow_agent",
+                    TemplateName = "workflow_agent",
+                },
+            },
+        };
+        stateProxy.State.AgentStateTypeName = LegacyUserAgentCatalogStateClrName;
+        stateProxy.State.AgentStateSnapshot = stored.ToByteArray();
+        stateProxy.State.AgentStateSnapshotVersion = 17;
+        var store = new RuntimeActorGrainEventSourcingSnapshotStore<UserAgentCatalogState>(runtimeState);
+
+        var loaded = await store.LoadAsync("actor-1");
+
+        loaded.Should().NotBeNull();
+        loaded!.Version.Should().Be(17);
+        loaded.State.Entries.Should().ContainSingle(x => x.AgentId == "agent-compat-2");
     }
 
     [Fact]

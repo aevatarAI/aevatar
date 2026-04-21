@@ -6,6 +6,7 @@ internal static class WorkflowAgentDefaults
     public const string ActorIdPrefix = "workflow-agent";
     public const string TemplateName = "social_media";
     public const string ProviderName = "nyxid";
+    public const string DefaultPlatform = "lark";
     public const string DefaultTimezone = "UTC";
     public const string StatusRunning = "running";
     public const string StatusError = "error";
