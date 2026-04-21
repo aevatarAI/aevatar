@@ -6,6 +6,7 @@
 
 Authoritative architecture and developer guides. Each covers one topic.
 
+- [[RFC] Aevatar Chat — Multi-Channel Adapter Architecture](canon/aevatar-channel-architecture.md)
 - [Aevatar Foundation](canon/architecture.md)
 - [Workflow Chat API 能力说明（框架层）](canon/chat-api.md)
 - [Connector 配置与执行逻辑](canon/connector.md)
@@ -30,6 +31,9 @@ Immutable records of architectural choices and their rationale.
 - [Orleans Kafka Provider Backend Architecture](decisions/0003-kafka-transport.md)
 - [Workflow 调度 Actor 化 & 多智能体协作演进方案](decisions/0006-multi-agent-evolution.md)
 - [Aevatar Stream Forward 架构说明（2026-02-22）](decisions/0007-stream-forward.md)
+- [Channel Runtime Multi-Token Credential Routing](decisions/0008-channel-runtime-multi-token-routing.md)
+- [Channel Bot Callback Architecture — Lessons from Lark Integration](decisions/0009-channel-bot-callback-architecture.md)
+- [Channel Phase 0 Persistent Provider Validation Result](decisions/0010-channel-phase0-provider-validation.md)
 
 ## History
 
@@ -44,11 +48,14 @@ Point-in-time design snapshots. Not authoritative — for context only.
 
 ### 2026-04
 
+- [2026-04-09-scripting-authority-write-path-cqrs-closure](history/2026-04/2026-04-09-scripting-authority-write-path-cqrs-closure.md)
+- [2026-04-17-nyxid-chat-registry-lifecycle](history/2026-04/2026-04-17-nyxid-chat-registry-lifecycle.md)
 - [claude-code-architecture-learnings](history/2026-04/claude-code-architecture-learnings.md)
 - [nyxid-chat-console-design](history/2026-04/nyxid-chat-console-design.md)
 
 ## Audit Scorecard
 
+- [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates
