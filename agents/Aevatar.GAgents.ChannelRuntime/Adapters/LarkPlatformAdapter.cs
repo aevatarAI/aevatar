@@ -461,8 +461,8 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                              statusProp.ValueKind == JsonValueKind.Number
                     ? statusProp.GetInt32()
                     : (int?)null;
-                var body = root.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() : null;
-                var message = root.TryGetProperty("message", out var messageProp) ? messageProp.GetString() : null;
+                var body = TryReadStringProperty(root, "body");
+                var message = TryReadStringProperty(root, "message");
 
                 if (TryBuildLarkPlatformErrorDetail(body, status, out var detail, out var failureKind))
                 {
@@ -519,19 +519,19 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                 if (code == 0)
                     return false;
 
-                var msg = root.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : null;
+                var msg = TryReadStringProperty(root, "msg");
                 detail = $"lark_code={code}" +
                          (string.IsNullOrWhiteSpace(msg) ? string.Empty : $" msg={msg}");
                 failureKind = ClassifyLarkPlatformError(code, error: null, status);
                 return true;
             }
 
-            var error = root.TryGetProperty("error", out var errorProp) ? errorProp.GetString() : null;
+            var error = TryReadStringProperty(root, "error");
             var errorCode = root.TryGetProperty("error_code", out var errorCodeProp) &&
                             errorCodeProp.ValueKind == JsonValueKind.Number
                 ? errorCodeProp.GetInt32()
                 : 0;
-            var message = root.TryGetProperty("message", out var messageProp) ? messageProp.GetString() : null;
+            var message = TryReadStringProperty(root, "message");
             if (string.IsNullOrWhiteSpace(error) && errorCode == 0 && string.IsNullOrWhiteSpace(message))
                 return false;
 
@@ -547,6 +547,13 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             return false;
         }
     }
+
+    // Avoid JsonElement.GetString() on non-string values (e.g. boolean `error:true`),
+    // which throws InvalidOperationException and escapes the structured-failure flow.
+    private static string? TryReadStringProperty(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
 
     private static PlatformReplyFailureKind ClassifyNyxProxyStatus(int? status) =>
         status switch

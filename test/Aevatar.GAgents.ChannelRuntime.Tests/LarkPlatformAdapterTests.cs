@@ -906,6 +906,30 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
+    public async Task SendReplyAsync_classifies_failure_when_lark_body_uses_boolean_error_field()
+    {
+        // Nyx wraps a non-2xx upstream whose body is {"error": true, "message": "..."}.
+        // The inner `error` is a JSON boolean, not a string, and must not throw.
+        var httpClient = CreateHttpClient(HttpStatusCode.BadRequest, """
+            {"error":true,"message":"upstream refused"}
+            """, out _);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("nyx_status=400 message=upstream refused");
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
+    }
+
+    [Fact]
     public async Task SendReplyAsync_preserves_proxy_exception_message_and_marks_it_transient()
     {
         var httpClient = new HttpClient(new ThrowingHandler(new HttpRequestException("dns failure")))
