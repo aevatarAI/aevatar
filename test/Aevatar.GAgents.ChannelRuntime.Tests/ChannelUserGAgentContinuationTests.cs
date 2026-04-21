@@ -324,6 +324,40 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
+    public async Task HandleChatEnd_ShouldCompletePendingSession_WhenReplyDeliveryPermanentFailure()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark")
+        {
+            FailRepliesRemaining = 1,
+            FailureDetail = "lark_code=230002 msg=Bot not in chat",
+            FailureKind = PlatformReplyFailureKind.Permanent,
+        };
+        var diagnostics = new InMemoryChannelRuntimeDiagnostics();
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore(), diagnostics);
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(BuildInboundEvent());
+
+        var request = runtime.SingleChatRequest();
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageEndEvent
+            {
+                SessionId = request.SessionId,
+                Content = "hello world",
+            }));
+
+        adapter.Replies.Should().ContainSingle();
+        agent.State.PendingSessions.Should().BeEmpty();
+        diagnostics.GetRecent().Select(entry => entry.Stage).Should().Contain("Reply:permanent");
+    }
+
+    [Fact]
     public async Task HandleInbound_DailyReportIntent_ShouldSendInteractiveBuilderCard()
     {
         var runtime = new RecordingActorRuntime();
@@ -1925,6 +1959,7 @@ public class ChannelUserGAgentContinuationTests
         public List<ReplyRecord> Replies { get; } = [];
         public int FailRepliesRemaining { get; set; }
         public string FailureDetail { get; set; } = "reply_rejected";
+        public PlatformReplyFailureKind FailureKind { get; set; } = PlatformReplyFailureKind.None;
 
         public Task<IResult?> TryHandleVerificationAsync(HttpContext http, ChannelBotRegistrationEntry registration) =>
             Task.FromResult<IResult?>(null);
@@ -1944,7 +1979,7 @@ public class ChannelUserGAgentContinuationTests
             if (FailRepliesRemaining > 0)
             {
                 FailRepliesRemaining--;
-                return Task.FromResult(new PlatformReplyDeliveryResult(false, FailureDetail));
+                return Task.FromResult(new PlatformReplyDeliveryResult(false, FailureDetail, FailureKind));
             }
 
             return Task.FromResult(new PlatformReplyDeliveryResult(true, "ok"));

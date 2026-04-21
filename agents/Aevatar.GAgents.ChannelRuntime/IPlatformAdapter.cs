@@ -37,6 +37,16 @@ public interface IPlatformAdapter
         CancellationToken ct);
 }
 
+// Today only Permanent changes ChannelUserGAgent completion behavior.
+// Transient and None both keep the session open for the normal timeout retry path.
+public enum PlatformReplyFailureKind
+{
+    None = 0,
+    Transient = 1,
+    Permanent = 2,
+}
+
 public readonly record struct PlatformReplyDeliveryResult(
     bool Succeeded,
-    string? Detail = null);
+    string? Detail = null,
+    PlatformReplyFailureKind FailureKind = PlatformReplyFailureKind.None);

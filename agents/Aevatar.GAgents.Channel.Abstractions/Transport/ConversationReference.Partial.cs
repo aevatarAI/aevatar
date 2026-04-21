@@ -8,6 +8,10 @@ public sealed partial class ConversationReference
     /// <summary>
     /// Creates one normalized conversation reference from deterministic canonical-key segments.
     /// </summary>
+    /// <remarks>
+    /// Callers must provide at least one deterministic segment beyond the channel id so the canonical key remains stable
+    /// for routing and deduplication.
+    /// </remarks>
     public static ConversationReference Create(
         ChannelId channel,
         BotInstanceId bot,
@@ -30,6 +34,12 @@ public sealed partial class ConversationReference
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(segments);
+        if (segments.Length == 0)
+        {
+            throw new ArgumentException(
+                "Canonical key must include at least one deterministic segment beyond the channel id.",
+                nameof(segments));
+        }
 
         var normalized = new List<string> { NormalizeSegment(channel.Value, nameof(channel)) };
         for (var i = 0; i < segments.Length; i++)
