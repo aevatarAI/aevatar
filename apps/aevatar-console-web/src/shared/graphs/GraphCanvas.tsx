@@ -55,6 +55,19 @@ type GraphCanvasProps = {
   onNodeLayoutChange?: (nodes: Node[]) => void;
 };
 
+const SELF_MANAGED_SELECTION_CLASS = 'graph-canvas-self-managed-selection';
+const selfManagedSelectionCss = `
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS},
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS}.selected,
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS}:focus,
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS}:focus-visible {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+`;
+
 const STUDIO_NODE_ICON_BY_CATEGORY: Record<
   string,
   React.ComponentType<{ style?: React.CSSProperties }>
@@ -274,7 +287,17 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     () =>
       localNodes.map((node) => {
         const isSelected = node.id === selectedNodeId;
+        const managesOwnSelection = node.className
+          ?.split(' ')
+          .includes(SELF_MANAGED_SELECTION_CLASS);
         if (isStudioVariant) {
+          return {
+            ...node,
+            selected: isSelected,
+          };
+        }
+
+        if (managesOwnSelection) {
           return {
             ...node,
             selected: isSelected,
@@ -339,6 +362,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         width: '100%',
       }}
     >
+      {!isStudioVariant ? <style>{selfManagedSelectionCss}</style> : null}
       <ReactFlow
         onInit={setFlowInstance}
         nodes={decoratedNodes}
