@@ -110,3 +110,17 @@ internal sealed class LarkConversationInboxRuntime :
             _services);
     }
 }
+
+internal sealed class LarkConversationInboxHostedService : IHostedService
+{
+    private readonly LarkConversationInboxRuntime _runtime;
+
+    public LarkConversationInboxHostedService(LarkConversationInboxRuntime runtime)
+    {
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+    }
+
+    public Task StartAsync(CancellationToken ct) => _runtime.StartAsync(ct);
+
+    public Task StopAsync(CancellationToken ct) => _runtime.StopAsync(ct);
+}
