@@ -46,6 +46,43 @@ public sealed class AppStudioAuthEndpointTests
         payload.ScopeSource.Should().Be("claim:scope_id");
     }
 
+    [Fact]
+    public async Task AuthMeEndpoint_ShouldReturnBearerTokenMode_WhenUnauthenticated()
+    {
+        await using var host = await StudioAuthTestHost.StartAsync(
+            authenticated: false,
+            resolvedScopeId: null);
+
+        var payload = await host.Client.GetFromJsonAsync<AppAuthMeResponse>("/api/auth/me");
+
+        payload.Should().NotBeNull();
+        payload!.Enabled.Should().BeTrue();
+        payload.Authenticated.Should().BeFalse();
+        payload.InvokeAuthMode.Should().Be("bearer-token");
+        payload.ExternalCallerHint.Should().Contain("Sign in with");
+        payload.LoginUrl.Should().Be("/auth/login?returnUrl=%2F");
+        payload.LogoutUrl.Should().Be("/auth/logout?returnUrl=%2F");
+    }
+
+    [Fact]
+    public async Task AuthMeEndpoint_ShouldReturnAnonymousMode_WhenAuthIsDisabled()
+    {
+        await using var host = await StudioAuthTestHost.StartAsync(
+            authenticated: false,
+            resolvedScopeId: null,
+            enableAuth: false);
+
+        var payload = await host.Client.GetFromJsonAsync<AppAuthMeResponse>("/api/auth/me");
+
+        payload.Should().NotBeNull();
+        payload!.Enabled.Should().BeFalse();
+        payload.Authenticated.Should().BeFalse();
+        payload.InvokeAuthMode.Should().Be("anonymous");
+        payload.ExternalCallerHint.Should().Contain("without authentication");
+        payload.LoginUrl.Should().BeNull();
+        payload.LogoutUrl.Should().BeNull();
+    }
+
     private sealed class StudioAuthTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
@@ -60,19 +97,26 @@ public sealed class AppStudioAuthEndpointTests
 
         public static async Task<StudioAuthTestHost> StartAsync(
             bool authenticated,
-            string? resolvedScopeId)
+            string? resolvedScopeId,
+            bool enableAuth = true)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
                 EnvironmentName = Environments.Development,
             });
             builder.WebHost.UseUrls("http://127.0.0.1:0");
-            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+
+            if (enableAuth)
             {
-                ["Aevatar:Authentication:Enabled"] = "true",
-                ["Aevatar:Authentication:Authority"] = "https://nyx.example.com",
-                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
-            });
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = "true",
+                    ["Aevatar:Authentication:Authority"] = "https://nyx.example.com",
+                    ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+                });
+                builder.Services.AddAuthentication("Test")
+                    .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
+            }
 
             builder.Services.AddSingleton<IAppScopeResolver>(new StubAppScopeResolver(resolvedScopeId));
             builder.Services.AddSingleton(new AevatarHostMetadata
@@ -80,11 +124,10 @@ public sealed class AppStudioAuthEndpointTests
                 ServiceName = "test-studio-auth",
             });
             builder.Services.AddSingleton<AevatarHostHealthService>();
-            builder.Services.AddAuthentication("Test")
-                .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
 
             var app = builder.Build();
-            app.UseAuthentication();
+            if (enableAuth)
+                app.UseAuthentication();
             app.Use(async (http, next) =>
             {
                 if (authenticated)
