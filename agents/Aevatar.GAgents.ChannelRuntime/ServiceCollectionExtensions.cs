@@ -195,8 +195,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
         services.TryAddSingleton<LarkConversationInboxRuntime>();
         services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService>(sp =>
-            sp.GetRequiredService<LarkConversationInboxRuntime>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, LarkConversationInboxHostedService>());
 
         return services;
     }
