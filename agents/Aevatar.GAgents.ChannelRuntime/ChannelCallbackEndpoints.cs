@@ -19,8 +19,10 @@ public static class ChannelCallbackEndpoints
     {
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
-        // Platform callback — receives webhooks directly from platforms (anonymous: platforms call this)
-        group.MapPost("/{platform}/callback/{registrationId}", HandleCallbackAsync);
+        // Platform callback — receives webhooks directly from platforms. These are invoked by
+        // external services (Lark, Telegram, …) without our JWT, so they must remain anonymous
+        // even after the host applies an authenticated-by-default fallback policy.
+        group.MapPost("/{platform}/callback/{registrationId}", HandleCallbackAsync).AllowAnonymous();
 
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();

@@ -604,6 +604,8 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
         public AppScopeContext? Resolve(HttpContext? httpContext = null) =>
             ScopeIdToReturn is null ? null : new AppScopeContext(ScopeIdToReturn, "test");
+
+        public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
     }
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
