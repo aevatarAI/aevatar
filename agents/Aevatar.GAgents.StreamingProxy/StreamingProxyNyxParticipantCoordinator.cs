@@ -208,7 +208,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                         AgentId = participant.ParticipantId,
                         AgentName = participant.DisplayName,
                         Content = content,
-                        SessionId = $"{sessionId}:{participant.ParticipantId}:round-{round}",
+                        SessionId = sessionId,
                     }, ct);
                 }
                 catch (OperationCanceledException)

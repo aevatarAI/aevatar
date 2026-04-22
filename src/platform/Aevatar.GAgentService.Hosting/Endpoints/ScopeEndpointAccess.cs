@@ -60,6 +60,9 @@ internal static class ScopeEndpointAccess
         ArgumentNullException.ThrowIfNull(http);
 
         message = string.Empty;
+        if (!ScopeEndpointRouteGroups.IsAuthenticationEnabled(http.RequestServices))
+            return false;
+
         if (http.User?.Identity?.IsAuthenticated != true)
         {
             message = "Authentication is required.";

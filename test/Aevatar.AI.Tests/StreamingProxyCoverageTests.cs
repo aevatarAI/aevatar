@@ -232,11 +232,69 @@ public class StreamingProxyCoverageTests
         cts.Cancel();
         await task;
 
-        projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "room-a");
+        projectionPort.EnsureCalls.Should().ContainSingle(x =>
+            x.actorId == "room-a" &&
+            x.projectionKind == StreamingProxyProjectionKinds.RoomSubscriptionSession);
+        projectionPort.EnsureCalls.Single().sessionId.Should().NotBeNullOrWhiteSpace();
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("AGENT_MESSAGE");
         body.Should().Contain("hello from projection");
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomSessionEventProjector_ShouldIgnoreDifferentChatSessionEvents()
+    {
+        var sessionHub = new RecordingRoomSessionEventHub();
+        var projector = new StreamingProxyRoomSessionEventProjector(sessionHub);
+        var context = new StreamingProxyRoomSessionProjectionContext
+        {
+            RootActorId = "room-a",
+            SessionId = "session-1",
+            ProjectionKind = StreamingProxyProjectionKinds.RoomChatSession,
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CreateTopologyEnvelope(new GroupChatMessageEvent
+            {
+                AgentId = "agent-2",
+                AgentName = "Bob",
+                Content = "not for this run",
+                SessionId = "session-2",
+            }),
+            CancellationToken.None);
+
+        sessionHub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomSessionEventProjector_ShouldPublishAllRoomEvents_ForSubscriptionScopedSession()
+    {
+        var sessionHub = new RecordingRoomSessionEventHub();
+        var projector = new StreamingProxyRoomSessionEventProjector(sessionHub);
+        var context = new StreamingProxyRoomSessionProjectionContext
+        {
+            RootActorId = "room-a",
+            SessionId = "sub-1",
+            ProjectionKind = StreamingProxyProjectionKinds.RoomSubscriptionSession,
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CreateTopologyEnvelope(new GroupChatMessageEvent
+            {
+                AgentId = "agent-2",
+                AgentName = "Bob",
+                Content = "visible to passive subscribers",
+                SessionId = "session-2",
+            }),
+            CancellationToken.None);
+
+        var published = sessionHub.Published.Should().ContainSingle().Subject;
+        published.ScopeId.Should().Be("room-a");
+        published.SessionId.Should().Be("sub-1");
+        published.Event.Envelope.Should().NotBeNull();
     }
 
     [Fact]
@@ -1064,7 +1122,7 @@ public class StreamingProxyCoverageTests
 
         public bool ProjectionEnabled => true;
 
-        public List<(string actorId, string sessionId)> EnsureCalls { get; } = [];
+        public List<(string actorId, string sessionId, string projectionKind)> EnsureCalls { get; } = [];
 
         public TaskCompletionSource<bool> Attached { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1074,9 +1132,34 @@ public class StreamingProxyCoverageTests
             string sessionId,
             CancellationToken ct = default)
         {
+            return EnsureProjectionAsync(actorId, sessionId, StreamingProxyProjectionKinds.RoomChatSession, ct);
+        }
+
+        public Task<IStreamingProxyRoomSessionProjectionLease?> EnsureChatProjectionAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            return EnsureProjectionAsync(actorId, sessionId, StreamingProxyProjectionKinds.RoomChatSession, ct);
+        }
+
+        public Task<IStreamingProxyRoomSessionProjectionLease?> EnsureSubscriptionProjectionAsync(
+            string actorId,
+            string subscriptionId,
+            CancellationToken ct = default)
+        {
+            return EnsureProjectionAsync(actorId, subscriptionId, StreamingProxyProjectionKinds.RoomSubscriptionSession, ct);
+        }
+
+        private Task<IStreamingProxyRoomSessionProjectionLease?> EnsureProjectionAsync(
+            string actorId,
+            string sessionId,
+            string projectionKind,
+            CancellationToken ct)
+        {
             _ = ct;
 
-            EnsureCalls.Add((actorId, sessionId));
+            EnsureCalls.Add((actorId, sessionId, projectionKind));
             _lease = new StubRoomSessionProjectionLease(actorId, sessionId);
             return Task.FromResult<IStreamingProxyRoomSessionProjectionLease?>(_lease);
         }
@@ -1126,6 +1209,41 @@ public class StreamingProxyCoverageTests
                 },
                 ct);
         }
+    }
+
+    private sealed class RecordingRoomSessionEventHub
+        : IProjectionSessionEventHub<StreamingProxyRoomSessionEnvelope>
+    {
+        public List<(string ScopeId, string SessionId, StreamingProxyRoomSessionEnvelope Event)> Published { get; } = [];
+
+        public Task PublishAsync(
+            string scopeId,
+            string sessionId,
+            StreamingProxyRoomSessionEnvelope evt,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            Published.Add((scopeId, sessionId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            string scopeId,
+            string sessionId,
+            Func<StreamingProxyRoomSessionEnvelope, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            _ = scopeId;
+            _ = sessionId;
+            _ = handler;
+            _ = ct;
+            return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+        }
+    }
+
+    private sealed class NoopAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed record StubRoomSessionProjectionLease(string ActorId, string SessionId)

@@ -195,7 +195,7 @@ public static class StreamingProxyEndpoints
             var sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
             var projectionLease = await roomSessionProjectionPort.EnsureAndAttachAsync(
-                token => roomSessionProjectionPort.EnsureRoomProjectionAsync(actor.Id, sessionId, token),
+                token => roomSessionProjectionPort.EnsureChatProjectionAsync(actor.Id, sessionId, token),
                 eventChannel,
                 ct);
             if (projectionLease == null)
@@ -420,7 +420,7 @@ public static class StreamingProxyEndpoints
             var sessionId = Guid.NewGuid().ToString("N");
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
             var projectionLease = await roomSessionProjectionPort.EnsureAndAttachAsync(
-                token => roomSessionProjectionPort.EnsureRoomProjectionAsync(actor.Id, sessionId, token),
+                token => roomSessionProjectionPort.EnsureSubscriptionProjectionAsync(actor.Id, sessionId, token),
                 eventChannel,
                 ct);
             if (projectionLease == null)

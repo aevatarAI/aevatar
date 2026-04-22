@@ -38,7 +38,7 @@ public static class ScopeServiceEndpoints
 {
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/scopes").WithTags("ScopeServices").RequireAuthorization();
+        var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeServices");
         group.MapPost("/{scopeId}/workflow/draft-run", HandleDraftRunAsync);
         group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync);
         group.MapGet("/{scopeId}/binding", HandleGetBindingAsync);
@@ -1104,7 +1104,7 @@ public static class ScopeServiceEndpoints
         var inputPayload = Any.Pack(chatRequest);
         var eventChannel = new EventChannel<EventEnvelope>();
         var projectionLease = await scriptExecutionProjectionPort.EnsureAndAttachAsync(
-            token => scriptExecutionProjectionPort.EnsureActorProjectionAsync(actorId, token),
+            token => scriptExecutionProjectionPort.EnsureRunProjectionAsync(actorId, runId, token),
             eventChannel,
             ct);
         if (projectionLease == null)

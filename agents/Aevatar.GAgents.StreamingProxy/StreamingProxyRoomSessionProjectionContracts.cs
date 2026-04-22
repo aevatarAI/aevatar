@@ -15,5 +15,16 @@ public interface IStreamingProxyRoomSessionProjectionPort
     Task<IStreamingProxyRoomSessionProjectionLease?> EnsureRoomProjectionAsync(
         string actorId,
         string sessionId,
+        CancellationToken ct = default) =>
+        EnsureChatProjectionAsync(actorId, sessionId, ct);
+
+    Task<IStreamingProxyRoomSessionProjectionLease?> EnsureChatProjectionAsync(
+        string actorId,
+        string sessionId,
+        CancellationToken ct = default);
+
+    Task<IStreamingProxyRoomSessionProjectionLease?> EnsureSubscriptionProjectionAsync(
+        string actorId,
+        string subscriptionId,
         CancellationToken ct = default);
 }

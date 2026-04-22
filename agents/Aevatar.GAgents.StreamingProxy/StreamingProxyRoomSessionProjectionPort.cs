@@ -29,13 +29,38 @@ public sealed class StreamingProxyRoomSessionProjectionPort
         string sessionId,
         CancellationToken ct = default)
     {
+        return await EnsureChatProjectionAsync(actorId, sessionId, ct);
+    }
+
+    public async Task<IStreamingProxyRoomSessionProjectionLease?> EnsureChatProjectionAsync(
+        string actorId,
+        string sessionId,
+        CancellationToken ct = default)
+    {
+        return await EnsureProjectionAsync(actorId, sessionId, StreamingProxyProjectionKinds.RoomChatSession, ct);
+    }
+
+    public async Task<IStreamingProxyRoomSessionProjectionLease?> EnsureSubscriptionProjectionAsync(
+        string actorId,
+        string subscriptionId,
+        CancellationToken ct = default)
+    {
+        return await EnsureProjectionAsync(actorId, subscriptionId, StreamingProxyProjectionKinds.RoomSubscriptionSession, ct);
+    }
+
+    private async Task<IStreamingProxyRoomSessionProjectionLease?> EnsureProjectionAsync(
+        string actorId,
+        string sessionId,
+        string projectionKind,
+        CancellationToken ct)
+    {
         await _currentStateProjectionPort.EnsureProjectionForActorAsync(actorId, ct);
 
         return await EnsureProjectionAsync(
             new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = StreamingProxyProjectionKinds.RoomSession,
+                ProjectionKind = projectionKind,
                 Mode = ProjectionRuntimeMode.SessionObservation,
                 SessionId = sessionId,
             },

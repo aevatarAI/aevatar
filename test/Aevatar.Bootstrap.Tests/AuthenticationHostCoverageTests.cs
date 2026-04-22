@@ -37,7 +37,7 @@ public class AuthenticationHostCoverageTests
     }
 
     [Fact]
-    public void AddAevatarAuthentication_WhenDisabled_ShouldSkipAuthenticationRegistration()
+    public async Task AddAevatarAuthentication_WhenDisabled_ShouldRegisterFallbackAuthenticationSchemeWithoutClaimsTransformation()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -50,9 +50,12 @@ public class AuthenticationHostCoverageTests
         var provider = app.Services;
 
         using var scope = provider.CreateScope();
-        scope.ServiceProvider.GetService<IAuthenticationService>().Should().BeNull();
+        scope.ServiceProvider.GetService<IAuthenticationService>().Should().NotBeNull();
+        var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
+        (await schemeProvider.GetDefaultAuthenticateSchemeAsync()).Should().NotBeNull();
+        (await schemeProvider.GetDefaultChallengeSchemeAsync()).Should().NotBeNull();
         scope.ServiceProvider.GetServices<IClaimsTransformation>()
-            .Should().BeEmpty();
+            .Should().NotContain(x => x.GetType().Name == "AevatarClaimsTransformation");
     }
 
     [Fact]

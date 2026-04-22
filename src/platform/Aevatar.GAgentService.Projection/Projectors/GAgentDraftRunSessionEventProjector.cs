@@ -26,6 +26,9 @@ public sealed class GAgentDraftRunSessionEventProjector
         if (string.IsNullOrWhiteSpace(context.SessionId))
             return EmptyEntries;
 
+        if (!string.Equals(envelope.Propagation?.CorrelationId, context.SessionId, StringComparison.Ordinal))
+            return EmptyEntries;
+
         var mapped = ScopeGAgentAguiEventMapper.TryMap(envelope);
         if (mapped == null)
             return EmptyEntries;
