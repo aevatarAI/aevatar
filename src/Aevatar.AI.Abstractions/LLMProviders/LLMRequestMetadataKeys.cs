@@ -5,6 +5,7 @@ public static class LLMRequestMetadataKeys
     public const string RequestId = "aevatar.request_id";
     public const string CallId = "aevatar.call_id";
     public const string NyxIdAccessToken = "nyxid.access_token";
+    public const string NyxIdRefreshToken = "nyxid.refresh_token";
     public const string NyxIdOrgToken = "nyxid.org_token";
     public const string NyxIdRoutePreference = "nyxid.route_preference";
     public const string ModelOverride = "aevatar.model_override";

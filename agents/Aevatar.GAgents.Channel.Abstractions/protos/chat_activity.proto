@@ -226,6 +226,20 @@ message CardBlock {
   repeated ActionElement actions = 7;
 }
 
+// Carries one strongly-typed card action callback submitted by the user.
+message CardActionSubmission {
+  // The stable action identifier submitted by the card callback.
+  string action_id = 1;
+  // The primary submitted value when the callback includes one explicit scalar value.
+  string submitted_value = 2;
+  // Additional scalar arguments submitted with the callback action payload.
+  map<string, string> arguments = 3;
+  // Scalar form fields submitted alongside the callback action.
+  map<string, string> form_fields = 4;
+  // The platform-native source message identifier for the card being acted on.
+  string source_message_id = 5;
+}
+
 // Carries the channel-agnostic message content used for send, update, and reply operations.
 message MessageContent {
   // The primary text body.
@@ -238,6 +252,8 @@ message MessageContent {
   repeated CardBlock cards = 4;
   // The requested delivery disposition.
   MessageDisposition disposition = 5;
+  // The strongly-typed card action callback payload when the activity is a card action.
+  CardActionSubmission card_action = 6;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

@@ -6,11 +6,14 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.Channel.Lark;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -24,9 +27,16 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddChannelRuntime(
         this IServiceCollection services, IConfiguration? configuration = null)
     {
-        // Memory cache for webhook dedup
-        services.AddMemoryCache();
+        Aevatar.GAgents.Channel.Runtime.ChannelRuntimeServiceCollectionExtensions.AddChannelRuntime(services);
+
+        services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
+        services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, EventStoreProjectionScopeWatermarkQueryPort>();
+        if (configuration != null)
+        {
+            services.Configure<ChannelRuntimeTombstoneCompactionOptions>(
+                configuration.GetSection("ChannelRuntime:TombstoneCompaction"));
+        }
 
         // Projection pipeline shared infrastructure
         services.AddProjectionReadModelRuntime();
@@ -52,6 +62,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>,
             DeviceRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IDeviceRegistrationQueryPort, DeviceRegistrationQueryPort>();
+        services.TryAddSingleton<DeviceRegistrationProjectionPort>();
+        services.AddHostedService<DeviceRegistrationStartupService>();
 
         if (useElasticsearch)
         {
@@ -81,10 +93,18 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ChannelBotRegistrationMaterializationContext,
             ChannelBotRegistrationProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ChannelBotRegistrationMaterializationContext,
+            ChannelBotDirectCallbackBindingProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotDirectCallbackBindingDocument>,
+            ChannelBotDirectCallbackBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
+        services.TryAddSingleton<ChannelPlatformReplyService>();
+        services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)
@@ -94,44 +114,64 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
-        }
-        else
-        {
-            services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
-                static doc => doc.Id, static key => key);
-        }
-
-        // ─── Agent Registry projection pipeline ───
-        services.AddProjectionMaterializationRuntimeCore<
-            AgentRegistryMaterializationContext,
-            AgentRegistryMaterializationRuntimeLease,
-            ProjectionMaterializationScopeGAgent<AgentRegistryMaterializationContext>>(
-            static scopeKey => new AgentRegistryMaterializationContext
-            {
-                RootActorId = scopeKey.RootActorId,
-                ProjectionKind = scopeKey.ProjectionKind,
-            },
-            static context => new AgentRegistryMaterializationRuntimeLease(context));
-        services.AddCurrentStateProjectionMaterializer<
-            AgentRegistryMaterializationContext,
-            AgentRegistryProjector>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentRegistryDocument>,
-            AgentRegistryDocumentMetadataProvider>();
-        services.TryAddSingleton<IAgentRegistryQueryPort, AgentRegistryQueryPort>();
-        services.TryAddSingleton<AgentRegistryProjectionPort>();
-        services.AddHostedService<AgentRegistryStartupService>();
-
-        if (useElasticsearch)
-        {
-            services.AddElasticsearchDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddElasticsearchDocumentProjectionStore<ChannelBotDirectCallbackBindingDocument, string>(
                 optionsFactory: _ => BuildElasticsearchOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AgentRegistryDocument>>().Metadata,
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotDirectCallbackBindingDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<AgentRegistryDocument, string>(
+            services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<ChannelBotDirectCallbackBindingDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
+
+        // ─── User Agent Catalog projection pipeline ───
+        services.AddProjectionMaterializationRuntimeCore<
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<UserAgentCatalogMaterializationContext>>(
+            static scopeKey => new UserAgentCatalogMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new UserAgentCatalogMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogNyxCredentialProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
+            UserAgentCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
+            UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
+        services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
+        services.TryAddSingleton<IUserAgentCatalogRuntimeQueryPort, UserAgentCatalogRuntimeQueryPort>();
+        services.TryAddSingleton<UserAgentCatalogProjectionPort>();
+        services.AddHostedService<UserAgentCatalogStartupService>();
+
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 
@@ -148,6 +188,30 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
+        services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
+        services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
+
+        services.AddHttpClient(LarkConversationHostDefaults.HttpClientName, client =>
+        {
+            client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
+        });
+        services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<LarkPayloadRedactor>();
+        services.TryAddSingleton<LarkConversationAdapterFactory>();
+        services.TryAddSingleton<ConversationDispatchMiddleware>();
+        services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, LarkConversationTurnRunner>());
+        services.Replace(ServiceDescriptor.Singleton(_ => new MiddlewarePipelineBuilder()
+            .Use<TracingMiddleware>()
+            .Use<LoggingMiddleware>()
+            .Use<ConversationResolverMiddleware>()
+            .Use<ConversationDispatchMiddleware>()));
+        services.TryAddSingleton<ChannelPipeline>(sp => sp.GetRequiredService<MiddlewarePipelineBuilder>().Build(sp));
+        services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+        services.TryAddSingleton<LarkConversationInboxRuntime>();
+        services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService>(sp =>
+            sp.GetRequiredService<LarkConversationInboxRuntime>()));
+        services.TryAddSingleton<ILarkConversationIngressRuntime, LarkConversationIngressRuntime>();
 
         return services;
     }

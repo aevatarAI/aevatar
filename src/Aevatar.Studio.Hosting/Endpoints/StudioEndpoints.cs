@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
@@ -23,23 +24,29 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 
 internal static class StudioEndpoints
 {
+    private const string AuthenticationSectionName = "Aevatar:Authentication";
+
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
         app.MapGet("/api/auth/me", HandleGetAuthMeAsync)
-            .Produces<AppAuthMeResponse>(StatusCodes.Status200OK);
+            .Produces<AppAuthMeResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapGet("/api/health", HandleGetHealthAsync)
             .WithTags("Health")
             .WithName("GetAppHealth")
             .WithSummary("Get readiness status for the current app-facing API surface.")
             .Produces<AevatarHealthResponse>(StatusCodes.Status200OK)
-            .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable);
+            .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable)
+            .AllowAnonymous();
         app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode))
-            .Produces<AppContextResponse>(StatusCodes.Status200OK);
+            .Produces<AppContextResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapGet("/api/studio/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode))
             .WithTags("Studio")
-            .Produces<AppContextResponse>(StatusCodes.Status200OK);
+            .Produces<AppContextResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapPost("/api/app/workflow-generator", (
             HttpContext http,
             AppWorkflowGenerateRequest request,
@@ -182,17 +189,100 @@ internal static class StudioEndpoints
         var scopeResolver = http.RequestServices.GetService<IAppScopeResolver>();
         var scope = scopeResolver?.Resolve(http);
         var schemeProvider = http.RequestServices.GetService<IAuthenticationSchemeProvider>();
-        var authEnabled = schemeProvider != null &&
-                          (await schemeProvider.GetAllSchemesAsync())
-                          .Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
+        var configuration = http.RequestServices.GetService<IConfiguration>();
+        var schemes = schemeProvider == null
+            ? Array.Empty<AuthenticationScheme>()
+            : (await schemeProvider.GetAllSchemesAsync()).ToArray();
+        var authEnabled = schemes.Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
+        var providerDisplayName = ResolveAuthProviderDisplayName(configuration, schemes);
+        var loginUrl = authEnabled
+            ? AppApiErrors.BuildLoginUrl("/")
+            : null;
+        var logoutUrl = authEnabled
+            ? BuildLogoutUrl("/")
+            : null;
+        var invokeAuthMode = ResolveInvokeAuthMode(authEnabled, isAuthenticated);
+        var externalCallerHint = BuildExternalCallerHint(
+            providerDisplayName,
+            authEnabled,
+            invokeAuthMode);
 
         return new AppAuthMeResponse(
             Enabled: authEnabled,
             Authenticated: isAuthenticated,
+            ProviderDisplayName: providerDisplayName,
+            LoginUrl: loginUrl,
+            LogoutUrl: logoutUrl,
             Name: user?.Identity?.Name,
             Email: user?.FindFirst("email")?.Value,
+            InvokeAuthMode: invokeAuthMode,
+            ExternalCallerHint: externalCallerHint,
             ScopeId: scope?.ScopeId,
             ScopeSource: scope?.Source);
+    }
+
+    private static string? ResolveAuthProviderDisplayName(
+        IConfiguration? configuration,
+        IReadOnlyList<AuthenticationScheme> schemes)
+    {
+        var nyxIdAuthority = configuration?["Cli:App:NyxId:Authority"]
+            ?? configuration?["Aevatar:NyxId:Authority"]
+            ?? configuration?[$"{AuthenticationSectionName}:Authority"];
+        if (!string.IsNullOrWhiteSpace(nyxIdAuthority) &&
+            nyxIdAuthority.Contains("nyx", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NyxID";
+        }
+
+        if (schemes.Count == 0)
+            return null;
+
+        var scheme = schemes
+            .FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.DisplayName) || !string.IsNullOrWhiteSpace(item.Name));
+        if (scheme == null)
+            return null;
+
+        var displayName = string.IsNullOrWhiteSpace(scheme.DisplayName)
+            ? scheme.Name
+            : scheme.DisplayName;
+        return string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
+    }
+
+    private static string BuildLogoutUrl(string returnUrl)
+    {
+        var normalizedReturnUrl = string.IsNullOrWhiteSpace(returnUrl)
+            ? "/"
+            : returnUrl.Trim();
+        return $"/auth/logout?returnUrl={Uri.EscapeDataString(normalizedReturnUrl)}";
+    }
+
+    private static string ResolveInvokeAuthMode(bool authEnabled, bool isAuthenticated) =>
+        !authEnabled
+            ? "anonymous"
+            : isAuthenticated
+                ? "studio-session"
+                : "bearer-token";
+
+    private static string? BuildExternalCallerHint(
+        string? providerDisplayName,
+        bool authEnabled,
+        string invokeAuthMode)
+    {
+        if (!authEnabled)
+            return "Invoke requests are accepted without authentication.";
+
+        var providerLabel = string.IsNullOrWhiteSpace(providerDisplayName)
+            ? "the configured identity provider"
+            : providerDisplayName.Trim();
+        return invokeAuthMode switch
+        {
+            "studio-session" =>
+                $"Studio invoke uses your current {providerLabel} session. External callers should send Authorization: Bearer <token> from the same provider.",
+            "bearer-token" =>
+                $"Sign in with {providerLabel} to establish a Studio session, or call the invoke endpoints directly with Authorization: Bearer <token>.",
+            _ =>
+                $"Use {providerLabel} credentials when the invoke endpoints require authentication.",
+        };
     }
 
     private static async Task<IResult> HandleGetHealthAsync(
@@ -1137,8 +1227,13 @@ internal static class StudioEndpoints
 public sealed record AppAuthMeResponse(
     bool Enabled,
     bool Authenticated,
+    string? ProviderDisplayName,
+    string? LoginUrl,
+    string? LogoutUrl,
     string? Name,
     string? Email,
+    string? InvokeAuthMode,
+    string? ExternalCallerHint,
     string? ScopeId,
     string? ScopeSource);
 

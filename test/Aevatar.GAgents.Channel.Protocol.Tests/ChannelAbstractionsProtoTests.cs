@@ -35,6 +35,12 @@ public sealed class ChannelAbstractionsProtoTests
             {
                 Text = "hello",
                 Disposition = MessageDisposition.Ephemeral,
+                CardAction = new CardActionSubmission
+                {
+                    ActionId = "approve",
+                    SubmittedValue = "true",
+                    SourceMessageId = "om_123",
+                },
             },
             ReplyToActivityId = "orig-1",
             RawPayloadBlobRef = "blob://payload/1",
@@ -73,12 +79,15 @@ public sealed class ChannelAbstractionsProtoTests
         var parsed = ChatActivity.Parser.ParseFrom(activity.ToByteArray());
 
         parsed.ShouldBe(activity);
+        parsed.Content.CardAction.ActionId.ShouldBe("approve");
         parsed.Content.Actions[0].Kind.ShouldBe(ActionElementKind.Button);
         parsed.Conversation.Scope.ShouldBe(ConversationScope.Thread);
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ChatActivity));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(MessageContent));
+        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(CardActionSubmission));
     }
 
     [Fact]

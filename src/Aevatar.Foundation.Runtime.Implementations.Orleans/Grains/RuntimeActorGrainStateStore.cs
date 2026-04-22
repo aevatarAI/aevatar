@@ -1,4 +1,5 @@
 using Orleans.Runtime;
+using Aevatar.Foundation.Core.Compatibility;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
@@ -37,7 +38,7 @@ internal sealed class RuntimeActorGrainStateStore<TState>
             return Task.FromResult<TState?>(null);
 
         // Snapshot belongs to another state type (e.g. actor type migrated).
-        if (!string.Equals(_runtimeState.State.AgentStateTypeName, StateTypeName, StringComparison.Ordinal))
+        if (!ProtobufContractCompatibility.IsCompatibleClrTypeName<TState>(_runtimeState.State.AgentStateTypeName))
             return Task.FromResult<TState?>(null);
 
         var state = new TState();

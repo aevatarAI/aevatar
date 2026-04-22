@@ -74,10 +74,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        var queryPort = _serviceProvider.GetService<IAgentRegistryQueryPort>();
+        var queryPort = _serviceProvider.GetService<IUserAgentCatalogRuntimeQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
         if (queryPort is null || actorRuntime is null)
-            return """{"error":"Agent delivery target runtime not available. IAgentRegistryQueryPort or IActorRuntime not registered in DI."}""";
+            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogRuntimeQueryPort or IActorRuntime not registered in DI."}""";
 
         using var doc = JsonDocument.Parse(argumentsJson);
         var root = doc.RootElement;
@@ -124,7 +124,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         return false;
     }
 
-    private async Task<string> ListAsync(IAgentRegistryQueryPort queryPort, string token, CancellationToken ct)
+    private async Task<string> ListAsync(IUserAgentCatalogRuntimeQueryPort queryPort, string token, CancellationToken ct)
     {
         var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
         if (currentOwner.error != null)
@@ -151,7 +151,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     }
 
     private async Task<string> UpsertAsync(
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogRuntimeQueryPort queryPort,
         IActorRuntime actorRuntime,
         string token,
         JsonElement args,
@@ -183,16 +183,16 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        var projectionPort = _serviceProvider.GetService<AgentRegistryProjectionPort>();
+        var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
         if (projectionPort != null)
-            await projectionPort.EnsureProjectionForActorAsync(AgentRegistryGAgent.WellKnownId, ct);
+            await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId.value!, ct) ?? -1;
 
-        var actor = await actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId)
-                    ?? await actorRuntime.CreateAsync<AgentRegistryGAgent>(AgentRegistryGAgent.WellKnownId);
+        var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                    ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
 
-        var cmd = new AgentRegistryUpsertCommand
+        var cmd = new UserAgentCatalogUpsertCommand
         {
             AgentId = agentId.value!,
             Platform = platform,
@@ -254,7 +254,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     }
 
     private async Task<string> DeleteAsync(
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogRuntimeQueryPort queryPort,
         IActorRuntime actorRuntime,
         string token,
         JsonElement args,
@@ -289,15 +289,14 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-        var actor = await actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId)
-                    ?? await actorRuntime.CreateAsync<AgentRegistryGAgent>(AgentRegistryGAgent.WellKnownId);
+        var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                    ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
 
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new AgentRegistryTombstoneCommand
+            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand
             {
                 AgentId = agentId,
             }),
@@ -309,15 +308,14 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
+        // Tombstone triggers IProjectionWriteDispatcher.DeleteAsync (Channel RFC §7.1.1),
+        // which also removes the document's projected StateVersion. Gate confirmation
+        // purely on document absence — versionAfter would be null after the delete lands.
         var confirmed = false;
         for (var attempt = 0; attempt < 10; attempt++)
         {
             if (attempt > 0)
                 await Task.Delay(500, ct);
-
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
 
             if (await queryPort.GetAsync(agentId, ct) == null)
             {

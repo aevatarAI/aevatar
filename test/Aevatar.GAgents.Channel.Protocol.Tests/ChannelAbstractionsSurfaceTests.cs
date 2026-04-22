@@ -193,7 +193,7 @@ public sealed class ChannelAbstractionsSurfaceTests
     }
 
     private sealed class TestProjector
-        : PerEntryDocumentProjector<TestProjectorState, TestProjectorEntry, TestProjectorDocument>
+        : PerEntryDocumentProjector<TestProjectorState, TestProjectorEntry, TestProjectorDocument, TestProjectionContext>
     {
         public TestProjector(
             IProjectionWriteDispatcher<TestProjectorDocument> writeDispatcher,
@@ -208,7 +208,7 @@ public sealed class ChannelAbstractionsSurfaceTests
 
         protected override TestProjectorDocument Materialize(
             TestProjectorEntry entry,
-            IProjectionMaterializationContext context,
+            TestProjectionContext context,
             StateEvent stateEvent,
             DateTimeOffset updatedAt) => new()
         {

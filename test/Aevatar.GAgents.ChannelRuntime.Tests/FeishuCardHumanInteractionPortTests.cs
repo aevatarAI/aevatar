@@ -13,11 +13,11 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class FeishuCardHumanInteractionPortTests
 {
     [Fact]
-    public async Task DeliverSuspensionAsync_ShouldSendInteractiveCardThroughNyxProxy()
+    public async Task DeliverSuspensionAsync_ShouldSendTextInstructionsThroughNyxProxy()
     {
-        var registry = Substitute.For<IAgentRegistryQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-1",
                 Platform = "lark",
@@ -28,69 +28,42 @@ public sealed class FeishuCardHumanInteractionPortTests
             }));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_1"}}""");
-        var httpClient = new HttpClient(handler);
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler));
         var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
-        await port.DeliverSuspensionAsync(
-            new HumanInteractionRequest
-            {
-                ActorId = "workflow-actor-1",
-                RunId = "run-1",
-                StepId = "approval-1",
-                SuspensionType = "human_approval",
-                Prompt = "Need approval",
-                Content = "Please confirm the publication.",
-                Options = ["approve", "reject"],
-            },
-            "agent-1",
-            CancellationToken.None);
+        await port.DeliverSuspensionAsync(BuildApprovalRequest(), "agent-1", CancellationToken.None);
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
         handler.LastRequest.RequestUri!.ToString()
             .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=chat_id");
-        handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
-        handler.LastRequest.Headers.Authorization.Parameter.Should().Be("nyx-api-key-1");
 
         using var body = JsonDocument.Parse(handler.LastBody!);
         body.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_chat_1");
-        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
 
-        using var card = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
-        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
-        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("orange");
-        var formElement = card.RootElement.GetProperty("elements")[1];
-        formElement.GetProperty("tag").GetString().Should().Be("form");
-        var editedContentInput = formElement.GetProperty("elements")[0];
-        editedContentInput.GetProperty("name").GetString().Should().Be("edited_content");
-
-        var feedbackInput = formElement.GetProperty("elements")[1];
-        feedbackInput.GetProperty("name").GetString().Should().Be("user_input");
-
-        var actionElement = formElement.GetProperty("elements")[2];
-        actionElement.GetProperty("tag").GetString().Should().Be("action");
-        var approve = actionElement.GetProperty("actions")[0];
-        approve.GetProperty("form_action_type").GetString().Should().Be("submit");
-        approve.GetProperty("value").GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
-        approve.GetProperty("value").GetProperty("run_id").GetString().Should().Be("run-1");
-        approve.GetProperty("value").GetProperty("step_id").GetString().Should().Be("approval-1");
-        approve.GetProperty("value").GetProperty("approved").GetBoolean().Should().BeTrue();
+        using var content = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        var text = content.RootElement.GetProperty("text").GetString();
+        text.Should().Contain("Approval required.");
+        text.Should().Contain("/approve actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1");
+        text.Should().Contain("/reject actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1 feedback=\"what should change\"");
     }
 
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrow_WhenTargetMissing()
     {
-        var registry = Substitute.For<IAgentRegistryQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("missing-agent", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(null));
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(null));
 
         var port = new FeishuCardHumanInteractionPort(
             registry,
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
             NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
-        var act = () => port.DeliverSuspensionAsync(BuildRequest(), "missing-agent", CancellationToken.None);
+        var act = () => port.DeliverSuspensionAsync(BuildApprovalRequest(), "missing-agent", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*delivery target not found*");
@@ -99,9 +72,9 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrow_WhenPlatformUnsupported()
     {
-        var registry = Substitute.For<IAgentRegistryQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-2", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-2",
                 Platform = "telegram",
@@ -112,18 +85,18 @@ public sealed class FeishuCardHumanInteractionPortTests
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
             NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
-        var act = () => port.DeliverSuspensionAsync(BuildRequest(), "agent-2", CancellationToken.None);
+        var act = () => port.DeliverSuspensionAsync(BuildApprovalRequest(), "agent-2", CancellationToken.None);
 
         await act.Should().ThrowAsync<NotSupportedException>()
             .WithMessage("*Unsupported human interaction platform*");
     }
 
     [Fact]
-    public async Task DeliverApprovalResolutionAsync_ShouldSendResolutionCardThroughNyxProxy()
+    public async Task DeliverApprovalResolutionAsync_ShouldSendResolutionTextThenApprovedContent()
     {
-        var registry = Substitute.For<IAgentRegistryQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-1",
                 Platform = "lark",
@@ -134,8 +107,9 @@ public sealed class FeishuCardHumanInteractionPortTests
             }));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_2"}}""");
-        var httpClient = new HttpClient(handler);
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler));
         var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
         await port.DeliverApprovalResolutionAsync(
@@ -145,8 +119,6 @@ public sealed class FeishuCardHumanInteractionPortTests
                 RunId = "run-2",
                 StepId = "approval-2",
                 Approved = true,
-                UserInput = "legacy-approved",
-                EditedContent = "Launch day update.",
                 Feedback = "Looks good",
                 ResolvedContent = "Launch day update.",
             },
@@ -155,14 +127,13 @@ public sealed class FeishuCardHumanInteractionPortTests
 
         handler.Bodies.Should().HaveCount(2);
 
-        using var cardBody = JsonDocument.Parse(handler.Bodies[0]);
-        cardBody.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
-        using var card = JsonDocument.Parse(cardBody.RootElement.GetProperty("content").GetString()!);
-        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("green");
-        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
-            .Should().Be("Approval Recorded");
-        card.RootElement.GetProperty("elements")[0].GetProperty("content").GetString()
-            .Should().Contain("posted below");
+        using var summaryBody = JsonDocument.Parse(handler.Bodies[0]);
+        summaryBody.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+        using var summaryContent = JsonDocument.Parse(summaryBody.RootElement.GetProperty("content").GetString()!);
+        var summaryText = summaryContent.RootElement.GetProperty("text").GetString();
+        summaryText.Should().Contain("Approval recorded.");
+        summaryText.Should().Contain("Run ID: run-2");
+        summaryText.Should().Contain("Feedback: Looks good");
 
         using var textBody = JsonDocument.Parse(handler.Bodies[1]);
         textBody.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
@@ -171,11 +142,11 @@ public sealed class FeishuCardHumanInteractionPortTests
     }
 
     [Fact]
-    public async Task DeliverApprovalResolutionAsync_ShouldOnlySendCard_ForRejectedSocialMedia()
+    public async Task DeliverApprovalResolutionAsync_ShouldIncludeTextRerunInstructions_ForRejectedSocialMedia()
     {
-        var registry = Substitute.For<IAgentRegistryQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "agent-1",
                 Platform = "lark",
@@ -186,8 +157,9 @@ public sealed class FeishuCardHumanInteractionPortTests
             }));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_3"}}""");
-        var httpClient = new HttpClient(handler);
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler));
         var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
         await port.DeliverApprovalResolutionAsync(
@@ -197,42 +169,38 @@ public sealed class FeishuCardHumanInteractionPortTests
                 RunId = "run-3",
                 StepId = "approval-3",
                 Approved = false,
-                UserInput = "legacy-rejected",
-                EditedContent = "Rejected draft content",
                 Feedback = "Need stronger hook",
-                ResolvedContent = "Rejected draft content",
             },
             "agent-1",
             CancellationToken.None);
 
         handler.Bodies.Should().HaveCount(1);
-
         using var body = JsonDocument.Parse(handler.Bodies[0]);
-        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
-        using var card = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
-        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("red");
-        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
-            .Should().Be("Rejection Recorded");
-        card.RootElement.GetProperty("elements")[0].GetProperty("content").GetString()
-            .Should().Contain("Need stronger hook");
-
-        var actionElement = card.RootElement.GetProperty("elements")[1];
-        actionElement.GetProperty("tag").GetString().Should().Be("action");
-        var rerun = actionElement.GetProperty("actions")[0];
-        rerun.GetProperty("text").GetProperty("content").GetString().Should().Be("Run Again");
-        rerun.GetProperty("value").GetProperty("agent_builder_action").GetString().Should().Be("run_agent");
-        rerun.GetProperty("value").GetProperty("agent_id").GetString().Should().Be("agent-1");
-        rerun.GetProperty("value").GetProperty("revision_feedback").GetString().Should().Be("Need stronger hook");
-
-        var viewAgents = actionElement.GetProperty("actions")[1];
-        viewAgents.GetProperty("text").GetProperty("content").GetString().Should().Be("View Agents");
-        viewAgents.GetProperty("value").GetProperty("agent_builder_action").GetString().Should().Be("list_agents");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+        using var content = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        var text = content.RootElement.GetProperty("text").GetString();
+        text.Should().Contain("Rejection recorded.");
+        text.Should().Contain("Feedback: Need stronger hook");
+        text.Should().Contain("/run-agent agent-1");
+        text.Should().Contain("/agents");
     }
 
     [Fact]
-    public void BuildCardJson_ShouldOmitActionButtons_ForHumanInput()
+    public void BuildSuspensionText_ShouldRenderApprovalCommands_ForHumanApproval()
     {
-        var json = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        var text = FeishuCardHumanInteractionPort.BuildSuspensionText(BuildApprovalRequest());
+
+        text.Should().Contain("Approval required.");
+        text.Should().Contain("Current content:");
+        text.Should().Contain("/approve actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1");
+        text.Should().Contain("edited_content=\"final approved content\"");
+        text.Should().Contain("/reject actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1 feedback=\"what should change\"");
+    }
+
+    [Fact]
+    public void BuildSuspensionText_ShouldRenderSubmitCommand_ForHumanInput()
+    {
+        var text = FeishuCardHumanInteractionPort.BuildSuspensionText(new HumanInteractionRequest
         {
             ActorId = "workflow-actor-2",
             RunId = "run-2",
@@ -243,40 +211,14 @@ public sealed class FeishuCardHumanInteractionPortTests
             Options = ["submit"],
         });
 
-        using var card = JsonDocument.Parse(json);
-        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
-        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("blue");
-        card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(1);
+        text.Should().Contain("Input required.");
+        text.Should().Contain("/submit actor_id=workflow-actor-2 run_id=run-2 step_id=input-1 user_input=\"your response here\"");
     }
 
     [Fact]
-    public void BuildCardJson_ShouldIncludeEditedContentAndFeedbackInputs_ForHumanApproval()
+    public void BuildApprovalResolutionText_ShouldRenderApprovedSummary()
     {
-        var json = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
-        {
-            ActorId = "workflow-actor-4",
-            RunId = "run-4",
-            StepId = "approval-4",
-            SuspensionType = "human_approval",
-            Prompt = "Need approval",
-            Content = "Review this draft",
-            Options = ["approve", "reject"],
-        });
-
-        using var card = JsonDocument.Parse(json);
-        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
-        card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(2);
-        card.RootElement.GetProperty("elements")[1].GetProperty("tag").GetString().Should().Be("form");
-        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[0].GetProperty("name").GetString()
-            .Should().Be("edited_content");
-        card.RootElement.GetProperty("elements")[1].GetProperty("elements")[1].GetProperty("name").GetString()
-            .Should().Be("user_input");
-    }
-
-    [Fact]
-    public void BuildApprovalResolutionCardJson_ShouldRenderApprovedCard()
-    {
-        var json = FeishuCardHumanInteractionPort.BuildApprovalResolutionCardJson(new HumanApprovalResolution
+        var text = FeishuCardHumanInteractionPort.BuildApprovalResolutionText(new HumanApprovalResolution
         {
             ActorId = "workflow-actor-3",
             RunId = "run-3",
@@ -284,20 +226,19 @@ public sealed class FeishuCardHumanInteractionPortTests
             Approved = true,
         });
 
-        using var card = JsonDocument.Parse(json);
-        card.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
-        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("green");
-        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
-            .Should().Be("Approval Recorded");
+        text.Should().Contain("Approval recorded.");
+        text.Should().Contain("Run ID: run-3");
+        text.Should().Contain("Step ID: approval-3");
     }
 
-    private static HumanInteractionRequest BuildRequest() => new()
+    private static HumanInteractionRequest BuildApprovalRequest() => new()
     {
         ActorId = "workflow-actor-1",
         RunId = "run-1",
         StepId = "approval-1",
         SuspensionType = "human_approval",
         Prompt = "Need approval",
+        Content = "Please confirm the publication.",
         Options = ["approve", "reject"],
     };
 

@@ -110,7 +110,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.Equals(action, "list_templates", StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { templates = AgentBuilderTemplates.ListTemplates() });
 
-        var queryPort = _serviceProvider.GetService<IAgentRegistryQueryPort>();
+        var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
         var nyxClient = _serviceProvider.GetService<NyxIdApiClient>();
         if (queryPort is null || actorRuntime is null || nyxClient is null)
@@ -133,7 +133,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> CreateAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
@@ -157,7 +157,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> CreateDailyReportAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
@@ -177,7 +177,7 @@ public sealed class AgentBuilderTool : IAgentTool
             return """{"error":"schedule_cron is required for create_agent"}""";
 
         var scheduleTimezone = args.Str("schedule_timezone") ?? SkillRunnerDefaults.DefaultTimezone;
-        if (!SkillRunnerScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
+        if (!ChannelScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
             return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
 
         var conversationId = args.Str("conversation_id")
@@ -247,7 +247,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
 
-        await EnsureAgentRegistryProjectionAsync(ct);
+        await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
@@ -272,7 +272,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> CreateSocialMediaAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
@@ -291,7 +291,7 @@ public sealed class AgentBuilderTool : IAgentTool
             return """{"error":"schedule_cron is required for create_agent"}""";
 
         var scheduleTimezone = args.Str("schedule_timezone") ?? WorkflowAgentDefaults.DefaultTimezone;
-        if (!SkillRunnerScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
+        if (!ChannelScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
             return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
 
         var conversationId = args.Str("conversation_id")
@@ -366,7 +366,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
 
-        await EnsureAgentRegistryProjectionAsync(ct);
+        await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
@@ -404,7 +404,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> ListAgentsAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         NyxIdApiClient nyxClient,
         string token,
         CancellationToken ct)
@@ -417,7 +417,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> GetAgentStatusAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         CancellationToken ct)
     {
         var agentId = args.Str("agent_id");
@@ -433,7 +433,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> DeleteAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
@@ -465,10 +465,10 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
             await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
 
-        var registryActor = await actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId)
-                           ?? await actorRuntime.CreateAsync<AgentRegistryGAgent>(AgentRegistryGAgent.WellKnownId, ct);
+        var registryActor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                           ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
         await registryActor.HandleEventAsync(
-            BuildDirectEnvelope(registryActor.Id, new AgentRegistryTombstoneCommand { AgentId = entry.AgentId }),
+            BuildDirectEnvelope(registryActor.Id, new UserAgentCatalogTombstoneCommand { AgentId = entry.AgentId }),
             ct);
 
         for (var attempt = 0; attempt < 10; attempt++)
@@ -512,7 +512,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> RunAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
         CancellationToken ct)
     {
@@ -549,7 +549,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> DisableAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
         CancellationToken ct)
     {
@@ -571,7 +571,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<string> EnableAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
         CancellationToken ct)
     {
@@ -621,7 +621,7 @@ public sealed class AgentBuilderTool : IAgentTool
         return JsonSerializer.Serialize(payload);
     }
 
-    private static string SerializeAgentStatus(AgentRegistryEntry entry, string? note = null)
+    private static string SerializeAgentStatus(UserAgentCatalogEntry entry, string? note = null)
     {
         return JsonSerializer.Serialize(new
         {
@@ -642,7 +642,7 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     private async Task<object[]> QueryAgentsForOwnerAsync(
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         string? ownerFilter,
         CancellationToken ct)
     {
@@ -665,9 +665,9 @@ public sealed class AgentBuilderTool : IAgentTool
             .ToArray();
     }
 
-    private async Task<(AgentRegistryEntry? value, string? error)> RequireManagedAgentAsync(
+    private async Task<(UserAgentCatalogEntry? value, string? error)> RequireManagedAgentAsync(
         BuilderArgs args,
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         string actionName,
         CancellationToken ct)
     {
@@ -686,10 +686,10 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     private async Task<bool> WaitForCreatedAgentAsync(
-        IAgentRegistryQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         string agentId,
         long versionBefore,
-        Func<AgentRegistryEntry, bool> predicate,
+        Func<UserAgentCatalogEntry, bool> predicate,
         CancellationToken ct,
         int maxAttempts = 10,
         int delayMilliseconds = 500)
@@ -711,17 +711,17 @@ public sealed class AgentBuilderTool : IAgentTool
         return false;
     }
 
-    private async Task EnsureAgentRegistryProjectionAsync(CancellationToken ct)
+    private async Task EnsureUserAgentCatalogProjectionAsync(CancellationToken ct)
     {
-        var projectionPort = _serviceProvider.GetService<AgentRegistryProjectionPort>();
+        var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
         if (projectionPort is null)
             return;
 
-        await projectionPort.EnsureProjectionForActorAsync(AgentRegistryGAgent.WellKnownId, ct);
+        await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
     }
 
-    private async Task<AgentRegistryEntry?> WaitForAgentStatusAsync(
-        IAgentRegistryQueryPort queryPort,
+    private async Task<UserAgentCatalogEntry?> WaitForAgentStatusAsync(
+        IUserAgentCatalogQueryPort queryPort,
         string agentId,
         string expectedStatus,
         CancellationToken ct)
@@ -740,7 +740,7 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     private async Task<(bool success, string? error)> DispatchAgentLifecycleAsync(
-        AgentRegistryEntry entry,
+        UserAgentCatalogEntry entry,
         IActorRuntime actorRuntime,
         string reason,
         LifecycleAction action,

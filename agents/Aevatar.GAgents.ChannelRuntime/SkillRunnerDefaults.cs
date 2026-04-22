@@ -5,6 +5,7 @@ internal static class SkillRunnerDefaults
     public const string AgentType = "skill_runner";
     public const string ActorIdPrefix = "skill-runner";
     public const string DefaultProviderName = "nyxid";
+    public const string DefaultPlatform = "lark";
     public const string DefaultTimezone = "UTC";
     public const int DefaultMaxToolRounds = 20;
     public const int DefaultMaxHistoryMessages = 32;

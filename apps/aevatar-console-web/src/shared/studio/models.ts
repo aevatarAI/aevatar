@@ -55,6 +55,8 @@ export interface StudioAuthSession {
   readonly providerDisplayName?: string;
   readonly loginUrl?: string;
   readonly logoutUrl?: string;
+  readonly invokeAuthMode?: "studio-session" | "bearer-token" | "anonymous";
+  readonly externalCallerHint?: string;
   readonly name?: string;
   readonly email?: string;
   readonly picture?: string;
@@ -75,7 +77,7 @@ export interface StudioWorkspaceSettings {
   readonly directories: StudioWorkflowDirectory[];
 }
 
-export interface StudioWorkflowSummary {
+export interface StudioWorkflowDraftSummary {
   readonly workflowId: string;
   readonly name: string;
   readonly description: string;
@@ -88,7 +90,15 @@ export interface StudioWorkflowSummary {
   readonly updatedAtUtc: string;
 }
 
-export interface StudioWorkflowFile {
+export interface StudioWorkflowCommittedSummary {
+  readonly workflowId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly stepCount: number;
+  readonly updatedAtUtc?: string | null;
+}
+
+export interface StudioWorkflowDraft {
   readonly workflowId: string;
   readonly name: string;
   readonly fileName: string;
@@ -96,14 +106,22 @@ export interface StudioWorkflowFile {
   readonly directoryId: string;
   readonly directoryLabel: string;
   readonly yaml: string;
-  readonly document?: StudioWorkflowDocument | null;
   readonly layout?: unknown;
-  readonly findings: StudioValidationFinding[];
   readonly updatedAtUtc: string;
+}
+
+export interface StudioCommittedWorkflow {
+  readonly workflowId: string;
+  readonly name: string;
+  readonly yaml: string;
+  readonly document?: StudioWorkflowDocument | null;
+  readonly findings: StudioValidationFinding[];
+  readonly updatedAtUtc?: string | null;
 }
 
 export interface StudioSaveWorkflowInput {
   readonly workflowId?: string | null;
+  readonly draftExists?: boolean | null;
   readonly scopeId?: string | null;
   readonly directoryId: string;
   readonly workflowName: string;
@@ -117,6 +135,14 @@ export interface StudioParseYamlResult {
   readonly graph?: unknown;
   readonly findings: StudioValidationFinding[];
 }
+
+export type StudioWorkflowSummary = StudioWorkflowDraftSummary;
+
+export type StudioWorkflowFile = StudioWorkflowDraft & {
+  readonly document?: StudioWorkflowDocument | null;
+  readonly draftExists?: boolean;
+  readonly findings: StudioValidationFinding[];
+};
 
 export interface StudioSerializeYamlResult {
   readonly yaml: string;

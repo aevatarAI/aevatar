@@ -403,6 +403,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (adapter is null)
             return new PlatformReplyDeliveryResult(false, $"No adapter for platform: {session.Platform}");
 
+        var replyService = Services.GetService<ChannelPlatformReplyService>();
         var nyxClient = Services.GetRequiredService<NyxIdApiClient>();
         var inbound = new InboundMessage
         {
@@ -420,11 +421,17 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             Id = session.RegistrationId,
             Platform = session.Platform,
             NyxProviderSlug = session.NyxProviderSlug,
-            NyxUserToken = session.OrgToken,
             ScopeId = session.RegistrationScopeId,
         };
+        registration.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
+        {
+            NyxUserToken = session.OrgToken,
+        });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        if (replyService is not null)
+            return await replyService.DeliverAsync(adapter, replyText, inbound, registration, cts.Token);
+
         return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
     }
 
@@ -496,6 +503,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (adapter is null)
             return new PlatformReplyDeliveryResult(false, $"No adapter for platform: {evt.Platform}");
 
+        var replyService = Services.GetService<ChannelPlatformReplyService>();
         var nyxClient = Services.GetRequiredService<NyxIdApiClient>();
         var inbound = new InboundMessage
         {
@@ -514,12 +522,18 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             Id = evt.RegistrationId,
             Platform = evt.Platform,
             NyxProviderSlug = evt.NyxProviderSlug,
-            NyxUserToken = evt.RegistrationToken,
             ScopeId = evt.RegistrationScopeId,
         };
+        registration.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
+        {
+            NyxUserToken = evt.RegistrationToken,
+        });
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
+        if (replyService is not null)
+            return await replyService.DeliverAsync(adapter, replyText, inbound, registration, cts.Token);
+
         return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
     }
 
