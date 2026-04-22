@@ -1483,6 +1483,15 @@ public static class ScopeServiceEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(endpointId))
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_ENDPOINT_ID",
+                message = "endpointId is required.",
+            });
+        }
+
         var resolution = await ResolveScopeServiceAsync(
             http,
             scopeId,
@@ -1665,10 +1674,10 @@ public static class ScopeServiceEndpoints
         if (endpoint == null)
             return null;
 
-        var implementationKind = NormalizeOptional(currentRevision?.ImplementationKind) ?? string.Empty;
+        var implementationKind = NormalizeOptional(currentRevision?.ImplementationKind);
         var supportsSse = IsChatEndpoint(endpoint.Kind);
-        var supportsAguiFrames = supportsSse &&
-                                 !string.Equals(implementationKind, "workflow", StringComparison.OrdinalIgnoreCase);
+        var streamFrameFormat = ResolveScopeServiceStreamFrameFormat(supportsSse, implementationKind);
+        var supportsAguiFrames = string.Equals(streamFrameFormat, "agui", StringComparison.Ordinal);
         var invokePath = supportsSse
             ? BuildScopeServiceStreamInvokePath(scopeId, serviceId, normalizedEndpointId)
             : BuildScopeServiceInvokePath(scopeId, serviceId, normalizedEndpointId);
@@ -1700,11 +1709,7 @@ public static class ScopeServiceEndpoints
             // This contract currently exposes HTTP POST plus optional SSE streaming only.
             SupportsWebSocket: false,
             SupportsAguiFrames: supportsAguiFrames,
-            StreamFrameFormat: supportsSse
-                ? supportsAguiFrames
-                    ? "agui"
-                    : "workflow-run-event"
-                : null,
+            StreamFrameFormat: streamFrameFormat,
             SmokeTestSupported: smokeTestSupported,
             DefaultSmokeInputMode: defaultSmokeInputMode,
             DefaultSmokePrompt: defaultSmokePrompt,
@@ -1720,6 +1725,23 @@ public static class ScopeServiceEndpoints
             FetchExample: smokeTestSupported
                 ? BuildScopeServiceFetchExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
                 : null);
+    }
+
+    private static string? ResolveScopeServiceStreamFrameFormat(bool supportsSse, string? implementationKind)
+    {
+        if (!supportsSse)
+            return null;
+
+        if (string.Equals(implementationKind, ServiceImplementationKind.Workflow.ToString(), StringComparison.OrdinalIgnoreCase))
+            return "workflow-run-event";
+
+        if (string.Equals(implementationKind, ServiceImplementationKind.Static.ToString(), StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(implementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            return "agui";
+        }
+
+        return null;
     }
 
     private static ServiceRevisionSnapshot? ResolveCurrentContractRevision(

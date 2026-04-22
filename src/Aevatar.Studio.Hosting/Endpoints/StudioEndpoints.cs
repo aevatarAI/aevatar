@@ -186,10 +186,11 @@ internal static class StudioEndpoints
         var scope = scopeResolver?.Resolve(http);
         var schemeProvider = http.RequestServices.GetService<IAuthenticationSchemeProvider>();
         var configuration = http.RequestServices.GetService<IConfiguration>();
-        var authEnabled = schemeProvider != null &&
-                          (await schemeProvider.GetAllSchemesAsync())
-                          .Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
-        var providerDisplayName = await ResolveAuthProviderDisplayNameAsync(configuration, schemeProvider);
+        var schemes = schemeProvider == null
+            ? Array.Empty<AuthenticationScheme>()
+            : (await schemeProvider.GetAllSchemesAsync()).ToArray();
+        var authEnabled = schemes.Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
+        var providerDisplayName = ResolveAuthProviderDisplayName(configuration, schemes);
         var loginUrl = authEnabled
             ? AppApiErrors.BuildLoginUrl("/")
             : null;
@@ -216,9 +217,9 @@ internal static class StudioEndpoints
             ScopeSource: scope?.Source);
     }
 
-    private static async Task<string?> ResolveAuthProviderDisplayNameAsync(
+    private static string? ResolveAuthProviderDisplayName(
         IConfiguration? configuration,
-        IAuthenticationSchemeProvider? schemeProvider)
+        IReadOnlyList<AuthenticationScheme> schemes)
     {
         var nyxIdAuthority = configuration?["Cli:App:NyxId:Authority"]
             ?? configuration?["Aevatar:NyxId:Authority"]
@@ -229,10 +230,10 @@ internal static class StudioEndpoints
             return "NyxID";
         }
 
-        if (schemeProvider == null)
+        if (schemes.Count == 0)
             return null;
 
-        var scheme = (await schemeProvider.GetAllSchemesAsync())
+        var scheme = schemes
             .FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.DisplayName) || !string.IsNullOrWhiteSpace(item.Name));
         if (scheme == null)
             return null;

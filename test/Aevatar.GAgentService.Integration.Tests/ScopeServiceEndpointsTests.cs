@@ -429,6 +429,67 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldReturnAguiStreamContractForStaticChatEndpoint()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            "scope-a",
+            "default",
+            "default",
+            "default",
+            "Orders App",
+            "rev-chat",
+            "rev-chat",
+            "dep-chat",
+            "static-actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "Chat",
+                    "chat",
+                    Any.Pack(new ChatRequestEvent()).TypeUrl,
+                    Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    "Chat entrypoint"),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-chat",
+                    ServiceImplementationKind.Static.ToString(),
+                    "Published",
+                    "hash-chat",
+                    string.Empty,
+                    [
+                        new ServiceEndpointSnapshot(
+                            "chat",
+                            "Chat",
+                            "chat",
+                            Any.Pack(new ChatRequestEvent()).TypeUrl,
+                            Any.Pack(new ChatResponseEvent()).TypeUrl,
+                            "Chat entrypoint"),
+                    ],
+                    DateTimeOffset.UtcNow.AddMinutes(-10),
+                    DateTimeOffset.UtcNow.AddMinutes(-9),
+                    DateTimeOffset.UtcNow.AddMinutes(-8),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceEndpointContractHttpResponse>(
+            "/api/scopes/scope-a/services/default/endpoints/chat/contract");
+
+        response.Should().NotBeNull();
+        response!.SupportsSse.Should().BeTrue();
+        response.SupportsAguiFrames.Should().BeTrue();
+        response.StreamFrameFormat.Should().Be("agui");
+    }
+
+    [Fact]
     public async Task GetEndpointContractEndpoint_ShouldReturnTypedInvokeContractForCommandEndpoint()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -460,7 +521,7 @@ public sealed class ScopeServiceEndpointsTests
             [
                 new ServiceRevisionSnapshot(
                     "rev-cmd",
-                    "gagent",
+                    ServiceImplementationKind.Static.ToString(),
                     "Published",
                     "hash-cmd",
                     string.Empty,
@@ -496,6 +557,20 @@ public sealed class ScopeServiceEndpointsTests
         response.CurlExample.Should().Contain("payloadBase64");
         response.FetchExample.Should().Contain("payloadTypeUrl");
         response.RevisionId.Should().Be("rev-cmd");
+    }
+
+    [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldReturnBadRequest_WhenEndpointIdIsBlank()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync("/api/scopes/scope-a/services/default/endpoints/%20/contract");
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_ENDPOINT_ID");
+        body["message"].Should().Be("endpointId is required.");
     }
 
     [Fact]
