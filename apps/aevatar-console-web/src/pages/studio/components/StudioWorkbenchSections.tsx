@@ -45,6 +45,7 @@ import {
   cardStackStyle,
   fillCardStyle,
 } from '@/shared/ui/proComponents';
+import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { describeError } from '@/shared/ui/errorText';
 
 type QueryState<T> = {
@@ -213,6 +214,52 @@ const executionTextareaStyle: React.CSSProperties = {
   width: '100%',
 };
 
+const observeSummaryGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  gridTemplateColumns: 'minmax(0, 1fr) minmax(300px, 340px)',
+};
+
+const observeSummaryStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+};
+
+const observeMetricGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+};
+
+const observeMetricCardStyle: React.CSSProperties = {
+  border: '1px solid #eef2f7',
+  borderRadius: 12,
+  display: 'grid',
+  gap: 4,
+  padding: 12,
+};
+
+type ObserveCompareRow = {
+  readonly baseline: string;
+  readonly current: string;
+  readonly delta: 'same' | 'changed' | 'regression' | 'current-only';
+  readonly label: string;
+};
+
+type ObserveHealthItem = {
+  readonly label: string;
+  readonly note: string;
+  readonly status: 'active' | 'blocked' | 'warning' | 'pending';
+  readonly value: string;
+};
+
+type ObservePlaybackEntry = {
+  readonly detail: string;
+  readonly label: string;
+  readonly status: 'active' | 'done' | 'waiting';
+  readonly timestamp: string;
+};
+
 const StudioNoticeCard: React.FC<{
   readonly type?: StudioNoticeLike['type'] | 'default';
   readonly title: React.ReactNode;
@@ -257,6 +304,244 @@ function StudioCatalogEmptyPanel(props: {
       <Typography.Text type="secondary">{props.copy}</Typography.Text>
     </div>
   );
+}
+
+function trimObserveText(value: string | null | undefined, limit = 84): string {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return 'n/a';
+  }
+
+  return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
+}
+
+function readExecutionDurationMs(
+  execution: Pick<StudioExecutionSummary, 'startedAtUtc' | 'completedAtUtc'> | null | undefined,
+): number {
+  if (!execution?.startedAtUtc) {
+    return 0;
+  }
+
+  const start = Date.parse(execution.startedAtUtc);
+  const end = execution.completedAtUtc
+    ? Date.parse(execution.completedAtUtc)
+    : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return 0;
+  }
+
+  return end - start;
+}
+
+function buildObserveCompareRows(input: {
+  baselineExecution: StudioExecutionSummary | null;
+  selectedExecution: StudioExecutionDetail | null | undefined;
+  traceLogCount: number;
+  executedStepCount: number;
+}): ObserveCompareRow[] {
+  const { baselineExecution, selectedExecution, traceLogCount, executedStepCount } = input;
+  const baselineDurationMs = readExecutionDurationMs(baselineExecution);
+  const currentDurationMs = readExecutionDurationMs(selectedExecution);
+  const baselineDurationLabel = baselineExecution
+    ? formatDurationBetween(
+        baselineExecution.startedAtUtc,
+        baselineExecution.completedAtUtc,
+      ) || 'n/a'
+    : 'n/a';
+  const currentDurationLabel = selectedExecution
+    ? formatDurationBetween(
+        selectedExecution.startedAtUtc,
+        selectedExecution.completedAtUtc,
+      ) || 'n/a'
+    : 'n/a';
+
+  const compare = (
+    label: string,
+    current: string,
+    baseline: string,
+    delta: ObserveCompareRow['delta'],
+  ): ObserveCompareRow => ({
+    baseline,
+    current,
+    delta,
+    label,
+  });
+
+  if (!selectedExecution) {
+    return [
+      compare('status', 'no run selected', 'n/a', 'current-only'),
+      compare('duration', 'n/a', 'n/a', 'current-only'),
+      compare('actor', 'n/a', 'n/a', 'current-only'),
+    ];
+  }
+
+  const rows: ObserveCompareRow[] = [
+    compare(
+      'status',
+      trimObserveText(selectedExecution.status),
+      trimObserveText(baselineExecution?.status),
+      baselineExecution
+        ? selectedExecution.status === baselineExecution.status
+          ? 'same'
+          : selectedExecution.status.toLowerCase().includes('fail')
+            ? 'regression'
+            : 'changed'
+        : 'current-only',
+    ),
+    compare(
+      'duration',
+      currentDurationLabel,
+      baselineDurationLabel,
+      baselineExecution
+        ? baselineDurationMs > 0 && currentDurationMs > baselineDurationMs
+          ? 'regression'
+          : currentDurationLabel === baselineDurationLabel
+            ? 'same'
+            : 'changed'
+        : 'current-only',
+    ),
+    compare(
+      'actor',
+      trimObserveText(selectedExecution.actorId),
+      trimObserveText(baselineExecution?.actorId),
+      baselineExecution
+        ? trimObserveText(selectedExecution.actorId) ===
+          trimObserveText(baselineExecution.actorId)
+          ? 'same'
+          : 'changed'
+        : 'current-only',
+    ),
+    compare(
+      'input',
+      trimObserveText(selectedExecution.prompt),
+      trimObserveText(baselineExecution?.prompt),
+      baselineExecution
+        ? trimObserveText(selectedExecution.prompt) ===
+          trimObserveText(baselineExecution.prompt)
+          ? 'same'
+          : 'changed'
+        : 'current-only',
+    ),
+    compare(
+      'trace coverage',
+      `${executedStepCount} steps · ${traceLogCount} logs`,
+      baselineExecution ? trimObserveText(baselineExecution.status) : 'n/a',
+      baselineExecution ? 'changed' : 'current-only',
+    ),
+  ];
+
+  if (selectedExecution.error || baselineExecution?.error) {
+    rows.push(
+      compare(
+        'error',
+        trimObserveText(selectedExecution.error || 'none'),
+        trimObserveText(baselineExecution?.error || 'none'),
+        baselineExecution
+          ? selectedExecution.error === baselineExecution.error
+            ? 'same'
+            : selectedExecution.error
+              ? 'regression'
+              : 'changed'
+          : 'current-only',
+      ),
+    );
+  }
+
+  return rows;
+}
+
+function buildObserveHealthItems(input: {
+  activeExecutionInteraction: ExecutionInteractionState | null;
+  executions: readonly StudioExecutionSummary[];
+  selectedExecution: StudioExecutionDetail | null | undefined;
+  traceLogCount: number;
+}): ObserveHealthItem[] {
+  const { activeExecutionInteraction, executions, selectedExecution, traceLogCount } = input;
+  const recentExecutions = executions.slice(0, 5);
+  const failedCount = recentExecutions.filter((item) =>
+    String(item.status || '').trim().toLowerCase().includes('fail'),
+  ).length;
+
+  return [
+    {
+      label: 'runtime',
+      note: selectedExecution
+        ? `Latest run ${trimObserveText(selectedExecution.executionId)}`
+        : 'No workflow run selected yet.',
+      status: selectedExecution
+        ? String(selectedExecution.status || '')
+            .trim()
+            .toLowerCase()
+            .includes('fail')
+          ? 'blocked'
+          : String(selectedExecution.status || '')
+                .trim()
+                .toLowerCase()
+                .includes('run')
+            ? 'active'
+            : 'pending'
+        : 'pending',
+      value: selectedExecution ? trimObserveText(selectedExecution.status) : 'idle',
+    },
+    {
+      label: 'recent runs',
+      note: `${failedCount} failed in the latest ${recentExecutions.length || 0} runs.`,
+      status: failedCount > 0 ? 'warning' : 'active',
+      value: recentExecutions.length ? `${recentExecutions.length} tracked` : 'warming up',
+    },
+    {
+      label: 'human gate',
+      note: activeExecutionInteraction
+        ? activeExecutionInteraction.prompt
+        : 'No human approval or input is currently blocking this run.',
+      status: activeExecutionInteraction ? 'warning' : 'active',
+      value: activeExecutionInteraction
+        ? activeExecutionInteraction.kind === 'human_approval'
+          ? 'awaiting approval'
+          : 'awaiting input'
+        : 'clear',
+    },
+    {
+      label: 'observability',
+      note:
+        traceLogCount > 0
+          ? `Execution logs and graph state are available for ${traceLogCount} frames.`
+          : 'No execution frames have been materialized yet.',
+      status: traceLogCount > 0 ? 'active' : 'pending',
+      value: traceLogCount > 0 ? 'live trace' : 'partial',
+    },
+  ];
+}
+
+function buildObservePlaybackEntries(
+  logs: NonNullable<ReturnType<typeof buildExecutionTrace>>['logs'] | undefined,
+): ObservePlaybackEntry[] {
+  if (!logs?.length) {
+    return [];
+  }
+
+  return logs
+    .filter((log) =>
+      Boolean(
+        log.interaction ||
+          log.title.toLowerCase().includes('approved') ||
+          log.title.toLowerCase().includes('rejected') ||
+          log.title.toLowerCase().includes('input submitted') ||
+          log.title.toLowerCase().includes('stop requested'),
+      ),
+    )
+    .slice(-6)
+    .map((log) => ({
+      detail: trimObserveText(log.previewText || log.meta || '', 140),
+      label: log.title,
+      status: log.interaction
+        ? 'waiting'
+        : log.tone === 'pending'
+          ? 'active'
+          : 'done' as ObservePlaybackEntry['status'],
+      timestamp: formatDateTime(log.timestamp),
+    }))
+    .reverse();
 }
 
 export type StudioExecutionPageProps = {
@@ -305,6 +590,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   workflowGraph,
   draftWorkflowName,
   activeWorkflowName,
+  activeWorkflowDescription,
+  activeDirectoryLabel,
   runPending,
   canRunWorkflow,
   executionCanStop,
@@ -450,6 +737,44 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         selectedExecutionDetail.completedAtUtc,
       )
     : '';
+  const baselineExecution =
+    currentWorkflowExecutions.find(
+      (item) => item.executionId !== selectedExecutionDetail?.executionId,
+    ) || null;
+  const observeCompareRows = React.useMemo(
+    () =>
+      buildObserveCompareRows({
+        baselineExecution,
+        selectedExecution: selectedExecutionDetail,
+        traceLogCount: executionLogCount,
+        executedStepCount: executionExecutedSteps,
+      }),
+    [
+      baselineExecution,
+      executionExecutedSteps,
+      executionLogCount,
+      selectedExecutionDetail,
+    ],
+  );
+  const observeHealthItems = React.useMemo(
+    () =>
+      buildObserveHealthItems({
+        activeExecutionInteraction,
+        executions: currentWorkflowExecutions,
+        selectedExecution: selectedExecutionDetail,
+        traceLogCount: executionLogCount,
+      }),
+    [
+      activeExecutionInteraction,
+      currentWorkflowExecutions,
+      executionLogCount,
+      selectedExecutionDetail,
+    ],
+  );
+  const observePlaybackEntries = React.useMemo(
+    () => buildObservePlaybackEntries(executionTrace?.logs),
+    [executionTrace?.logs],
+  );
 
   const copyText = async (value: string): Promise<boolean> => {
     if (!value || typeof navigator === 'undefined' || !navigator.clipboard) {
@@ -955,6 +1280,201 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           description={selectedExecutionDetail.error}
         />
       ) : null}
+
+      <div style={observeSummaryGridStyle}>
+        <div style={observeSummaryStackStyle}>
+          <AevatarPanel
+            title="Run Compare"
+            titleHelp="Observe should answer what changed between the selected run and the nearest baseline before operators dive into logs."
+            extra={
+              baselineExecution ? (
+                <Tag>{`${baselineExecution.executionId} baseline`}</Tag>
+              ) : (
+                <Tag>no baseline yet</Tag>
+              )
+            }
+          >
+            <div style={{ display: 'grid', gap: 10 }}>
+              {observeCompareRows.map((row) => (
+                <div
+                  key={row.label}
+                  style={{
+                    alignItems: 'center',
+                    borderBottom: '1px solid #f3f4f6',
+                    display: 'grid',
+                    gap: 12,
+                    gridTemplateColumns: '120px minmax(0, 1fr) minmax(0, 1fr) auto',
+                    paddingBottom: 10,
+                  }}
+                >
+                  <Typography.Text type="secondary">{row.label}</Typography.Text>
+                  <Typography.Text>{row.current}</Typography.Text>
+                  <Typography.Text type="secondary">{row.baseline}</Typography.Text>
+                  <AevatarStatusTag
+                    domain="observation"
+                    label="delta"
+                    status={row.delta}
+                  />
+                </div>
+              ))}
+            </div>
+          </AevatarPanel>
+
+          <AevatarPanel
+            title="Human Escalation Playback"
+            titleHelp="Keep waiting approvals, submitted answers, and recent human hand-offs visible before the operator scrolls into the raw event log."
+          >
+            {observePlaybackEntries.length > 0 ? (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {observePlaybackEntries.map((entry) => (
+                  <div
+                    key={`${entry.timestamp}-${entry.label}`}
+                    style={{
+                      borderBottom: '1px solid #f3f4f6',
+                      display: 'grid',
+                      gap: 4,
+                      paddingBottom: 10,
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: 'center',
+                        display: 'flex',
+                        gap: 8,
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <Typography.Text strong>{entry.label}</Typography.Text>
+                      <AevatarStatusTag
+                        domain="observation"
+                        label="playback"
+                        status={entry.status}
+                      />
+                    </div>
+                    <Typography.Text type="secondary">{entry.detail}</Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {entry.timestamp}
+                    </Typography.Text>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <StudioCatalogEmptyPanel
+                icon={<UserOutlined style={{ color: '#CBD5E1' }} />}
+                title="暂无人工介入"
+                copy="当前选择的运行还没有出现 approval、input 或 replay 片段。"
+              />
+            )}
+          </AevatarPanel>
+
+          <AevatarPanel
+            title="Governance Snapshot"
+            titleHelp="Observe keeps the current workflow identity, active actor, and execution provenance visible without sending operators back into Bind."
+          >
+            <div style={observeMetricGridStyle}>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Workflow</Typography.Text>
+                <Typography.Text strong>
+                  {activeWorkflowName || draftWorkflowName || '当前流程'}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Workspace</Typography.Text>
+                <Typography.Text strong>{activeDirectoryLabel || 'Workspace'}</Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Execution</Typography.Text>
+                <Typography.Text strong>
+                  {selectedExecutionDetail?.executionId || 'No run selected'}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Actor</Typography.Text>
+                <Typography.Text strong>{selectedExecutionActorId || 'n/a'}</Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Started</Typography.Text>
+                <Typography.Text strong>
+                  {selectedExecutionDetail
+                    ? formatDateTime(selectedExecutionDetail.startedAtUtc)
+                    : 'n/a'}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Prompt</Typography.Text>
+                <Typography.Text strong>
+                  {trimObserveText(executionPromptPreview || 'No prompt yet.', 72)}
+                </Typography.Text>
+              </div>
+            </div>
+          </AevatarPanel>
+        </div>
+
+        <div style={observeSummaryStackStyle}>
+          <AevatarPanel
+            title="Health & Trust"
+            titleHelp="Observe should quickly answer whether the current member looks healthy, whether humans are blocked, and whether the trace can be trusted."
+          >
+            <div style={{ display: 'grid', gap: 12 }}>
+              {observeHealthItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderBottom: '1px solid #f3f4f6',
+                    display: 'grid',
+                    gap: 6,
+                    paddingBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      alignItems: 'center',
+                      display: 'flex',
+                      gap: 8,
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Typography.Text type="secondary">{item.label}</Typography.Text>
+                    <AevatarStatusTag
+                      domain="observation"
+                      label="health"
+                      status={item.status}
+                    />
+                  </div>
+                  <Typography.Text strong>{item.value}</Typography.Text>
+                  <Typography.Text type="secondary">{item.note}</Typography.Text>
+                </div>
+              ))}
+            </div>
+          </AevatarPanel>
+
+          <AevatarPanel
+            title="Provenance"
+            titleHelp="Be explicit about what is live, what is inferred from the selected execution, and what still needs another run or baseline."
+          >
+            <div style={{ display: 'grid', gap: 12 }}>
+              <Space wrap size={[8, 8]}>
+                <Tag color={executionLogCount > 0 ? 'green' : 'default'}>
+                  {executionLogCount > 0 ? 'graph + logs ready' : 'graph only'}
+                </Tag>
+                <Tag color={baselineExecution ? 'blue' : 'default'}>
+                  {baselineExecution ? 'baseline available' : 'baseline warming up'}
+                </Tag>
+              </Space>
+              <Typography.Text type="secondary">
+                {activeWorkflowDescription || '当前 Observe 页展示的是 workflow 级执行回放，不承担契约配置。'}
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                {baselineExecution
+                  ? `The compare baseline is ${baselineExecution.executionId}, started ${formatDateTime(
+                      baselineExecution.startedAtUtc,
+                    )}.`
+                  : 'Observe can compare more meaningfully after the next run lands and a baseline exists.'}
+              </Typography.Text>
+            </div>
+          </AevatarPanel>
+        </div>
+      </div>
 
       <div
         style={{

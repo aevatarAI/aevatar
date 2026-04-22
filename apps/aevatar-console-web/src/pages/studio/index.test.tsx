@@ -1467,6 +1467,47 @@ jest.mock("../scopes/components/ScopeServiceRuntimeWorkbench", () => ({
   },
 }));
 
+jest.mock("./components/bind/StudioMemberBindPanel", () => ({
+  __esModule: true,
+  default: (props: any) => {
+    const React = require("react");
+    return React.createElement("div", null, [
+      React.createElement(
+        "div",
+        { key: "title", "data-testid": "studio-bind-surface" },
+        "Bind Surface Mock"
+      ),
+      React.createElement(
+        "div",
+        { key: "service" },
+        props.initialServiceId || props.preferredServiceId || "no-service"
+      ),
+      React.createElement(
+        "button",
+        {
+          key: "select-endpoint",
+          type: "button",
+          onClick: () =>
+            props.onSelectionChange?.({
+              serviceId: "default",
+              endpointId: "support-chat",
+            }),
+        },
+        "Select bind endpoint"
+      ),
+      React.createElement(
+        "button",
+        {
+          key: "continue",
+          type: "button",
+          onClick: () => props.onContinueToInvoke?.("default", "support-chat"),
+        },
+        "Continue to Invoke"
+      ),
+    ]);
+  },
+}));
+
 jest.mock("./components/StudioMemberInvokePanel", () => ({
   __esModule: true,
   default: (props: any) => {
@@ -1480,12 +1521,12 @@ jest.mock("./components/StudioMemberInvokePanel", () => ({
       React.createElement(
         "div",
         { key: "service" },
-        props.initialServiceId || "no-service"
+        `service:${props.initialServiceId || "no-service"}`
       ),
       React.createElement(
         "div",
         { key: "endpoint" },
-        props.initialEndpointId || "no-endpoint"
+        `endpoint:${props.initialEndpointId || "no-endpoint"}`
       ),
     ]);
   },
@@ -2153,6 +2194,13 @@ describe("StudioPage", () => {
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent(
       "workflow canvas"
     );
+    expect(screen.getByTestId("studio-context-bar")).toHaveStyle({
+      gap: "12px",
+      padding: "10px 16px",
+    });
+    expect(screen.getByTestId("studio-build-mode-switcher")).toHaveStyle({
+      gap: "4px",
+    });
     expect(screen.getByTestId("studio-workflow-build-panel")).toBeTruthy();
     expect(screen.getByText("DAG Canvas")).toBeTruthy();
     expect(screen.getByText("Step Detail")).toBeTruthy();
@@ -2167,6 +2215,10 @@ describe("StudioPage", () => {
       "aria-pressed",
       "true"
     );
+    expect(screen.getByRole("button", { name: /^Workflow/ })).toHaveStyle({
+      height: "28px",
+      fontSize: "11px",
+    });
     expect(screen.getByRole("button", { name: /^Script/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^GAgent/ })).toHaveAttribute(
       "aria-pressed",
@@ -2615,6 +2667,21 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
   });
 
+  it("carries the selected bind contract into invoke after continuing from build", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
+
+    expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
+    expect(screen.getByText("service:default")).toBeTruthy();
+    expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+  });
+
   it("does not resurrect a deleted workflow step when another node is selected afterwards", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
@@ -3004,8 +3071,25 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Use runtime endpoint" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to Invoke" }));
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
+    expect(screen.getByText("service:default")).toBeTruthy();
+    expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+  });
+
+  it("walks the lifecycle flow from build to bind to invoke to observe", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
+    expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Observe" }));
+    expect(await screen.findByText("Logs")).toBeTruthy();
   });
 });

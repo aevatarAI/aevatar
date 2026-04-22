@@ -34,6 +34,7 @@ import {
 } from '@/shared/studio/graph';
 
 type GraphCanvasProps = {
+  autoFitKey?: string;
   nodes: Node[];
   edges: Edge[];
   height?: number | string;
@@ -241,6 +242,7 @@ function StudioWorkflowNode({
 }
 
 const GraphCanvas: React.FC<GraphCanvasProps> = ({
+  autoFitKey,
   nodes,
   edges,
   height = 420,
@@ -261,6 +263,15 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const [flowInstance, setFlowInstance] =
     React.useState<ReactFlowInstance | null>(null);
   const isStudioVariant = variant === 'studio';
+  const studioFitViewOptions = React.useMemo(
+    () => ({
+      padding: 0.2,
+      minZoom: 0.14,
+      maxZoom: 0.92,
+      duration: 0,
+    }),
+    [],
+  );
 
   useEffect(() => {
     setLocalNodes(nodes);
@@ -269,6 +280,43 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   useEffect(() => {
     setLocalEdges(edges);
   }, [edges, setLocalEdges]);
+
+  useEffect(() => {
+    if (!autoFitKey || !flowInstance || !isStudioVariant || nodes.length === 0) {
+      return;
+    }
+
+    if (typeof window === 'undefined') {
+      flowInstance.fitView(studioFitViewOptions);
+      return;
+    }
+
+    const useAnimationFrame =
+      typeof window.requestAnimationFrame === 'function' &&
+      typeof window.cancelAnimationFrame === 'function';
+    const handle = useAnimationFrame
+      ? window.requestAnimationFrame(() => {
+          flowInstance.fitView(studioFitViewOptions);
+        })
+      : window.setTimeout(() => {
+          flowInstance.fitView(studioFitViewOptions);
+        }, 0);
+
+    return () => {
+      if (useAnimationFrame) {
+        window.cancelAnimationFrame(handle);
+        return;
+      }
+
+      window.clearTimeout(handle);
+    };
+  }, [
+    autoFitKey,
+    flowInstance,
+    isStudioVariant,
+    nodes.length,
+    studioFitViewOptions,
+  ]);
 
   const decoratedNodes = useMemo(
     () =>
@@ -345,13 +393,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         edges={decoratedEdges}
         fitView
         fitViewOptions={
-          isStudioVariant
-            ? {
-                padding: 0.2,
-                minZoom: 0.14,
-                maxZoom: 0.92,
-              }
-            : undefined
+          isStudioVariant ? studioFitViewOptions : undefined
         }
         minZoom={isStudioVariant ? 0.14 : undefined}
         maxZoom={isStudioVariant ? 1.6 : undefined}

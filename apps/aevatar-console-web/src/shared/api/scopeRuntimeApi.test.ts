@@ -289,4 +289,36 @@ describe("scopeRuntimeApi", () => {
       "/api/scopes/scope-a/services/default/runs/run-42/audit?actorId=actor%3A%2F%2Fscope-a%2Fdefault",
     );
   });
+
+  it("retires a scope-scoped service revision", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: "scope-a",
+        serviceId: "default",
+        revisionId: "rev-2",
+        status: "retired",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scopeRuntimeApi.retireServiceRevision("scope-a", "default", "rev-2"),
+    ).resolves.toEqual({
+      scopeId: "scope-a",
+      serviceId: "default",
+      revisionId: "rev-2",
+      status: "retired",
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe(
+      "/api/scopes/scope-a/services/default/revisions/rev-2:retire",
+    );
+    expect(init?.method).toBe("POST");
+  });
 });

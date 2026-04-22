@@ -66,6 +66,14 @@ const buildWorkbenchGridStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+const buildWorkbenchPrimaryColumnStyle: React.CSSProperties = {
+  alignSelf: 'start',
+  display: 'grid',
+  gap: 16,
+  minHeight: 0,
+  minWidth: 0,
+};
+
 const buildSurfaceCardStyle: React.CSSProperties = {
   background: '#ffffff',
   border: '1px solid #e8dfd0',
@@ -141,6 +149,15 @@ const workflowViewSwitchStyle: React.CSSProperties = {
   borderRadius: 999,
   display: 'inline-flex',
   padding: 4,
+};
+
+const workflowCanvasSurfaceStyle: React.CSSProperties = {
+  background: '#fdfaf4',
+  border: '1px solid #ede5d8',
+  borderRadius: 22,
+  minHeight: 456,
+  overflow: 'hidden',
+  padding: 12,
 };
 
 const workflowSideRailStyle: React.CSSProperties = {
@@ -826,6 +843,16 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     }
   }, [onRemoveSelectedStep]);
 
+  const workflowCanvasAutoFitKey = React.useMemo(
+    () =>
+      JSON.stringify({
+        workflowName: workflowName || 'workflow',
+        nodeIds: workflowGraph.nodes.map((node) => node.id),
+        edgeIds: workflowGraph.edges.map((edge) => edge.id),
+      }),
+    [workflowGraph.edges, workflowGraph.nodes, workflowName],
+  );
+
   return (
     <div data-testid="studio-workflow-build-panel" style={buildWorkbenchGridStyle}>
       <div data-testid="workflow-stage-actions" style={workflowStageActionsStyle}>
@@ -858,7 +885,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         ) : null}
       </div>
 
-      <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
+      <div
+        data-testid="workflow-build-primary-column"
+        style={buildWorkbenchPrimaryColumnStyle}
+      >
         <section style={buildSurfaceCardStyle}>
           <div style={workflowToolbarStyle}>
             <Space wrap size={[8, 8]}>
@@ -923,19 +953,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             </div>
           ) : null}
           {viewMode === 'canvas' ? (
-            <div
-              style={{
-                background: '#fdfaf4',
-                border: '1px solid #ede5d8',
-                borderRadius: 22,
-                minHeight: 520,
-                overflow: 'hidden',
-                padding: 12,
-              }}
-            >
+            <div style={workflowCanvasSurfaceStyle}>
               <GraphCanvas
+                autoFitKey={workflowCanvasAutoFitKey}
                 bottomInset={0}
-                height={560}
+                height={500}
                 variant="studio"
                 nodes={[...workflowGraph.nodes]}
                 edges={[...workflowGraph.edges]}

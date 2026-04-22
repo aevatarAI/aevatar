@@ -14,6 +14,7 @@ import {
 import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
+import { formatCompactDateTime } from '@/shared/datetime/dateTime';
 import {
   buildConversationHeaders,
   formatConversationProviderLabel,
@@ -28,7 +29,6 @@ import { servicesApi } from '@/shared/api/servicesApi';
 import {
   Button,
   Popover,
-  Space,
   message,
 } from 'antd';
 import React, {
@@ -106,9 +106,10 @@ import {
 } from './components/StudioBuildPanels';
 import StudioShell, {
   type StudioLifecycleStep,
+  type StudioShellMemberKind,
   type StudioShellMemberItem,
 } from './components/StudioShell';
-import ScopeServiceRuntimeWorkbench from '../scopes/components/ScopeServiceRuntimeWorkbench';
+import StudioMemberBindPanel from './components/bind/StudioMemberBindPanel';
 import {
   dedupeStudioWorkflowSummaries,
   StudioExecutionPage,
@@ -623,6 +624,102 @@ function formatStudioAssetMeta(input: {
   return [trimOptional(input.primary), trimOptional(input.secondary)]
     .filter(Boolean)
     .join(' · ');
+}
+
+type StudioContextBadgeTone = 'accent' | 'default' | 'success' | 'warning';
+
+function formatStudioMemberKindLabel(
+  kind: StudioShellMemberKind | '' | undefined,
+): string {
+  switch (kind) {
+    case 'workflow':
+      return 'Workflow';
+    case 'script':
+      return 'Script';
+    case 'gagent':
+      return 'GAgent';
+    case 'member':
+      return 'Member';
+    default:
+      return 'Focus';
+  }
+}
+
+function formatStudioLifecycleLabel(
+  step: StudioSurface | StudioStep | string,
+): string {
+  switch (trimOptional(step).toLowerCase()) {
+    case 'build':
+      return 'Build';
+    case 'bind':
+      return 'Bind';
+    case 'invoke':
+      return 'Invoke';
+    case 'observe':
+      return 'Observe';
+    default:
+      return 'Workbench';
+  }
+}
+
+function resolveStudioContextBadgeStyle(
+  tone: StudioContextBadgeTone,
+): React.CSSProperties {
+  switch (tone) {
+    case 'accent':
+      return {
+        background: 'rgba(225, 235, 255, 0.96)',
+        borderColor: '#c8dafd',
+        color: '#2452b5',
+      };
+    case 'success':
+      return {
+        background: 'rgba(232, 247, 236, 0.98)',
+        borderColor: '#c8e7d0',
+        color: '#23613e',
+      };
+    case 'warning':
+      return {
+        background: 'rgba(250, 239, 224, 0.98)',
+        borderColor: '#ead0a6',
+        color: '#8a5317',
+      };
+    default:
+      return {
+        background: 'rgba(245, 239, 228, 0.98)',
+        borderColor: '#e5dccb',
+        color: '#645946',
+      };
+  }
+}
+
+function resolveExecutionTone(status: string | null | undefined): StudioContextBadgeTone {
+  const normalized = trimOptional(status).toLowerCase();
+  if (
+    normalized.includes('fail') ||
+    normalized.includes('error') ||
+    normalized.includes('stop')
+  ) {
+    return 'warning';
+  }
+
+  if (
+    normalized.includes('run') ||
+    normalized.includes('wait') ||
+    normalized.includes('pending')
+  ) {
+    return 'accent';
+  }
+
+  if (
+    normalized.includes('success') ||
+    normalized.includes('complete') ||
+    normalized.includes('done')
+  ) {
+    return 'success';
+  }
+
+  return 'default';
 }
 
 function isWorkflowNotFoundError(error: unknown): boolean {
@@ -2718,6 +2815,57 @@ const StudioPage: React.FC = () => {
         : isObserveSurface
           ? 'observe'
           : 'build';
+  const currentMemberLabel =
+    trimOptional(scopeBindingQuery.data?.displayName) ||
+    trimOptional(activeWorkflowName) ||
+    (isBuildScriptsSurface ? trimOptional(selectedScriptId) : '') ||
+    'Current member';
+  const currentMemberDescription =
+    trimOptional(routeState.memberId) ||
+    trimOptional(scopeBindingQuery.data?.serviceId) ||
+    (activeBuildFocusKey
+      ? activeBuildFocusKey.startsWith('script:')
+        ? `Script ${trimOptional(selectedScriptId)}`
+        : activeWorkflowName
+          ? `Workflow ${activeWorkflowName}`
+          : 'Studio is tracking the current member focus.'
+      : 'Studio is tracking the current member focus.');
+  const currentMemberKind: StudioShellMemberKind =
+    isBuildScriptsSurface
+      ? 'script'
+      : isBuildGAgentSurface
+        ? 'gagent'
+      : currentScopeBindingRevision?.implementationKind === 'gagent'
+        ? 'gagent'
+        : currentScopeBindingRevision?.implementationKind === 'script'
+          ? 'script'
+          : currentScopeBindingRevision?.implementationKind === 'workflow'
+            ? 'workflow'
+            : selectedWorkflowId || templateWorkflow
+              ? 'workflow'
+              : 'member';
+  const currentMemberTone: 'live' | 'draft' | 'idle' =
+    currentScopeBindingRevision?.isActiveServing
+      ? 'live'
+      : activeBuildFocusKey
+        ? 'draft'
+        : 'idle';
+  const currentMemberMeta = formatStudioAssetMeta({
+    primary:
+      isObserveSurface
+        ? 'Recent run focus'
+        : isBuildScriptsSurface
+          ? 'Script behavior'
+          : isBindSurface
+            ? 'Binding focus'
+            : isInvokeSurface
+              ? 'Invoke focus'
+              : 'Build focus',
+    secondary:
+      currentScopeBindingRevision?.revisionId ||
+      trimOptional(routeState.memberId) ||
+      activeBuildFocusKey,
+  });
   const currentFocusMemberKey = useMemo(
     () =>
       buildStudioFocusKey({
@@ -2779,62 +2927,12 @@ const StudioPage: React.FC = () => {
   const memberItems = useMemo(() => {
     const items: StudioShellMemberItem[] = [];
     const seen = new Set<string>();
-    const currentMemberLabel =
-      trimOptional(scopeBindingQuery.data?.displayName) ||
-      trimOptional(activeWorkflowName) ||
-      (isBuildScriptsSurface ? trimOptional(selectedScriptId) : '') ||
-      'Current member';
-    const currentMemberDescription =
-      trimOptional(routeState.memberId) ||
-      trimOptional(scopeBindingQuery.data?.serviceId) ||
-      (activeBuildFocusKey
-        ? activeBuildFocusKey.startsWith('script:')
-          ? `Script ${trimOptional(selectedScriptId)}`
-          : activeWorkflowName
-            ? `Workflow ${activeWorkflowName}`
-            : 'Studio is tracking the current member focus.'
-        : 'Studio is tracking the current member focus.');
-    const currentMemberKind =
-      isBuildScriptsSurface
-        ? 'script'
-        : isBuildGAgentSurface
-          ? 'gagent'
-        : currentScopeBindingRevision?.implementationKind === 'gagent'
-          ? 'gagent'
-          : currentScopeBindingRevision?.implementationKind === 'script'
-            ? 'script'
-            : currentScopeBindingRevision?.implementationKind === 'workflow'
-              ? 'workflow'
-              : selectedWorkflowId || templateWorkflow
-                ? 'workflow'
-                : 'member';
-    const currentMemberTone =
-      currentScopeBindingRevision?.isActiveServing
-        ? 'live'
-        : activeBuildFocusKey
-          ? 'draft'
-          : 'idle';
     const currentMemberItem: StudioShellMemberItem = {
       key: currentFocusMemberKey,
       label: currentMemberLabel,
       description: currentMemberDescription,
       kind: currentMemberKind,
-      meta: formatStudioAssetMeta({
-        primary:
-          isObserveSurface
-            ? 'Recent run focus'
-            : isBuildScriptsSurface
-              ? 'Script behavior'
-              : isBindSurface
-                ? 'Binding focus'
-                : isInvokeSurface
-                  ? 'Invoke focus'
-                  : 'Build focus',
-        secondary:
-          currentScopeBindingRevision?.revisionId ||
-          trimOptional(routeState.memberId) ||
-          activeBuildFocusKey,
-      }),
+      meta: currentMemberMeta,
       tone: currentMemberTone,
     };
 
@@ -2923,20 +3021,14 @@ const StudioPage: React.FC = () => {
     activeWorkflowName,
     availableScopeScripts,
     currentFocusMemberKey,
-    currentScopeBindingRevision?.implementationKind,
     currentScopeBindingRevision?.isActiveServing,
     currentScopeBindingRevision?.revisionId,
-    activeBuildFocusKey,
-    isBuildGAgentSurface,
-    isBindSurface,
-    isInvokeSurface,
-    isObserveSurface,
+    currentMemberDescription,
+    currentMemberKind,
+    currentMemberLabel,
+    currentMemberMeta,
+    currentMemberTone,
     preferredScopeWorkflow,
-    routeState.memberId,
-    scopeBindingQuery.data?.displayName,
-    scopeBindingQuery.data?.serviceId,
-    selectedScriptId,
-    selectedWorkflowId,
     templateWorkflow,
     visibleWorkflowSummaries,
   ]);
@@ -2984,7 +3076,7 @@ const StudioPage: React.FC = () => {
       data-testid="studio-build-mode-switcher"
       style={{
         display: 'grid',
-        gap: 6,
+        gap: 4,
       }}
     >
       <div
@@ -2997,7 +3089,7 @@ const StudioPage: React.FC = () => {
         <div
           style={{
             color: '#8b7b63',
-            fontSize: 11,
+            fontSize: 10,
             fontWeight: 700,
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
@@ -3034,7 +3126,7 @@ const StudioPage: React.FC = () => {
       <div
         style={{
           display: 'inline-flex',
-          gap: 6,
+          gap: 4,
           width: '100%',
         }}
       >
@@ -3057,13 +3149,13 @@ const StudioPage: React.FC = () => {
                 cursor: item.disabled ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 flex: 1,
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: 700,
-                height: 32,
+                height: 28,
                 justifyContent: 'center',
                 minWidth: 0,
                 opacity: item.disabled ? 0.58 : 1,
-                padding: '0 12px',
+                padding: '0 10px',
                 transition:
                   'border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease',
               }}
@@ -3076,38 +3168,15 @@ const StudioPage: React.FC = () => {
     </div>
   ) : null;
 
-  const studioContextActions =
-    isObserveSurface ? (
-      <Space wrap size={[8, 8]}>
-        <Button
-          loading={runPending}
-          onClick={() => void handleStartExecution()}
-          type="primary"
-          disabled={!canRunWorkflow || runPending}
-        >
-          重新运行
-        </Button>
-      </Space>
-    ) : isBindSurface ? (
-      <Space wrap size={[8, 8]}>
-        <Button
-          disabled={!resolvedStudioScopeId}
-          onClick={() => applyStudioTarget('invoke')}
-          type="primary"
-        >
-          进入调用
-        </Button>
-      </Space>
-    ) : isInvokeSurface ? (
-      <Space wrap size={[8, 8]}>
-        <Button onClick={() => applyStudioTarget('bind')}>
-          查看绑定
-        </Button>
-      </Space>
-    ) : undefined;
-
-  const studioContextScopeLabel =
-    scopeBindingQuery.data?.displayName || resolvedStudioScopeId;
+  const selectedExecutionSummary =
+    selectedExecutionQuery.data ??
+    executionsQuery.data?.find(
+      (item) => item.executionId === selectedExecutionId,
+    ) ??
+    null;
+  const latestExecutionSummary = executionsQuery.data?.[0] ?? null;
+  const activeExecutionSummary =
+    selectedExecutionSummary ?? latestExecutionSummary;
   const studioContextPrimaryTitle =
     isBuildEditorSurface
       ? activeWorkflowName || templateWorkflow || 'Workflow 构建'
@@ -3136,12 +3205,51 @@ const StudioPage: React.FC = () => {
           : isInvokeSurface
             ? '调用当前成员并保留运行观察上下文'
             : '成员工作台';
+  const studioTeamLabel =
+    trimOptional(resolvedStudioScopeId) || 'Local draft workspace';
+  const studioBoundServiceLabel =
+    trimOptional(routeState.memberId) ||
+    trimOptional(scopeBindingQuery.data?.serviceId) ||
+    'No bound service';
+  const studioBindingLabel =
+    trimOptional(currentScopeBindingRevision?.revisionId) ||
+    (resolvedStudioScopeId ? 'Awaiting binding revision' : 'Scope not resolved');
+  const studioBindingTone: StudioContextBadgeTone =
+    currentScopeBindingRevision?.isActiveServing
+      ? 'success'
+      : currentScopeBindingRevision?.revisionId
+        ? 'warning'
+        : 'default';
+  const studioHealthLabel =
+    trimOptional(scopeBindingQuery.data?.deploymentStatus) ||
+    trimOptional(currentScopeBindingRevision?.status) ||
+    'Draft only';
+  const studioHealthTone = resolveExecutionTone(
+    scopeBindingQuery.data?.deploymentStatus ||
+      currentScopeBindingRevision?.status,
+  );
+  const studioLastRunLabel = activeExecutionSummary?.startedAtUtc
+    ? formatCompactDateTime(activeExecutionSummary.startedAtUtc)
+    : 'No recent run';
+  const studioObservationLabel =
+    trimOptional(activeExecutionSummary?.status) || 'No active execution';
+  const studioObservationTone = resolveExecutionTone(
+    activeExecutionSummary?.status,
+  );
+  const studioRuntimeBadgeStyle = resolveStudioContextBadgeStyle(
+    studioObservationTone,
+  );
+  const studioObservationNote = activeExecutionSummary
+    ? [
+        trimOptional(activeExecutionSummary.workflowName) || currentMemberLabel,
+        trimOptional(activeExecutionSummary.actorId),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : 'Run a member through Invoke or Observe to keep runtime posture visible here.';
   const studioContextMetaParts = [
     studioContextDescriptor,
-    studioContextScopeLabel,
-    currentScopeBindingRevision?.revisionId || '',
-    routeState.memberId || '',
-    scopeBindingQuery.data?.serviceId || '',
+    studioBoundServiceLabel,
   ]
     .map((value) => trimOptional(value))
     .filter(Boolean);
@@ -3159,93 +3267,312 @@ const StudioPage: React.FC = () => {
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
-  const studioContextBar = (
-    <div
-      style={{
-        alignItems: 'center',
-        background: '#ffffff',
-        borderBottom: '1px solid #f0f0f0',
-        display: 'grid',
-        gap: 10,
-        gridTemplateColumns: 'auto minmax(0, 1fr) auto',
-        minHeight: 48,
-        padding: '8px 12px',
-      }}
-    >
-      <button
-        aria-label={studioReturnLabel}
-        type="button"
-        onClick={() => history.push(studioReturnHref)}
-        style={{
-          alignItems: 'center',
-          background: 'transparent',
-          border: 'none',
-          color: '#1890ff',
-          cursor: 'pointer',
-          display: 'inline-flex',
-          flexShrink: 0,
-          fontSize: 12,
-          gap: 4,
-          padding: 0,
-        }}
-      >
-        ← {studioReturnLabel}
-      </button>
-      <div
-        style={{
-          alignItems: 'baseline',
-          display: 'flex',
-          gap: 10,
-          minWidth: 0,
-          overflow: 'hidden',
-        }}
-      >
+  const studioRuntimeRunsHref = buildRuntimeRunsHref({
+    route:
+      trimOptional(activeWorkflowName) ||
+      trimOptional(currentScopeBindingRevision?.workflowName) ||
+      undefined,
+    scopeId: resolvedStudioScopeId || undefined,
+    serviceId: scopeBindingQuery.data?.serviceId || undefined,
+    prompt: trimOptional(runPrompt) || undefined,
+    returnTo: currentStudioReturnTo || undefined,
+  });
+  const studioContextBadges: readonly {
+    readonly label: string;
+    readonly value: string;
+    readonly tone: StudioContextBadgeTone;
+  }[] = [
+    {
+      label: 'Type',
+      value: formatStudioMemberKindLabel(currentMemberKind),
+      tone: 'default',
+    },
+    {
+      label: 'Binding',
+      value: studioBindingLabel,
+      tone: studioBindingTone,
+    },
+    {
+      label: 'Health',
+      value: studioHealthLabel,
+      tone: studioHealthTone,
+    },
+  ];
+  const studioPrimaryAction =
+    isObserveSurface
+      ? {
+          disabled: !canRunWorkflow || runPending,
+          label: '重新运行',
+          loading: runPending,
+          onClick: () => void handleStartExecution(),
+          type: 'primary' as const,
+        }
+      : isBindSurface
+        ? {
+            disabled: !resolvedStudioScopeId,
+            label: '进入调用',
+            loading: false,
+            onClick: () => applyStudioTarget('invoke'),
+            type: 'primary' as const,
+          }
+        : isInvokeSurface
+          ? {
+              disabled: !resolvedStudioScopeId,
+              label: '查看绑定',
+              loading: false,
+              onClick: () => applyStudioTarget('bind'),
+              type: 'default' as const,
+            }
+          : resolvedStudioScopeId
+            ? {
+                disabled: false,
+                label: '进入绑定',
+                loading: false,
+                onClick: () => applyStudioTarget('bind'),
+                type: 'default' as const,
+              }
+            : null;
+  const studioRailCardStyle: React.CSSProperties = {
+    background: 'rgba(255, 255, 255, 0.96)',
+    border: '1px solid #ece3d5',
+    borderRadius: 14,
+    display: 'grid',
+    gap: 6,
+    padding: '10px 11px',
+  };
+  const studioRailLabelStyle: React.CSSProperties = {
+    color: '#7b6e5a',
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+  };
+  const studioRailValueStyle: React.CSSProperties = {
+    color: '#16120d',
+    fontSize: 11.5,
+    fontWeight: 700,
+    lineHeight: '17px',
+  };
+  const studioRailMetaStyle: React.CSSProperties = {
+    color: '#6f6250',
+    fontSize: 10.5,
+    lineHeight: '16px',
+  };
+  const studioRailFooter = (
+    <>
+      <div style={studioRailCardStyle}>
+        <div style={studioRailLabelStyle}>Current team</div>
+        <div style={studioRailValueStyle}>{studioTeamLabel}</div>
+        <div style={studioRailMetaStyle}>
+          {studioBoundServiceLabel}
+          {currentScopeBindingRevision?.revisionId
+            ? ` · ${currentScopeBindingRevision.revisionId}`
+            : ''}
+        </div>
+      </div>
+      <div style={studioRailCardStyle}>
+        <div style={studioRailLabelStyle}>Observe posture</div>
         <div
-          data-testid="studio-context-title"
           style={{
-            color: '#1d2129',
-            flexShrink: 0,
-            fontSize: 13,
-            fontWeight: 700,
-            lineHeight: '20px',
-            maxWidth: '40%',
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            ...studioRailValueStyle,
+            color: resolveStudioContextBadgeStyle(studioObservationTone).color,
           }}
         >
-          {studioContextPrimaryTitle}
+          {studioObservationLabel}
         </div>
-        {studioContextMetaParts.length > 0 ? (
-          <div
-            data-testid="studio-context-meta"
-            style={{
-              color: '#8c8c8c',
-              fontSize: 11,
-              lineHeight: '16px',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {studioContextMetaParts.join(' · ')}
-          </div>
-        ) : null}
+        <div style={studioRailMetaStyle}>{studioObservationNote}</div>
       </div>
-      {studioContextActions ? (
+    </>
+  );
+  const studioContextBar = (
+    <div
+      data-testid="studio-context-bar"
+      style={{
+        background: 'rgba(255, 252, 247, 0.98)',
+        borderBottom: '1px solid rgba(229, 220, 203, 0.88)',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 12,
+        justifyContent: 'space-between',
+        padding: '10px 16px',
+      }}
+    >
+      <div
+        style={{
+          display: 'grid',
+          flex: '1 1 540px',
+          gap: 6,
+          minWidth: 0,
+        }}
+      >
         <div
           style={{
             alignItems: 'center',
             display: 'flex',
-            gap: 8,
-            marginLeft: 'auto',
+            flexWrap: 'wrap',
+            gap: 10,
           }}
         >
-          {studioContextActions}
+          <button
+            aria-label={studioReturnLabel}
+            type="button"
+            onClick={() => history.push(studioReturnHref)}
+            style={{
+              alignItems: 'center',
+              background: 'transparent',
+              border: 'none',
+              color: '#2452b5',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              flexShrink: 0,
+              fontSize: 11,
+              fontWeight: 700,
+              gap: 4,
+              letterSpacing: '0.02em',
+              padding: 0,
+            }}
+          >
+            ← {studioReturnLabel}
+          </button>
+          <div
+            style={{
+              color: '#8b7b63',
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+          >
+            Aevatar Studio
+          </div>
+          <div
+            data-testid="studio-context-title"
+            style={{
+              color: '#1d2129',
+              fontSize: 17,
+              fontWeight: 700,
+              letterSpacing: '-0.02em',
+              lineHeight: '22px',
+              minWidth: 0,
+            }}
+          >
+            {studioContextPrimaryTitle}
+          </div>
         </div>
-      ) : null}
+        <div
+          style={{
+            alignItems: 'center',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
+          {studioContextMetaParts.length > 0 ? (
+            <div
+              data-testid="studio-context-meta"
+              style={{
+                color: '#6f6250',
+                fontSize: 11,
+                lineHeight: '17px',
+                minWidth: 0,
+              }}
+            >
+              {studioContextMetaParts.join(' · ')}
+            </div>
+          ) : null}
+          {studioContextBadges.map((badge) => {
+            const badgeStyle = resolveStudioContextBadgeStyle(badge.tone);
+
+            return (
+              <span
+                key={badge.label}
+                style={{
+                  alignItems: 'center',
+                  background: badgeStyle.background,
+                  border: `1px solid ${badgeStyle.borderColor}`,
+                  borderRadius: 999,
+                  color: badgeStyle.color,
+                  display: 'inline-flex',
+                  fontSize: 10,
+                  gap: 5,
+                  lineHeight: '15px',
+                  minHeight: 22,
+                  padding: '0 7px',
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 700,
+                  }}
+                >
+                  {badge.label}
+                </span>
+                <span>{badge.value}</span>
+              </span>
+            );
+          })}
+        </div>
+      </div>
+      <div
+        style={{
+          alignItems: 'center',
+          display: 'flex',
+          flex: '0 1 auto',
+          flexWrap: 'wrap',
+          gap: 8,
+          justifyContent: 'flex-end',
+        }}
+      >
+        <span
+          style={{
+            alignItems: 'center',
+            background: studioRuntimeBadgeStyle.background,
+            border: `1px solid ${studioRuntimeBadgeStyle.borderColor}`,
+            borderRadius: 999,
+            color: studioRuntimeBadgeStyle.color,
+            display: 'inline-flex',
+            fontSize: 10.5,
+            gap: 5,
+            lineHeight: '16px',
+            minHeight: 24,
+            padding: '0 9px',
+          }}
+        >
+          <span
+            style={{
+              fontWeight: 700,
+            }}
+          >
+            Runtime
+          </span>
+          <span>{studioObservationLabel}</span>
+        </span>
+        {activeExecutionSummary?.startedAtUtc ? (
+          <span
+            style={{
+              color: '#8b7b63',
+              fontSize: 10.5,
+              lineHeight: '16px',
+            }}
+          >
+            {studioLastRunLabel}
+          </span>
+        ) : null}
+        <Button onClick={() => history.push(studioRuntimeRunsHref)}>
+          Runtime Runs
+        </Button>
+        {studioPrimaryAction ? (
+          <Button
+            disabled={studioPrimaryAction.disabled}
+            loading={studioPrimaryAction.loading}
+            onClick={studioPrimaryAction.onClick}
+            type={studioPrimaryAction.type}
+          >
+            {studioPrimaryAction.label}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 
@@ -3412,15 +3739,18 @@ const StudioPage: React.FC = () => {
           overflow: 'hidden',
         }}
       >
-        <ScopeServiceRuntimeWorkbench
-          onUseEndpoint={handleUseBindingEndpoint}
-          onSelectionChange={handleBindingSelectionChange}
+        <StudioMemberBindPanel
+          authSession={authSessionQuery.data}
+          initialEndpointId={bindingSelectionRef.current.endpointId}
           initialServiceId={bindingSelectionRef.current.serviceId}
+          onContinueToInvoke={handleUseBindingEndpoint}
+          onSelectionChange={handleBindingSelectionChange}
           preferredServiceId={
             scopeBindingQuery.data?.available
               ? scopeBindingQuery.data.serviceId
               : ''
           }
+          scopeBinding={scopeBindingQuery.data}
           scopeId={resolvedStudioScopeId}
           services={publishedScopeServices}
         />
@@ -3479,6 +3809,7 @@ const StudioPage: React.FC = () => {
             onSelectLifecycleStep={handleSelectLifecycleStep}
             onSelectMember={handleSelectStudioMember}
             pageTitle={pageTitle}
+            railFooter={studioRailFooter}
             selectedMemberKey={currentFocusMemberKey}
             showPageHeader={false}
           >

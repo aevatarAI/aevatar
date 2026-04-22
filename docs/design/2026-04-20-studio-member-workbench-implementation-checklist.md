@@ -259,6 +259,11 @@ last_updated: 2026-04-20
 
 把当前 binding / revisions / snippets 收到同一块。
 
+细化文档：
+
+1. [2026-04-21-studio-workflow-bind-information-architecture.md](./2026-04-21-studio-workflow-bind-information-architecture.md)
+2. [2026-04-21-studio-workflow-bind-implementation-checklist.md](./2026-04-21-studio-workflow-bind-implementation-checklist.md)
+
 任务：
 
 - [ ] 从 [ScopeServiceRuntimeWorkbench.tsx](../../apps/aevatar-console-web/src/pages/scopes/components/ScopeServiceRuntimeWorkbench.tsx) 提取 binding 相关区域
@@ -470,4 +475,3 @@ last_updated: 2026-04-20
 ## 7. 一句话实施策略
 
 > 先把 Studio 从“工具中心”改成“member workbench 壳子”，再把 Build / Bind / Invoke / Observe 四块能力一块块并回来。
-

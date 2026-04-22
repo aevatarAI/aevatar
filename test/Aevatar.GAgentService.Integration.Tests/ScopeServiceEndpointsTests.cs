@@ -744,6 +744,56 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ActivateServiceRevisionEndpoint_ShouldDispatchActivateRevisionForNamedService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "def-actor-1");
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:orders",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-2",
+                    "workflow",
+                    "Published",
+                    "hash-2",
+                    string.Empty,
+                    [],
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/revisions/rev-2:activate", new { });
+        var body = await response.Content.ReadFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRevisionActionHttpResponse>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.ServiceId.Should().Be("orders");
+        body.RevisionId.Should().Be("rev-2");
+        body.Status.Should().Be("active");
+        host.ServiceCommandPort.SetDefaultServingCommand.Should().NotBeNull();
+        host.ServiceCommandPort.SetDefaultServingCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "orders",
+        });
+        host.ServiceCommandPort.SetDefaultServingCommand.RevisionId.Should().Be("rev-2");
+        host.ServiceCommandPort.ActivateRevisionCommand.Should().NotBeNull();
+        host.ServiceCommandPort.ActivateRevisionCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "orders",
+        });
+        host.ServiceCommandPort.ActivateRevisionCommand.RevisionId.Should().Be("rev-2");
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldDelegateInlineWorkflowBundleToWorkflowPipeline()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

@@ -363,6 +363,9 @@ describe('StudioWorkflowBuildPanel', () => {
 
     expect(await screen.findByText('DAG Canvas')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-stage-actions')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-build-primary-column')).toHaveStyle({
+      alignSelf: 'start',
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
     expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();

@@ -84,6 +84,9 @@ export type ServiceEndpoint = {
   endpointId: string;
   displayName: string;
   kind: string;
+  requestTypeUrl?: string;
+  responseTypeUrl?: string;
+  description?: string;
 };
 
 export type ServiceOption = {
@@ -91,6 +94,8 @@ export type ServiceOption = {
   label: string;
   kind: 'nyxid-chat' | 'onboarding' | 'streaming-proxy' | 'service';
   endpoints: ServiceEndpoint[];
+  deploymentStatus?: string;
+  serviceKey?: string;
 };
 
 /* ─── Chat History Persistence Types ─── */

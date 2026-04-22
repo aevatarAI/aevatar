@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import StudioShell, {
   type StudioLifecycleStep,
@@ -59,16 +59,18 @@ describe('StudioShell', () => {
     const handleSelectLifecycleStep = jest.fn();
 
     const { container } = render(
-      React.createElement(StudioShell, {
-        currentLifecycleStep: 'build',
-        lifecycleSteps,
-        members,
-        onSelectLifecycleStep: handleSelectLifecycleStep,
-        onSelectMember: handleSelectMember,
-        pageTitle: 'Studio page',
-        selectedMemberKey: 'workflow:workspace-demo',
-        children: React.createElement('div', null, 'Studio content'),
-      }),
+      <StudioShell
+        currentLifecycleStep="build"
+        lifecycleSteps={lifecycleSteps}
+        members={members}
+        onSelectLifecycleStep={handleSelectLifecycleStep}
+        onSelectMember={handleSelectMember}
+        pageTitle="Studio page"
+        railFooter={<div>Current scope snapshot</div>}
+        selectedMemberKey="workflow:workspace-demo"
+      >
+        <div>Studio content</div>
+      </StudioShell>,
     );
 
     expect(container.firstChild).toHaveStyle({
@@ -79,6 +81,10 @@ describe('StudioShell', () => {
       width: '100%',
     });
     expect(screen.getByLabelText('Team members')).toBeInTheDocument();
+    expect(screen.getByText('Member inventory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search team members')).toBeInTheDocument();
+    expect(screen.getByText('Workbench context')).toBeInTheDocument();
+    expect(screen.getByText('Current scope snapshot')).toBeInTheDocument();
     expect(screen.getByText('Support Triage Router')).toBeInTheDocument();
     expect(screen.queryByText('Workspace panels')).toBeNull();
     expect(
@@ -90,19 +96,33 @@ describe('StudioShell', () => {
     expect(
       screen.getByRole('button', { name: /Observe/i }),
     ).not.toHaveAttribute('aria-current', 'step');
+    expect(screen.getByTestId('studio-lifecycle-section')).toHaveStyle({
+      gap: '6px',
+      padding: '0 16px 10px',
+    });
+    expect(screen.getByTestId('studio-lifecycle-stepper')).toHaveStyle({
+      display: 'flex',
+      overflowX: 'auto',
+    });
+    expect(
+      within(screen.getByTestId('studio-lifecycle-stepper')).getByRole('button', {
+        name: /^Build$/,
+      }),
+    ).toHaveStyle({
+      borderRadius: '999px',
+      padding: '6px 14px',
+    });
+    expect(
+      within(screen.getByTestId('studio-lifecycle-stepper')).getByRole('button', {
+        name: /^Observe$/,
+      }),
+    ).toHaveAttribute('title', 'Inspect run posture for the selected member.');
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Open team members help' }),
     );
     expect(
       await screen.findByText(/Keep one member in focus while Build, Bind/i),
-    ).toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Open lifecycle step 4 help' }),
-    );
-    expect(
-      await screen.findByText('Inspect run posture for the selected member.'),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /risk-review/i }));
@@ -114,17 +134,18 @@ describe('StudioShell', () => {
 
   it('keeps the content body scroll ownership configurable', () => {
     render(
-      React.createElement(StudioShell, {
-        contentOverflow: 'hidden',
-        currentLifecycleStep: 'build',
-        lifecycleSteps,
-        members,
-        onSelectLifecycleStep: jest.fn(),
-        onSelectMember: jest.fn(),
-        pageTitle: 'Studio page',
-        selectedMemberKey: 'workflow:workspace-demo',
-        children: React.createElement('div', null, 'Studio content'),
-      }),
+      <StudioShell
+        contentOverflow="hidden"
+        currentLifecycleStep="build"
+        lifecycleSteps={lifecycleSteps}
+        members={members}
+        onSelectLifecycleStep={jest.fn()}
+        onSelectMember={jest.fn()}
+        pageTitle="Studio page"
+        selectedMemberKey="workflow:workspace-demo"
+      >
+        <div>Studio content</div>
+      </StudioShell>,
     );
 
     expect(screen.getByText('Studio content').parentElement).toHaveStyle({
@@ -134,22 +155,23 @@ describe('StudioShell', () => {
       minHeight: '0',
       overflowX: 'hidden',
       overflowY: 'hidden',
-      padding: '12px',
+      padding: '14px 16px 16px',
     });
   });
 
   it('keeps the shell content as a flex column so the studio editor can stretch', () => {
     render(
-      React.createElement(StudioShell, {
-        currentLifecycleStep: 'observe',
-        lifecycleSteps,
-        members,
-        onSelectLifecycleStep: jest.fn(),
-        onSelectMember: jest.fn(),
-        pageTitle: 'Studio page',
-        selectedMemberKey: 'workflow:workspace-demo',
-        children: React.createElement('div', null, 'Studio content'),
-      }),
+      <StudioShell
+        currentLifecycleStep="observe"
+        lifecycleSteps={lifecycleSteps}
+        members={members}
+        onSelectLifecycleStep={jest.fn()}
+        onSelectMember={jest.fn()}
+        pageTitle="Studio page"
+        selectedMemberKey="workflow:workspace-demo"
+      >
+        <div>Studio content</div>
+      </StudioShell>,
     );
 
     expect(screen.getByTestId('studio-shell-content')).toHaveStyle({
