@@ -1,9 +1,12 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -123,6 +126,10 @@ internal static class GAgentServiceTestKit
         AssignActorId(agent, actorId);
         agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<TState>(eventStore);
         agent.Services = new ServiceCollection()
+            .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
+            .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
+                sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
             .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>())
             .BuildServiceProvider();
         return agent;

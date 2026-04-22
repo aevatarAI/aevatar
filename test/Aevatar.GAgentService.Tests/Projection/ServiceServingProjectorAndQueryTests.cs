@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
@@ -317,6 +318,118 @@ public sealed class ServiceServingProjectorAndQueryTests
             });
 
         (await store.ReadItemsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RolloutCommandObservationProjectorAndQueryReader_ShouldProjectObservedOutcome()
+    {
+        var store = new RecordingDocumentStore<ServiceRolloutCommandObservationReadModel>(x => x.Id);
+        var projector = new ServiceRolloutCommandObservationProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var reader = new ServiceRolloutCommandObservationQueryReader(store);
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceRolloutProjectionContext
+        {
+            RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-rollout",
+        };
+        var observedAt = DateTimeOffset.Parse("2026-03-15T08:00:00+00:00");
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceRolloutCommandObservedEvent
+                {
+                    Identity = identity.Clone(),
+                    RolloutId = "rollout-a",
+                    CommandId = "cmd-rollout-pause",
+                    CorrelationId = "corr-rollout-pause",
+                    Status = ServiceRolloutStatus.Paused,
+                    WasNoOp = true,
+                    ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                },
+                eventId: "evt-rollout-observed",
+                stateVersion: 9,
+                observedAt: observedAt));
+
+        var snapshot = await reader.GetAsync("cmd-rollout-pause");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        snapshot.RolloutId.Should().Be("rollout-a");
+        snapshot.CorrelationId.Should().Be("corr-rollout-pause");
+        snapshot.Status.Should().Be(ServiceRolloutStatus.Paused);
+        snapshot.WasNoOp.Should().BeTrue();
+        snapshot.StateVersion.Should().Be(9);
+        snapshot.ObservedAt.Should().Be(observedAt);
+    }
+
+    [Fact]
+    public async Task RolloutProjector_ShouldAdvanceVersionWithoutChangingStatus_WhenObservationArrives()
+    {
+        var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
+        var projector = new ServiceRolloutProjector(
+            store,
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceRolloutProjectionContext
+        {
+            RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-rollout",
+        };
+        var startedAt = DateTimeOffset.Parse("2026-03-15T01:00:00+00:00");
+        var observedAt = DateTimeOffset.Parse("2026-03-15T02:00:00+00:00");
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceRolloutStartedEvent
+                {
+                    Identity = identity.Clone(),
+                    Plan = new ServiceRolloutPlanSpec
+                    {
+                        RolloutId = "rollout-a",
+                        DisplayName = "Primary rollout",
+                        Stages =
+                        {
+                            new ServiceRolloutStageSpec
+                            {
+                                StageId = "stage-a",
+                                Targets = { CreateTarget("dep-a", "r1", "actor-a", 100, "run") },
+                            },
+                        },
+                    },
+                    StartedAt = Timestamp.FromDateTimeOffset(startedAt),
+                },
+                eventId: "evt-rollout-start",
+                stateVersion: 3,
+                observedAt: startedAt));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceRolloutCommandObservedEvent
+                {
+                    Identity = identity.Clone(),
+                    RolloutId = "rollout-a",
+                    CommandId = "cmd-rollout-pause",
+                    CorrelationId = "corr-rollout-pause",
+                    Status = ServiceRolloutStatus.InProgress,
+                    WasNoOp = true,
+                    ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                },
+                eventId: "evt-rollout-observed",
+                stateVersion: 5,
+                observedAt: observedAt));
+
+        var readModel = await store.GetAsync(ServiceKeys.Build(identity));
+
+        readModel.Should().NotBeNull();
+        readModel!.Status.Should().Be(ServiceRolloutStatus.InProgress.ToString());
+        readModel.StateVersion.Should().Be(5);
+        readModel.LastEventId.Should().Be("evt-rollout-observed");
+        readModel.UpdatedAt.Should().Be(startedAt);
     }
 
     [Fact]

@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Internal;
 using Google.Protobuf;
@@ -18,7 +17,6 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
     private readonly IServiceDeploymentCatalogProjectionPort _deploymentProjectionPort;
     private readonly IServiceServingSetProjectionPort _servingSetProjectionPort;
     private readonly IServiceRolloutProjectionPort _rolloutProjectionPort;
-    private readonly IServiceRolloutQueryReader _rolloutQueryReader;
     private readonly IServiceTrafficViewProjectionPort _trafficViewProjectionPort;
 
     public ServiceCommandApplicationService(
@@ -29,7 +27,6 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         IServiceDeploymentCatalogProjectionPort deploymentProjectionPort,
         IServiceServingSetProjectionPort servingSetProjectionPort,
         IServiceRolloutProjectionPort rolloutProjectionPort,
-        IServiceRolloutQueryReader rolloutQueryReader,
         IServiceTrafficViewProjectionPort trafficViewProjectionPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -39,7 +36,6 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         _deploymentProjectionPort = deploymentProjectionPort ?? throw new ArgumentNullException(nameof(deploymentProjectionPort));
         _servingSetProjectionPort = servingSetProjectionPort ?? throw new ArgumentNullException(nameof(servingSetProjectionPort));
         _rolloutProjectionPort = rolloutProjectionPort ?? throw new ArgumentNullException(nameof(rolloutProjectionPort));
-        _rolloutQueryReader = rolloutQueryReader ?? throw new ArgumentNullException(nameof(rolloutQueryReader));
         _trafficViewProjectionPort = trafficViewProjectionPort ?? throw new ArgumentNullException(nameof(trafficViewProjectionPort));
     }
 
@@ -158,18 +154,16 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
     }
 
-    public async Task<ServiceRolloutCommandAcceptedReceipt> PauseServiceRolloutAsync(
+    public async Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(
         PauseServiceRolloutCommand command,
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureRolloutTargetAsync(command.Identity, ct);
         await _rolloutProjectionPort.EnsureProjectionAsync(actorId, ct);
-        var currentState = await GetRolloutCurrentStateAsync(command.Identity, ct);
-        var receipt = await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
-        return CreatePauseReceipt(receipt, command.RolloutId, currentState);
+        return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
     }
 
-    public async Task<ServiceRolloutCommandAcceptedReceipt> ResumeServiceRolloutAsync(
+    public async Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(
         ResumeServiceRolloutCommand command,
         CancellationToken ct = default)
     {
@@ -177,12 +171,10 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
         await EnsureServingProjectionsAsync(ServiceActorIds.ServingSet(command.Identity), ct);
         await _rolloutProjectionPort.EnsureProjectionAsync(actorId, ct);
-        var currentState = await GetRolloutCurrentStateAsync(command.Identity, ct);
-        var receipt = await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
-        return CreateResumeReceipt(receipt, command.RolloutId, currentState);
+        return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
     }
 
-    public async Task<ServiceRolloutCommandAcceptedReceipt> RollbackServiceRolloutAsync(
+    public async Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(
         RollbackServiceRolloutCommand command,
         CancellationToken ct = default)
     {
@@ -190,9 +182,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
         await EnsureServingProjectionsAsync(ServiceActorIds.ServingSet(command.Identity), ct);
         await _rolloutProjectionPort.EnsureProjectionAsync(actorId, ct);
-        var currentState = await GetRolloutCurrentStateAsync(command.Identity, ct);
-        var receipt = await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
-        return CreateRollbackReceipt(receipt, command.RolloutId, currentState);
+        return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
     }
 
     private async Task EnsureServingProjectionsAsync(string actorId, CancellationToken ct)
@@ -216,83 +206,4 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
 
     private static string CorrelationForRevision(ServiceIdentity identity, string revisionId) =>
         $"{ServiceKeys.Build(identity)}:{revisionId ?? string.Empty}";
-
-    private async Task<ServiceRolloutCurrentState?> GetRolloutCurrentStateAsync(ServiceIdentity identity, CancellationToken ct)
-    {
-        var snapshot = await _rolloutQueryReader.GetAsync(identity, ct);
-        if (snapshot == null)
-            return null;
-
-        return new ServiceRolloutCurrentState(
-            snapshot.RolloutId,
-            ParseRolloutStatus(snapshot.Status));
-    }
-
-    private static ServiceRolloutCommandAcceptedReceipt CreateRolloutReceipt(
-        ServiceCommandAcceptedReceipt receipt,
-        bool wasNoOp,
-        ServiceRolloutStatus status) =>
-        new(
-            receipt.TargetActorId,
-            receipt.CommandId,
-            receipt.CorrelationId,
-            wasNoOp,
-            status.ToString());
-
-    private static ServiceRolloutCommandAcceptedReceipt CreatePauseReceipt(
-        ServiceCommandAcceptedReceipt receipt,
-        string rolloutId,
-        ServiceRolloutCurrentState? currentState)
-    {
-        if (!MatchesRollout(currentState, rolloutId))
-            return CreateRolloutReceipt(receipt, wasNoOp: false, ServiceRolloutStatus.Paused);
-
-        var wasNoOp = currentState!.Status != ServiceRolloutStatus.InProgress;
-        return CreateRolloutReceipt(
-            receipt,
-            wasNoOp,
-            wasNoOp ? currentState.Status : ServiceRolloutStatus.Paused);
-    }
-
-    private static ServiceRolloutCommandAcceptedReceipt CreateResumeReceipt(
-        ServiceCommandAcceptedReceipt receipt,
-        string rolloutId,
-        ServiceRolloutCurrentState? currentState)
-    {
-        if (!MatchesRollout(currentState, rolloutId))
-            return CreateRolloutReceipt(receipt, wasNoOp: false, ServiceRolloutStatus.InProgress);
-
-        var wasNoOp = currentState!.Status != ServiceRolloutStatus.Paused;
-        return CreateRolloutReceipt(
-            receipt,
-            wasNoOp,
-            wasNoOp ? currentState.Status : ServiceRolloutStatus.InProgress);
-    }
-
-    private static ServiceRolloutCommandAcceptedReceipt CreateRollbackReceipt(
-        ServiceCommandAcceptedReceipt receipt,
-        string rolloutId,
-        ServiceRolloutCurrentState? currentState)
-    {
-        if (!MatchesRollout(currentState, rolloutId))
-            return CreateRolloutReceipt(receipt, wasNoOp: false, ServiceRolloutStatus.RolledBack);
-
-        var wasNoOp = currentState!.Status is ServiceRolloutStatus.Completed or ServiceRolloutStatus.RolledBack;
-        return CreateRolloutReceipt(
-            receipt,
-            wasNoOp,
-            wasNoOp ? currentState.Status : ServiceRolloutStatus.RolledBack);
-    }
-
-    private static bool MatchesRollout(ServiceRolloutCurrentState? currentState, string rolloutId) =>
-        currentState != null &&
-        !string.IsNullOrWhiteSpace(rolloutId) &&
-        string.Equals(currentState.RolloutId, rolloutId, StringComparison.Ordinal);
-
-    private static ServiceRolloutStatus ParseRolloutStatus(string status) =>
-        System.Enum.TryParse<ServiceRolloutStatus>(status, out var parsed)
-            ? parsed
-            : ServiceRolloutStatus.Unspecified;
-
-    private sealed record ServiceRolloutCurrentState(string RolloutId, ServiceRolloutStatus Status);
 }

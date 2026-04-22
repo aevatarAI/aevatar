@@ -52,15 +52,15 @@ public interface IServiceCommandPort
         AdvanceServiceRolloutCommand command,
         CancellationToken ct = default);
 
-    Task<ServiceRolloutCommandAcceptedReceipt> PauseServiceRolloutAsync(
+    Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(
         PauseServiceRolloutCommand command,
         CancellationToken ct = default);
 
-    Task<ServiceRolloutCommandAcceptedReceipt> ResumeServiceRolloutAsync(
+    Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(
         ResumeServiceRolloutCommand command,
         CancellationToken ct = default);
 
-    Task<ServiceRolloutCommandAcceptedReceipt> RollbackServiceRolloutAsync(
+    Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(
         RollbackServiceRolloutCommand command,
         CancellationToken ct = default);
 }

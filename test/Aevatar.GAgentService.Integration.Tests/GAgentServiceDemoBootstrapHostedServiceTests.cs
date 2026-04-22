@@ -212,29 +212,26 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             return Task.FromResult(CreateReceipt(command.Identity));
         }
 
-        public Task<ServiceRolloutCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
         {
             PauseServiceRolloutCommands.Add(command.Clone());
-            return Task.FromResult(CreateRolloutReceipt(command.Identity, ServiceRolloutStatus.Paused));
+            return Task.FromResult(CreateReceipt(command.Identity));
         }
 
-        public Task<ServiceRolloutCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
         {
             ResumeServiceRolloutCommands.Add(command.Clone());
-            return Task.FromResult(CreateRolloutReceipt(command.Identity, ServiceRolloutStatus.InProgress));
+            return Task.FromResult(CreateReceipt(command.Identity));
         }
 
-        public Task<ServiceRolloutCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
         {
             RollbackServiceRolloutCommands.Add(command.Clone());
-            return Task.FromResult(CreateRolloutReceipt(command.Identity, ServiceRolloutStatus.RolledBack));
+            return Task.FromResult(CreateReceipt(command.Identity));
         }
 
         private static ServiceCommandAcceptedReceipt CreateReceipt(ServiceIdentity identity) =>
             new(ServiceKeys.Build(identity), Guid.NewGuid().ToString("N"), ServiceKeys.Build(identity));
-
-        private static ServiceRolloutCommandAcceptedReceipt CreateRolloutReceipt(ServiceIdentity identity, ServiceRolloutStatus status) =>
-            new(ServiceKeys.Build(identity), Guid.NewGuid().ToString("N"), ServiceKeys.Build(identity), false, status.ToString());
     }
 
     private sealed class RecordingServiceQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
@@ -261,6 +258,12 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
 
         public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
 
         public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceTrafficViewSnapshot?>(null);

@@ -300,33 +300,33 @@ public sealed class ServiceEndpointsTests
         var rollbackResponse = await host.Client.PostAsJsonAsync(
             "/api/services/orders/rollouts/rollout-2:rollback",
             new ServiceEndpoints.RolloutActionHttpRequest("tenant", "app", "ns", "rollback-now"));
-        var pauseReceipt = await pauseResponse.Content.ReadFromJsonAsync<ServiceRolloutCommandAcceptedReceipt>();
-        var resumeReceipt = await resumeResponse.Content.ReadFromJsonAsync<ServiceRolloutCommandAcceptedReceipt>();
-        var rollbackReceipt = await rollbackResponse.Content.ReadFromJsonAsync<ServiceRolloutCommandAcceptedReceipt>();
+        var pauseReceipt = await pauseResponse.Content.ReadFromJsonAsync<ServiceCommandAcceptedReceipt>();
+        var resumeReceipt = await resumeResponse.Content.ReadFromJsonAsync<ServiceCommandAcceptedReceipt>();
+        var rollbackReceipt = await rollbackResponse.Content.ReadFromJsonAsync<ServiceCommandAcceptedReceipt>();
 
         deactivateResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         advanceResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         pauseResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         resumeResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         rollbackResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        pauseReceipt.Should().BeEquivalentTo(new ServiceRolloutCommandAcceptedReceipt(
+        pauseResponse.Headers.Location.Should().NotBeNull();
+        pauseResponse.Headers.Location!.ToString().Should().Be("/api/services/orders/rollouts/commands/cmd-pause-rollout");
+        resumeResponse.Headers.Location.Should().NotBeNull();
+        resumeResponse.Headers.Location!.ToString().Should().Be("/api/services/orders/rollouts/commands/cmd-resume-rollout");
+        rollbackResponse.Headers.Location.Should().NotBeNull();
+        rollbackResponse.Headers.Location!.ToString().Should().Be("/api/services/orders/rollouts/commands/cmd-rollback-rollout");
+        pauseReceipt.Should().BeEquivalentTo(new ServiceCommandAcceptedReceipt(
             "rollout-actor",
             "cmd-pause-rollout",
-            "corr-pause-rollout",
-            true,
-            ServiceRolloutStatus.Paused.ToString()));
-        resumeReceipt.Should().BeEquivalentTo(new ServiceRolloutCommandAcceptedReceipt(
+            "corr-pause-rollout"));
+        resumeReceipt.Should().BeEquivalentTo(new ServiceCommandAcceptedReceipt(
             "rollout-actor",
             "cmd-resume-rollout",
-            "corr-resume-rollout",
-            false,
-            ServiceRolloutStatus.InProgress.ToString()));
-        rollbackReceipt.Should().BeEquivalentTo(new ServiceRolloutCommandAcceptedReceipt(
+            "corr-resume-rollout"));
+        rollbackReceipt.Should().BeEquivalentTo(new ServiceCommandAcceptedReceipt(
             "rollout-actor",
             "cmd-rollback-rollout",
-            "corr-rollback-rollout",
-            false,
-            ServiceRolloutStatus.RolledBack.ToString()));
+            "corr-rollback-rollout"));
 
         host.CommandPort.DeactivateServiceDeploymentCommand.Should().NotBeNull();
         host.CommandPort.DeactivateServiceDeploymentCommand!.DeploymentId.Should().Be("dep-2");
@@ -340,6 +340,38 @@ public sealed class ServiceEndpointsTests
         host.CommandPort.RollbackServiceRolloutCommand.Should().NotBeNull();
         host.CommandPort.RollbackServiceRolloutCommand!.RolloutId.Should().Be("rollout-2");
         host.CommandPort.RollbackServiceRolloutCommand.Reason.Should().Be("rollback-now");
+    }
+
+    [Fact]
+    public async Task RolloutCommandObservationEndpoint_ShouldReturnObservationSnapshot()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.QueryPort.GetServiceRolloutCommandObservationResult = new ServiceRolloutCommandObservationSnapshot(
+            "cmd-pause-rollout",
+            "corr-pause-rollout",
+            "tenant:app:ns:orders",
+            "rollout-2",
+            ServiceRolloutStatus.Paused,
+            true,
+            17,
+            DateTimeOffset.Parse("2026-04-22T10:00:00+00:00"));
+
+        var observation = await host.Client.GetFromJsonAsync<ServiceRolloutCommandObservationSnapshot>(
+            "/api/services/orders/rollouts/commands/cmd-pause-rollout?tenantId=tenant&appId=app&namespace=ns");
+
+        observation.Should().NotBeNull();
+        observation!.Status.Should().Be(ServiceRolloutStatus.Paused);
+        observation.WasNoOp.Should().BeTrue();
+        observation.StateVersion.Should().Be(17);
+        host.QueryPort.LastGetServiceRolloutCommandObservation.Should().NotBeNull();
+        host.QueryPort.LastGetServiceRolloutCommandObservation!.Value.commandId.Should().Be("cmd-pause-rollout");
+        host.QueryPort.LastGetServiceRolloutCommandObservation!.Value.identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "ns",
+            ServiceId = "orders",
+        });
     }
 
     [Fact]
@@ -931,22 +963,22 @@ public sealed class ServiceEndpointsTests
             return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-advance-rollout", "corr-advance-rollout"));
         }
 
-        public Task<ServiceRolloutCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
         {
             PauseServiceRolloutCommand = command;
-            return Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("rollout-actor", "cmd-pause-rollout", "corr-pause-rollout", true, ServiceRolloutStatus.Paused.ToString()));
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-pause-rollout", "corr-pause-rollout"));
         }
 
-        public Task<ServiceRolloutCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
         {
             ResumeServiceRolloutCommand = command;
-            return Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("rollout-actor", "cmd-resume-rollout", "corr-resume-rollout", false, ServiceRolloutStatus.InProgress.ToString()));
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-resume-rollout", "corr-resume-rollout"));
         }
 
-        public Task<ServiceRolloutCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
         {
             RollbackServiceRolloutCommand = command;
-            return Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("rollout-actor", "cmd-rollback-rollout", "corr-rollback-rollout", false, ServiceRolloutStatus.RolledBack.ToString()));
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-rollback-rollout", "corr-rollback-rollout"));
         }
     }
 
@@ -964,6 +996,8 @@ public sealed class ServiceEndpointsTests
 
         public ServiceRolloutSnapshot? GetServiceRolloutResult { get; set; }
 
+        public ServiceRolloutCommandObservationSnapshot? GetServiceRolloutCommandObservationResult { get; set; }
+
         public ServiceTrafficViewSnapshot? GetServiceTrafficViewResult { get; set; }
 
         public ServiceIdentity? LastGetServiceIdentity { get; private set; }
@@ -975,6 +1009,8 @@ public sealed class ServiceEndpointsTests
         public ServiceIdentity? LastGetServiceServingSetIdentity { get; private set; }
 
         public ServiceIdentity? LastGetServiceRolloutIdentity { get; private set; }
+
+        public (ServiceIdentity identity, string commandId)? LastGetServiceRolloutCommandObservation { get; private set; }
 
         public ServiceIdentity? LastGetServiceTrafficViewIdentity { get; private set; }
 
@@ -1019,6 +1055,15 @@ public sealed class ServiceEndpointsTests
         {
             LastGetServiceRolloutIdentity = identity;
             return Task.FromResult(GetServiceRolloutResult);
+        }
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            LastGetServiceRolloutCommandObservation = (identity, commandId);
+            return Task.FromResult(GetServiceRolloutCommandObservationResult);
         }
 
         public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default)
