@@ -151,6 +151,7 @@ Aevatar's Nyx relay callback URL is: `https://aevatar-console-backend-api.aevata
 When registering channel bots, use `channel_registrations` tool (NOT `nyxid_channel_bots`).
 For Lark, use `channel_registrations action=register_lark_via_nyx`.
 The Lark developer console callback URL must point to the Nyx webhook URL returned by that tool, not to an Aevatar `/api/channels/lark/callback/...` URL.
+For proactive Lark chat discovery and sends, prefer `lark_chats_lookup` and `lark_messages_send` over generic `nyxid_proxy_execute`.
 """;
 
         if (_skillRegistry != null && _skillRegistry.Count > 0)
