@@ -377,7 +377,7 @@ public static class ChannelCallbackEndpoints
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
             callback_url = $"{callbackPath}/{registrationId}",
-            auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.LegacyDirectBinding?.NyxRefreshToken),
+            refresh_token_present = !string.IsNullOrWhiteSpace(cmd.LegacyDirectBinding?.NyxRefreshToken),
             note = "Registration accepted. Read model visibility is asynchronous; list/query results may lag briefly until the projection pipeline catches up.",
         });
     }
@@ -507,7 +507,7 @@ public static class ChannelCallbackEndpoints
         {
             status = "accepted",
             registration_id = registrationId,
-            auto_refresh_ready = !string.IsNullOrWhiteSpace(newRefreshToken),
+            refresh_token_present = !string.IsNullOrWhiteSpace(newRefreshToken),
             note = "Token update accepted. Read model visibility is asynchronous; query/list results may lag briefly until the projection pipeline catches up.",
         });
     }

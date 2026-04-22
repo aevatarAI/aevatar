@@ -2,12 +2,10 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
-using NSubstitute;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -15,85 +13,29 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelPlatformReplyServiceTests
 {
     [Fact]
-    public async Task DeliverAsync_refreshes_expired_lark_token_and_replays_successfully()
+    public async Task DeliverAsync_returns_manual_reauth_when_lark_token_is_expired()
     {
         var store = new FakeChannelBotRegistrationStore(MakeRegistration("old-access", "old-refresh"));
-        var actorRuntime = BuildActorRuntime(store, out _);
         var handler = new ScriptedNyxHandler(
             proxyFactory: request =>
             {
                 var auth = request.Headers.Authorization?.Parameter;
-                var response = auth switch
+                return Task.FromResult(auth switch
                 {
                     "old-access" => CreateJsonResponse(
                         HttpStatusCode.Unauthorized,
                         """{"error":"token_expired","error_code":2001,"message":"Token expired"}"""),
-                    "fresh-access" => CreateJsonResponse(
-                        HttpStatusCode.OK,
-                        """{"code":0,"msg":"success","data":{"message_id":"om_fresh_1"}}"""),
                     _ => CreateJsonResponse(HttpStatusCode.BadRequest, """{"message":"unexpected auth"}"""),
-                };
-                return Task.FromResult(response);
+                });
             },
-            refreshFactory: _ => Task.FromResult(CreateJsonResponse(
-                HttpStatusCode.OK,
-                """{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":900}""")));
+            refreshFactory: _ => throw new InvalidOperationException("refresh should not be called"));
 
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-        var refreshService = new ChannelBotRegistrationTokenRefreshService(
-            store,
-            actorRuntime,
-            nyxClient,
-            NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
         var replyService = new ChannelPlatformReplyService(
             store,
             nyxClient,
-            refreshService,
-            NullLogger<ChannelPlatformReplyService>.Instance);
-        var adapter = new LarkPlatformAdapter(NullLogger<LarkPlatformAdapter>.Instance);
-
-        var result = await replyService.DeliverAsync(
-            adapter,
-            "hello",
-            MakeInbound(),
-            store.Current,
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
-        result.Detail.Should().Contain("auto_refresh_succeeded");
-        store.Current.NyxUserToken.Should().Be("fresh-access");
-        store.Current.NyxRefreshToken.Should().Be("fresh-refresh");
-        handler.ProxyCalls.Should().Be(2);
-        handler.RefreshCalls.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task DeliverAsync_returns_manual_reauth_when_refresh_fails()
-    {
-        var store = new FakeChannelBotRegistrationStore(MakeRegistration("old-access", "old-refresh"));
-        var actorRuntime = BuildActorRuntime(store, out _);
-        var handler = new ScriptedNyxHandler(
-            proxyFactory: _ => Task.FromResult(CreateJsonResponse(
-                HttpStatusCode.Unauthorized,
-                """{"error":"token_expired","error_code":2001,"message":"Token expired"}""")),
-            refreshFactory: _ => Task.FromResult(CreateJsonResponse(
-                HttpStatusCode.Unauthorized,
-                """{"error":"invalid_token","message":"Refresh token expired"}""")));
-
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-        var refreshService = new ChannelBotRegistrationTokenRefreshService(
-            store,
-            actorRuntime,
-            nyxClient,
-            NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
-        var replyService = new ChannelPlatformReplyService(
-            store,
-            nyxClient,
-            refreshService,
             NullLogger<ChannelPlatformReplyService>.Instance);
         var adapter = new LarkPlatformAdapter(NullLogger<LarkPlatformAdapter>.Instance);
 
@@ -107,18 +49,17 @@ public sealed class ChannelPlatformReplyServiceTests
         result.Succeeded.Should().BeFalse();
         result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
         result.Detail.Should().Contain("manual_reauth_required");
-        result.Detail.Should().Contain("refresh_failed");
+        result.Detail.Should().Contain("reply_path_token_refresh_disabled");
         store.Current.NyxUserToken.Should().Be("old-access");
         store.Current.NyxRefreshToken.Should().Be("old-refresh");
         handler.ProxyCalls.Should().Be(1);
-        handler.RefreshCalls.Should().Be(1);
+        handler.RefreshCalls.Should().Be(0);
     }
 
     [Fact]
     public async Task DeliverAsync_returns_manual_reauth_when_refresh_token_is_missing()
     {
         var store = new FakeChannelBotRegistrationStore(MakeRegistration("old-access", string.Empty));
-        var actorRuntime = BuildActorRuntime(store, out _);
         var handler = new ScriptedNyxHandler(
             proxyFactory: _ => Task.FromResult(CreateJsonResponse(
                 HttpStatusCode.Unauthorized,
@@ -128,15 +69,9 @@ public sealed class ChannelPlatformReplyServiceTests
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-        var refreshService = new ChannelBotRegistrationTokenRefreshService(
-            store,
-            actorRuntime,
-            nyxClient,
-            NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
         var replyService = new ChannelPlatformReplyService(
             store,
             nyxClient,
-            refreshService,
             NullLogger<ChannelPlatformReplyService>.Instance);
         var adapter = new LarkPlatformAdapter(NullLogger<LarkPlatformAdapter>.Instance);
 
@@ -148,61 +83,72 @@ public sealed class ChannelPlatformReplyServiceTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
         result.Detail.Should().Contain("manual_reauth_required");
         result.Detail.Should().Contain("missing_nyx_refresh_token");
+        store.Current.NyxUserToken.Should().Be("old-access");
+        store.Current.NyxRefreshToken.Should().BeEmpty();
         handler.ProxyCalls.Should().Be(1);
         handler.RefreshCalls.Should().Be(0);
     }
 
     [Fact]
-    public async Task DeliverAsync_concurrent_refreshes_remain_stateless_and_eventually_persist_latest_tokens()
+    public async Task DeliverAsync_returns_upstream_failure_for_non_refreshable_auth_error()
     {
         var store = new FakeChannelBotRegistrationStore(MakeRegistration("old-access", "old-refresh"));
-        var actorRuntime = BuildActorRuntime(store, out var actor);
-        var bothExpiredAttemptsObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var expiredAttemptCount = 0;
         var handler = new ScriptedNyxHandler(
-            proxyFactory: request =>
-            {
-                var auth = request.Headers.Authorization?.Parameter;
-                if (string.Equals(auth, "old-access", StringComparison.Ordinal) &&
-                    Interlocked.Increment(ref expiredAttemptCount) == 2)
-                {
-                    bothExpiredAttemptsObserved.TrySetResult();
-                }
-
-                var response = auth switch
-                {
-                    "old-access" => CreateJsonResponse(
-                        HttpStatusCode.Unauthorized,
-                        """{"error":"token_expired","error_code":2001,"message":"Token expired"}"""),
-                    "fresh-access" => CreateJsonResponse(
-                        HttpStatusCode.OK,
-                        """{"code":0,"msg":"success","data":{"message_id":"om_shared"}}"""),
-                    _ => CreateJsonResponse(HttpStatusCode.BadRequest, """{"message":"unexpected auth"}"""),
-                };
-                return Task.FromResult(response);
-            },
-            refreshFactory: async _ =>
-            {
-                await bothExpiredAttemptsObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                return CreateJsonResponse(
-                    HttpStatusCode.OK,
-                    """{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":900}""");
-            });
+            proxyFactory: _ => Task.FromResult(CreateJsonResponse(
+                HttpStatusCode.Forbidden,
+                """{"error":"forbidden","message":"bot muted"}""")),
+            refreshFactory: _ => throw new InvalidOperationException("refresh should not be called"));
 
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-        var refreshService = new ChannelBotRegistrationTokenRefreshService(
-            store,
-            actorRuntime,
-            nyxClient,
-            NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
         var replyService = new ChannelPlatformReplyService(
             store,
             nyxClient,
-            refreshService,
+            NullLogger<ChannelPlatformReplyService>.Instance);
+        var adapter = new LarkPlatformAdapter(NullLogger<LarkPlatformAdapter>.Instance);
+
+        var result = await replyService.DeliverAsync(
+            adapter,
+            "hello",
+            MakeInbound(),
+            store.Current,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().NotContain("manual_reauth_required");
+        result.Detail.Should().Contain("forbidden");
+        handler.ProxyCalls.Should().Be(1);
+        handler.RefreshCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DeliverAsync_concurrent_expired_lark_replies_fail_without_mutating_registration()
+    {
+        var store = new FakeChannelBotRegistrationStore(MakeRegistration("old-access", "old-refresh"));
+        var handler = new ScriptedNyxHandler(
+            proxyFactory: request =>
+            {
+                var auth = request.Headers.Authorization?.Parameter;
+                return Task.FromResult(auth switch
+                {
+                    "old-access" => CreateJsonResponse(
+                        HttpStatusCode.Unauthorized,
+                        """{"error":"token_expired","error_code":2001,"message":"Token expired"}"""),
+                    _ => CreateJsonResponse(HttpStatusCode.BadRequest, """{"message":"unexpected auth"}"""),
+                });
+            },
+            refreshFactory: _ => throw new InvalidOperationException("refresh should not be called"));
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var replyService = new ChannelPlatformReplyService(
+            store,
+            nyxClient,
             NullLogger<ChannelPlatformReplyService>.Instance);
         var adapter = new LarkPlatformAdapter(NullLogger<LarkPlatformAdapter>.Instance);
 
@@ -212,15 +158,15 @@ public sealed class ChannelPlatformReplyServiceTests
 
         var results = await Task.WhenAll(first, second);
 
-        results.Should().OnlyContain(static result => result.Succeeded);
-        handler.RefreshCalls.Should().BeGreaterThanOrEqualTo(1);
-        await actor.Received().HandleEventAsync(
-            Arg.Is<EventEnvelope>(envelope =>
-                envelope.Payload != null &&
-                envelope.Payload.Is(ChannelBotUpdateTokenCommand.Descriptor)),
-            Arg.Any<CancellationToken>());
-        store.Current.NyxUserToken.Should().Be("fresh-access");
-        store.Current.NyxRefreshToken.Should().Be("fresh-refresh");
+        results.Should().OnlyContain(static result =>
+            !result.Succeeded &&
+            result.FailureKind == PlatformReplyFailureKind.Permanent &&
+            !string.IsNullOrWhiteSpace(result.Detail) &&
+            result.Detail.Contains("manual_reauth_required", StringComparison.Ordinal));
+        handler.ProxyCalls.Should().Be(2);
+        handler.RefreshCalls.Should().Be(0);
+        store.Current.NyxUserToken.Should().Be("old-access");
+        store.Current.NyxRefreshToken.Should().Be("old-refresh");
     }
 
     private static ChannelBotRegistrationEntry MakeRegistration(string accessToken, string refreshToken) =>
@@ -247,29 +193,6 @@ public sealed class ChannelPlatformReplyServiceTests
             MessageId = "om_1",
             ChatType = "p2p",
         };
-
-    private static IActorRuntime BuildActorRuntime(FakeChannelBotRegistrationStore store, out IActor actor)
-    {
-        actor = Substitute.For<IActor>();
-        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
-        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                var envelope = callInfo.ArgAt<EventEnvelope>(0);
-                var command = envelope.Payload!.Unpack<ChannelBotUpdateTokenCommand>();
-                store.ApplyUpdate(command);
-                return Task.CompletedTask;
-            });
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
-        actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
-                Arg.Any<string?>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(actor));
-        return actorRuntime;
-    }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string body) =>
         new(statusCode)
@@ -325,16 +248,6 @@ public sealed class ChannelPlatformReplyServiceTests
             lock (_gate)
             {
                 return Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([_registration.Clone()]);
-            }
-        }
-
-        public void ApplyUpdate(ChannelBotUpdateTokenCommand command)
-        {
-            lock (_gate)
-            {
-                _registration.NyxUserToken = command.NyxUserToken;
-                _registration.NyxRefreshToken = command.NyxRefreshToken;
-                _stateVersion++;
             }
         }
     }

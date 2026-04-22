@@ -530,7 +530,7 @@ public class ChannelRegistrationToolTests
             var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-4"}""");
             var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            doc.RootElement.GetProperty("auto_refresh_ready").GetBoolean().Should().BeTrue();
+            doc.RootElement.GetProperty("refresh_token_present").GetBoolean().Should().BeTrue();
 
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&

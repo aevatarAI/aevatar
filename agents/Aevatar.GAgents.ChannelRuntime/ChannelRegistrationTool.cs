@@ -303,7 +303,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             nyx_provider_slug = cmd.NyxProviderSlug,
             callback_url = $"{callbackPath}/{registrationId}",
             webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
-            auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.LegacyDirectBinding?.NyxRefreshToken),
+            refresh_token_present = !string.IsNullOrWhiteSpace(cmd.LegacyDirectBinding?.NyxRefreshToken),
             note = "Registration accepted. Read model visibility is asynchronous; try 'list' after a few seconds if the entry does not appear immediately.",
         });
     }
@@ -406,10 +406,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
             status = "accepted",
             registration_id = registrationId,
             platform = exists.Platform,
-            auto_refresh_ready = !string.IsNullOrWhiteSpace(refreshToken),
+            refresh_token_present = !string.IsNullOrWhiteSpace(refreshToken),
             note = !string.IsNullOrWhiteSpace(refreshToken)
-                ? "Token update accepted. Read model visibility is asynchronous; once the projection catches up, outbound replies can auto-refresh with the stored refresh token."
-                : "Token update accepted. Read model visibility is asynchronous; once the projection catches up, outbound replies will use the refreshed access token until it expires.",
+                ? "Token update accepted. Read model visibility is asynchronous; stored refresh tokens remain available for manual re-auth or migration flows."
+                : "Token update accepted. Read model visibility is asynchronous; query/list results may lag briefly until the projection pipeline catches up.",
         });
     }
 

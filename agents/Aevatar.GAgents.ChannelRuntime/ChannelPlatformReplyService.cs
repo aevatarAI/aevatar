@@ -5,25 +5,23 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Sends outbound platform replies and performs Lark-specific Nyx token refresh
-/// when the stored access token has expired.
+/// Sends outbound platform replies.
+/// Legacy direct Lark replies fail fast with manual re-auth when the persisted
+/// Nyx session token has expired.
 /// </summary>
 internal sealed class ChannelPlatformReplyService
 {
     private readonly IChannelBotRegistrationRuntimeQueryPort _runtimeQueryPort;
     private readonly NyxIdApiClient _nyxClient;
-    private readonly ChannelBotRegistrationTokenRefreshService _tokenRefreshService;
     private readonly ILogger<ChannelPlatformReplyService> _logger;
 
     public ChannelPlatformReplyService(
         IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         NyxIdApiClient nyxClient,
-        ChannelBotRegistrationTokenRefreshService tokenRefreshService,
         ILogger<ChannelPlatformReplyService> logger)
     {
         _runtimeQueryPort = runtimeQueryPort ?? throw new ArgumentNullException(nameof(runtimeQueryPort));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
-        _tokenRefreshService = tokenRefreshService ?? throw new ArgumentNullException(nameof(tokenRefreshService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -46,55 +44,15 @@ internal sealed class ChannelPlatformReplyService
             _nyxClient,
             ct);
 
-        if (IsMissingRefreshTokenFailure(adapter, currentRegistration, firstAttempt))
-        {
-            return new PlatformReplyDeliveryResult(
-                false,
-                CombineDetails(firstAttempt.Detail, "manual_reauth_required missing_nyx_refresh_token"),
-                PlatformReplyFailureKind.Permanent);
-        }
-
-        if (!ShouldAttemptRefresh(adapter, currentRegistration, firstAttempt))
+        var manualReauthFailure = BuildManualReauthFailure(adapter, currentRegistration, firstAttempt);
+        if (manualReauthFailure is null)
             return firstAttempt;
 
-        var refresh = await _tokenRefreshService.RefreshAsync(currentRegistration.Id, ct);
-        if (!refresh.Succeeded || refresh.Registration is null)
-        {
-            var detail = CombineDetails(
-                firstAttempt.Detail,
-                refresh.Detail);
-            _logger.LogWarning(
-                "Lark outbound reply refresh failed: registration={RegistrationId}, detail={Detail}",
-                currentRegistration.Id,
-                detail);
-            return new PlatformReplyDeliveryResult(false, detail, PlatformReplyFailureKind.Permanent);
-        }
-
-        var replay = await adapter.SendReplyAsync(
-            replyText,
-            inbound,
-            refresh.Registration,
-            _nyxClient,
-            ct);
-
-        if (replay.Succeeded)
-        {
-            var detail = string.IsNullOrWhiteSpace(replay.Detail)
-                ? "auto_refresh_succeeded"
-                : $"auto_refresh_succeeded {replay.Detail}";
-            _logger.LogInformation(
-                "Lark outbound reply recovered after Nyx token refresh: registration={RegistrationId}, detail={Detail}",
-                currentRegistration.Id,
-                detail);
-            return new PlatformReplyDeliveryResult(true, detail);
-        }
-
-        var replayDetail = CombineDetails("auto_refresh_succeeded replay_failed", replay.Detail);
         _logger.LogWarning(
-            "Lark outbound reply replay failed after Nyx token refresh: registration={RegistrationId}, detail={Detail}",
+            "Lark outbound reply requires manual re-auth: registration={RegistrationId}, detail={Detail}",
             currentRegistration.Id,
-            replayDetail);
-        return new PlatformReplyDeliveryResult(false, replayDetail, replay.FailureKind);
+            manualReauthFailure.Value.Detail);
+        return manualReauthFailure.Value;
     }
 
     private async Task<ChannelBotRegistrationEntry> ResolveCurrentRegistrationAsync(
@@ -108,33 +66,20 @@ internal sealed class ChannelPlatformReplyService
         return current ?? registration;
     }
 
-    private static bool ShouldAttemptRefresh(
+    private static PlatformReplyDeliveryResult? BuildManualReauthFailure(
         IPlatformAdapter adapter,
         ChannelBotRegistrationEntry registration,
         PlatformReplyDeliveryResult result)
     {
         if (!string.Equals(adapter.Platform, "lark", StringComparison.OrdinalIgnoreCase))
-            return false;
+            return null;
+        if (!LarkPlatformAdapter.IsRefreshableAuthFailure(result))
+            return null;
 
-        if (string.IsNullOrWhiteSpace(registration.Id) ||
-            string.IsNullOrWhiteSpace(registration.GetNyxRefreshToken()))
-        {
-            return false;
-        }
-
-        return LarkPlatformAdapter.IsRefreshableAuthFailure(result);
-    }
-
-    private static bool IsMissingRefreshTokenFailure(
-        IPlatformAdapter adapter,
-        ChannelBotRegistrationEntry registration,
-        PlatformReplyDeliveryResult result)
-    {
-        if (!string.Equals(adapter.Platform, "lark", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return string.IsNullOrWhiteSpace(registration.GetNyxRefreshToken()) &&
-               LarkPlatformAdapter.IsRefreshableAuthFailure(result);
+        var detail = string.IsNullOrWhiteSpace(registration.GetNyxRefreshToken())
+            ? CombineDetails(result.Detail, "manual_reauth_required missing_nyx_refresh_token")
+            : CombineDetails(result.Detail, "manual_reauth_required reply_path_token_refresh_disabled");
+        return new PlatformReplyDeliveryResult(false, detail, PlatformReplyFailureKind.Permanent);
     }
 
     private static string CombineDetails(string? primary, string? secondary)
