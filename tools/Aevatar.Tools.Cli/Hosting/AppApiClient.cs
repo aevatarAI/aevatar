@@ -50,18 +50,22 @@ internal sealed class AppApiClient : IDisposable
         int take,
         CancellationToken ct)
     {
-        _ = scopeId;
-        var path = $"api/services?take={take}";
+        var query = ScopeServiceIdentityQuery.BuildQueryString(
+            scopeId,
+            ("take", take.ToString()));
+        var path = $"api/services?{query}";
         return await GetJsonAsync(path, ct);
     }
 
     public async Task<JsonElement> GetBindingsAsync(
         string serviceId,
-        string? tenantId,
+        string? scopeId,
         CancellationToken ct)
     {
-        _ = tenantId;
-        var path = $"api/services/{Uri.EscapeDataString(serviceId)}/bindings";
+        var query = ScopeServiceIdentityQuery.BuildQueryString(scopeId);
+        var path = string.IsNullOrWhiteSpace(query)
+            ? $"api/services/{Uri.EscapeDataString(serviceId)}/bindings"
+            : $"api/services/{Uri.EscapeDataString(serviceId)}/bindings?{query}";
         return await GetJsonAsync(path, ct);
     }
 
