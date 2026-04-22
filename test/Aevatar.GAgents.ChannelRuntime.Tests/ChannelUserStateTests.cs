@@ -156,23 +156,20 @@ public class ChannelUserStateTests
     }
 
     [Fact]
-    public void ChannelBotRegistrationEntry_EncryptKey_DefaultsToEmpty()
-    {
-        var entry = new ChannelBotRegistrationEntry();
-        entry.EncryptKey.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void ChannelBotRegistrationEntry_EncryptKey_RoundTrips()
+    public void ChannelBotRegistrationEntry_RelayIdentifiers_RoundTrip()
     {
         var entry = new ChannelBotRegistrationEntry
         {
             Id = "test",
-            EncryptKey = "my-secret-key",
+            NyxChannelBotId = "bot-1",
+            NyxAgentApiKeyId = "key-1",
+            NyxConversationRouteId = "route-1",
         };
 
         var clone = entry.Clone();
-        clone.EncryptKey.Should().Be("my-secret-key");
+        clone.NyxChannelBotId.Should().Be("bot-1");
+        clone.NyxAgentApiKeyId.Should().Be("key-1");
+        clone.NyxConversationRouteId.Should().Be("route-1");
     }
 
     [Fact]

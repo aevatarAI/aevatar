@@ -617,12 +617,12 @@ public class ChannelUserGAgentContinuationTests
                 ["schedule_time"] = "09:00",
                 ["schedule_timezone"] = "UTC",
             },
-            "evt_daily_submit_1");
+            "evt_daily_submit_1",
+            launchInbound.RegistrationToken);
 
         await agent.HandleInbound(submitInbound);
 
         adapter.Replies.Should().HaveCount(2);
-        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[1].ReplyText).Should().BeTrue();
         adapter.Replies[1].ReplyText.Should().Contain("Daily report agent created: skill-runner-");
         adapter.Replies[1].ReplyText.Should().Contain("View Agents");
         agent.State.ProcessedMessageIds.Should().Contain("evt_daily_submit_1");
@@ -933,12 +933,12 @@ public class ChannelUserGAgentContinuationTests
                 ["schedule_time"] = "09:00",
                 ["schedule_timezone"] = "UTC",
             },
-            "evt_social_submit_1");
+            "evt_social_submit_1",
+            launchInbound.RegistrationToken);
 
         await agent.HandleInbound(submitInbound);
 
         adapter.Replies.Should().HaveCount(2);
-        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[1].ReplyText).Should().BeTrue();
         adapter.Replies[1].ReplyText.Should().Contain("Social media agent created: workflow-agent-");
         adapter.Replies[1].ReplyText.Should().Contain("View Agents");
         agent.State.ProcessedMessageIds.Should().Contain("evt_social_submit_1");
@@ -1917,47 +1917,40 @@ public class ChannelUserGAgentContinuationTests
         NyxProviderSlug = "api-lark-bot",
     };
 
-    private static async Task<ChannelInboundEvent> BuildCardSubmitInboundEventAsync(
+    private static Task<ChannelInboundEvent> BuildCardSubmitInboundEventAsync(
         string cardJson,
         IReadOnlyDictionary<string, string> formValues,
-        string eventId)
+        string eventId,
+        string registrationToken = "org-token")
     {
         var actionValue = ExtractPrimaryFormActionValue(cardJson);
-        var payload = new
+        var registration = BuildLarkRegistration();
+        var inboundEvent = new ChannelInboundEvent
         {
-            schema = "2.0",
-            header = new
-            {
-                event_type = "card.action.trigger",
-                token = "verify-token",
-                event_id = eventId,
-            },
-            @event = new
-            {
-                @operator = new
-                {
-                    open_id = "ou_123",
-                },
-                context = new
-                {
-                    open_chat_id = "oc_chat_1",
-                    open_message_id = "om_card_msg_1",
-                },
-                action = new
-                {
-                    value = actionValue,
-                    form_value = formValues,
-                },
-            },
+            Text = string.Empty,
+            SenderId = "ou_123",
+            SenderName = "ou_123",
+            ConversationId = "oc_chat_1",
+            MessageId = eventId,
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = registration.Id,
+            RegistrationToken = registrationToken,
+            RegistrationScopeId = registration.ScopeId,
+            NyxProviderSlug = registration.NyxProviderSlug,
         };
 
-        var http = CreateHttpContext(payload);
-        var adapter = new LarkPlatformAdapter(NullLogger<LarkPlatformAdapter>.Instance);
-        var registration = BuildLarkRegistration();
-        var inbound = await adapter.ParseInboundAsync(http, registration);
+        if (actionValue.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in actionValue.EnumerateObject())
+                inboundEvent.Extra[property.Name] = property.Value.ToString();
+        }
 
-        inbound.Should().NotBeNull();
-        return ToChannelInboundEvent(inbound!, registration);
+        foreach (var pair in formValues)
+            inboundEvent.Extra[pair.Key] = pair.Value;
+
+        inboundEvent.Extra["event_id"] = "om_card_msg_1";
+        return Task.FromResult(inboundEvent);
     }
 
     private static JsonElement ExtractPrimaryFormActionValue(string cardJson)
@@ -1977,19 +1970,9 @@ public class ChannelUserGAgentContinuationTests
         return button.GetProperty("value").Clone();
     }
 
-    private static HttpContext CreateHttpContext(object payload)
-    {
-        var json = JsonSerializer.Serialize(payload);
-        var context = new DefaultHttpContext();
-        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(json));
-        context.Request.ContentType = "application/json";
-        context.Request.EnableBuffering();
-        return context;
-    }
-
     private static ChannelBotRegistrationEntry BuildLarkRegistration()
     {
-        var entry = new ChannelBotRegistrationEntry
+        return new ChannelBotRegistrationEntry
         {
             Id = "reg-1",
             Platform = "lark",
@@ -1997,37 +1980,6 @@ public class ChannelUserGAgentContinuationTests
             ScopeId = "scope-1",
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
-        entry.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
-        {
-            NyxUserToken = "org-token",
-            VerificationToken = "verify-token",
-        });
-        return entry;
-    }
-
-    private static ChannelInboundEvent ToChannelInboundEvent(
-        InboundMessage inbound,
-        ChannelBotRegistrationEntry registration)
-    {
-        var inboundEvent = new ChannelInboundEvent
-        {
-            Text = inbound.Text,
-            SenderId = inbound.SenderId,
-            SenderName = inbound.SenderName,
-            ConversationId = inbound.ConversationId,
-            MessageId = inbound.MessageId ?? string.Empty,
-            ChatType = inbound.ChatType ?? string.Empty,
-            Platform = inbound.Platform,
-            RegistrationId = registration.Id,
-            RegistrationToken = registration.GetNyxUserToken(),
-            RegistrationScopeId = registration.ScopeId,
-            NyxProviderSlug = registration.NyxProviderSlug,
-        };
-
-        foreach (var pair in inbound.Extra)
-            inboundEvent.Extra[pair.Key] = pair.Value;
-
-        return inboundEvent;
     }
 
     private static EventEnvelope BuildTopologyEnvelope(

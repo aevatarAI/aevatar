@@ -18,7 +18,6 @@ public class TelegramPlatformAdapterTests
         Id = "test-tg-reg-1",
         Platform = "telegram",
         NyxProviderSlug = "api-telegram-bot",
-        NyxUserToken = "test-token",
         ScopeId = "test-scope",
         CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
     };
@@ -188,5 +187,28 @@ public class TelegramPlatformAdapterTests
         var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
 
         inbound.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SendReply_returns_retired_contract_failure()
+    {
+        var result = await _adapter.SendReplyAsync(
+            "hello",
+            new InboundMessage
+            {
+                Platform = "telegram",
+                ConversationId = "42",
+                SenderId = "user-1",
+                SenderName = "user-1",
+                Text = "hello",
+            },
+            MakeRegistration(),
+            new Aevatar.AI.ToolProviders.NyxId.NyxIdApiClient(
+                new Aevatar.AI.ToolProviders.NyxId.NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
+        result.Detail.Should().Contain("telegram_direct_callback_retired");
     }
 }

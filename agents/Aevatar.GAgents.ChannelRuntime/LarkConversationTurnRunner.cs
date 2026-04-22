@@ -345,7 +345,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = registration.GetNyxUserToken(),
+            RegistrationToken = string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };

@@ -1,5 +1,7 @@
 # Lark -> NyxID -> Aevatar Cutover Runbook
 
+This runbook reflects the post-`#308` production contract.
+
 ## Goal
 
 Cut production Lark webhook ingress over to `Lark -> NyxID -> Aevatar` and retire the direct Aevatar Lark callback with `410 Gone`.
@@ -45,7 +47,11 @@ Operationally:
 - `POST /api/channels/registrations` no longer accepts direct Lark registrations.
 - `channel_registrations action=register` no longer accepts `platform=lark`.
 - `POST /api/channels/lark/callback/{registrationId}` returns `410 Gone`.
+- direct platform callback/test-reply flows are retired from ChannelRuntime.
+- `update_token` is retired; ChannelRuntime does not store or refresh channel credentials.
+- ChannelRuntime registration queries return only non-secret routing/identity/status handles.
+- ChannelRuntime no longer requires `ICredentialProvider` / `SecretsStoreCredentialProvider` composition for channel registration or reply delivery.
+- Telegram is not part of the supported production contract until it can satisfy the same external credential-authority boundary.
 - Lark workflow approvals and `social_media` review steps are text-driven through `/approve`, `/reject`, and `/submit`; they do not rely on `card.action.trigger`.
-- Nyx-backed Lark registrations must not use `update_token` or direct test-reply diagnostics.
+- Nyx-backed Lark registrations must not use retired direct-callback diagnostics.
 - public `UserAgentCatalog` queries no longer expose `NyxApiKey`.
-- host-side delivery paths that still need Nyx credentials must read them from the runtime-only `UserAgentCatalogNyxCredentialDocument` projection, not from public registration or catalog read models.

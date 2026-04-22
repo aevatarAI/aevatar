@@ -130,40 +130,19 @@ public sealed class TelegramPlatformAdapter : IPlatformAdapter
         NyxIdApiClient nyxClient,
         CancellationToken ct)
     {
-        var payload = new Dictionary<string, object?>
-        {
-            ["chat_id"] = long.Parse(inbound.ConversationId),
-            ["text"] = replyText,
-        };
+        _ = replyText;
+        _ = inbound;
+        _ = registration;
+        _ = nyxClient;
+        _ = ct;
 
-        // Thread reply to original message if available
-        if (!string.IsNullOrWhiteSpace(inbound.MessageId))
-            payload["reply_to_message_id"] = long.Parse(inbound.MessageId);
-
-        var body = JsonSerializer.Serialize(payload);
-
-        var result = await nyxClient.ProxyRequestAsync(
-            registration.GetNyxUserToken(),
-            registration.NyxProviderSlug,
-            "sendMessage",
-            "POST",
-            body,
-            extraHeaders: null,
-            ct);
-
-        if (TryBuildTelegramErrorDetail(result, out var errorDetail))
-        {
-            _logger.LogWarning(
-                "Telegram outbound reply failed: chat={ChatId}, slug={Slug}, detail={Detail}",
-                inbound.ConversationId, registration.NyxProviderSlug, errorDetail);
-            return new PlatformReplyDeliveryResult(false, errorDetail);
-        }
-
-        var successDetail = BuildTelegramSuccessDetail(result);
-        _logger.LogInformation(
-            "Telegram outbound reply sent: chat={ChatId}, slug={Slug}, detail={Detail}",
-            inbound.ConversationId, registration.NyxProviderSlug, successDetail);
-        return new PlatformReplyDeliveryResult(true, successDetail);
+        _logger.LogWarning(
+            "Telegram direct callback delivery is retired: registration={RegistrationId}",
+            registration.Id);
+        return new PlatformReplyDeliveryResult(
+            false,
+            "telegram_direct_callback_retired unsupported_production_contract",
+            PlatformReplyFailureKind.Permanent);
     }
 
     private static bool TryBuildTelegramErrorDetail(string? result, out string detail)

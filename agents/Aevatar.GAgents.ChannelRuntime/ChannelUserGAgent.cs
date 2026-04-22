@@ -423,10 +423,6 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             NyxProviderSlug = session.NyxProviderSlug,
             ScopeId = session.RegistrationScopeId,
         };
-        registration.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
-        {
-            NyxUserToken = session.OrgToken,
-        });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         if (replyService is not null)
@@ -524,10 +520,6 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             NyxProviderSlug = evt.NyxProviderSlug,
             ScopeId = evt.RegistrationScopeId,
         };
-        registration.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
-        {
-            NyxUserToken = evt.RegistrationToken,
-        });
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));

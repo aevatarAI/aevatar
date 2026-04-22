@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.ChannelRuntime.Adapters;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,7 +10,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddChannelRuntime_RegistersDirectCallbackBindingProjectionServices_ForInMemoryStore()
+    public void AddChannelRuntime_RegistersOnlyPublicRegistrationProjectionServices_ForInMemoryStore()
     {
         var services = new ServiceCollection();
 
@@ -18,13 +19,19 @@ public sealed class ServiceCollectionExtensionsTests
         act.Should().Throw<ArgumentException>()
             .WithMessage("*IHostedService*");
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotDirectCallbackBindingDocument>));
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IPlatformAdapter) &&
+            descriptor.ImplementationType == typeof(LarkPlatformAdapter));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(IPlatformAdapter) &&
+            descriptor.ImplementationType == typeof(TelegramPlatformAdapter));
     }
 
     [Fact]
-    public void AddChannelRuntime_RegistersDirectCallbackBindingProjectionServices_ForElasticsearchStore()
+    public void AddChannelRuntime_RegistersOnlyPublicRegistrationProjectionServices_ForElasticsearchStore()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -40,8 +47,10 @@ public sealed class ServiceCollectionExtensionsTests
         act.Should().Throw<ArgumentException>()
             .WithMessage("*IHostedService*");
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotDirectCallbackBindingDocument>));
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
     }
 }
