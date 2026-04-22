@@ -12,6 +12,8 @@ describe('StudioShell', () => {
       label: 'Support Triage Router',
       description: 'service-alpha',
       meta: 'Build focus · rev-1',
+      canDelete: true,
+      canRename: true,
       kind: 'workflow',
       tone: 'live',
     },
@@ -55,18 +57,37 @@ describe('StudioShell', () => {
   ];
 
   it('renders the member rail and forwards member and lifecycle selection', async () => {
+    const handleCreateMember = jest.fn();
+    const handleDeleteMember = jest.fn();
     const handleSelectMember = jest.fn();
     const handleSelectLifecycleStep = jest.fn();
 
     const { container } = render(
       <StudioShell
         currentLifecycleStep="build"
+        inventoryActions={
+          <div>
+            <button
+              aria-label="Create member"
+              onClick={handleCreateMember}
+              type="button"
+            >
+              Create member
+            </button>
+            <button
+              aria-label="Delete Support Triage Router"
+              onClick={() => handleDeleteMember('workflow:workspace-demo')}
+              type="button"
+            >
+              Delete
+            </button>
+          </div>
+        }
         lifecycleSteps={lifecycleSteps}
         members={members}
         onSelectLifecycleStep={handleSelectLifecycleStep}
         onSelectMember={handleSelectMember}
         pageTitle="Studio page"
-        railFooter={<div>Current scope snapshot</div>}
         selectedMemberKey="workflow:workspace-demo"
       >
         <div>Studio content</div>
@@ -83,8 +104,7 @@ describe('StudioShell', () => {
     expect(screen.getByLabelText('Team members')).toBeInTheDocument();
     expect(screen.getByText('Member inventory')).toBeInTheDocument();
     expect(screen.getByLabelText('Search team members')).toBeInTheDocument();
-    expect(screen.getByText('Workbench context')).toBeInTheDocument();
-    expect(screen.getByText('Current scope snapshot')).toBeInTheDocument();
+    expect(screen.getByLabelText('Create member')).toBeInTheDocument();
     expect(screen.getByText('Support Triage Router')).toBeInTheDocument();
     expect(screen.queryByText('Workspace panels')).toBeNull();
     expect(
@@ -127,7 +147,11 @@ describe('StudioShell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /risk-review/i }));
     fireEvent.click(screen.getByRole('button', { name: /Observe/i }));
+    fireEvent.click(screen.getByLabelText('Create member'));
+    fireEvent.click(await screen.findByLabelText('Delete Support Triage Router'));
 
+    expect(handleCreateMember).toHaveBeenCalled();
+    expect(handleDeleteMember).toHaveBeenCalledWith('workflow:workspace-demo');
     expect(handleSelectMember).toHaveBeenCalledWith('script:risk-review');
     expect(handleSelectLifecycleStep).toHaveBeenCalledWith('observe');
   });

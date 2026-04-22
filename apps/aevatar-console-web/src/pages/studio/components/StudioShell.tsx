@@ -29,6 +29,8 @@ export type StudioShellMemberItem = {
   readonly meta?: string;
   readonly kind?: StudioShellMemberKind;
   readonly tone?: StudioShellMemberTone;
+  readonly canDelete?: boolean;
+  readonly canRename?: boolean;
   readonly disabled?: boolean;
 };
 
@@ -45,6 +47,7 @@ type StudioShellProps = {
   readonly contentOverflow?: 'auto' | 'hidden';
   readonly contextBar?: React.ReactNode;
   readonly currentLifecycleStep?: string;
+  readonly inventoryActions?: React.ReactNode;
   readonly lifecycleSteps?: readonly StudioLifecycleStep[];
   readonly members?: readonly StudioShellMemberItem[];
   readonly onSelectLifecycleStep?: (stepKey: string) => void;
@@ -102,6 +105,18 @@ const railSectionHeaderStyle: React.CSSProperties = {
   gap: 6,
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
+};
+
+const railSectionHeaderRowStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: 8,
+  justifyContent: 'space-between',
+};
+
+const railSectionHeaderStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
 };
 
 const memberListStyle: React.CSSProperties = {
@@ -387,13 +402,13 @@ const StudioShell: React.FC<StudioShellProps> = ({
   contentOverflow = 'auto',
   contextBar,
   currentLifecycleStep,
+  inventoryActions,
   lifecycleSteps = [],
   members = [],
   onSelectLifecycleStep,
   onSelectMember,
   pageTitle,
   pageToolbar,
-  railFooter,
   selectedMemberKey,
   showPageHeader = true,
   children,
@@ -521,8 +536,13 @@ const StudioShell: React.FC<StudioShellProps> = ({
         </div>
 
         <div style={{ ...railSectionStyle, flex: 1, minHeight: 0 }}>
-          <div style={railSectionHeaderStyle}>
-            <span>Member inventory</span>
+          <div style={railSectionHeaderStackStyle}>
+            <div style={railSectionHeaderRowStyle}>
+              <div style={railSectionHeaderStyle}>
+                <span>Member inventory</span>
+              </div>
+            </div>
+            {inventoryActions}
           </div>
           {filteredMembers.length > 0 ? (
             <div style={memberListStyle}>
@@ -612,6 +632,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                         style={{
                           alignItems: 'center',
                           display: 'flex',
+                          flex: 1,
                           gap: 8,
                           minWidth: 0,
                         }}
@@ -638,7 +659,6 @@ const StudioShell: React.FC<StudioShellProps> = ({
                         <span
                           style={{
                             color: isSelected ? '#fbfaf6' : '#111827',
-                            flex: 1,
                             fontSize: 13,
                             fontWeight: 700,
                             lineHeight: '20px',
@@ -697,18 +717,10 @@ const StudioShell: React.FC<StudioShellProps> = ({
             >
               {members.length > 0
                 ? 'No members match the current search or filter. Try clearing the rail controls.'
-                : 'No member focus is available yet. Once Studio resolves the current team context, nearby drafts and bound members will appear here.'}
+                : 'No team members yet. Create a member to start building in Studio.'}
             </Typography.Text>
           )}
         </div>
-        {railFooter ? (
-          <div style={railSectionStyle}>
-            <div style={railSectionHeaderStyle}>
-              <span>Workbench context</span>
-            </div>
-            <div style={railFooterStyle}>{railFooter}</div>
-          </div>
-        ) : null}
 
       </aside>
 

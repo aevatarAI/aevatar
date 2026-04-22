@@ -1,5 +1,5 @@
 import { PageContainer } from '@ant-design/pro-components';
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { DeleteOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Node } from '@xyflow/react';
 import {
@@ -14,7 +14,6 @@ import {
 import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
-import { formatCompactDateTime } from '@/shared/datetime/dateTime';
 import {
   buildConversationHeaders,
   formatConversationProviderLabel,
@@ -27,8 +26,9 @@ import {
 } from '../chat/chatConversationConfig';
 import { servicesApi } from '@/shared/api/servicesApi';
 import {
-  Button,
+  Modal,
   Popover,
+  Typography,
   message,
 } from 'antd';
 import React, {
@@ -195,6 +195,190 @@ const visuallyHiddenStyle: React.CSSProperties = {
   position: 'absolute',
   whiteSpace: 'nowrap',
   width: 1,
+};
+
+const inventoryActionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+};
+
+const inventoryActionsHintStyle: React.CSSProperties = {
+  color: '#7a6d59',
+  fontSize: 11,
+  lineHeight: '16px',
+};
+
+const inventorySelectionPillStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255, 250, 244, 0.96)',
+  border: '1px solid #e7dece',
+  borderRadius: 999,
+  color: '#5f574b',
+  display: 'inline-flex',
+  fontSize: 10.5,
+  fontWeight: 700,
+  gap: 6,
+  lineHeight: '16px',
+  maxWidth: '100%',
+  minHeight: 24,
+  padding: '0 9px',
+};
+
+const inventorySelectionLabelStyle: React.CSSProperties = {
+  color: '#9a8b73',
+  flexShrink: 0,
+  fontSize: 9.5,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+};
+
+const inventorySelectionValueStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const inventoryActionRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+};
+
+const inventoryActionButtonStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255, 252, 246, 0.98)',
+  border: '1px solid #e6decd',
+  borderRadius: 999,
+  color: '#5f574b',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  flexShrink: 0,
+  fontSize: 10.5,
+  fontWeight: 700,
+  gap: 6,
+  minHeight: 28,
+  padding: '0 10px',
+};
+
+const inventoryActionPrimaryButtonStyle: React.CSSProperties = {
+  ...inventoryActionButtonStyle,
+  background: 'rgba(17, 24, 39, 0.96)',
+  border: '1px solid rgba(17, 24, 39, 0.96)',
+  color: '#fbfaf6',
+};
+
+const inventoryActionDangerButtonStyle: React.CSSProperties = {
+  ...inventoryActionButtonStyle,
+  background: 'rgba(255, 245, 245, 0.98)',
+  border: '1px solid rgba(248, 113, 113, 0.24)',
+  color: '#b91c1c',
+};
+
+const memberEmptyStatePanelStyle: React.CSSProperties = {
+  ...embeddedPanelStyle,
+  alignItems: 'flex-start',
+  background: 'rgba(255, 252, 246, 0.98)',
+  borderColor: 'rgba(229, 220, 203, 0.92)',
+  display: 'grid',
+  gap: 16,
+  justifyContent: 'center',
+  marginTop: 8,
+  minHeight: 280,
+  padding: '28px 28px 24px',
+};
+
+const memberEmptyStateTitleStyle: React.CSSProperties = {
+  color: '#1f2937',
+  fontSize: 24,
+  fontWeight: 700,
+  letterSpacing: '-0.02em',
+  lineHeight: '30px',
+  margin: 0,
+};
+
+const memberEmptyStateBodyStyle: React.CSSProperties = {
+  color: '#6b7280',
+  fontSize: 13,
+  lineHeight: '20px',
+  margin: 0,
+  maxWidth: 520,
+};
+
+const memberEmptyStateActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+};
+
+const inventoryCreateModalStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+};
+
+const inventoryCreateTypeRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+};
+
+const inventoryCreateTypeChipStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255, 252, 246, 0.98)',
+  border: '1px solid #e6decd',
+  borderRadius: 999,
+  color: '#5f574b',
+  display: 'inline-flex',
+  fontSize: 10.5,
+  fontWeight: 700,
+  gap: 6,
+  minHeight: 30,
+  padding: '0 10px',
+};
+
+const inventoryCreateTypeChipActiveStyle: React.CSSProperties = {
+  ...inventoryCreateTypeChipStyle,
+  background: '#eef4ff',
+  border: '1px solid #6b8cff',
+  color: '#2f54eb',
+};
+
+const inventoryCreateTypeChipDisabledStyle: React.CSSProperties = {
+  ...inventoryCreateTypeChipStyle,
+  cursor: 'not-allowed',
+  opacity: 0.56,
+};
+
+const inventoryCreateFieldStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+};
+
+const inventoryCreateFieldLabelStyle: React.CSSProperties = {
+  color: '#6b5f4f',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+};
+
+const inventoryCreateInputStyle: React.CSSProperties = {
+  background: 'rgba(255, 252, 246, 0.98)',
+  border: '1px solid #e5dccb',
+  borderRadius: 10,
+  color: '#1f2937',
+  fontSize: 13,
+  minWidth: 0,
+  outline: 'none',
+  padding: '10px 12px',
+  width: '100%',
+};
+
+const inventoryCreateHintStyle: React.CSSProperties = {
+  color: '#7b6e5a',
+  fontSize: 11.5,
+  lineHeight: '18px',
 };
 
 const InlineInfoButton: React.FC<InlineInfoButtonProps> = ({
@@ -514,6 +698,43 @@ function buildBlankDraftYaml(workflowName: string): string {
   return `name: ${normalizedName}\nsteps: []\n`;
 }
 
+function buildInventoryWorkflowName(
+  workflows: readonly { name: string }[],
+  baseName = 'draft',
+): string {
+  const normalizedBaseName = trimOptional(baseName) || 'draft';
+  const names = new Set(
+    workflows
+      .map((workflow) => trimOptional(workflow.name)?.toLowerCase())
+      .filter(Boolean),
+  );
+
+  if (!names.has(normalizedBaseName.toLowerCase())) {
+    return normalizedBaseName;
+  }
+
+  let nextIndex = 2;
+  while (names.has(`${normalizedBaseName}-${nextIndex}`.toLowerCase())) {
+    nextIndex += 1;
+  }
+
+  return `${normalizedBaseName}-${nextIndex}`;
+}
+
+function buildWorkflowFileName(workflowName: string): string {
+  const normalizedWorkflowName = trimOptional(workflowName) || 'workflow';
+  return `${normalizedWorkflowName}.yaml`;
+}
+
+function readWorkflowIdFromMemberKey(memberKey: string): string {
+  const normalizedMemberKey = trimOptional(memberKey);
+  if (!normalizedMemberKey.startsWith('workflow:')) {
+    return '';
+  }
+
+  return trimOptional(normalizedMemberKey.slice('workflow:'.length));
+}
+
 function readStudioRouteState(search?: string): StudioRouteState {
   if (typeof window === 'undefined' && typeof search !== 'string') {
     return {
@@ -626,7 +847,7 @@ function buildStudioFocusKey(input: {
     return `binding:${currentBindingRevisionId}`;
   }
 
-  return 'member:current';
+  return '';
 }
 
 function formatStudioAssetMeta(input: {
@@ -636,68 +857,6 @@ function formatStudioAssetMeta(input: {
   return [trimOptional(input.primary), trimOptional(input.secondary)]
     .filter(Boolean)
     .join(' · ');
-}
-
-type StudioContextBadgeTone = 'accent' | 'default' | 'success' | 'warning';
-
-function resolveStudioContextBadgeStyle(
-  tone: StudioContextBadgeTone,
-): React.CSSProperties {
-  switch (tone) {
-    case 'accent':
-      return {
-        background: 'rgba(225, 235, 255, 0.96)',
-        borderColor: '#c8dafd',
-        color: '#2452b5',
-      };
-    case 'success':
-      return {
-        background: 'rgba(232, 247, 236, 0.98)',
-        borderColor: '#c8e7d0',
-        color: '#23613e',
-      };
-    case 'warning':
-      return {
-        background: 'rgba(250, 239, 224, 0.98)',
-        borderColor: '#ead0a6',
-        color: '#8a5317',
-      };
-    default:
-      return {
-        background: 'rgba(245, 239, 228, 0.98)',
-        borderColor: '#e5dccb',
-        color: '#645946',
-      };
-  }
-}
-
-function resolveExecutionTone(status: string | null | undefined): StudioContextBadgeTone {
-  const normalized = trimOptional(status).toLowerCase();
-  if (
-    normalized.includes('fail') ||
-    normalized.includes('error') ||
-    normalized.includes('stop')
-  ) {
-    return 'warning';
-  }
-
-  if (
-    normalized.includes('run') ||
-    normalized.includes('wait') ||
-    normalized.includes('pending')
-  ) {
-    return 'accent';
-  }
-
-  if (
-    normalized.includes('success') ||
-    normalized.includes('complete') ||
-    normalized.includes('done')
-  ) {
-    return 'success';
-  }
-
-  return 'default';
 }
 
 function isWorkflowNotFoundError(error: unknown): boolean {
@@ -772,6 +931,10 @@ const StudioPage: React.FC = () => {
   const [draftSourceKey, setDraftSourceKey] = useState('');
   const [savePending, setSavePending] = useState(false);
   const [saveNotice, setSaveNotice] = useState<DraftSaveNotice | null>(null);
+  const [inventoryBusyKey, setInventoryBusyKey] = useState('');
+  const [createMemberModalOpen, setCreateMemberModalOpen] = useState(false);
+  const [createMemberName, setCreateMemberName] = useState('');
+  const [createMemberDirectoryId, setCreateMemberDirectoryId] = useState('');
   const [runPrompt, setRunPrompt] = useState(() => readStudioRouteState().prompt);
   const [runPending, setRunPending] = useState(false);
   const [runNotice, setRunNotice] = useState<DraftRunNotice | null>(null);
@@ -1026,6 +1189,10 @@ const StudioPage: React.FC = () => {
   const visibleWorkflowSummaries = useMemo(
     () => dedupeStudioWorkflowSummaries(workflowsQuery.data ?? []),
     [workflowsQuery.data],
+  );
+  const suggestedCreateWorkflowName = useMemo(
+    () => buildInventoryWorkflowName(visibleWorkflowSummaries),
+    [visibleWorkflowSummaries],
   );
   const currentScopeBindingRevision = useMemo(
     () => getStudioScopeBindingCurrentRevision(scopeBindingQuery.data ?? null),
@@ -1410,6 +1577,20 @@ const StudioPage: React.FC = () => {
     visibleWorkflowSummaries,
   ]);
 
+  const clearWorkflowBuildFocus = useCallback(() => {
+    setSelectedWorkflowId('');
+    setTemplateWorkflow('');
+    setDraftMode('');
+    setDraftSourceKey('');
+    setDraftYaml('');
+    setDraftWorkflowName('');
+    setDraftFileName('');
+    setDraftWorkflowLayout(null);
+    setEditableWorkflowDocument(null);
+    setSelectedGraphNodeId('');
+    setSaveNotice(null);
+  }, []);
+
   useEffect(() => {
     if (
       !selectedWorkflowId ||
@@ -1432,14 +1613,9 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    setSelectedWorkflowId('');
-    setTemplateWorkflow('');
-    setDraftMode('new');
-    setDraftDirectoryId((current) => current || defaultDirectoryId);
-    setDraftWorkflowLayout(null);
-    setSaveNotice(null);
+    clearWorkflowBuildFocus();
   }, [
-    defaultDirectoryId,
+    clearWorkflowBuildFocus,
     selectedWorkflowId,
     selectedWorkflowQuery.error,
     selectedWorkflowQuery.isError,
@@ -1632,12 +1808,43 @@ const StudioPage: React.FC = () => {
 
   const activeWorkflowName = draftWorkflowName || sourceWorkflowName;
   const resolvedDraftDirectoryId = draftDirectoryId || defaultDirectoryId;
+  const inventoryDirectoryId =
+    resolvedDraftDirectoryId ||
+    activeWorkflowFile?.directoryId ||
+    visibleWorkflowSummaries[0]?.directoryId ||
+    '';
   const activeDirectoryLabel =
     workspaceSettingsQuery.data?.directories.find(
       (item) => item.directoryId === resolvedDraftDirectoryId,
     )?.label ||
     activeWorkflowFile?.directoryLabel ||
     'No directory';
+  const inventoryDirectoryOptions = useMemo(() => {
+    const directories = workspaceSettingsQuery.data?.directories ?? [];
+    if (
+      inventoryDirectoryId &&
+      !directories.some((item) => item.directoryId === inventoryDirectoryId)
+    ) {
+      return [
+        {
+          directoryId: inventoryDirectoryId,
+          label: activeDirectoryLabel,
+          path: '',
+          isBuiltIn: false,
+        },
+        ...directories,
+      ];
+    }
+
+    return directories;
+  }, [
+    activeDirectoryLabel,
+    inventoryDirectoryId,
+    workspaceSettingsQuery.data?.directories,
+  ]);
+  const selectedCreateDirectory = inventoryDirectoryOptions.find(
+    (item) => item.directoryId === createMemberDirectoryId,
+  );
   const activeWorkflowDescription =
     parseYamlQuery.data?.document?.description ||
     activeWorkflowFile?.document?.description ||
@@ -2057,16 +2264,23 @@ const StudioPage: React.FC = () => {
 
     setSelectedWorkflowId('');
     setTemplateWorkflow('');
-    setDraftMode('new');
-    setDraftDirectoryId((current) => current || defaultDirectoryId);
-    setDraftWorkflowLayout(null);
+    if (routeState.draftMode === 'new') {
+      setDraftMode('new');
+      setDraftDirectoryId((current) => current || defaultDirectoryId);
+      setDraftWorkflowLayout(null);
+      return;
+    }
+
+    clearWorkflowBuildFocus();
   }, [
     activeSourceReady,
     activeWorkflowSourceKey,
+    clearWorkflowBuildFocus,
     defaultDirectoryId,
     draftSourceKey,
     draftWorkflowName,
     draftYaml,
+    routeState.draftMode,
     selectedWorkflowId,
     sourceDirectoryId,
     sourceFileName,
@@ -2075,6 +2289,59 @@ const StudioPage: React.FC = () => {
     sourceYaml,
     visibleWorkflowSummaries,
   ]);
+
+  const applySavedWorkflowSelection = useCallback(
+    async (
+      savedWorkflow: StudioWorkflowFile,
+      options?: {
+        readonly layout?: unknown;
+      },
+    ) => {
+      queryClient.setQueryData(
+        ['studio-workflow', workflowWorkspaceContextKey, savedWorkflow.workflowId],
+        savedWorkflow,
+      );
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
+      });
+
+      setSelectedWorkflowId(savedWorkflow.workflowId);
+      setSelectedScriptId('');
+      setTemplateWorkflow('');
+      setDraftMode('');
+      setBuildSurface('editor');
+      setStudioSurface('build');
+      setDraftSourceKey(
+        `workflow:${workflowWorkspaceContextKey}:${savedWorkflow.workflowId}`,
+      );
+      setDraftYaml(savedWorkflow.yaml);
+      setDraftWorkflowName(savedWorkflow.name);
+      setDraftFileName(savedWorkflow.fileName);
+      setDraftDirectoryId(savedWorkflow.directoryId);
+      setDraftWorkflowLayout(
+        savedWorkflow.layout ||
+          options?.layout ||
+          draftWorkflowLayout ||
+          buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
+      );
+      setSaveNotice(null);
+      setRunNotice(null);
+    },
+    [
+      draftWorkflowLayout,
+      queryClient,
+      workflowGraph.nodes,
+      workflowWorkspaceContextKey,
+    ],
+  );
+  const confirmScriptsStudioLeave = useCallback(async () => {
+    if (!isBuildScriptsSurface) {
+      return true;
+    }
+
+    const leaveGuard = scriptLeaveGuardRef.current;
+    return leaveGuard ? await leaveGuard() : true;
+  }, [isBuildScriptsSurface]);
 
   const handleSaveDraft = async () => {
     const directoryId = resolvedDraftDirectoryId;
@@ -2112,30 +2379,9 @@ const StudioPage: React.FC = () => {
           buildStudioWorkflowLayout(activeWorkflowName, workflowGraph.nodes),
       });
 
-      queryClient.setQueryData(
-        ['studio-workflow', workflowWorkspaceContextKey, savedWorkflow.workflowId],
-        savedWorkflow,
-      );
-      await queryClient.invalidateQueries({
-        queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
+      await applySavedWorkflowSelection(savedWorkflow, {
+        layout: draftWorkflowLayout,
       });
-
-      setSelectedWorkflowId(savedWorkflow.workflowId);
-      setTemplateWorkflow('');
-      setDraftMode('');
-      setDraftSourceKey(
-        `workflow:${workflowWorkspaceContextKey}:${savedWorkflow.workflowId}`,
-      );
-      setDraftYaml(savedWorkflow.yaml);
-      setDraftWorkflowName(savedWorkflow.name);
-      setDraftFileName(savedWorkflow.fileName);
-      setDraftDirectoryId(savedWorkflow.directoryId);
-      setDraftWorkflowLayout(
-        savedWorkflow.layout ||
-          draftWorkflowLayout ||
-          buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
-      );
-      setSaveNotice(null);
       void message.success(
         `已保存到 ${describeSavedWorkflowLocation(savedWorkflow)}。`,
       );
@@ -2149,6 +2395,335 @@ const StudioPage: React.FC = () => {
       setSavePending(false);
     }
   };
+
+  const openCreateWorkflowMemberFlow = useCallback(async () => {
+    if (!(await confirmScriptsStudioLeave())) {
+      return;
+    }
+
+    const nextDirectoryId =
+      inventoryDirectoryId || inventoryDirectoryOptions[0]?.directoryId || '';
+    if (!nextDirectoryId) {
+      void message.error('Add a workflow directory in Config before creating a member.');
+      return;
+    }
+
+    setCreateMemberName(suggestedCreateWorkflowName);
+    setCreateMemberDirectoryId(nextDirectoryId);
+    setCreateMemberModalOpen(true);
+  }, [
+    confirmScriptsStudioLeave,
+    inventoryDirectoryId,
+    inventoryDirectoryOptions,
+    suggestedCreateWorkflowName,
+  ]);
+
+  const closeCreateWorkflowMemberFlow = useCallback(() => {
+    if (inventoryBusyKey === 'create') {
+      return;
+    }
+
+    setCreateMemberModalOpen(false);
+  }, [inventoryBusyKey]);
+
+  const handleCreateWorkflowMember = useCallback(async () => {
+    const workflowName = trimOptional(createMemberName);
+    const directoryId = trimOptional(createMemberDirectoryId) || inventoryDirectoryId;
+    if (!workflowName) {
+      void message.warning('Workflow member name is required.');
+      return;
+    }
+
+    if (!directoryId) {
+      void message.error('Add a workflow directory in Config before creating a member.');
+      return;
+    }
+
+    if (
+      visibleWorkflowSummaries.some(
+        (workflow) => normalizeComparableText(workflow.name) === workflowName.toLowerCase(),
+      )
+    ) {
+      void message.warning('A workflow member with the same name already exists.');
+      return;
+    }
+
+    setInventoryBusyKey('create');
+
+    try {
+      const savedWorkflow = await studioApi.saveWorkflow({
+        scopeId: resolvedStudioScopeId || undefined,
+        directoryId,
+        workflowName,
+        fileName: buildWorkflowFileName(workflowName),
+        yaml: buildBlankDraftYaml(workflowName),
+        layout: buildStudioWorkflowLayout(workflowName, []),
+      });
+
+      await applySavedWorkflowSelection(savedWorkflow);
+      setCreateMemberModalOpen(false);
+      void message.success(`Created workflow member ${workflowName}.`);
+    } catch (error) {
+      void message.error(
+        error instanceof Error ? error.message : 'Failed to create workflow member.',
+      );
+    } finally {
+      setInventoryBusyKey('');
+    }
+  }, [
+    applySavedWorkflowSelection,
+    createMemberDirectoryId,
+    createMemberName,
+    inventoryDirectoryId,
+    resolvedStudioScopeId,
+    visibleWorkflowSummaries,
+  ]);
+
+  const handleRenameWorkflowMember = useCallback(
+    async (memberKey: string) => {
+      const workflowId = readWorkflowIdFromMemberKey(memberKey);
+      if (!workflowId) {
+        return;
+      }
+
+      const currentWorkflowSummary = visibleWorkflowSummaries.find(
+        (workflow) => workflow.workflowId === workflowId,
+      );
+      const currentWorkflowName =
+        trimOptional(currentWorkflowSummary?.name) ||
+        (selectedWorkflowId === workflowId
+          ? trimOptional(draftWorkflowName) || trimOptional(activeWorkflowName)
+          : '') ||
+        'workflow';
+      const nextWorkflowName = trimOptional(
+        window.prompt('Rename workflow member', currentWorkflowName) ?? '',
+      );
+
+      if (!nextWorkflowName || nextWorkflowName === currentWorkflowName) {
+        return;
+      }
+
+      if (
+        visibleWorkflowSummaries.some(
+          (workflow) =>
+            workflow.workflowId !== workflowId &&
+            workflow.name.trim().toLowerCase() === nextWorkflowName.toLowerCase(),
+        )
+      ) {
+        void message.warning('A workflow member with the same name already exists.');
+        return;
+      }
+
+      setInventoryBusyKey(memberKey);
+
+      try {
+        const isSelectedWorkflow = selectedWorkflowId === workflowId;
+        const fallbackWorkflowFile =
+          !isSelectedWorkflow || !activeWorkflowFile
+            ? await studioApi.getWorkflow(workflowId, resolvedStudioScopeId)
+            : activeWorkflowFile;
+        const baseDocument =
+          isSelectedWorkflow && activeWorkflowDocument
+            ? cloneStudioWorkflowDocument(activeWorkflowDocument)
+            : cloneStudioWorkflowDocument(
+                fallbackWorkflowFile.document ??
+                  (
+                    await studioApi.parseYaml({
+                      yaml: fallbackWorkflowFile.yaml,
+                      availableWorkflowNames: workflowNames,
+                      availableStepTypes,
+                    })
+                  ).document ??
+                  null,
+              );
+
+        if (!baseDocument) {
+          throw new Error('Failed to load the workflow document for rename.');
+        }
+
+        const nextDocument: StudioWorkflowDocument = {
+          ...baseDocument,
+        };
+        nextDocument.name = nextWorkflowName;
+        const serialized = await studioApi.serializeYaml({
+          document: nextDocument,
+          availableWorkflowNames: workflowNames.filter(
+            (name) => name.trim().toLowerCase() !== currentWorkflowName.toLowerCase(),
+          ),
+          availableStepTypes,
+        });
+        const savedWorkflow = await studioApi.saveWorkflow({
+          workflowId,
+          scopeId: resolvedStudioScopeId || undefined,
+          directoryId:
+            (isSelectedWorkflow ? draftDirectoryId : '') ||
+            fallbackWorkflowFile.directoryId ||
+            currentWorkflowSummary?.directoryId ||
+            inventoryDirectoryId,
+          workflowName: nextWorkflowName,
+          fileName: buildWorkflowFileName(nextWorkflowName),
+          yaml: serialized.yaml,
+          layout:
+            (isSelectedWorkflow ? draftWorkflowLayout : null) ||
+            fallbackWorkflowFile.layout,
+        });
+
+        if (isSelectedWorkflow) {
+          setEditableWorkflowDocument(
+            cloneStudioWorkflowDocument(serialized.document),
+          );
+        }
+
+        await applySavedWorkflowSelection(savedWorkflow, {
+          layout:
+            (isSelectedWorkflow ? draftWorkflowLayout : null) ||
+            fallbackWorkflowFile.layout,
+        });
+        void message.success(`Renamed workflow member to ${nextWorkflowName}.`);
+      } catch (error) {
+        void message.error(
+          error instanceof Error ? error.message : 'Failed to rename workflow member.',
+        );
+      } finally {
+        setInventoryBusyKey('');
+      }
+    },
+    [
+      activeWorkflowDocument,
+      activeWorkflowFile,
+      activeWorkflowName,
+      applySavedWorkflowSelection,
+      availableStepTypes,
+      draftDirectoryId,
+      draftWorkflowLayout,
+      draftWorkflowName,
+      inventoryDirectoryId,
+      resolvedStudioScopeId,
+      selectedWorkflowId,
+      visibleWorkflowSummaries,
+      workflowNames,
+    ],
+  );
+
+  const handleDeleteWorkflowMember = useCallback(
+    (memberKey: string) => {
+      const workflowId = readWorkflowIdFromMemberKey(memberKey);
+      if (!workflowId) {
+        return;
+      }
+
+      const workflowLabel =
+        visibleWorkflowSummaries.find(
+          (workflow) => workflow.workflowId === workflowId,
+        )?.name || 'this workflow member';
+
+      Modal.confirm({
+        autoFocusButton: 'cancel',
+        cancelText: 'Keep member',
+        centered: true,
+        content: (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <Typography.Text
+              style={{
+                color: '#111827',
+                fontSize: 13,
+                lineHeight: '20px',
+              }}
+            >
+              Remove <strong>{workflowLabel}</strong> from the current member
+              inventory?
+            </Typography.Text>
+            <div
+              style={{
+                background: 'rgba(254, 242, 242, 0.92)',
+                border: '1px solid rgba(248, 113, 113, 0.18)',
+                borderRadius: 12,
+                display: 'grid',
+                gap: 4,
+                padding: '10px 12px',
+              }}
+            >
+              <Typography.Text
+                strong
+                style={{
+                  color: '#991b1b',
+                  fontSize: 12,
+                  letterSpacing: '0.02em',
+                }}
+              >
+                Draft only
+              </Typography.Text>
+              <Typography.Text
+                style={{
+                  color: '#7f1d1d',
+                  fontSize: 12,
+                  lineHeight: '18px',
+                }}
+              >
+                This only deletes the Studio workflow draft. Published bindings,
+                live revisions, and historical runs stay intact.
+              </Typography.Text>
+            </div>
+          </div>
+        ),
+        icon: <DeleteOutlined style={{ color: '#dc2626' }} />,
+        okButtonProps: {
+          danger: true,
+        },
+        okText: 'Delete member',
+        title: 'Delete workflow member',
+        width: 460,
+        onOk: async () => {
+          setInventoryBusyKey(memberKey);
+
+          try {
+            await studioApi.deleteWorkflow(
+              workflowId,
+              resolvedStudioScopeId || undefined,
+            );
+            queryClient.removeQueries({
+              queryKey: ['studio-workflow', workflowWorkspaceContextKey, workflowId],
+            });
+            await queryClient.invalidateQueries({
+              queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
+            });
+
+            if (selectedWorkflowId === workflowId) {
+              const fallbackWorkflowId =
+                visibleWorkflowSummaries.find(
+                  (workflow) => workflow.workflowId !== workflowId,
+                )?.workflowId || '';
+              if (fallbackWorkflowId) {
+                openWorkspaceWorkflow(fallbackWorkflowId);
+              } else {
+                clearWorkflowBuildFocus();
+              }
+            }
+
+            void message.success(`Deleted workflow member ${workflowLabel}.`);
+          } catch (error) {
+            void message.error(
+              error instanceof Error
+                ? error.message
+                : 'Failed to delete workflow member.',
+            );
+            throw error;
+          } finally {
+            setInventoryBusyKey('');
+          }
+        },
+      });
+    },
+    [
+      openWorkspaceWorkflow,
+      clearWorkflowBuildFocus,
+      queryClient,
+      resolvedStudioScopeId,
+      selectedWorkflowId,
+      visibleWorkflowSummaries,
+      workflowWorkspaceContextKey,
+    ],
+  );
 
   useEffect(() => {
     if (!isBuildEditorSurface) {
@@ -2655,14 +3230,6 @@ const StudioPage: React.FC = () => {
     },
     [],
   );
-  const confirmScriptsStudioLeave = useCallback(async () => {
-    if (!isBuildScriptsSurface) {
-      return true;
-    }
-
-    const leaveGuard = scriptLeaveGuardRef.current;
-    return leaveGuard ? await leaveGuard() : true;
-  }, [isBuildScriptsSurface]);
   const handleSelectBuildMode = useCallback(
     async (nextBuildMode: BuildMode) => {
       if (nextBuildMode === activeBuildMode) {
@@ -2793,44 +3360,62 @@ const StudioPage: React.FC = () => {
         : isObserveSurface
           ? 'observe'
           : 'build';
+  const hasSelectedMemberFocus =
+    Boolean(activeBuildFocusKey) ||
+    Boolean(trimOptional(routeState.memberId)) ||
+    Boolean(trimOptional(currentScopeBindingRevision?.revisionId)) ||
+    (draftMode === 'new' && isBuildEditorSurface);
   const currentMemberLabel =
-    trimOptional(scopeBindingQuery.data?.displayName) ||
-    trimOptional(activeWorkflowName) ||
-    (isBuildScriptsSurface ? trimOptional(selectedScriptId) : '') ||
-    'Current member';
+    hasSelectedMemberFocus
+      ? trimOptional(scopeBindingQuery.data?.displayName) ||
+        trimOptional(activeWorkflowName) ||
+        (isBuildScriptsSurface ? trimOptional(selectedScriptId) : '') ||
+        'Current member'
+      : 'Select a member';
   const currentMemberDescription =
-    trimOptional(routeState.memberId) ||
-    trimOptional(scopeBindingQuery.data?.serviceId) ||
-    (activeBuildFocusKey
-      ? activeBuildFocusKey.startsWith('script:')
-        ? `Script ${trimOptional(selectedScriptId)}`
-        : activeWorkflowName
-          ? `Workflow ${activeWorkflowName}`
-          : 'Studio is tracking the current member focus.'
-      : 'Studio is tracking the current member focus.');
+    hasSelectedMemberFocus
+      ? trimOptional(routeState.memberId) ||
+        trimOptional(scopeBindingQuery.data?.serviceId) ||
+        (draftMode === 'new' && isBuildEditorSurface
+          ? 'Unsaved workflow member draft.'
+          : '') ||
+        (activeBuildFocusKey
+          ? activeBuildFocusKey.startsWith('script:')
+            ? `Script ${trimOptional(selectedScriptId)}`
+            : activeWorkflowName
+              ? `Workflow ${activeWorkflowName}`
+              : 'Studio is tracking the current member focus.'
+          : 'Studio is tracking the current member focus.')
+      : 'Choose a member from Team members, or create a new workflow member to start building.';
   const currentMemberKind: StudioShellMemberKind =
-    isBuildScriptsSurface
-      ? 'script'
-      : isBuildGAgentSurface
-        ? 'gagent'
-      : currentScopeBindingRevision?.implementationKind === 'gagent'
-        ? 'gagent'
-        : currentScopeBindingRevision?.implementationKind === 'script'
-          ? 'script'
+    hasSelectedMemberFocus
+      ? isBuildScriptsSurface
+        ? 'script'
+        : isBuildGAgentSurface
+          ? 'gagent'
+          : draftMode === 'new' && isBuildEditorSurface
+            ? 'workflow'
+          : currentScopeBindingRevision?.implementationKind === 'gagent'
+            ? 'gagent'
+          : currentScopeBindingRevision?.implementationKind === 'script'
+            ? 'script'
           : currentScopeBindingRevision?.implementationKind === 'workflow'
             ? 'workflow'
-            : selectedWorkflowId || templateWorkflow
-              ? 'workflow'
-              : 'member';
+          : selectedWorkflowId || templateWorkflow
+            ? 'workflow'
+            : 'member'
+      : 'member';
   const currentMemberTone: 'live' | 'draft' | 'idle' =
-    currentScopeBindingRevision?.isActiveServing
-      ? 'live'
-      : activeBuildFocusKey
-        ? 'draft'
-        : 'idle';
+    hasSelectedMemberFocus
+      ? currentScopeBindingRevision?.isActiveServing
+        ? 'live'
+        : activeBuildFocusKey
+          ? 'draft'
+          : 'idle'
+      : 'idle';
   const currentMemberMeta = formatStudioAssetMeta({
-    primary:
-      isObserveSurface
+    primary: hasSelectedMemberFocus
+      ? isObserveSurface
         ? 'Recent run focus'
         : isBuildScriptsSurface
           ? 'Script behavior'
@@ -2838,25 +3423,39 @@ const StudioPage: React.FC = () => {
             ? 'Binding focus'
             : isInvokeSurface
               ? 'Invoke focus'
-              : 'Build focus',
-    secondary:
-      currentScopeBindingRevision?.revisionId ||
-      trimOptional(routeState.memberId) ||
-      activeBuildFocusKey,
+              : 'Build focus'
+      : '',
+    secondary: hasSelectedMemberFocus
+      ? currentScopeBindingRevision?.revisionId ||
+        trimOptional(routeState.memberId) ||
+        activeBuildFocusKey
+      : '',
   });
   const currentFocusMemberKey = useMemo(
     () =>
-      buildStudioFocusKey({
-        activeBuildFocusKey,
-        routeMemberId: routeState.memberId,
-        currentBindingRevisionId: currentScopeBindingRevision?.revisionId,
-      }),
+      draftMode === 'new' && isBuildEditorSurface
+        ? 'draft:new'
+        : buildStudioFocusKey({
+            activeBuildFocusKey,
+            routeMemberId: routeState.memberId,
+            currentBindingRevisionId: currentScopeBindingRevision?.revisionId,
+          }),
     [
       activeBuildFocusKey,
       currentScopeBindingRevision?.revisionId,
+      draftMode,
+      isBuildEditorSurface,
       routeState.memberId,
     ],
   );
+  const renameableWorkflowMemberKey = useMemo(
+    () => (selectedWorkflowId ? `workflow:${selectedWorkflowId}` : ''),
+    [selectedWorkflowId],
+  );
+  const renameableWorkflowLabel =
+    trimOptional(activeWorkflowName) ||
+    trimOptional(currentMemberLabel) ||
+    'current workflow member';
   const handleSelectStudioMember = useCallback(
     async (memberKey: string) => {
       const normalizedMemberKey = trimOptional(memberKey);
@@ -2887,6 +3486,11 @@ const StudioPage: React.FC = () => {
         return;
       }
 
+      if (normalizedMemberKey.startsWith('draft:')) {
+        startBlankDraft();
+        return;
+      }
+
       if (
         normalizedMemberKey.startsWith('binding:') &&
         preferredScopeWorkflow?.workflowId
@@ -2900,6 +3504,7 @@ const StudioPage: React.FC = () => {
       openScopeScript,
       openWorkspaceWorkflow,
       preferredScopeWorkflow?.workflowId,
+      startBlankDraft,
     ],
   );
   const memberItems = useMemo(() => {
@@ -2908,6 +3513,9 @@ const StudioPage: React.FC = () => {
     const currentMemberItem: StudioShellMemberItem = {
       key: currentFocusMemberKey,
       label: currentMemberLabel,
+      canDelete:
+        currentFocusMemberKey.startsWith('workflow:') && Boolean(selectedWorkflowId),
+      canRename: currentFocusMemberKey.startsWith('workflow:'),
       description: currentMemberDescription,
       kind: currentMemberKind,
       meta: currentMemberMeta,
@@ -2938,6 +3546,8 @@ const StudioPage: React.FC = () => {
         description:
           trimOptional(preferredScopeWorkflow.description) ||
           'Scope-backed workflow draft ready for the current member context.',
+        canDelete: true,
+        canRename: true,
         kind: 'workflow',
         meta: formatStudioAssetMeta({
           primary: `${preferredScopeWorkflow.stepCount} steps`,
@@ -2956,6 +3566,8 @@ const StudioPage: React.FC = () => {
           trimOptional(workflow.description) ||
           trimOptional(workflow.fileName) ||
           'Workspace workflow draft',
+        canDelete: true,
+        canRename: true,
         kind: 'workflow',
         meta: formatStudioAssetMeta({
           primary: `${workflow.stepCount} steps`,
@@ -3155,53 +3767,55 @@ const StudioPage: React.FC = () => {
   const latestExecutionSummary = executionsQuery.data?.[0] ?? null;
   const activeExecutionSummary =
     selectedExecutionSummary ?? latestExecutionSummary;
+  const showWorkflowEntryEmptyState =
+    isBuildEditorSurface &&
+    !selectedWorkflowId &&
+    !templateWorkflow &&
+    draftMode !== 'new' &&
+    visibleWorkflowSummaries.length === 0 &&
+    !workflowsQuery.isLoading &&
+    !scopeBindingQuery.isLoading &&
+    (!appContextQuery.data?.features.scripts || !scopeScriptsQuery.isLoading);
   const studioContextPrimaryTitle =
-    isBuildEditorSurface
-      ? activeWorkflowName || templateWorkflow || 'Workflow 构建'
-      : isBuildGAgentSurface
-        ? scopeBindingQuery.data?.displayName || 'GAgent 构建'
-      : isBuildScriptsSurface
-        ? selectedScriptId || 'Script 构建'
-      : isObserveSurface
-        ? activeWorkflowName || templateWorkflow || '测试运行'
+    showWorkflowEntryEmptyState
+      ? 'Select a member'
+      : isBuildEditorSurface
+        ? activeWorkflowName || templateWorkflow || 'Workflow 构建'
+        : isBuildGAgentSurface
+          ? scopeBindingQuery.data?.displayName || 'GAgent 构建'
+        : isBuildScriptsSurface
+          ? selectedScriptId || 'Script 构建'
+        : isObserveSurface
+          ? activeWorkflowName || templateWorkflow || '测试运行'
         : isBindSurface
           ? scopeBindingQuery.data?.displayName || '成员绑定'
           : isInvokeSurface
             ? scopeBindingQuery.data?.displayName || '成员调用'
             : pageTitle;
   const studioContextDescriptor =
-    isBuildEditorSurface
-      ? '围绕当前 member 的 workflow canvas、step detail 和 dry-run 继续构建'
-      : isBuildGAgentSurface
-        ? '在 Build 内定义 GAgent 类型、角色、初始 prompt、工具和状态持久化'
-      : isBuildScriptsSurface
-        ? '围绕 script source、diagnostics 和 dry-run 继续迭代当前 member'
-      : isObserveSurface
-        ? '测试运行'
-        : isBindSurface
-          ? '查看绑定版本、运行态入口与 serving 状态'
-          : isInvokeSurface
-            ? '调用当前成员并保留运行观察上下文'
-            : '成员工作台';
-  const studioTeamLabel =
-    trimOptional(resolvedStudioScopeId) || 'Local draft workspace';
+    showWorkflowEntryEmptyState
+      ? memberItems.length > 0
+        ? '先从左侧选一个已有 member，再继续 Build；如果要新增，再显式点击 Create member。'
+        : '这个 team 还没有 member。显式点击 Create member，再进入新的 workflow draft。'
+      : isBuildEditorSurface
+        ? '围绕当前 member 的 workflow canvas、step detail 和 dry-run 继续构建'
+        : isBuildGAgentSurface
+          ? '在 Build 内定义 GAgent 类型、角色、初始 prompt、工具和状态持久化'
+        : isBuildScriptsSurface
+          ? '围绕 script source、diagnostics 和 dry-run 继续迭代当前 member'
+        : isObserveSurface
+          ? '测试运行'
+          : isBindSurface
+            ? '查看绑定版本、运行态入口与 serving 状态'
+            : isInvokeSurface
+              ? '调用当前成员并保留运行观察上下文'
+              : '成员工作台';
   const studioBoundServiceLabel =
-    trimOptional(routeState.memberId) ||
-    trimOptional(scopeBindingQuery.data?.serviceId) ||
-    'No bound service';
-  const studioObservationLabel =
-    trimOptional(activeExecutionSummary?.status) || 'No active execution';
-  const studioObservationTone = resolveExecutionTone(
-    activeExecutionSummary?.status,
-  );
-  const studioObservationNote = activeExecutionSummary
-    ? [
-        trimOptional(activeExecutionSummary.workflowName) || currentMemberLabel,
-        trimOptional(activeExecutionSummary.actorId),
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : 'Run a member through Invoke or Observe to keep runtime posture visible here.';
+    hasSelectedMemberFocus
+      ? trimOptional(routeState.memberId) ||
+        trimOptional(scopeBindingQuery.data?.serviceId) ||
+        'No bound service'
+      : '';
   const studioContextMetaParts = [
     studioContextDescriptor,
     studioBoundServiceLabel,
@@ -3222,58 +3836,125 @@ const StudioPage: React.FC = () => {
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
-  const studioRailCardStyle: React.CSSProperties = {
-    background: 'rgba(255, 255, 255, 0.96)',
-    border: '1px solid #ece3d5',
-    borderRadius: 14,
-    display: 'grid',
-    gap: 6,
-    padding: '10px 11px',
-  };
-  const studioRailLabelStyle: React.CSSProperties = {
-    color: '#7b6e5a',
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-  };
-  const studioRailValueStyle: React.CSSProperties = {
-    color: '#16120d',
-    fontSize: 11.5,
-    fontWeight: 700,
-    lineHeight: '17px',
-  };
-  const studioRailMetaStyle: React.CSSProperties = {
-    color: '#6f6250',
-    fontSize: 10.5,
-    lineHeight: '16px',
-  };
-  const studioRailFooter = (
-    <>
-      <div style={studioRailCardStyle}>
-        <div style={studioRailLabelStyle}>Current team</div>
-        <div style={studioRailValueStyle}>{studioTeamLabel}</div>
-        <div style={studioRailMetaStyle}>
-          {studioBoundServiceLabel}
-          {currentScopeBindingRevision?.revisionId
-            ? ` · ${currentScopeBindingRevision.revisionId}`
-            : ''}
-        </div>
-      </div>
-      <div style={studioRailCardStyle}>
-        <div style={studioRailLabelStyle}>Observe posture</div>
-        <div
+  const createMemberButtonDisabled =
+    inventoryBusyKey === 'create' || inventoryDirectoryOptions.length === 0;
+  const selectedInventoryMemberKey = renameableWorkflowMemberKey;
+  const selectedInventoryMemberBusy =
+    inventoryBusyKey === selectedInventoryMemberKey;
+  const inventoryActions = (
+    <div style={inventoryActionsStyle}>
+      <div style={inventoryActionRowStyle}>
+        <button
+          aria-label="Create member"
+          disabled={createMemberButtonDisabled}
+          onClick={() => void openCreateWorkflowMemberFlow()}
           style={{
-            ...studioRailValueStyle,
-            color: resolveStudioContextBadgeStyle(studioObservationTone).color,
+            ...inventoryActionPrimaryButtonStyle,
+            cursor: createMemberButtonDisabled ? 'not-allowed' : 'pointer',
+            opacity: createMemberButtonDisabled ? 0.56 : 1,
           }}
+          type="button"
         >
-          {studioObservationLabel}
-        </div>
-        <div style={studioRailMetaStyle}>{studioObservationNote}</div>
+          Create member
+        </button>
+        <button
+          aria-label={`Rename ${renameableWorkflowLabel}`}
+          disabled={!selectedInventoryMemberKey || selectedInventoryMemberBusy}
+          onClick={() =>
+            selectedInventoryMemberKey
+              ? void handleRenameWorkflowMember(selectedInventoryMemberKey)
+              : undefined
+          }
+          style={{
+            ...inventoryActionButtonStyle,
+            cursor:
+              !selectedInventoryMemberKey || selectedInventoryMemberBusy
+                ? 'not-allowed'
+                : 'pointer',
+            opacity:
+              !selectedInventoryMemberKey || selectedInventoryMemberBusy ? 0.56 : 1,
+          }}
+          type="button"
+        >
+          Rename
+        </button>
+        <button
+          aria-label={`Delete ${renameableWorkflowLabel}`}
+          disabled={!selectedInventoryMemberKey || selectedInventoryMemberBusy}
+          onClick={() =>
+            selectedInventoryMemberKey
+              ? void handleDeleteWorkflowMember(selectedInventoryMemberKey)
+              : undefined
+          }
+          style={{
+            ...inventoryActionDangerButtonStyle,
+            cursor:
+              !selectedInventoryMemberKey || selectedInventoryMemberBusy
+                ? 'not-allowed'
+                : 'pointer',
+            opacity:
+              !selectedInventoryMemberKey || selectedInventoryMemberBusy ? 0.56 : 1,
+          }}
+          type="button"
+        >
+          Delete
+        </button>
       </div>
-    </>
+      {selectedInventoryMemberKey ? (
+        <div style={inventorySelectionPillStyle}>
+          <span style={inventorySelectionLabelStyle}>Selected</span>
+          <span style={inventorySelectionValueStyle}>{renameableWorkflowLabel}</span>
+        </div>
+      ) : (
+        <div style={inventoryActionsHintStyle}>
+          Create a workflow member here. Rename and delete become available after
+          you select a workflow member from the inventory.
+        </div>
+      )}
+    </div>
   );
+  const buildEmptyStateContent = showWorkflowEntryEmptyState ? (
+    <div
+      data-testid="studio-empty-member-state"
+      style={memberEmptyStatePanelStyle}
+    >
+      <div style={{ display: 'grid', gap: 8 }}>
+        <h2 style={memberEmptyStateTitleStyle}>
+          {memberItems.length > 0 ? 'Select a team member' : 'Create your first team member'}
+        </h2>
+        <p style={memberEmptyStateBodyStyle}>
+          {memberItems.length > 0
+            ? 'Pick an existing member from Team members to continue in Studio, or explicitly create a new workflow member here.'
+            : 'Studio no longer creates an implicit draft on entry. Create a workflow member when you are ready to start building.'}
+        </p>
+      </div>
+      <div style={memberEmptyStateActionsStyle}>
+        <button
+          aria-label="Create member from empty state"
+          disabled={createMemberButtonDisabled}
+          onClick={() => void openCreateWorkflowMemberFlow()}
+          style={{
+            ...inventoryActionPrimaryButtonStyle,
+            cursor: createMemberButtonDisabled ? 'not-allowed' : 'pointer',
+            opacity: createMemberButtonDisabled ? 0.56 : 1,
+          }}
+          type="button"
+        >
+          Create member
+        </button>
+        <span style={inventoryActionsHintStyle}>
+          {memberItems.length > 0
+            ? 'You can also pick an existing member from the left rail.'
+            : 'Only explicit Create member should open a new draft now.'}
+        </span>
+      </div>
+      {createMemberButtonDisabled ? (
+        <div style={inventoryActionsHintStyle}>
+          Add a workflow directory in Config before creating a member.
+        </div>
+      ) : null}
+    </div>
+  ) : null;
   const studioContextBar = (
     <div
       data-testid="studio-context-bar"
@@ -3307,17 +3988,26 @@ const StudioPage: React.FC = () => {
         ← {studioReturnLabel}
       </button>
       <div
-        data-testid="studio-context-title"
         style={{
-          color: '#1d2129',
-          fontSize: 16,
-          fontWeight: 700,
-          letterSpacing: '-0.02em',
-          lineHeight: '22px',
+          alignItems: 'center',
+          display: 'flex',
+          gap: 10,
           minWidth: 0,
         }}
       >
-        {studioContextPrimaryTitle}
+        <div
+          data-testid="studio-context-title"
+          style={{
+            color: '#1d2129',
+            fontSize: 16,
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            lineHeight: '22px',
+            minWidth: 0,
+          }}
+        >
+          {studioContextPrimaryTitle}
+        </div>
       </div>
       {studioContextMetaParts.length > 0 ? (
         <div
@@ -3426,23 +4116,29 @@ const StudioPage: React.FC = () => {
         minWidth: 0,
       }}
     >
-      {buildModeCards}
-      <div
-        style={{
-          display: 'flex',
-          flex: 1,
-          flexDirection: 'column',
-          minHeight: 0,
-          minWidth: 0,
-          overflow: 'auto',
-        }}
-      >
-        {activeBuildMode === 'workflow'
-          ? workflowBuildContent
-          : activeBuildMode === 'script'
-            ? scriptBuildContent
-            : gAgentBuildContent}
-      </div>
+      {showWorkflowEntryEmptyState ? (
+        buildEmptyStateContent
+      ) : (
+        <>
+          {buildModeCards}
+          <div
+            style={{
+              display: 'flex',
+              flex: 1,
+              flexDirection: 'column',
+              minHeight: 0,
+              minWidth: 0,
+              overflow: 'auto',
+            }}
+          >
+            {activeBuildMode === 'workflow'
+              ? workflowBuildContent
+              : activeBuildMode === 'script'
+                ? scriptBuildContent
+                : gAgentBuildContent}
+          </div>
+        </>
+      )}
     </div>
   ) : null;
 
@@ -3554,21 +4250,95 @@ const StudioPage: React.FC = () => {
         {logsPopoutMode === 'popout' ? (
           currentPageContent
         ) : (
-          <StudioShell
-            contentOverflow="auto"
-            contextBar={studioContextBar}
-            currentLifecycleStep={currentLifecycleStep}
-            lifecycleSteps={lifecycleSteps}
-            members={memberItems}
-            onSelectLifecycleStep={handleSelectLifecycleStep}
-            onSelectMember={handleSelectStudioMember}
-            pageTitle={pageTitle}
-            railFooter={studioRailFooter}
-            selectedMemberKey={currentFocusMemberKey}
-            showPageHeader={false}
-          >
-            {currentPageContent}
-          </StudioShell>
+          <>
+            <StudioShell
+              contentOverflow="auto"
+              contextBar={studioContextBar}
+              currentLifecycleStep={currentLifecycleStep}
+              inventoryActions={inventoryActions}
+              lifecycleSteps={lifecycleSteps}
+              members={memberItems}
+              onSelectLifecycleStep={handleSelectLifecycleStep}
+              onSelectMember={handleSelectStudioMember}
+              pageTitle={pageTitle}
+              selectedMemberKey={currentFocusMemberKey}
+              showPageHeader={false}
+            >
+              {currentPageContent}
+            </StudioShell>
+            <Modal
+              open={createMemberModalOpen}
+              title="Create member"
+              onCancel={closeCreateWorkflowMemberFlow}
+              onOk={() => void handleCreateWorkflowMember()}
+              okText="Create workflow member"
+              okButtonProps={{
+                disabled:
+                  inventoryBusyKey === 'create' ||
+                  !trimOptional(createMemberName) ||
+                  !trimOptional(createMemberDirectoryId),
+                loading: inventoryBusyKey === 'create',
+              }}
+              cancelButtonProps={{
+                disabled: inventoryBusyKey === 'create',
+              }}
+            >
+              <div style={inventoryCreateModalStackStyle}>
+                <div style={inventoryCreateFieldStackStyle}>
+                  <div style={inventoryCreateFieldLabelStyle}>Member type</div>
+                  <div style={inventoryCreateTypeRowStyle}>
+                    <span style={inventoryCreateTypeChipActiveStyle}>Workflow</span>
+                    <span style={inventoryCreateTypeChipDisabledStyle}>Script</span>
+                    <span style={inventoryCreateTypeChipDisabledStyle}>GAgent</span>
+                  </div>
+                  <div style={inventoryCreateHintStyle}>
+                    Member inventory currently creates workflow members. Script and
+                    GAgent creation still goes through their dedicated authoring
+                    surfaces.
+                  </div>
+                </div>
+                <label style={inventoryCreateFieldStackStyle}>
+                  <span style={inventoryCreateFieldLabelStyle}>Workflow member name</span>
+                  <input
+                    aria-label="Workflow member name"
+                    autoFocus
+                    onChange={(event) => setCreateMemberName(event.target.value)}
+                    placeholder={suggestedCreateWorkflowName}
+                    style={inventoryCreateInputStyle}
+                    type="text"
+                    value={createMemberName}
+                  />
+                </label>
+                <label style={inventoryCreateFieldStackStyle}>
+                  <span style={inventoryCreateFieldLabelStyle}>Directory</span>
+                  <select
+                    aria-label="Workflow directory"
+                    onChange={(event) => setCreateMemberDirectoryId(event.target.value)}
+                    style={inventoryCreateInputStyle}
+                    value={createMemberDirectoryId}
+                  >
+                    <option value="" disabled>
+                      Select a workflow directory
+                    </option>
+                    {inventoryDirectoryOptions.map((directory) => (
+                      <option key={directory.directoryId} value={directory.directoryId}>
+                        {directory.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={inventoryCreateHintStyle}>
+                    {selectedCreateDirectory?.path
+                      ? `${selectedCreateDirectory.label} · ${selectedCreateDirectory.path}`
+                      : 'The workflow YAML will be created in the selected Studio directory.'}
+                  </div>
+                </label>
+                <div style={inventoryCreateHintStyle}>
+                  New members start as a blank workflow draft with an empty canvas, so
+                  you can name it first and then continue editing inside Build.
+                </div>
+              </div>
+            </Modal>
+          </>
         )}
       </StudioBootstrapGate>
     </PageContainer>

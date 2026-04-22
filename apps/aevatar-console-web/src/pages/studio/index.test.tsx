@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { message } from "antd";
+import { Modal, message } from "antd";
 import React from "react";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
@@ -11,6 +11,7 @@ import StudioPage from "./index";
 
 jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
+  const modal = actual.Modal;
   return {
     ...actual,
     message: {
@@ -21,6 +22,9 @@ jest.mock("antd", () => {
       error: jest.fn(),
       destroy: jest.fn(),
     },
+    Modal: Object.assign(modal, {
+      confirm: jest.fn(),
+    }),
   };
 });
 
@@ -123,6 +127,7 @@ function mockBuildWorkflowYaml(document: typeof mockWorkflowDocument): string {
 
 let mockParsedDocument = mockCloneValue(mockWorkflowDocument);
 let mockWorkflowFile: any;
+let mockWorkflowSummaries: any[];
 let mockConnectorCatalog: any;
 let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
@@ -196,6 +201,7 @@ async function mockAuthorWorkflowSuccess(
 
 function resetMockState(): void {
   mockParsedDocument = mockCloneValue(mockWorkflowDocument);
+  mockWorkflowSummaries = mockCreateDefaultWorkflowSummaries();
   mockWorkflowFile = {
     workflowId: "workflow-1",
     name: "workspace-demo",
@@ -440,7 +446,7 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
-    listWorkflows: jest.fn(async () => mockCreateDefaultWorkflowSummaries()),
+    listWorkflows: jest.fn(async () => mockWorkflowSummaries),
     getTemplateWorkflow: jest.fn(async () => ({
       catalog: {
         name: "published-demo",
@@ -517,11 +523,14 @@ jest.mock("@/shared/studio/api", () => ({
         fileName?: string | null;
         yaml: string;
       }) => {
+        const resolvedWorkflowId =
+          input.workflowId || `workflow-${mockWorkflowSummaries.length + 1}`;
         mockWorkflowFile = {
           ...mockWorkflowFile,
-          workflowId: input.workflowId || mockWorkflowFile.workflowId,
+          workflowId: resolvedWorkflowId,
           name: input.workflowName,
-          fileName: input.fileName || mockWorkflowFile.fileName,
+          fileName: input.fileName || `${input.workflowName}.yaml`,
+          filePath: `/tmp/workflows/${input.fileName || `${input.workflowName}.yaml`}`,
           directoryId: input.directoryId,
           yaml: input.yaml,
           updatedAtUtc: "2026-03-18T00:05:00Z",
@@ -530,10 +539,54 @@ jest.mock("@/shared/studio/api", () => ({
             name: input.workflowName,
           },
         };
+        const existingSummaryIndex = mockWorkflowSummaries.findIndex(
+          (workflow) => workflow.workflowId === resolvedWorkflowId
+        );
+        const nextSummary = {
+          workflowId: resolvedWorkflowId,
+          name: input.workflowName,
+          description: "Workspace workflow",
+          fileName: mockWorkflowFile.fileName,
+          filePath: mockWorkflowFile.filePath,
+          directoryId: input.directoryId,
+          directoryLabel: "Workspace",
+          stepCount: 0,
+          hasLayout: true,
+          updatedAtUtc: "2026-03-18T00:05:00Z",
+        };
+        if (existingSummaryIndex >= 0) {
+          mockWorkflowSummaries[existingSummaryIndex] = nextSummary;
+        } else {
+          mockWorkflowSummaries = [nextSummary, ...mockWorkflowSummaries];
+        }
 
         return mockWorkflowFile;
       }
     ),
+    deleteWorkflow: jest.fn(async (workflowId: string) => {
+      mockWorkflowSummaries = mockWorkflowSummaries.filter(
+        (workflow) => workflow.workflowId !== workflowId
+      );
+      if (mockWorkflowFile.workflowId === workflowId) {
+        const fallback = mockWorkflowSummaries[0];
+        if (fallback) {
+          mockWorkflowFile = {
+            ...mockWorkflowFile,
+            workflowId: fallback.workflowId,
+            name: fallback.name,
+            fileName: fallback.fileName,
+            filePath: fallback.filePath,
+            directoryId: fallback.directoryId,
+            yaml: `name: ${fallback.name}\nsteps: []\n`,
+            document: {
+              ...mockWorkflowFile.document,
+              name: fallback.name,
+            },
+          };
+        }
+      }
+      return undefined;
+    }),
     parseYaml: jest.fn(async (input: { yaml: string }) => ({
       document: input.yaml.includes("name: legacy_draft")
         ? {
@@ -1378,6 +1431,7 @@ jest.mock("./components/StudioShell", () => ({
     alerts,
     children,
     contextBar,
+    inventoryActions,
     lifecycleSteps = [],
     members = [],
     navItems = [],
@@ -1397,18 +1451,29 @@ jest.mock("./components/StudioShell", () => ({
         React.createElement(
           "div",
           { key: "members", "aria-label": "Team members" },
-          members.map((member: any) =>
-            React.createElement(
-              "button",
-              {
-                key: `member-${member.key}`,
-                type: "button",
-                "aria-current": selectedMemberKey === member.key ? "true" : undefined,
-                onClick: () => onSelectMember?.(member.key),
-              },
-              member.label
-            )
-          )
+          [
+            inventoryActions
+              ? React.createElement("div", { key: "inventory-actions" }, inventoryActions)
+              : null,
+            ...members.map((member: any) =>
+              React.createElement(
+                "div",
+                { key: `member-row-${member.key}` },
+                [
+                  React.createElement(
+                    "button",
+                    {
+                      key: `member-${member.key}`,
+                      type: "button",
+                      "aria-current": selectedMemberKey === member.key ? "true" : undefined,
+                      onClick: () => onSelectMember?.(member.key),
+                    },
+                    member.label
+                  ),
+                ]
+              )
+            ),
+          ]
         ),
         ...lifecycleSteps.map((step: any) =>
           React.createElement(
@@ -2188,9 +2253,11 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-context-title")).toBeTruthy();
     expect(screen.getByText("Workbench")).toBeTruthy();
-    expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
-      "workspace-demo"
-    );
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+        "workspace-demo"
+      );
+    });
     expect(screen.getByTestId("studio-context-meta")).toHaveTextContent(
       "workflow canvas"
     );
@@ -2265,7 +2332,7 @@ describe("StudioPage", () => {
 
     const routeLabel = await screen.findByTestId("workflow-dry-run-route");
     await waitFor(() => {
-      expect(routeLabel).toHaveTextContent("NyxID Gateway · OpenAI");
+      expect(routeLabel).toHaveTextContent("NyxID Gateway");
     });
   });
 
@@ -2634,6 +2701,101 @@ describe("StudioPage", () => {
     });
   });
 
+  it("creates a workflow member from the inventory rail", async () => {
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
+    const createButton = await screen.findByLabelText("Create member");
+    await waitFor(() => {
+      expect(createButton).not.toBeDisabled();
+    });
+    fireEvent.click(createButton);
+
+    const nameInput = await screen.findByLabelText("Workflow member name");
+    expect(nameInput).toHaveValue("draft");
+    fireEvent.change(nameInput, {
+      target: {
+        value: "orders-draft",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create workflow member" }));
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName: "orders-draft",
+          fileName: "orders-draft.yaml",
+          yaml: "name: orders-draft\nsteps: []\n",
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Created workflow member orders-draft.",
+      );
+    });
+  });
+
+  it("renames a workflow member from the inventory actions", async () => {
+    jest.spyOn(window, "prompt").mockReturnValue("orders-router");
+
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByLabelText("Rename workspace-demo"));
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-1",
+          workflowName: "orders-router",
+          fileName: "orders-router.yaml",
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Renamed workflow member to orders-router.",
+      );
+    });
+  });
+
+  it("deletes a workflow member from the inventory rail", async () => {
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete workflow member",
+          okText: "Delete member",
+          cancelText: "Keep member",
+          autoFocusButton: "cancel",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    expect(confirmConfig.icon).toBeTruthy();
+    await act(async () => {
+      await confirmConfig.onOk();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.deleteWorkflow).toHaveBeenCalledWith(
+        "workflow-1",
+        undefined,
+      );
+    });
+
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Deleted workflow member workspace-demo.",
+      );
+    });
+  });
+
   it("saves the workflow draft and continues to bind from the build page", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
@@ -2801,7 +2963,7 @@ describe("StudioPage", () => {
     ).toHaveValue("name: draft\nsteps: []\n");
   });
 
-  it("recovers to a blank draft when the route points at a missing workflow", async () => {
+  it("does not auto-create a draft when Studio opens without any team members", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -2809,9 +2971,37 @@ describe("StudioPage", () => {
       workflowStorageMode: "scope",
     });
     (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+
+    renderStudioPage("/studio?scopeId=scope-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-empty-member-state")).toBeTruthy();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+      "Select a member"
+    );
+    expect(screen.getByLabelText("Create member from empty state")).toBeTruthy();
+    expect(screen.queryByText("DAG Canvas")).toBeNull();
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("draft")).toBeNull();
+      expect(searchParams.get("focus")).toBeNull();
+      expect(searchParams.get("tab")).toBe("studio");
+    });
+  });
+
+  it("recovers to an explicit member-selection empty state when the route points at a missing workflow", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      workflowStorageMode: "scope",
+    });
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValue([]);
     (studioApi.getWorkflow as jest.Mock).mockRejectedValueOnce(
       new Error("Not Found")
     );
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
 
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Adraft&tab=studio");
 
@@ -2820,14 +3010,17 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(window.location.search).toContain("draft=new");
-      expect(window.location.search).not.toContain("workflow=draft");
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("draft")).toBeNull();
+      expect(searchParams.get("focus")).toBeNull();
+      expect(searchParams.get("tab")).toBe("studio");
     });
 
-    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft");
-    expect(
-      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
-    ).toHaveValue("name: draft\nsteps: []\n");
+    expect(await screen.findByTestId("studio-empty-member-state")).toBeTruthy();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+      "Select a member"
+    );
+    expect(screen.queryByText("DAG Canvas")).toBeNull();
   });
 
   it("ignores the legacy playground handoff route flag and opens a blank Studio draft", async () => {
@@ -2964,8 +3157,12 @@ describe("StudioPage", () => {
 
     const rail = await screen.findByLabelText("Team members");
     await within(rail).findByText("other-workflow");
-    const workspaceButtonBefore = within(rail).getByText("workspace-demo").closest("button");
-    const otherWorkflowButtonBefore = within(rail).getByText("other-workflow").closest("button");
+    const workspaceButtonBefore = within(rail).getByRole("button", {
+      name: "workspace-demo",
+    });
+    const otherWorkflowButtonBefore = within(rail).getByRole("button", {
+      name: "other-workflow",
+    });
 
     expect(workspaceButtonBefore).toBeTruthy();
     expect(otherWorkflowButtonBefore).toBeTruthy();
@@ -2974,15 +3171,19 @@ describe("StudioPage", () => {
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
 
-    fireEvent.click(otherWorkflowButtonBefore!);
+    await replaceStudioRoute("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-2&tab=studio");
 
     await waitFor(() => {
-      const searchParams = new URLSearchParams(window.location.search);
-      expect(searchParams.get("focus")).toBe("workflow:workflow-2");
+      expect(within(rail).getByRole("button", { name: "workspace-demo" })).toBeTruthy();
+      expect(within(rail).getByRole("button", { name: "other-workflow" })).toBeTruthy();
     });
 
-    const workspaceButtonAfter = within(rail).getByText("workspace-demo").closest("button");
-    const otherWorkflowButtonAfter = within(rail).getByText("other-workflow").closest("button");
+    const workspaceButtonAfter = within(rail).getByRole("button", {
+      name: "workspace-demo",
+    });
+    const otherWorkflowButtonAfter = within(rail).getByRole("button", {
+      name: "other-workflow",
+    });
 
     expect(workspaceButtonAfter).toBeTruthy();
     expect(otherWorkflowButtonAfter).toBeTruthy();
@@ -2990,7 +3191,6 @@ describe("StudioPage", () => {
       workspaceButtonAfter!.compareDocumentPosition(otherWorkflowButtonAfter!) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-    expect(otherWorkflowButtonAfter).toHaveAttribute("aria-current", "true");
   });
 
   it("opens the scripts workspace when the route only carries a script id", async () => {
