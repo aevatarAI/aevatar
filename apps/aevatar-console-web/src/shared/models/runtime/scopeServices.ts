@@ -42,6 +42,30 @@ export interface ScopeServiceRevisionActionResult {
   readonly status: string;
 }
 
+export interface ScopeServiceEndpointContract {
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly endpointId: string;
+  readonly invokePath: string;
+  readonly method: string;
+  readonly requestContentType: string;
+  readonly responseContentType: string;
+  readonly requestTypeUrl: string;
+  readonly responseTypeUrl: string;
+  readonly supportsSse: boolean;
+  readonly supportsWebSocket: boolean;
+  readonly supportsAguiFrames: boolean;
+  readonly streamFrameFormat: string | null;
+  readonly smokeTestSupported: boolean;
+  readonly defaultSmokeInputMode: "prompt" | "typed-payload";
+  readonly defaultSmokePrompt: string | null;
+  readonly sampleRequestJson: string | null;
+  readonly deploymentStatus: string;
+  readonly revisionId: string;
+  readonly curlExample: string | null;
+  readonly fetchExample: string | null;
+}
+
 export interface ScopeServiceRunSummary {
   readonly scopeId: string;
   readonly serviceId: string;

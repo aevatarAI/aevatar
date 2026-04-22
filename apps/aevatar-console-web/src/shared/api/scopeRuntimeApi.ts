@@ -13,6 +13,7 @@ import {
 import type {
   ScopeServiceBindingCatalogSnapshot,
   ScopeServiceBindingInput,
+  ScopeServiceEndpointContract,
   ScopeServiceRevisionActionResult,
   ScopeServiceRevisionCatalogSnapshot,
   ScopeServiceRunAuditReport,
@@ -551,6 +552,112 @@ function decodeScopeServiceRevisionActionResult(
       `${label}.revisionId`,
     ),
     status: readString(record, ["status", "Status"], `${label}.status`),
+  };
+}
+
+function decodeScopeServiceEndpointContract(
+  value: unknown,
+  label = "ScopeServiceEndpointContract",
+): ScopeServiceEndpointContract {
+  const record = expectRecord(value, label);
+  return {
+    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    serviceId: readString(
+      record,
+      ["serviceId", "ServiceId"],
+      `${label}.serviceId`,
+    ),
+    endpointId: readString(
+      record,
+      ["endpointId", "EndpointId"],
+      `${label}.endpointId`,
+    ),
+    invokePath: readString(
+      record,
+      ["invokePath", "InvokePath"],
+      `${label}.invokePath`,
+    ),
+    method: readString(record, ["method", "Method"], `${label}.method`),
+    requestContentType: readString(
+      record,
+      ["requestContentType", "RequestContentType"],
+      `${label}.requestContentType`,
+    ),
+    responseContentType: readString(
+      record,
+      ["responseContentType", "ResponseContentType"],
+      `${label}.responseContentType`,
+    ),
+    requestTypeUrl: readString(
+      record,
+      ["requestTypeUrl", "RequestTypeUrl"],
+      `${label}.requestTypeUrl`,
+    ),
+    responseTypeUrl: readString(
+      record,
+      ["responseTypeUrl", "ResponseTypeUrl"],
+      `${label}.responseTypeUrl`,
+    ),
+    supportsSse: readBoolean(
+      record,
+      ["supportsSse", "SupportsSse"],
+      `${label}.supportsSse`,
+    ),
+    supportsWebSocket: readBoolean(
+      record,
+      ["supportsWebSocket", "SupportsWebSocket"],
+      `${label}.supportsWebSocket`,
+    ),
+    supportsAguiFrames: readBoolean(
+      record,
+      ["supportsAguiFrames", "SupportsAguiFrames"],
+      `${label}.supportsAguiFrames`,
+    ),
+    streamFrameFormat: readNullableString(
+      record,
+      ["streamFrameFormat", "StreamFrameFormat"],
+      `${label}.streamFrameFormat`,
+    ),
+    smokeTestSupported: readBoolean(
+      record,
+      ["smokeTestSupported", "SmokeTestSupported"],
+      `${label}.smokeTestSupported`,
+    ),
+    defaultSmokeInputMode: readString(
+      record,
+      ["defaultSmokeInputMode", "DefaultSmokeInputMode"],
+      `${label}.defaultSmokeInputMode`,
+    ) as ScopeServiceEndpointContract["defaultSmokeInputMode"],
+    defaultSmokePrompt: readNullableString(
+      record,
+      ["defaultSmokePrompt", "DefaultSmokePrompt"],
+      `${label}.defaultSmokePrompt`,
+    ),
+    sampleRequestJson: readNullableString(
+      record,
+      ["sampleRequestJson", "SampleRequestJson"],
+      `${label}.sampleRequestJson`,
+    ),
+    deploymentStatus: readString(
+      record,
+      ["deploymentStatus", "DeploymentStatus"],
+      `${label}.deploymentStatus`,
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      `${label}.revisionId`,
+    ),
+    curlExample: readNullableString(
+      record,
+      ["curlExample", "CurlExample"],
+      `${label}.curlExample`,
+    ),
+    fetchExample: readNullableString(
+      record,
+      ["fetchExample", "FetchExample"],
+      `${label}.fetchExample`,
+    ),
   };
 }
 
@@ -1116,6 +1223,17 @@ export const scopeRuntimeApi = {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/revisions/${encodeURIComponent(revisionId)}`,
       decodeScopeServiceRevision,
+    );
+  },
+
+  getServiceEndpointContract(
+    scopeId: string,
+    serviceId: string,
+    endpointId: string,
+  ): Promise<ScopeServiceEndpointContract> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
+      decodeScopeServiceEndpointContract,
     );
   },
 
