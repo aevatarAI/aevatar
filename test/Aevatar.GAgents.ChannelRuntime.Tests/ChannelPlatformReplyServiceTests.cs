@@ -45,6 +45,7 @@ public sealed class ChannelPlatformReplyServiceTests
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
             store,
+            store,
             actorRuntime,
             nyxClient,
             NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
@@ -88,6 +89,7 @@ public sealed class ChannelPlatformReplyServiceTests
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
             store,
+            store,
             actorRuntime,
             nyxClient,
             NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
@@ -130,6 +132,7 @@ public sealed class ChannelPlatformReplyServiceTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
+            store,
             store,
             actorRuntime,
             nyxClient,
@@ -196,6 +199,7 @@ public sealed class ChannelPlatformReplyServiceTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
+            store,
             store,
             actorRuntime,
             nyxClient,
@@ -277,7 +281,7 @@ public sealed class ChannelPlatformReplyServiceTests
         };
 
     private sealed class FakeChannelBotRegistrationStore(ChannelBotRegistrationEntry registration)
-        : IChannelBotRegistrationQueryPort
+        : IChannelBotRegistrationQueryPort, IChannelBotRegistrationRuntimeQueryPort
     {
         private readonly object _gate = new();
         private ChannelBotRegistrationEntry _registration = registration.Clone();

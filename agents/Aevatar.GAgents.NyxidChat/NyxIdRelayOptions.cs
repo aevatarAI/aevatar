@@ -17,4 +17,26 @@ public sealed class NyxIdRelayOptions
     /// development/debugging, false in production.
     /// </summary>
     public bool EnableDebugDiagnostics { get; set; }
+
+    /// <summary>
+    /// Optional override for the Nyx OIDC discovery document URL.
+    /// Defaults to <c>{NyxBaseUrl}/.well-known/openid-configuration</c>.
+    /// </summary>
+    public string? OidcDiscoveryUrl { get; set; }
+
+    /// <summary>
+    /// Optional override for the expected JWT audience.
+    /// Defaults to the configured Nyx base URL.
+    /// </summary>
+    public string? ExpectedAudience { get; set; }
+
+    /// <summary>
+    /// Time window in seconds used for JWT lifetime clock skew.
+    /// </summary>
+    public int JwtClockSkewSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Cache lifetime in seconds for Nyx OIDC discovery + JWKS documents.
+    /// </summary>
+    public int OidcCacheTtlSeconds { get; set; } = 300;
 }

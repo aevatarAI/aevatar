@@ -10,26 +10,19 @@ message ChannelBotRegistrationEntry {
   string id = 1;
   string platform = 2;
   string nyx_provider_slug = 3;
-  string nyx_user_token = 4;
-  string verification_token = 5;
-  string scope_id = 6;
-  google.protobuf.Timestamp created_at = 7;
-  string webhook_url = 8;  // Full callback URL configured via setWebhook
-  string encrypt_key = 9;  // Deprecated legacy raw field retained only for historical state migration.
-  // Late-bound credential reference (Channel RFC §17.3).
-  //
-  // Current status: host registration surfaces accept credential_ref and the
-  // Lark host ingress runtime resolves it before bootstrapping the adapter.
-  // Raw encrypt_key remains only as a deprecated migration field and should
-  // not participate in normal query/runtime flow.
-  string credential_ref = 10;
+  string scope_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  string webhook_url = 6;  // Full callback URL configured via setWebhook
   // Soft-delete marker retained for projector watermark coordination
   // (Channel RFC §7.1.1): the registration stays in state after unregister so
   // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
   // .DeleteAsync. Housekeeping cleans watermark-passed entries.
-  bool tombstoned = 11;
-  int64 tombstone_state_version = 12;
-  string nyx_refresh_token = 13;
+  bool tombstoned = 7;
+  int64 tombstone_state_version = 8;
+  string nyx_channel_bot_id = 9;
+  string nyx_agent_api_key_id = 10;
+  string nyx_conversation_route_id = 11;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 12;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -160,19 +153,25 @@ message ChannelBotUnregisteredEvent {
 }
 
 // Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
+message ChannelBotLegacyDirectBinding {
+  string nyx_user_token = 1;
+  string nyx_refresh_token = 2;
+  string verification_token = 3;
+  // Late-bound credential reference for direct platform/webhook secrets.
+  string credential_ref = 4;
+  string encrypt_key = 5;   // Deprecated legacy raw field retained only for migration fallback.
+}
+
 message ChannelBotRegisterCommand {
   string platform = 1;
   string nyx_provider_slug = 2;
-  string nyx_user_token = 3;
-  string verification_token = 4;
-  string scope_id = 5;
-  string webhook_url = 6;
-  string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
-  string encrypt_key = 8;   // Deprecated legacy raw field; new registrations ignore it and use credential_ref.
-  // Late-bound credential reference (Channel RFC §17.3). See
-  // ChannelBotRegistrationEntry.credential_ref for runtime contract.
-  string credential_ref = 9;
-  string nyx_refresh_token = 10;
+  string scope_id = 3;
+  string webhook_url = 4;
+  string requested_id = 5;  // Caller-provided ID; actor uses if non-empty, else generates
+  string nyx_channel_bot_id = 6;
+  string nyx_agent_api_key_id = 7;
+  string nyx_conversation_route_id = 8;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 9;
 }
 
 message ChannelBotUnregisterCommand {
@@ -181,8 +180,7 @@ message ChannelBotUnregisterCommand {
 
 message ChannelBotUpdateTokenCommand {
   string registration_id = 1;
-  string nyx_user_token = 2;
-  string nyx_refresh_token = 3;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 2;
 }
 
 message ChannelBotCompactTombstonesCommand {
@@ -197,8 +195,7 @@ message ChannelBotTombstonesCompactedEvent {
 // Domain event: token updated on an existing registration
 message ChannelBotTokenUpdatedEvent {
   string registration_id = 1;
-  string nyx_user_token = 2;
-  string nyx_refresh_token = 3;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 2;
 }
 
 // Projection read model for channel bot registrations
@@ -213,12 +210,25 @@ message ChannelBotRegistrationDocument {
   string last_event_id = 8;
   google.protobuf.Timestamp updated_at_utc = 9;
   string actor_id = 10;                     // Source actor ID
-  string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
-  string encrypt_key = 12;                   // Deprecated legacy raw field retained for runtime fallback until old registrations are backfilled to credential_ref.
-  // Late-bound credential reference (Channel RFC §17.3). See
-  // ChannelBotRegistrationEntry.credential_ref for runtime contract.
-  string credential_ref = 13;
-  string nyx_refresh_token = 14;
+  string nyx_channel_bot_id = 11;
+  string nyx_agent_api_key_id = 12;
+  string nyx_conversation_route_id = 13;
+}
+
+// Runtime-only legacy direct binding read model. This is intentionally separate
+// from ChannelBotRegistrationDocument so the normal registration query surface
+// carries only non-secret identifiers.
+message ChannelBotLegacyDirectBindingDocument {
+  string id = 1;                            // Registration ID (= document key)
+  string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
+  string verification_token = 4;
+  string credential_ref = 5;
+  string encrypt_key = 6;
+  int64 state_version = 7;
+  string last_event_id = 8;
+  google.protobuf.Timestamp updated_at_utc = 9;
+  string actor_id = 10;                     // Source actor ID
 }
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───

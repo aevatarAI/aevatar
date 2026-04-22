@@ -47,7 +47,9 @@ public static class NyxIdChatEndpoints
             if (string.IsNullOrWhiteSpace(token))
                 return Results.Json(new { error = "Provide token via X-Test-Token header" });
 
-            var gateway = "https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1/chat/completions";
+            var configuration = http.RequestServices.GetService<IConfiguration>();
+            var gateway = configuration?["Aevatar:NyxId:GatewayUrl"]
+                ?? "https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1/chat/completions";
             var body = """{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}""";
 
             using var client = new System.Net.Http.HttpClient();
@@ -501,15 +503,18 @@ public static class NyxIdChatEndpoints
         if (memoryStore == null)
             return;
 
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger("Aevatar.NyxId.Chat.UserMemory");
+
         try
         {
             var section = await memoryStore.BuildPromptSectionAsync(2000, ct);
             if (!string.IsNullOrWhiteSpace(section))
                 metadata[LLMRequestMetadataKeys.UserMemoryPrompt] = section;
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort
+            logger?.LogWarning(ex, "Failed to load user memory from chrono-storage — continuing without memory context");
         }
     }
 
@@ -522,6 +527,9 @@ public static class NyxIdChatEndpoints
         var client = http.RequestServices.GetService<NyxIdApiClient>();
         if (client is null)
             return;
+
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger("Aevatar.NyxId.Chat.ConnectedServices");
 
         try
         {
@@ -543,9 +551,9 @@ public static class NyxIdChatEndpoints
             if (!string.IsNullOrWhiteSpace(context))
                 metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = context;
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort — agent still works without capability context
+            logger?.LogWarning(ex, "Failed to load connected services context — continuing without capability context");
         }
     }
 
@@ -739,7 +747,8 @@ public static class NyxIdChatEndpoints
 
     /// <summary>
     /// Receives forwarded platform messages from NyxID Channel Bot Relay.
-    /// Verifies HMAC signature, dispatches to NyxIdChat actor, collects response, returns sync reply.
+    /// Validates the Nyx relay JWT, durably dispatches the inbound turn, returns 202,
+    /// and sends the platform reply asynchronously through Nyx channel-relay/reply.
     /// </summary>
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
@@ -747,6 +756,8 @@ public static class NyxIdChatEndpoints
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] IGAgentActorStore actorStore,
         [FromServices] NyxIdRelayOptions relayOptions,
+        [FromServices] NyxRelayJwtValidator relayJwtValidator,
+        [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -763,31 +774,43 @@ public static class NyxIdChatEndpoints
             catch (JsonException ex)
             {
                 logger.LogWarning(ex, "Failed to parse relay payload");
-                return FriendlyReply("I received a message but couldn't understand it. Please try again.");
+                return Results.BadRequest(new { error = "invalid_relay_payload" });
             }
 
-            if (message is null || string.IsNullOrWhiteSpace(message.Content?.Text))
-                return FriendlyReply("I received an empty message. Please send some text.");
+            if (message is null)
+                return Results.BadRequest(new { error = "missing_relay_payload" });
+            if (string.IsNullOrWhiteSpace(message.MessageId))
+                return Results.BadRequest(new { error = "missing_message_id" });
+            if (string.IsNullOrWhiteSpace(message.Content?.Text))
+                return Results.Accepted(value: new { status = "ignored", reason = "empty_text" });
 
             // ─── Auth ───
             var userToken = http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(userToken))
             {
                 logger.LogWarning("Relay callback missing X-NyxID-User-Token header");
-                return FriendlyReply("Authentication is not configured properly. " +
-                    "Please ask the bot owner to check the channel relay setup.");
+                return Results.Unauthorized();
             }
 
-            // Resolve user scope for chrono-storage config access
-            var jwtScopeId = TryExtractJwtSubject(userToken);
-            var scopeId = jwtScopeId ?? message.Agent?.ApiKeyId ?? "default";
-
-            if (!string.IsNullOrWhiteSpace(jwtScopeId))
+            var validation = await relayJwtValidator.ValidateAsync(userToken, ct);
+            if (!validation.Succeeded || validation.Principal is null || string.IsNullOrWhiteSpace(validation.Subject))
             {
-                var claims = new[] { new System.Security.Claims.Claim("sub", jwtScopeId) };
-                var identity = new System.Security.Claims.ClaimsIdentity(claims, "NyxIdRelay");
-                http.User = new System.Security.Claims.ClaimsPrincipal(identity);
+                logger.LogWarning("Relay callback JWT validation failed: {Error}", validation.Error);
+                return Results.Unauthorized();
             }
+
+            if (!string.IsNullOrWhiteSpace(message.Agent?.ApiKeyId) &&
+                !string.Equals(message.Agent.ApiKeyId, validation.RelayApiKeyId, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "Relay callback agent mismatch: payload_agent_api_key_id={PayloadApiKeyId}, token_agent_api_key_id={TokenApiKeyId}",
+                    message.Agent.ApiKeyId,
+                    validation.RelayApiKeyId);
+                return Results.Unauthorized();
+            }
+
+            http.User = validation.Principal;
+            var scopeId = validation.Subject!;
 
             // Note: config.json in chrono-storage cannot be read in relay flow because
             // ChronoStorageCatalogBlobClient reads the Bearer token from Authorization header,
@@ -815,13 +838,14 @@ public static class NyxIdChatEndpoints
                         ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
             await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
 
-            // ─── Subscribe and collect response ───
+            // ─── Subscribe before dispatch so we can relay the response asynchronously ───
             var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var responseBuilder = new StringBuilder();
-            string? errorMessage = null;
-            using var ctr = ct.Register(() => responseTcs.TrySetCanceled());
+            var relayReply = new RelayReplyAccumulator();
+            var sessionId = !string.IsNullOrWhiteSpace(message.MessageId)
+                ? $"{conversationId}-{message.MessageId}"
+                : $"{conversationId}-{Guid.NewGuid():N}";
 
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+            var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
                 actor.Id,
                 envelope =>
                 {
@@ -831,36 +855,36 @@ public static class NyxIdChatEndpoints
                     if (payload.Is(TextMessageContentEvent.Descriptor))
                     {
                         var evt = payload.Unpack<TextMessageContentEvent>();
+                        if (!string.Equals(evt.SessionId, sessionId, StringComparison.Ordinal))
+                            return Task.CompletedTask;
                         if (!string.IsNullOrEmpty(evt.Delta))
-                            responseBuilder.Append(evt.Delta);
+                            relayReply.ResponseBuilder.Append(evt.Delta);
                     }
                     else if (payload.Is(TextMessageEndEvent.Descriptor))
                     {
                         var evt = payload.Unpack<TextMessageEndEvent>();
-                        if (!string.IsNullOrEmpty(evt.Content))
+                        if (!string.Equals(evt.SessionId, sessionId, StringComparison.Ordinal))
+                            return Task.CompletedTask;
+
+                        if (TryExtractLlmError(evt.Content, out var extractedError))
                         {
-                            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                            const string llmFailedPrefix = "LLM request failed:";
-                            if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                                errorMessage = evt.Content[llmErrorPrefix.Length..].Trim();
-                            else if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                                errorMessage = evt.Content.Trim();
+                            relayReply.ErrorMessage = extractedError;
                         }
-                        responseTcs.TrySetResult(responseBuilder.ToString());
+                        else if (relayReply.ResponseBuilder.Length == 0 && !string.IsNullOrWhiteSpace(evt.Content))
+                        {
+                            relayReply.ResponseBuilder.Append(evt.Content);
+                        }
+
+                        responseTcs.TrySetResult(relayReply.ResponseBuilder.ToString());
                     }
 
                     return Task.CompletedTask;
                 },
-                ct);
+                CancellationToken.None);
 
             // ─── Dispatch to actor ───
             // SessionId = per-message unique ID (for idempotent retry),
             // NOT conversationId (which is per-chat and would collide across messages).
-            var relayMessageId = message.MessageId;
-            var sessionId = !string.IsNullOrWhiteSpace(relayMessageId)
-                ? $"{conversationId}-{relayMessageId}"
-                : $"{conversationId}-{Guid.NewGuid():N}";
-
             var chatRequest = new ChatRequestEvent
             {
                 Prompt = message.Content.Text,
@@ -890,55 +914,33 @@ public static class NyxIdChatEndpoints
 
             await actor.HandleEventAsync(envelope, ct);
 
-            // ─── Wait for response ───
-            var timeoutMs = relayOptions.ResponseTimeoutSeconds * 1000;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(timeoutMs, ct));
-            sw.Stop();
+            var configuration = http.RequestServices.GetService<IConfiguration>();
+            _ = FinalizeRelayReplyAsync(
+                    subscription,
+                    responseTcs,
+                    relayReply,
+                    sessionId,
+                    message.MessageId!,
+                    userToken,
+                    chatRequest.Metadata,
+                    relayOptions,
+                    nyxClient,
+                    configuration,
+                    logger)
+                .ContinueWith(
+                    task => logger.LogError(task.Exception, "Relay background reply pipeline failed for session {SessionId}", sessionId),
+                    TaskContinuationOptions.OnlyOnFaulted);
 
-            string replyText;
-            if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
+            return Results.Accepted(value: new
             {
-                replyText = responseTcs.Task.Result;
-                logger.LogInformation("Relay response in {ElapsedMs}ms, length={Length}",
-                    sw.ElapsedMilliseconds, replyText.Length);
-            }
-            else
-            {
-                var partial = responseBuilder.ToString();
-                logger.LogWarning("Relay timed out after {ElapsedMs}ms, partial={Length}",
-                    sw.ElapsedMilliseconds, partial.Length);
-                replyText = partial.Length > 0
-                    ? partial
-                    : "Sorry, it's taking too long to respond. Please try again.";
-            }
-
-            // ─── Translate errors to friendly messages ───
-            if (!string.IsNullOrWhiteSpace(errorMessage))
-            {
-                logger.LogWarning("Relay LLM error: conversation={ConversationId}, error={Error}",
-                    conversationId, errorMessage);
-
-                replyText = ClassifyError(errorMessage);
-
-                if (relayOptions.EnableDebugDiagnostics)
-                {
-                    var config = http.RequestServices.GetService<IConfiguration>();
-                    var diagnostic = BuildRelayDiagnostic(chatRequest.Metadata, config, errorMessage);
-                    replyText += $"\n\n[Debug]\n{diagnostic}";
-                }
-            }
-            else if (string.IsNullOrWhiteSpace(replyText))
-            {
-                logger.LogWarning("Relay empty response: conversation={ConversationId}", conversationId);
-                replyText = "Sorry, I wasn't able to generate a response. Please try again.";
-            }
-
-            return FriendlyReply(replyText);
+                status = "accepted",
+                session_id = sessionId,
+                message_id = message.MessageId,
+            });
         }
         catch (OperationCanceledException)
         {
-            return FriendlyReply("The request was cancelled. Please try again.");
+            return Results.StatusCode(499);
         }
         catch (InvalidOperationException)
         {
@@ -947,7 +949,7 @@ public static class NyxIdChatEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "Relay handler unexpected error");
-            return FriendlyReply("Sorry, an unexpected error occurred. Please try again later.");
+            return Results.StatusCode(StatusCodes.Status500InternalServerError);
         }
     }
 
@@ -976,6 +978,107 @@ public static class NyxIdChatEndpoints
             return "Sorry, the configured AI model is not available.";
 
         return "Sorry, something went wrong while generating a response.";
+    }
+
+    private static bool TryExtractLlmError(string? content, out string error)
+    {
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(content))
+            return false;
+
+        const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+        const string llmFailedPrefix = "LLM request failed:";
+        if (content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+        {
+            error = content[llmErrorPrefix.Length..].Trim();
+            return true;
+        }
+
+        if (content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+        {
+            error = content.Trim();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static async Task FinalizeRelayReplyAsync(
+        IAsyncDisposable subscription,
+        TaskCompletionSource<string> responseTcs,
+        RelayReplyAccumulator relayReply,
+        string sessionId,
+        string messageId,
+        string relayToken,
+        Google.Protobuf.Collections.MapField<string, string> metadata,
+        NyxIdRelayOptions relayOptions,
+        NyxIdApiClient nyxClient,
+        IConfiguration? configuration,
+        ILogger logger)
+    {
+        await using var ownedSubscription = subscription;
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(relayOptions.ResponseTimeoutSeconds));
+
+        var completed = await Task.WhenAny(
+            responseTcs.Task,
+            Task.Delay(Timeout.InfiniteTimeSpan, timeoutCts.Token));
+
+        string replyText;
+        if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
+        {
+            replyText = responseTcs.Task.Result;
+            logger.LogInformation(
+                "Relay response completed: session={SessionId}, length={Length}",
+                sessionId,
+                replyText.Length);
+        }
+        else
+        {
+            var partial = relayReply.ResponseBuilder.ToString();
+            logger.LogWarning(
+                "Relay response timed out: session={SessionId}, partial_length={Length}",
+                sessionId,
+                partial.Length);
+            replyText = partial.Length > 0
+                ? partial
+                : "Sorry, it's taking too long to respond. Please try again.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(relayReply.ErrorMessage))
+        {
+            logger.LogWarning(
+                "Relay LLM error surfaced through async reply: session={SessionId}, error={Error}",
+                sessionId,
+                relayReply.ErrorMessage);
+            replyText = ClassifyError(relayReply.ErrorMessage);
+            if (relayOptions.EnableDebugDiagnostics)
+            {
+                var diagnostic = BuildRelayDiagnostic(metadata, configuration, relayReply.ErrorMessage);
+                replyText += $"\n\n[Debug]\n{diagnostic}";
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(replyText))
+        {
+            replyText = "Sorry, I wasn't able to generate a response. Please try again.";
+        }
+
+        using var deliveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var delivery = await nyxClient.SendChannelRelayTextReplyAsync(relayToken, messageId, replyText, deliveryCts.Token);
+        if (!delivery.Succeeded)
+        {
+            logger.LogError(
+                "Relay async reply delivery failed: session={SessionId}, messageId={MessageId}, detail={Detail}",
+                sessionId,
+                messageId,
+                delivery.Detail);
+            return;
+        }
+
+        logger.LogInformation(
+            "Relay async reply delivered: session={SessionId}, messageId={MessageId}, platformMessageId={PlatformMessageId}",
+            sessionId,
+            delivery.MessageId,
+            delivery.PlatformMessageId);
     }
 
     /// <summary>
@@ -1048,6 +1151,12 @@ public static class NyxIdChatEndpoints
     {
         public string? Type { get; set; }
         public string? Text { get; set; }
+    }
+
+    private sealed class RelayReplyAccumulator
+    {
+        public StringBuilder ResponseBuilder { get; } = new();
+        public string? ErrorMessage { get; set; }
     }
 
 }

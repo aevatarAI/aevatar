@@ -62,6 +62,7 @@ public static class ChannelCallbackEndpoints
         string platform,
         string registrationId,
         [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
+        [FromServices] LarkDirectWebhookCutoverOptions larkCutoverOptions,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] ILarkConversationIngressRuntime larkIngressRuntime,
@@ -84,6 +85,24 @@ public static class ChannelCallbackEndpoints
         {
             RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "platform_mismatch");
             return Results.BadRequest(new { error = "Platform mismatch" });
+        }
+
+        if (!ShouldAcceptDirectLarkCallback(registration, larkCutoverOptions, DateTimeOffset.UtcNow))
+        {
+            RecordDiagnostic(
+                diagnostics,
+                "Callback:retired",
+                registration.Platform,
+                registration.Id,
+                "lark_direct_callback_retired");
+            return Results.Json(
+                new
+                {
+                    error = "Lark direct callback is retired. Point the Lark Developer Console callback URL to the NyxID webhook URL and use Nyx relay ingress instead.",
+                    registration_id = registration.Id,
+                    platform = registration.Platform,
+                },
+                statusCode: StatusCodes.Status410Gone);
         }
 
         if (string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
@@ -135,7 +154,8 @@ public static class ChannelCallbackEndpoints
             cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
         }
 
-        if (ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand))
+        if (ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand) ||
+            ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out resumeCommand))
         {
             var resumeService = http.RequestServices
                 .GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
@@ -221,7 +241,7 @@ public static class ChannelCallbackEndpoints
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = registration.NyxUserToken,
+            RegistrationToken = registration.LegacyDirectBinding?.NyxUserToken ?? string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
@@ -331,6 +351,14 @@ public static class ChannelCallbackEndpoints
 
         // Validate platform has a registered adapter
         var platformNormalized = request.Platform.Trim().ToLowerInvariant();
+        if (string.Equals(platformNormalized, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Conflict(new
+            {
+                error = "Direct Lark registration is retired. Use the Nyx-backed provisioning flow so the webhook URL points to NyxID instead of Aevatar.",
+            });
+        }
+
         var hasAdapter = adapters.Any(a =>
             string.Equals(a.Platform, platformNormalized, StringComparison.OrdinalIgnoreCase));
         if (!hasAdapter)
@@ -362,13 +390,14 @@ public static class ChannelCallbackEndpoints
         {
             Platform = platformNormalized,
             NyxProviderSlug = request.NyxProviderSlug.Trim(),
-            NyxUserToken = request.NyxUserToken.Trim(),
-            NyxRefreshToken = request.NyxRefreshToken?.Trim() ?? string.Empty,
-            VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
-            CredentialRef = request.CredentialRef?.Trim() ?? string.Empty,
             RequestedId = registrationId,
+            LegacyDirectBinding = BuildLegacyDirectBinding(
+                request.NyxUserToken,
+                request.NyxRefreshToken,
+                request.VerificationToken,
+                request.CredentialRef),
         };
 
         var cmdEnvelope = new EventEnvelope
@@ -413,7 +442,7 @@ public static class ChannelCallbackEndpoints
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
             callback_url = $"{callbackPath}/{registrationId}",
-            auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.NyxRefreshToken),
+            auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.LegacyDirectBinding?.NyxRefreshToken),
             projection_ready = materialized,
             projection_warning = materialized
                 ? null
@@ -430,9 +459,15 @@ public static class ChannelCallbackEndpoints
         {
             id = e.Id,
             platform = e.Platform,
+            registration_mode = string.IsNullOrWhiteSpace(e.NyxAgentApiKeyId) ? "legacy_direct_callback" : "nyx_relay_webhook",
             nyx_provider_slug = e.NyxProviderSlug,
             scope_id = e.ScopeId,
-            callback_url = $"/api/channels/{e.Platform}/callback/{e.Id}",
+            callback_url = string.IsNullOrWhiteSpace(e.NyxAgentApiKeyId)
+                ? $"/api/channels/{e.Platform}/callback/{e.Id}"
+                : string.Empty,
+            nyx_channel_bot_id = e.NyxChannelBotId,
+            nyx_agent_api_key_id = e.NyxAgentApiKeyId,
+            nyx_conversation_route_id = e.NyxConversationRouteId,
         });
 
         return Results.Ok(result);
@@ -470,6 +505,8 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
+        [FromServices] LarkDirectWebhookCutoverOptions larkCutoverOptions,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -478,6 +515,16 @@ public static class ChannelCallbackEndpoints
         var exists = await queryPort.GetAsync(registrationId, ct);
         if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
+
+        if (string.Equals(exists.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+            !ShouldAcceptLegacyDirectLarkOperation(exists, larkCutoverOptions, DateTimeOffset.UtcNow))
+        {
+            return Results.Conflict(new
+            {
+                error = "Lark registrations on the Nyx relay path do not use persisted Nyx session tokens. Re-provision through the Nyx-backed Lark flow instead of updating tokens here.",
+                registration_id = registrationId,
+            });
+        }
 
         UpdateTokenRequest? request;
         try
@@ -494,7 +541,11 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = "nyx_user_token is required" });
 
         var newToken = request.NyxUserToken.Trim();
-        var newRefreshToken = ResolveUpdatedRefreshToken(request.NyxRefreshToken, exists.NyxRefreshToken);
+        var runtimeRegistration = await runtimeQueryPort.GetAsync(registrationId, ct) ?? exists;
+        var currentLegacyDirectBinding = runtimeRegistration.LegacyDirectBinding;
+        var newRefreshToken = ResolveUpdatedRefreshToken(
+            request.NyxRefreshToken,
+            currentLegacyDirectBinding?.NyxRefreshToken);
 
         // Snapshot projection version. Orphaned documents retain a stale version
         // that never advances — this lets us detect the actor dropping the command.
@@ -505,8 +556,10 @@ public static class ChannelCallbackEndpoints
         var cmd = new ChannelBotUpdateTokenCommand
         {
             RegistrationId = registrationId,
-            NyxUserToken = newToken,
-            NyxRefreshToken = newRefreshToken,
+            LegacyDirectBinding = MergeLegacyDirectBinding(
+                currentLegacyDirectBinding,
+                newToken,
+                newRefreshToken),
         };
 
         var cmdEnvelope = new EventEnvelope
@@ -530,10 +583,9 @@ public static class ChannelCallbackEndpoints
             var versionAfter = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
             if (versionAfter <= versionBefore)
                 continue;
-            var after = await queryPort.GetAsync(registrationId, ct);
+            var after = await runtimeQueryPort.GetAsync(registrationId, ct);
             if (after is not null &&
-                string.Equals(after.NyxUserToken, newToken, StringComparison.Ordinal) &&
-                string.Equals(after.NyxRefreshToken, newRefreshToken, StringComparison.Ordinal))
+                HasLegacyDirectTokens(after.LegacyDirectBinding, newToken, newRefreshToken))
             {
                 confirmed = true;
                 break;
@@ -567,6 +619,77 @@ public static class ChannelCallbackEndpoints
         return requestedRefreshToken.Trim();
     }
 
+    internal static bool ShouldAcceptDirectLarkCallback(
+        ChannelBotRegistrationEntry registration,
+        LarkDirectWebhookCutoverOptions options,
+        DateTimeOffset nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!string.Equals(registration.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(registration.NyxAgentApiKeyId))
+            return false;
+
+        return options.AllowsLegacyDirectCallbackAt(nowUtc);
+    }
+
+    internal static bool ShouldAcceptLegacyDirectLarkOperation(
+        ChannelBotRegistrationEntry registration,
+        LarkDirectWebhookCutoverOptions options,
+        DateTimeOffset nowUtc) =>
+        ShouldAcceptDirectLarkCallback(registration, options, nowUtc);
+
+    private static ChannelBotLegacyDirectBinding? BuildLegacyDirectBinding(
+        string? nyxUserToken,
+        string? nyxRefreshToken,
+        string? verificationToken,
+        string? credentialRef)
+    {
+        var userToken = nyxUserToken?.Trim() ?? string.Empty;
+        var refreshToken = nyxRefreshToken?.Trim() ?? string.Empty;
+        var verifyToken = verificationToken?.Trim() ?? string.Empty;
+        var secretRef = credentialRef?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(userToken) &&
+            string.IsNullOrWhiteSpace(refreshToken) &&
+            string.IsNullOrWhiteSpace(verifyToken) &&
+            string.IsNullOrWhiteSpace(secretRef))
+        {
+            return null;
+        }
+
+        return new ChannelBotLegacyDirectBinding
+        {
+            NyxUserToken = userToken,
+            NyxRefreshToken = refreshToken,
+            VerificationToken = verifyToken,
+            CredentialRef = secretRef,
+            EncryptKey = string.Empty,
+        };
+    }
+
+    private static ChannelBotLegacyDirectBinding MergeLegacyDirectBinding(
+        ChannelBotLegacyDirectBinding? existing,
+        string userToken,
+        string refreshToken) =>
+        new()
+        {
+            NyxUserToken = userToken,
+            NyxRefreshToken = refreshToken,
+            VerificationToken = existing?.VerificationToken ?? string.Empty,
+            CredentialRef = existing?.CredentialRef ?? string.Empty,
+            EncryptKey = existing?.EncryptKey ?? string.Empty,
+        };
+
+    private static bool HasLegacyDirectTokens(
+        ChannelBotLegacyDirectBinding? binding,
+        string userToken,
+        string refreshToken) =>
+        string.Equals(binding?.NyxUserToken, userToken, StringComparison.Ordinal) &&
+        string.Equals(binding?.NyxRefreshToken, refreshToken, StringComparison.Ordinal);
+
     /// <summary>
     /// Diagnostic: sends a test reply directly through the platform adapter,
     /// bypassing the full LLM chat flow. Isolates whether the reply path
@@ -575,7 +698,8 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleTestReplyAsync(
         HttpContext http,
         string registrationId,
-        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
+        [FromServices] LarkDirectWebhookCutoverOptions larkCutoverOptions,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
@@ -583,9 +707,19 @@ public static class ChannelCallbackEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Diagnostic");
 
-        var registration = await queryPort.GetAsync(registrationId, ct);
+        var registration = await runtimeQueryPort.GetAsync(registrationId, ct);
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
+
+        if (string.Equals(registration.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+            !ShouldAcceptLegacyDirectLarkOperation(registration, larkCutoverOptions, DateTimeOffset.UtcNow))
+        {
+            return Results.Conflict(new
+            {
+                error = "Direct Lark test replies are retired on the Nyx relay path. Validate the relay callback and channel-relay/reply flow instead.",
+                registration_id = registrationId,
+            });
+        }
 
         // Read optional test parameters from body
         TestReplyRequest? request;
@@ -615,10 +749,10 @@ public static class ChannelCallbackEndpoints
             registration_id = registration.Id,
             platform = registration.Platform,
             nyx_provider_slug = registration.NyxProviderSlug,
-            nyx_user_token_present = !string.IsNullOrWhiteSpace(registration.NyxUserToken),
-            nyx_user_token_length = registration.NyxUserToken?.Length ?? 0,
-            nyx_refresh_token_present = !string.IsNullOrWhiteSpace(registration.NyxRefreshToken),
-            nyx_refresh_token_length = registration.NyxRefreshToken?.Length ?? 0,
+            nyx_user_token_present = !string.IsNullOrWhiteSpace(registration.LegacyDirectBinding?.NyxUserToken),
+            nyx_user_token_length = registration.LegacyDirectBinding?.NyxUserToken?.Length ?? 0,
+            nyx_refresh_token_present = !string.IsNullOrWhiteSpace(registration.LegacyDirectBinding?.NyxRefreshToken),
+            nyx_refresh_token_length = registration.LegacyDirectBinding?.NyxRefreshToken?.Length ?? 0,
             scope_id = registration.ScopeId,
             target_chat_id = chatId,
         };

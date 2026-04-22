@@ -100,7 +100,17 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
         ChannelBotRegistrationEntry registration,
         CancellationToken ct)
     {
-        if (!AgentBuilderCardFlow.TryResolve(inboundEvent, out var decision) || decision is null)
+        AgentBuilderFlowDecision? decision = null;
+        var relayMode = !string.IsNullOrWhiteSpace(registration.NyxAgentApiKeyId);
+        var relayDecisionMatched = relayMode &&
+                                  NyxRelayAgentBuilderFlow.TryResolve(inboundEvent, out decision);
+        if (!relayDecisionMatched &&
+            (!AgentBuilderCardFlow.TryResolve(inboundEvent, out decision) || decision is null))
+        {
+            return null;
+        }
+
+        if (decision is null)
             return null;
 
         var replyPayload = decision.ReplyPayload;
@@ -112,7 +122,9 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
                 AgentToolRequestContext.CurrentMetadata = BuildAgentBuilderMetadata(activity, inboundEvent);
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_services);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyPayload = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
+                replyPayload = relayDecisionMatched
+                    ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
+                    : AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
             }
             finally
             {
@@ -189,7 +201,9 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(inbound);
 
-        if (!ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand) ||
+        var routed = ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand) ||
+                     ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out resumeCommand);
+        if (!routed ||
             resumeCommand is null)
         {
             return null;
@@ -332,7 +346,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = registration.NyxUserToken,
+            RegistrationToken = registration.GetNyxUserToken(),
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };

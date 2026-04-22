@@ -20,6 +20,7 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
     private static readonly TimeSpan RefreshTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProjectionPollInterval = TimeSpan.FromMilliseconds(50);
 
+    private readonly IChannelBotRegistrationRuntimeQueryPort _runtimeQueryPort;
     private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly NyxIdApiClient _nyxClient;
@@ -28,11 +29,13 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
         new(StringComparer.Ordinal);
 
     public ChannelBotRegistrationTokenRefreshService(
+        IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         IChannelBotRegistrationQueryPort queryPort,
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         ILogger<ChannelBotRegistrationTokenRefreshService> logger)
     {
+        _runtimeQueryPort = runtimeQueryPort ?? throw new ArgumentNullException(nameof(runtimeQueryPort));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
@@ -73,11 +76,11 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
         using var timeoutCts = new CancellationTokenSource(RefreshTimeout);
         var ct = timeoutCts.Token;
 
-        var registration = await _queryPort.GetAsync(registrationId, ct);
+        var registration = await _runtimeQueryPort.GetAsync(registrationId, ct);
         if (registration is null)
             return new ChannelBotRegistrationTokenRefreshResult(false, Detail: $"registration_not_found:{registrationId}");
 
-        if (string.IsNullOrWhiteSpace(registration.NyxRefreshToken))
+        if (string.IsNullOrWhiteSpace(registration.GetNyxRefreshToken()))
         {
             return new ChannelBotRegistrationTokenRefreshResult(
                 false,
@@ -88,7 +91,7 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
             "Refreshing Nyx session token for channel registration {RegistrationId}",
             registrationId);
 
-        var refresh = await _nyxClient.RefreshSessionAsync(registration.NyxRefreshToken, ct);
+        var refresh = await _nyxClient.RefreshSessionAsync(registration.GetNyxRefreshToken(), ct);
         if (!refresh.Succeeded || string.IsNullOrWhiteSpace(refresh.AccessToken))
         {
             var detail = string.IsNullOrWhiteSpace(refresh.Detail)
@@ -98,11 +101,12 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
         }
 
         var rotatedRefreshToken = string.IsNullOrWhiteSpace(refresh.RefreshToken)
-            ? registration.NyxRefreshToken
+            ? registration.GetNyxRefreshToken()
             : refresh.RefreshToken;
 
         var persisted = await PersistRefreshedTokensAsync(
             registrationId,
+            registration.LegacyDirectBinding,
             refresh.AccessToken,
             rotatedRefreshToken,
             ct);
@@ -118,6 +122,7 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
 
     private async Task<ChannelBotRegistrationTokenRefreshResult> PersistRefreshedTokensAsync(
         string registrationId,
+        ChannelBotLegacyDirectBinding? existingBinding,
         string accessToken,
         string refreshToken,
         CancellationToken ct)
@@ -132,8 +137,14 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
         var command = new ChannelBotUpdateTokenCommand
         {
             RegistrationId = registrationId,
-            NyxUserToken = accessToken,
-            NyxRefreshToken = refreshToken,
+            LegacyDirectBinding = new ChannelBotLegacyDirectBinding
+            {
+                NyxUserToken = accessToken,
+                NyxRefreshToken = refreshToken,
+                VerificationToken = existingBinding?.VerificationToken ?? string.Empty,
+                CredentialRef = existingBinding?.CredentialRef ?? string.Empty,
+                EncryptKey = existingBinding?.EncryptKey ?? string.Empty,
+            },
         };
 
         var envelope = new EventEnvelope
@@ -157,12 +168,12 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
             if (versionAfter <= versionBefore)
                 continue;
 
-            var registration = await _queryPort.GetAsync(registrationId, ct);
+            var registration = await _runtimeQueryPort.GetAsync(registrationId, ct);
             if (registration is null)
                 continue;
 
-            if (string.Equals(registration.NyxUserToken, accessToken, StringComparison.Ordinal) &&
-                string.Equals(registration.NyxRefreshToken, refreshToken, StringComparison.Ordinal))
+            if (string.Equals(registration.GetNyxUserToken(), accessToken, StringComparison.Ordinal) &&
+                string.Equals(registration.GetNyxRefreshToken(), refreshToken, StringComparison.Ordinal))
             {
                 return new ChannelBotRegistrationTokenRefreshResult(true, registration);
             }

@@ -35,6 +35,7 @@ public class ChannelRegistrationToolTests
 
         tool.Description.Should().Contain("Lark");
         tool.Description.Should().Contain("Telegram");
+        tool.Description.Should().Contain("register_lark_via_nyx");
     }
 
     [Fact]
@@ -45,6 +46,19 @@ public class ChannelRegistrationToolTests
 
         var act = () => JsonDocument.Parse(tool.ParametersSchema);
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void ParametersSchema_Contains_Lark_Nyx_Provisioning_Fields()
+    {
+        var sp = new ServiceCollection().BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(sp);
+
+        var doc = JsonDocument.Parse(tool.ParametersSchema);
+        var properties = doc.RootElement.GetProperty("properties");
+        properties.TryGetProperty("app_id", out _).Should().BeTrue();
+        properties.TryGetProperty("app_secret", out _).Should().BeTrue();
+        properties.TryGetProperty("label", out _).Should().BeTrue();
     }
 
     // ─── Lazy DI resolution: error when dependencies missing ───
@@ -67,6 +81,102 @@ public class ChannelRegistrationToolTests
             // Assert: clear error message, not a crash
             result.Should().Contain("error");
             result.Should().Contain("not registered");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RegisterLarkViaNyx_Does_Not_Require_Channel_Runtime_Dependencies()
+    {
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkProvisioningResult(
+                Succeeded: true,
+                Status: "registered",
+                RegistrationId: "reg-1",
+                NyxChannelBotId: "bot-1",
+                NyxAgentApiKeyId: "key-1",
+                NyxConversationRouteId: "route-1",
+                RelayCallbackUrl: "https://aevatar.example.com/api/webhooks/nyxid-relay",
+                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(provisioningService);
+        var sp = services.BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                    "action": "register_lark_via_nyx",
+                    "app_id": "cli_xxx",
+                    "app_secret": "secret",
+                    "webhook_base_url": "https://aevatar.example.com"
+                }
+                """);
+
+            var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("registered");
+            doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-1");
+            doc.RootElement.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-1");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RegisterLarkViaNyx_Passes_Minimal_Lark_Config_To_Service()
+    {
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Error: "missing_app_secret")));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(provisioningService);
+        var sp = services.BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
+        };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                    "action": "register_lark_via_nyx",
+                    "app_id": "cli_xxx",
+                    "app_secret": "secret",
+                    "label": "Ops Bot",
+                    "scope_id": "scope-1",
+                    "webhook_base_url": "https://aevatar.example.com",
+                    "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            await provisioningService.Received(1).ProvisionAsync(
+                Arg.Is<NyxLarkProvisioningRequest>(request =>
+                    request.AccessToken == "test-token" &&
+                    request.AppId == "cli_xxx" &&
+                    request.AppSecret == "secret" &&
+                    request.Label == "Ops Bot" &&
+                    request.ScopeId == "scope-1" &&
+                    request.WebhookBaseUrl == "https://aevatar.example.com" &&
+                    request.NyxProviderSlug == "api-lark-bot"),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -145,6 +255,73 @@ public class ChannelRegistrationToolTests
             var result = await tool.ExecuteAsync("""{"action":"register"}""");
             result.Should().Contain("platform");
             result.Should().Contain("required");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Register_Lark_Direct_Path_Is_Retired()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                    "action":"register",
+                    "platform":"lark",
+                    "nyx_provider_slug":"api-lark-bot"
+                }
+                """);
+
+            result.Should().Contain("Direct Lark registration is retired");
+            result.Should().Contain("register_lark_via_nyx");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateToken_Lark_Relay_Path_Is_Rejected()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("lark-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "lark-1",
+                Platform = "lark",
+                NyxAgentApiKeyId = "agent-key-1",
+            }));
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"lark-1"}""");
+
+            result.Should().Contain("not supported on the Nyx relay path");
+            await actorRuntime.DidNotReceive().GetAsync(Arg.Any<string>());
         }
         finally
         {
@@ -245,10 +422,10 @@ public class ChannelRegistrationToolTests
         queryPort.GetAsync("bot-1", Arg.Any<CancellationToken>())
             .Returns(
                 Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-1", Platform = "lark", NyxUserToken = "old-token" }),
+                    { Id = "bot-1", Platform = "telegram", NyxUserToken = "old-token" }),
                 // Post-dispatch polls: return updated entry
                 Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-1", Platform = "lark", NyxUserToken = "new-token" }));
+                    { Id = "bot-1", Platform = "telegram", NyxUserToken = "new-token" }));
 
         queryPort.GetStateVersionAsync("bot-1", Arg.Any<CancellationToken>())
             .Returns(
@@ -289,7 +466,7 @@ public class ChannelRegistrationToolTests
         // Registration appears in projection (could be orphaned)
         queryPort.GetAsync("orphan-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "orphan-1", Platform = "lark", NyxUserToken = "stale-token" }));
+                { Id = "orphan-1", Platform = "telegram", NyxUserToken = "stale-token" }));
 
         // Version never advances — actor dropped the command
         queryPort.GetStateVersionAsync("orphan-1", Arg.Any<CancellationToken>())
@@ -332,7 +509,7 @@ public class ChannelRegistrationToolTests
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync("bot-2", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "bot-2", Platform = "lark", NyxUserToken = "wrong-token" }));
+                { Id = "bot-2", Platform = "telegram", NyxUserToken = "wrong-token" }));
 
         queryPort.GetStateVersionAsync("bot-2", Arg.Any<CancellationToken>())
             .Returns(
@@ -374,7 +551,7 @@ public class ChannelRegistrationToolTests
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync("bot-3", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "bot-3", Platform = "lark", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }));
+                { Id = "bot-3", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }));
 
         // Version advances and token matches — success path
         queryPort.GetStateVersionAsync("bot-3", Arg.Any<CancellationToken>())
@@ -385,9 +562,9 @@ public class ChannelRegistrationToolTests
         queryPort.GetAsync("bot-3", Arg.Any<CancellationToken>())
             .Returns(
                 Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-3", Platform = "lark", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }),
+                    { Id = "bot-3", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }),
                 Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-3", Platform = "lark", NyxUserToken = "fresh", NyxRefreshToken = "refresh-fresh" }));
+                    { Id = "bot-3", Platform = "telegram", NyxUserToken = "fresh", NyxRefreshToken = "refresh-fresh" }));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-bot-registration-store");
@@ -436,9 +613,9 @@ public class ChannelRegistrationToolTests
         queryPort.GetAsync("bot-4", Arg.Any<CancellationToken>())
             .Returns(
                 Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-4", Platform = "lark", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }),
+                    { Id = "bot-4", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }),
                 Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-4", Platform = "lark", NyxUserToken = "fresh", NyxRefreshToken = "refresh-old" }));
+                    { Id = "bot-4", Platform = "telegram", NyxUserToken = "fresh", NyxRefreshToken = "refresh-old" }));
         queryPort.GetStateVersionAsync("bot-4", Arg.Any<CancellationToken>())
             .Returns(
                 Task.FromResult<long?>(10),
@@ -515,7 +692,7 @@ public class ChannelRegistrationToolTests
         // Return confirmation on first poll
         queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "confirmed-id", Platform = "lark" }));
+                { Id = "confirmed-id", Platform = "telegram" }));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-bot-registration-store");
@@ -541,8 +718,8 @@ public class ChannelRegistrationToolTests
             await tool.ExecuteAsync("""
                 {
                     "action": "register",
-                    "platform": "lark",
-                    "nyx_provider_slug": "api-lark-bot",
+                    "platform": "telegram",
+                    "nyx_provider_slug": "api-telegram-bot",
                     "credential_ref": "vault://channels/lark/reg-1"
                 }
                 """);
@@ -567,7 +744,7 @@ public class ChannelRegistrationToolTests
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "confirmed", Platform = "lark" }));
+                { Id = "confirmed", Platform = "telegram" }));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-bot-registration-store");
@@ -589,8 +766,8 @@ public class ChannelRegistrationToolTests
             await tool.ExecuteAsync("""
                 {
                     "action": "register",
-                    "platform": "lark",
-                    "nyx_provider_slug": "api-lark-bot"
+                    "platform": "telegram",
+                    "nyx_provider_slug": "api-telegram-bot"
                 }
                 """);
 

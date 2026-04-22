@@ -7,20 +7,18 @@ using Aevatar.GAgents.Channel.Abstractions;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Materializes <see cref="ChannelBotRegistrationStoreState"/> into per-entry
-/// <see cref="ChannelBotRegistrationDocument"/> documents for the query-side read model.
-/// Tombstoned entries are retained in state and projected as <see cref="ProjectionVerdict.Tombstone"/>
-/// so the dispatcher removes the stale document (Channel RFC §7.1.1).
+/// Materializes legacy direct-platform secret bindings into a runtime-only
+/// document. Lark registrations on the Nyx relay path leave this empty.
 /// </summary>
-public sealed class ChannelBotRegistrationProjector
+public sealed class ChannelBotLegacyDirectBindingProjector
     : PerEntryDocumentProjector<
         ChannelBotRegistrationStoreState,
         ChannelBotRegistrationEntry,
-        ChannelBotRegistrationDocument,
+        ChannelBotLegacyDirectBindingDocument,
         ChannelBotRegistrationMaterializationContext>
 {
-    public ChannelBotRegistrationProjector(
-        IProjectionWriteDispatcher<ChannelBotRegistrationDocument> writeDispatcher,
+    public ChannelBotLegacyDirectBindingProjector(
+        IProjectionWriteDispatcher<ChannelBotLegacyDirectBindingDocument> writeDispatcher,
         IProjectionClock clock)
         : base(writeDispatcher, clock)
     {
@@ -32,26 +30,29 @@ public sealed class ChannelBotRegistrationProjector
     protected override string EntryKey(ChannelBotRegistrationEntry entry) => entry.Id ?? string.Empty;
 
     protected override ProjectionVerdict Evaluate(ChannelBotRegistrationEntry entry) =>
-        entry.Tombstoned ? ProjectionVerdict.Tombstone : ProjectionVerdict.Project;
+        entry.Tombstoned || entry.LegacyDirectBinding is null
+            ? ProjectionVerdict.Tombstone
+            : ProjectionVerdict.Project;
 
-    protected override ChannelBotRegistrationDocument Materialize(
+    protected override ChannelBotLegacyDirectBindingDocument Materialize(
         ChannelBotRegistrationEntry entry,
         ChannelBotRegistrationMaterializationContext context,
         StateEvent stateEvent,
-        DateTimeOffset updatedAt) =>
-        new()
+        DateTimeOffset updatedAt)
+    {
+        var binding = entry.LegacyDirectBinding ?? new ChannelBotLegacyDirectBinding();
+        return new ChannelBotLegacyDirectBindingDocument
         {
             Id = entry.Id,
-            Platform = entry.Platform ?? string.Empty,
-            NyxProviderSlug = entry.NyxProviderSlug ?? string.Empty,
-            ScopeId = entry.ScopeId ?? string.Empty,
-            WebhookUrl = entry.WebhookUrl ?? string.Empty,
-            NyxChannelBotId = entry.NyxChannelBotId ?? string.Empty,
-            NyxAgentApiKeyId = entry.NyxAgentApiKeyId ?? string.Empty,
-            NyxConversationRouteId = entry.NyxConversationRouteId ?? string.Empty,
+            NyxUserToken = binding.NyxUserToken ?? string.Empty,
+            NyxRefreshToken = binding.NyxRefreshToken ?? string.Empty,
+            VerificationToken = binding.VerificationToken ?? string.Empty,
+            CredentialRef = binding.CredentialRef ?? string.Empty,
+            EncryptKey = binding.EncryptKey ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             ActorId = context.RootActorId,
             UpdatedAt = updatedAt,
         };
+    }
 }

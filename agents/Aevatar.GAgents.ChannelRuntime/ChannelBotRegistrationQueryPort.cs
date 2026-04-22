@@ -47,11 +47,10 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             Id = document.Id ?? string.Empty,
             Platform = document.Platform ?? string.Empty,
             NyxProviderSlug = document.NyxProviderSlug ?? string.Empty,
-            NyxUserToken = document.NyxUserToken ?? string.Empty,
-            NyxRefreshToken = document.NyxRefreshToken ?? string.Empty,
-            VerificationToken = document.VerificationToken ?? string.Empty,
             ScopeId = document.ScopeId ?? string.Empty,
             WebhookUrl = document.WebhookUrl ?? string.Empty,
-            CredentialRef = document.CredentialRef ?? string.Empty,
+            NyxChannelBotId = document.NyxChannelBotId ?? string.Empty,
+            NyxAgentApiKeyId = document.NyxAgentApiKeyId ?? string.Empty,
+            NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
         };
 }

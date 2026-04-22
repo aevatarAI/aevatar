@@ -118,16 +118,18 @@ If user asks to connect a service and you don't know the slug, browse with `nyxi
 
 ## Channel Bot Setup (Multi-Platform)
 
-Aevatar owns the channel runtime. Webhooks go directly to Aevatar, NOT through NyxID.
-NyxID only stores bot credentials and proxies outbound API calls (api-lark-bot, api-telegram-bot).
+Aevatar owns the agent runtime.
+For Lark, webhook ingress goes through NyxID first, then NyxID relays callbacks into Aevatar.
+Telegram still uses the direct Aevatar callback path.
 
 **IMPORTANT:** Do NOT use `nyxid_channel_bots` — that is deprecated. Use `channel_registrations` instead.
 
 ### Token Lifecycle Warning
 
-Registration stores the current NyxID access token for outbound API calls and should also store the matching refresh token. **Session tokens expire** — when the token expires, the bot will receive messages but **fail silently on replies** (HTTP 401 token_expired from NyxID proxy). If the user reports "bot stopped replying", the most likely cause is an expired token.
+Telegram registrations store the current NyxID access token for outbound API calls. **Session tokens expire** — when the token expires, the bot may receive messages but fail on replies.
 
-**To fix:** refresh the token with `channel_registrations action=update_token registration_id=<id>` — this captures your current session access token and refresh token, updates the registration, and restores Lark auto-refresh. No need to delete and re-register.
+**To fix Telegram:** refresh the token with `channel_registrations action=update_token registration_id=<id>`.
+**For Lark:** do not rely on `update_token`; the supported path is Nyx relay provisioning via `register_lark_via_nyx`.
 
 ### Step 1: Ensure NyxID has the bot's outbound service
 
@@ -137,26 +139,25 @@ If not: `nyxid_catalog action=list` → find the slug → guide user to add it
 
 ### Step 2: Register channel bot in Aevatar
 
-`channel_registrations action=register platform=lark nyx_provider_slug=api-lark-bot`
-
-For **Lark/Feishu**, also ask for the Verification Token from Lark developer console (事件与回调 → 加密策略):
-`channel_registrations action=register platform=lark nyx_provider_slug=api-lark-bot verification_token=<token>`
+`channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> webhook_base_url=https://aevatar-console-backend-api.aevatar.ai`
 
 For **Telegram**:
 `channel_registrations action=register platform=telegram nyx_provider_slug=api-telegram-bot`
 
-→ Returns the registration ID and the callback URL.
+→ Lark returns the registration ID, the Nyx relay callback URL, and the Nyx webhook URL that must be configured in the Lark developer console.
+→ Telegram returns the registration ID and the direct callback URL.
 
-**After registration, inform the user:** The bot's outbound replies depend on your NyxID session tokens. Aevatar will auto-refresh when a refresh token is stored. If the bot ever stops replying after re-auth, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
+**After Telegram registration, inform the user:** The bot's outbound replies depend on your NyxID session token. If the bot ever stops replying after re-auth, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
 
 ### Step 3: Configure platform webhook
 
 Tell the user to set the webhook URL in their platform's developer console:
 
 **Lark/Feishu:** 开发者后台 → 事件与回调 → 事件配置 → 请求地址:
-`https://aevatar-console-backend-api.aevatar.ai/api/channels/lark/callback/<registration_id>`
+`<webhook_url returned by register_lark_via_nyx>`
 
-Also add events: `im.message.receive_v1` and `card.action.trigger` (required for interactive card button clicks and form submissions)
+Add event: `im.message.receive_v1`
+Do not rely on `card.action.trigger` for the Nyx relay path.
 
 **Telegram:** User must call Telegram's setWebhook API manually or via BotFather, pointing to:
 `https://aevatar-console-backend-api.aevatar.ai/api/channels/telegram/callback/<registration_id>`
@@ -164,12 +165,16 @@ Also add events: `im.message.receive_v1` and `card.action.trigger` (required for
 ### Managing registrations
 
 - List: `channel_registrations action=list`
-- Refresh token: `channel_registrations action=update_token registration_id=<id>`
+- Refresh Telegram token: `channel_registrations action=update_token registration_id=<id>`
 - Delete: `channel_registrations action=delete id=<registration_id> confirm=true`
 
 ## Agent Delivery Targets
 
-Workflow `human_approval`, `human_input`, and `secure_input` steps can send Feishu interactive cards when the workflow step includes `delivery_target_id=<agent_id>`.
+Workflow `human_approval`, `human_input`, and `secure_input` steps can send Feishu delivery messages when the workflow step includes `delivery_target_id=<agent_id>`.
+
+For the Nyx relay path, these are text-driven instructions, not submit cards:
+- `human_approval`: user replies with `/approve ...` or `/reject ...`
+- `human_input` / `secure_input`: user replies with `/submit ...`
 
 Use `agent_delivery_targets` to bind that `agent_id` to the real outbound route:
 - List: `agent_delivery_targets action=list`
@@ -189,7 +194,8 @@ Use `agent_builder` when the user wants a persistent Day One automation agent in
 - Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot
 - `create_agent` will create a persistent agent plus a non-expiring NyxID API key for outbound delivery
 - `daily_report` is a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat
-- `social_media` is a workflow-backed scheduled agent that generates one draft and sends an approval card into the current private chat
+- `social_media` is a workflow-backed scheduled agent that generates one draft and routes approval through the current supported human-interaction surface
+- The Nyx relay path supports text commands such as `/daily-report ...`, `/social-media ...`, `/agents`, `/agent-status <agent_id>`
 - `list_agents` and `agent_status` read the registry-backed current state
 - `run_agent` only works when the agent is enabled
 - `disable_agent` pauses scheduled execution without deleting the agent or revoking its API key

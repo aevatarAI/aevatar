@@ -38,13 +38,12 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
-            NyxUserToken = cmd.NyxUserToken,
-            NyxRefreshToken = cmd.NyxRefreshToken,
-            VerificationToken = cmd.VerificationToken,
             ScopeId = cmd.ScopeId,
             WebhookUrl = cmd.WebhookUrl,
-            EncryptKey = string.Empty,
-            CredentialRef = cmd.CredentialRef ?? string.Empty,
+            NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
+            NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
+            NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
+            LegacyDirectBinding = CloneLegacyDirectBinding(cmd.LegacyDirectBinding),
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
@@ -84,8 +83,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         await PersistDomainEventAsync(new ChannelBotTokenUpdatedEvent
         {
             RegistrationId = cmd.RegistrationId,
-            NyxUserToken = cmd.NyxUserToken,
-            NyxRefreshToken = cmd.NyxRefreshToken,
+            LegacyDirectBinding = CloneLegacyDirectBinding(cmd.LegacyDirectBinding),
         });
         Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
     }
@@ -149,8 +147,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
         {
-            entry.NyxUserToken = evt.NyxUserToken;
-            entry.NyxRefreshToken = evt.NyxRefreshToken;
+            entry.LegacyDirectBinding = CloneLegacyDirectBinding(evt.LegacyDirectBinding);
         }
         return next;
     }
@@ -177,4 +174,21 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
         .CurrentVersion + 1;
+
+    private static ChannelBotLegacyDirectBinding? CloneLegacyDirectBinding(ChannelBotLegacyDirectBinding? binding)
+    {
+        if (binding is null)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(binding.NyxUserToken) &&
+            string.IsNullOrWhiteSpace(binding.NyxRefreshToken) &&
+            string.IsNullOrWhiteSpace(binding.VerificationToken) &&
+            string.IsNullOrWhiteSpace(binding.CredentialRef) &&
+            string.IsNullOrWhiteSpace(binding.EncryptKey))
+        {
+            return null;
+        }
+
+        return binding.Clone();
+    }
 }

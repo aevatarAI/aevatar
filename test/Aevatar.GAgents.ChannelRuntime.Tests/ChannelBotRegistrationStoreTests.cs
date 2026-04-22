@@ -133,7 +133,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRegister_DoesNotPersistLegacyEncryptKey()
+    public async Task HandleRegister_PersistsLegacyEncryptKeyOnlyInLegacyBinding()
     {
         var cmd = new ChannelBotRegisterCommand
         {
@@ -146,7 +146,8 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         await _agent.HandleRegister(cmd);
 
         var entry = _agent.State.Registrations[0];
-        entry.EncryptKey.Should().BeEmpty();
+        entry.LegacyDirectBinding.Should().NotBeNull();
+        entry.EncryptKey.Should().Be("my-encrypt-key-123");
     }
 
     [Fact]

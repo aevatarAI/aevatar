@@ -76,8 +76,9 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                 ? tokenProp.GetString()
                 : null;
 
-            if (!string.IsNullOrWhiteSpace(registration.VerificationToken) &&
-                !string.Equals(incomingToken, registration.VerificationToken, StringComparison.Ordinal))
+            var verificationToken = registration.GetVerificationToken();
+            if (!string.IsNullOrWhiteSpace(verificationToken) &&
+                !string.Equals(incomingToken, verificationToken, StringComparison.Ordinal))
             {
                 _logger.LogWarning(
                     "Lark URL verification token mismatch — rejecting challenge");
@@ -176,10 +177,10 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
             // Verify token on v2 event callbacks (header.token) — fallback when no encrypt_key.
             if (string.IsNullOrEmpty(encryptKey) &&
-                !string.IsNullOrWhiteSpace(registration.VerificationToken))
+                !string.IsNullOrWhiteSpace(registration.GetVerificationToken()))
             {
                 var headerToken = header.TryGetProperty("token", out var ht) ? ht.GetString() : null;
-                if (!string.Equals(headerToken, registration.VerificationToken, StringComparison.Ordinal))
+                if (!string.Equals(headerToken, registration.GetVerificationToken(), StringComparison.Ordinal))
                 {
                     _logger.LogWarning("Lark event callback token mismatch — ignoring");
                     return null;
@@ -296,7 +297,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         });
 
         var result = await nyxClient.ProxyRequestAsync(
-            registration.NyxUserToken,
+            registration.GetNyxUserToken(),
             registration.NyxProviderSlug,
             "open-apis/im/v1/messages?receive_id_type=chat_id",
             "POST",
@@ -424,9 +425,9 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         ChannelBotRegistrationEntry registration,
         CancellationToken ct)
     {
-        var credentialRef = registration.CredentialRef?.Trim() ?? string.Empty;
+        var credentialRef = registration.GetCredentialRef().Trim();
         if (credentialRef.Length == 0)
-            return registration.EncryptKey ?? string.Empty;
+            return registration.GetEncryptKey();
 
         var credentialProvider = http.RequestServices.GetService(typeof(ICredentialProvider)) as ICredentialProvider
             ?? throw new InvalidOperationException(

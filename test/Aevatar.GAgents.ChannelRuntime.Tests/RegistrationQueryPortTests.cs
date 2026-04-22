@@ -110,7 +110,7 @@ public sealed class RegistrationQueryPortTests
     // ─── ChannelBotRegistrationQueryPort ───
 
     [Fact]
-    public async Task BotQueryPort_GetAsync_ReturnsEntry_WhenDocumentExists()
+    public async Task BotQueryPort_GetAsync_ReturnsPublicEntry_WhenDocumentExists()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
         reader.GetAsync("bot-1", Arg.Any<CancellationToken>())
@@ -119,11 +119,11 @@ public sealed class RegistrationQueryPortTests
                 Id = "bot-1",
                 Platform = "lark",
                 NyxProviderSlug = "lark-provider",
-                NyxUserToken = "token-abc",
-                NyxRefreshToken = "refresh-abc",
-                VerificationToken = "verify-123",
                 ScopeId = "scope-x",
                 WebhookUrl = "https://example.com/callback/bot-1",
+                NyxChannelBotId = "nyx-bot-1",
+                NyxAgentApiKeyId = "key-1",
+                NyxConversationRouteId = "route-1",
                 StateVersion = 2,
                 LastEventId = "evt-bot-1",
                 ActorId = "actor-bot",
@@ -136,30 +136,35 @@ public sealed class RegistrationQueryPortTests
         result!.Id.Should().Be("bot-1");
         result.Platform.Should().Be("lark");
         result.NyxProviderSlug.Should().Be("lark-provider");
-        result.NyxUserToken.Should().Be("token-abc");
-        result.NyxRefreshToken.Should().Be("refresh-abc");
-        result.VerificationToken.Should().Be("verify-123");
         result.ScopeId.Should().Be("scope-x");
         result.WebhookUrl.Should().Be("https://example.com/callback/bot-1");
+        result.NyxChannelBotId.Should().Be("nyx-bot-1");
+        result.NyxAgentApiKeyId.Should().Be("key-1");
+        result.NyxConversationRouteId.Should().Be("route-1");
     }
 
     [Fact]
-    public async Task BotQueryPort_GetAsync_PropagatesCredentialRef()
+    public async Task BotQueryPort_GetAsync_DoesNotExposeLegacyDirectBinding()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.GetAsync("bot-credref", Arg.Any<CancellationToken>())
+        reader.GetAsync("bot-public", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
             {
-                Id = "bot-credref",
+                Id = "bot-public",
                 Platform = "lark",
-                CredentialRef = "secrets://lark/encrypt-key/bot-credref",
+                ScopeId = "scope-public",
             }));
 
         var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.GetAsync("bot-credref");
+        var result = await queryPort.GetAsync("bot-public");
 
         result.Should().NotBeNull();
-        result!.CredentialRef.Should().Be("secrets://lark/encrypt-key/bot-credref");
+        result!.LegacyDirectBinding.Should().BeNull();
+        result.NyxUserToken.Should().BeEmpty();
+        result.NyxRefreshToken.Should().BeEmpty();
+        result.VerificationToken.Should().BeEmpty();
+        result.CredentialRef.Should().BeEmpty();
+        result.EncryptKey.Should().BeEmpty();
     }
 
     [Fact]
@@ -198,13 +203,23 @@ public sealed class RegistrationQueryPortTests
                 [
                     new ChannelBotRegistrationDocument
                     {
-                        Id = "bot-1", Platform = "lark", NyxProviderSlug = "lark-p",
-                        ActorId = "a1", StateVersion = 1, LastEventId = "e1",
+                        Id = "bot-1",
+                        Platform = "lark",
+                        NyxProviderSlug = "lark-p",
+                        NyxChannelBotId = "channel-bot-1",
+                        ActorId = "a1",
+                        StateVersion = 1,
+                        LastEventId = "e1",
                     },
                     new ChannelBotRegistrationDocument
                     {
-                        Id = "bot-2", Platform = "telegram", NyxProviderSlug = "tg-p",
-                        ActorId = "a1", StateVersion = 2, LastEventId = "e2",
+                        Id = "bot-2",
+                        Platform = "telegram",
+                        NyxProviderSlug = "tg-p",
+                        NyxAgentApiKeyId = "api-key-2",
+                        ActorId = "a1",
+                        StateVersion = 2,
+                        LastEventId = "e2",
                     },
                 ],
             }));
@@ -215,8 +230,12 @@ public sealed class RegistrationQueryPortTests
         result.Should().HaveCount(2);
         result[0].Id.Should().Be("bot-1");
         result[0].Platform.Should().Be("lark");
+        result[0].NyxChannelBotId.Should().Be("channel-bot-1");
+        result[0].LegacyDirectBinding.Should().BeNull();
         result[1].Id.Should().Be("bot-2");
         result[1].Platform.Should().Be("telegram");
+        result[1].NyxAgentApiKeyId.Should().Be("api-key-2");
+        result[1].LegacyDirectBinding.Should().BeNull();
     }
 
     [Fact]
@@ -262,116 +281,86 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task BotQueryPort_GetAsync_DoesNotExposeLegacyEncryptKey()
+    public async Task BotRuntimeQueryPort_GetAsync_ComposesLegacyDirectBinding()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.GetAsync("bot-enc", Arg.Any<CancellationToken>())
+        var documentReader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        documentReader.GetAsync("bot-runtime", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
             {
-                Id = "bot-enc",
+                Id = "bot-runtime",
                 Platform = "lark",
                 NyxProviderSlug = "lark-provider",
-                NyxUserToken = "token-abc",
-                VerificationToken = "verify-123",
-                ScopeId = "scope-x",
-                WebhookUrl = "https://example.com/callback",
-                EncryptKey = "my-secret-encrypt-key",
-                StateVersion = 5,
-                LastEventId = "evt-enc",
-                ActorId = "actor-bot",
+                ScopeId = "scope-runtime",
+                WebhookUrl = "https://example.com/relay",
+                NyxChannelBotId = "channel-bot-runtime",
+                NyxAgentApiKeyId = "api-key-runtime",
+                NyxConversationRouteId = "route-runtime",
             }));
 
-        var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.GetAsync("bot-enc");
+        var bindingReader = Substitute.For<IProjectionDocumentReader<ChannelBotLegacyDirectBindingDocument, string>>();
+        bindingReader.GetAsync("bot-runtime", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotLegacyDirectBindingDocument?>(new ChannelBotLegacyDirectBindingDocument
+            {
+                Id = "bot-runtime",
+                NyxUserToken = "access-runtime",
+                NyxRefreshToken = "refresh-runtime",
+                VerificationToken = "verify-runtime",
+                CredentialRef = "secrets://runtime/bot-runtime",
+                EncryptKey = "encrypt-runtime",
+            }));
+
+        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(documentReader, bindingReader);
+        var result = await queryPort.GetAsync("bot-runtime");
 
         result.Should().NotBeNull();
-        result!.EncryptKey.Should().BeEmpty();
+        result!.Id.Should().Be("bot-runtime");
+        result.LegacyDirectBinding.Should().NotBeNull();
+        result.NyxUserToken.Should().Be("access-runtime");
+        result.NyxRefreshToken.Should().Be("refresh-runtime");
+        result.VerificationToken.Should().Be("verify-runtime");
+        result.CredentialRef.Should().Be("secrets://runtime/bot-runtime");
+        result.EncryptKey.Should().Be("encrypt-runtime");
     }
 
     [Fact]
-    public async Task BotQueryPort_GetAsync_DefaultsLegacyEncryptKeyToEmpty_WhenNull()
+    public async Task BotRuntimeQueryPort_GetAsync_ReturnsPublicEntry_WhenLegacyBindingDocumentIsMissing()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.GetAsync("bot-no-enc", Arg.Any<CancellationToken>())
+        var documentReader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        documentReader.GetAsync("bot-public-only", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
             {
-                Id = "bot-no-enc",
+                Id = "bot-public-only",
                 Platform = "lark",
-                StateVersion = 1,
-                LastEventId = "evt-1",
-                ActorId = "actor-bot",
-                // EncryptKey not set — proto default is empty string
+                NyxConversationRouteId = "route-only",
             }));
 
-        var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.GetAsync("bot-no-enc");
+        var bindingReader = Substitute.For<IProjectionDocumentReader<ChannelBotLegacyDirectBindingDocument, string>>();
+        bindingReader.GetAsync("bot-public-only", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotLegacyDirectBindingDocument?>(null));
+
+        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(documentReader, bindingReader);
+        var result = await queryPort.GetAsync("bot-public-only");
 
         result.Should().NotBeNull();
-        result!.EncryptKey.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task BotRuntimeQueryPort_GetAsync_PreservesLegacyEncryptKey()
-    {
-        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.GetAsync("bot-runtime-enc", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
-            {
-                Id = "bot-runtime-enc",
-                Platform = "lark",
-                EncryptKey = "legacy-encrypt-key",
-                CredentialRef = string.Empty,
-            }));
-
-        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(reader);
-        var result = await queryPort.GetAsync("bot-runtime-enc");
-
-        result.Should().NotBeNull();
-        result!.EncryptKey.Should().Be("legacy-encrypt-key");
-        result.CredentialRef.Should().BeEmpty();
+        result!.NyxConversationRouteId.Should().Be("route-only");
+        result.LegacyDirectBinding.Should().BeNull();
+        result.NyxUserToken.Should().BeEmpty();
+        result.EncryptKey.Should().BeEmpty();
     }
 
     [Fact]
     public async Task BotRuntimeQueryPort_GetAsync_ReturnsNull_WhenDocumentNotFound()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.GetAsync("missing-runtime", Arg.Any<CancellationToken>())
+        var documentReader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        documentReader.GetAsync("missing-runtime", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(null));
+        var bindingReader = Substitute.For<IProjectionDocumentReader<ChannelBotLegacyDirectBindingDocument, string>>();
 
-        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(reader);
+        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(documentReader, bindingReader);
         var result = await queryPort.GetAsync("missing-runtime");
 
         result.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task BotQueryPort_QueryAllAsync_DoesNotExposeLegacyEncryptKey()
-    {
-        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>
-            {
-                Items =
-                [
-                    new ChannelBotRegistrationDocument
-                    {
-                        Id = "bot-a", Platform = "lark", EncryptKey = "key-a",
-                        ActorId = "a1", StateVersion = 1, LastEventId = "e1",
-                    },
-                    new ChannelBotRegistrationDocument
-                    {
-                        Id = "bot-b", Platform = "lark", EncryptKey = "key-b",
-                        ActorId = "a1", StateVersion = 2, LastEventId = "e2",
-                    },
-                ],
-            }));
-
-        var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.QueryAllAsync();
-
-        result.Should().HaveCount(2);
-        result[0].EncryptKey.Should().BeEmpty();
-        result[1].EncryptKey.Should().BeEmpty();
+        await bindingReader.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

@@ -10,18 +10,18 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 internal sealed class ChannelPlatformReplyService
 {
-    private readonly IChannelBotRegistrationQueryPort _queryPort;
+    private readonly IChannelBotRegistrationRuntimeQueryPort _runtimeQueryPort;
     private readonly NyxIdApiClient _nyxClient;
     private readonly ChannelBotRegistrationTokenRefreshService _tokenRefreshService;
     private readonly ILogger<ChannelPlatformReplyService> _logger;
 
     public ChannelPlatformReplyService(
-        IChannelBotRegistrationQueryPort queryPort,
+        IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         NyxIdApiClient nyxClient,
         ChannelBotRegistrationTokenRefreshService tokenRefreshService,
         ILogger<ChannelPlatformReplyService> logger)
     {
-        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _runtimeQueryPort = runtimeQueryPort ?? throw new ArgumentNullException(nameof(runtimeQueryPort));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _tokenRefreshService = tokenRefreshService ?? throw new ArgumentNullException(nameof(tokenRefreshService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -104,7 +104,7 @@ internal sealed class ChannelPlatformReplyService
         if (string.IsNullOrWhiteSpace(registration.Id))
             return registration;
 
-        var current = await _queryPort.GetAsync(registration.Id, ct);
+        var current = await _runtimeQueryPort.GetAsync(registration.Id, ct);
         return current ?? registration;
     }
 
@@ -117,7 +117,7 @@ internal sealed class ChannelPlatformReplyService
             return false;
 
         if (string.IsNullOrWhiteSpace(registration.Id) ||
-            string.IsNullOrWhiteSpace(registration.NyxRefreshToken))
+            string.IsNullOrWhiteSpace(registration.GetNyxRefreshToken()))
         {
             return false;
         }
@@ -133,7 +133,7 @@ internal sealed class ChannelPlatformReplyService
         if (!string.Equals(adapter.Platform, "lark", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        return string.IsNullOrWhiteSpace(registration.NyxRefreshToken) &&
+        return string.IsNullOrWhiteSpace(registration.GetNyxRefreshToken()) &&
                LarkPlatformAdapter.IsRefreshableAuthFailure(result);
     }
 

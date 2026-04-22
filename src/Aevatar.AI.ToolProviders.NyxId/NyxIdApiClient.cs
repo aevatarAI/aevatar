@@ -13,6 +13,12 @@ public sealed record NyxIdSessionRefreshResult(
     int? ExpiresIn = null,
     string? Detail = null);
 
+public sealed record NyxIdChannelRelayReplyResult(
+    bool Succeeded,
+    string? MessageId = null,
+    string? PlatformMessageId = null,
+    string? Detail = null);
+
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient
 {
@@ -412,6 +418,56 @@ public sealed class NyxIdApiClient
 
     public Task<string> PushChannelEventAsync(string token, string conversationId, string body, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/channel-events/{Uri.EscapeDataString(conversationId)}", body, ct);
+
+    public async Task<NyxIdChannelRelayReplyResult> SendChannelRelayTextReplyAsync(
+        string token,
+        string messageId,
+        string text,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+        if (string.IsNullOrWhiteSpace(messageId))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_message_id");
+        if (string.IsNullOrWhiteSpace(text))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text");
+
+        var response = await PostAsync(
+            token,
+            "/api/v1/channel-relay/reply",
+            JsonSerializer.Serialize(new
+            {
+                message_id = messageId,
+                reply = new
+                {
+                    text,
+                },
+            }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+            return new NyxIdChannelRelayReplyResult(false, Detail: errorDetail);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            return new NyxIdChannelRelayReplyResult(
+                true,
+                MessageId: root.TryGetProperty("message_id", out var replyMessageId) && replyMessageId.ValueKind == JsonValueKind.String
+                    ? replyMessageId.GetString()
+                    : null,
+                PlatformMessageId: root.TryGetProperty("platform_message_id", out var platformMessageId) &&
+                                   platformMessageId.ValueKind == JsonValueKind.String
+                    ? platformMessageId.GetString()
+                    : null);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Nyx channel relay reply returned invalid JSON");
+            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_response");
+        }
+    }
 
     // ─── Admin Invite Codes ───
 

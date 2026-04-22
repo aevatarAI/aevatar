@@ -421,8 +421,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             Id = session.RegistrationId,
             Platform = session.Platform,
             NyxProviderSlug = session.NyxProviderSlug,
-            NyxUserToken = session.OrgToken,
             ScopeId = session.RegistrationScopeId,
+            LegacyDirectBinding = new ChannelBotLegacyDirectBinding
+            {
+                NyxUserToken = session.OrgToken,
+            },
         };
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -519,8 +522,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             Id = evt.RegistrationId,
             Platform = evt.Platform,
             NyxProviderSlug = evt.NyxProviderSlug,
-            NyxUserToken = evt.RegistrationToken,
             ScopeId = evt.RegistrationScopeId,
+            LegacyDirectBinding = new ChannelBotLegacyDirectBinding
+            {
+                NyxUserToken = evt.RegistrationToken,
+            },
         };
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

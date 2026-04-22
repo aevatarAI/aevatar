@@ -32,13 +32,19 @@ public static class ServiceCollectionExtensions
         // Memory cache for webhook dedup
         services.AddMemoryCache();
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
+        services.AddOptions<LarkDirectWebhookCutoverOptions>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, EventStoreProjectionScopeWatermarkQueryPort>();
         if (configuration != null)
         {
             services.Configure<ChannelRuntimeTombstoneCompactionOptions>(
                 configuration.GetSection("ChannelRuntime:TombstoneCompaction"));
+            services.Configure<LarkDirectWebhookCutoverOptions>(
+                configuration.GetSection(LarkDirectWebhookCutoverOptions.SectionName));
         }
+        services.TryAddSingleton(sp =>
+            sp.GetService<Microsoft.Extensions.Options.IOptions<LarkDirectWebhookCutoverOptions>>()?.Value
+            ?? new LarkDirectWebhookCutoverOptions());
 
         // Projection pipeline shared infrastructure
         services.AddProjectionReadModelRuntime();
@@ -95,13 +101,19 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ChannelBotRegistrationMaterializationContext,
             ChannelBotRegistrationProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ChannelBotRegistrationMaterializationContext,
+            ChannelBotLegacyDirectBindingProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotLegacyDirectBindingDocument>,
+            ChannelBotLegacyDirectBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelBotRegistrationTokenRefreshService>();
         services.TryAddSingleton<ChannelPlatformReplyService>();
+        services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)
@@ -111,10 +123,17 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<ChannelBotLegacyDirectBindingDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotLegacyDirectBindingDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
         }
         else
         {
             services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<ChannelBotLegacyDirectBindingDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 

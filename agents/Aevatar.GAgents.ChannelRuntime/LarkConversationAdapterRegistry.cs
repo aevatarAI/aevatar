@@ -129,8 +129,8 @@ internal sealed class LarkConversationAdapterRegistry : IAsyncDisposable
             ArgumentNullException.ThrowIfNull(registration);
             ct.ThrowIfCancellationRequested();
 
-            var credentialRef = registration.CredentialRef?.Trim() ?? string.Empty;
-            var legacyEncryptKey = registration.EncryptKey?.Trim() ?? string.Empty;
+            var credentialRef = registration.GetCredentialRef().Trim();
+            var legacyEncryptKey = registration.GetEncryptKey().Trim();
             var bindingCredentialRef = credentialRef.Length == 0
                 ? $"channel-registration:lark:{registration.Id ?? string.Empty}"
                 : credentialRef;
@@ -142,7 +142,7 @@ internal sealed class LarkConversationAdapterRegistry : IAsyncDisposable
             return new AdapterSnapshot(
                 registration.Id ?? string.Empty,
                 registration.ScopeId ?? string.Empty,
-                registration.VerificationToken ?? string.Empty,
+                registration.GetVerificationToken(),
                 bindingCredentialRef,
                 credentialRef,
                 secretJson);
