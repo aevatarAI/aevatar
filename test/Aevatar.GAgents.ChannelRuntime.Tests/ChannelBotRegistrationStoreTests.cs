@@ -49,9 +49,10 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var cmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
+            Platform = "telegram",
+            NyxProviderSlug = "api-telegram-bot",
             NyxUserToken = "token-123",
+            NyxRefreshToken = "refresh-123",
             VerificationToken = "verify-456",
             ScopeId = "scope-1",
         };
@@ -60,10 +61,16 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 
         _agent.State.Registrations.Should().HaveCount(1);
         var entry = _agent.State.Registrations[0];
-        entry.Platform.Should().Be("lark");
-        entry.NyxProviderSlug.Should().Be("api-lark-bot");
-        entry.NyxUserToken.Should().Be("token-123");
-        entry.VerificationToken.Should().Be("verify-456");
+        var binding = entry.ResolveDirectCallbackBinding();
+        entry.Platform.Should().Be("telegram");
+        entry.NyxProviderSlug.Should().Be("api-telegram-bot");
+        binding.Should().NotBeNull();
+        binding!.NyxUserToken.Should().Be("token-123");
+        binding.NyxRefreshToken.Should().Be("refresh-123");
+        binding.VerificationToken.Should().Be("verify-456");
+        entry.NyxUserToken.Should().BeEmpty();
+        entry.NyxRefreshToken.Should().BeEmpty();
+        entry.VerificationToken.Should().BeEmpty();
         entry.ScopeId.Should().Be("scope-1");
         entry.Id.Should().NotBeNullOrWhiteSpace();
     }
@@ -71,8 +78,8 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleRegister_GeneratesUniqueId()
     {
-        var cmd1 = new ChannelBotRegisterCommand { Platform = "lark", NyxProviderSlug = "slug-1", NyxUserToken = "t1" };
-        var cmd2 = new ChannelBotRegisterCommand { Platform = "telegram", NyxProviderSlug = "slug-2", NyxUserToken = "t2" };
+        var cmd1 = new ChannelBotRegisterCommand { Platform = "telegram", NyxProviderSlug = "slug-1", NyxUserToken = "t1" };
+        var cmd2 = new ChannelBotRegisterCommand { Platform = "discord", NyxProviderSlug = "slug-2", NyxUserToken = "t2" };
 
         await _agent.HandleRegister(cmd1);
         await _agent.HandleRegister(cmd2);
@@ -88,9 +95,10 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var cmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
+            Platform = "telegram",
+            NyxProviderSlug = "api-telegram-bot",
             NyxUserToken = "token-abc",
+            NyxRefreshToken = "refresh-abc",
             VerificationToken = "verify-xyz",
             ScopeId = "scope-x",
             WebhookUrl = "https://example.com/callback",
@@ -100,10 +108,16 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 
         _agent.State.Registrations.Should().HaveCount(1);
         var entry = _agent.State.Registrations[0];
-        entry.Platform.Should().Be("lark");
-        entry.NyxProviderSlug.Should().Be("api-lark-bot");
-        entry.NyxUserToken.Should().Be("token-abc");
-        entry.VerificationToken.Should().Be("verify-xyz");
+        var binding = entry.ResolveDirectCallbackBinding();
+        entry.Platform.Should().Be("telegram");
+        entry.NyxProviderSlug.Should().Be("api-telegram-bot");
+        binding.Should().NotBeNull();
+        binding!.NyxUserToken.Should().Be("token-abc");
+        binding.NyxRefreshToken.Should().Be("refresh-abc");
+        binding.VerificationToken.Should().Be("verify-xyz");
+        entry.NyxUserToken.Should().BeEmpty();
+        entry.NyxRefreshToken.Should().BeEmpty();
+        entry.VerificationToken.Should().BeEmpty();
         entry.ScopeId.Should().Be("scope-x");
         entry.WebhookUrl.Should().Be("https://example.com/callback");
         entry.CreatedAt.Should().NotBeNull();
@@ -114,7 +128,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var cmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
+            Platform = "telegram",
             NyxProviderSlug = "slug",
             NyxUserToken = "token",
         };
@@ -122,19 +136,20 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         await _agent.HandleRegister(cmd);
 
         var entry = _agent.State.Registrations[0];
-        entry.VerificationToken.Should().BeEmpty();
+        entry.ResolveDirectCallbackBinding().Should().NotBeNull();
         entry.ScopeId.Should().BeEmpty();
         entry.WebhookUrl.Should().BeEmpty();
+        entry.VerificationToken.Should().BeEmpty();
         entry.EncryptKey.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleRegister_PersistsEncryptKey()
+    public async Task HandleRegister_PersistsEncryptKeyOnlyInDirectCallbackBinding()
     {
         var cmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
+            Platform = "telegram",
+            NyxProviderSlug = "api-telegram-bot",
             NyxUserToken = "token-abc",
             EncryptKey = "my-encrypt-key-123",
         };
@@ -142,7 +157,9 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         await _agent.HandleRegister(cmd);
 
         var entry = _agent.State.Registrations[0];
-        entry.EncryptKey.Should().Be("my-encrypt-key-123");
+        entry.DirectCallbackBinding.Should().NotBeNull();
+        entry.DirectCallbackBinding!.EncryptKey.Should().Be("my-encrypt-key-123");
+        entry.EncryptKey.Should().BeEmpty();
     }
 
     [Fact]
@@ -150,8 +167,8 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var cmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
+            Platform = "telegram",
+            NyxProviderSlug = "api-telegram-bot",
             NyxUserToken = "token-abc",
             CredentialRef = "secrets://lark/encrypt-key/test-1",
         };
@@ -159,7 +176,35 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         await _agent.HandleRegister(cmd);
 
         var entry = _agent.State.Registrations[0];
-        entry.CredentialRef.Should().Be("secrets://lark/encrypt-key/test-1");
+        entry.DirectCallbackBinding.Should().NotBeNull();
+        entry.DirectCallbackBinding!.CredentialRef.Should().Be("secrets://lark/encrypt-key/test-1");
+        entry.CredentialRef.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRegister_LarkRelayRegistration_DropsDirectCallbackBinding()
+    {
+        var cmd = new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxUserToken = "token-abc",
+            NyxRefreshToken = "refresh-abc",
+            VerificationToken = "verify-xyz",
+            CredentialRef = "secrets://lark/direct-callback",
+            NyxChannelBotId = "channel-bot-1",
+            NyxAgentApiKeyId = "api-key-1",
+            NyxConversationRouteId = "route-1",
+        };
+
+        await _agent.HandleRegister(cmd);
+
+        var entry = _agent.State.Registrations[0];
+        entry.Platform.Should().Be("lark");
+        entry.ResolveDirectCallbackBinding().Should().BeNull();
+        entry.NyxChannelBotId.Should().Be("channel-bot-1");
+        entry.NyxAgentApiKeyId.Should().Be("api-key-1");
+        entry.NyxConversationRouteId.Should().Be("route-1");
     }
 
     [Fact]
@@ -167,7 +212,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var cmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
+            Platform = "telegram",
             NyxProviderSlug = "slug",
             NyxUserToken = "token",
         };
@@ -190,7 +235,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand
         {
-            Platform = "lark",
+            Platform = "telegram",
             NyxProviderSlug = "slug-a",
             NyxUserToken = "token-a",
         });
@@ -221,7 +266,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var cmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
+            Platform = "telegram",
             NyxProviderSlug = "slug",
             NyxUserToken = "token",
         };
@@ -242,8 +287,8 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var registerCmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
+            Platform = "telegram",
+            NyxProviderSlug = "api-telegram-bot",
             NyxUserToken = "old-token",
         };
         await _agent.HandleRegister(registerCmd);
@@ -254,10 +299,16 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         {
             RegistrationId = registrationId,
             NyxUserToken = "new-token",
+            NyxRefreshToken = "new-refresh-token",
         });
 
         _agent.State.Registrations.Should().HaveCount(1);
-        _agent.State.Registrations[0].NyxUserToken.Should().Be("new-token");
+        var binding = _agent.State.Registrations[0].ResolveDirectCallbackBinding();
+        binding.Should().NotBeNull();
+        binding!.NyxUserToken.Should().Be("new-token");
+        binding.NyxRefreshToken.Should().Be("new-refresh-token");
+        _agent.State.Registrations[0].NyxUserToken.Should().BeEmpty();
+        _agent.State.Registrations[0].NyxRefreshToken.Should().BeEmpty();
     }
 
     [Fact]
@@ -265,8 +316,8 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var registerCmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
+            Platform = "telegram",
+            NyxProviderSlug = "api-telegram-bot",
             NyxUserToken = "same-token",
         };
         await _agent.HandleRegister(registerCmd);
@@ -280,7 +331,8 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxUserToken = "same-token",
         });
 
-        _agent.State.Registrations[0].NyxUserToken.Should().Be("same-token");
+        _agent.State.Registrations[0].ResolveDirectCallbackBinding()!.NyxUserToken.Should().Be("same-token");
+        _agent.State.Registrations[0].NyxUserToken.Should().BeEmpty();
     }
 
     [Fact]
@@ -288,7 +340,7 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var registerCmd = new ChannelBotRegisterCommand
         {
-            Platform = "lark",
+            Platform = "telegram",
             NyxProviderSlug = "slug",
             NyxUserToken = "token",
         };
@@ -300,14 +352,15 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 
         await act.Should().NotThrowAsync();
         _agent.State.Registrations.Should().HaveCount(1);
-        _agent.State.Registrations[0].NyxUserToken.Should().Be("token");
+        _agent.State.Registrations[0].ResolveDirectCallbackBinding()!.NyxUserToken.Should().Be("token");
+        _agent.State.Registrations[0].NyxUserToken.Should().BeEmpty();
     }
 
     [Fact]
     public async Task HandleUpdateToken_DoesNotAffectOtherRegistrations()
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand
-            { Platform = "lark", NyxProviderSlug = "slug-1", NyxUserToken = "token-a" });
+            { Platform = "telegram", NyxProviderSlug = "slug-1", NyxUserToken = "token-a" });
         await _agent.HandleRegister(new ChannelBotRegisterCommand
             { Platform = "telegram", NyxProviderSlug = "slug-2", NyxUserToken = "token-b" });
 
@@ -319,8 +372,37 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxUserToken = "token-a-updated",
         });
 
-        _agent.State.Registrations[0].NyxUserToken.Should().Be("token-a-updated");
-        _agent.State.Registrations[1].NyxUserToken.Should().Be("token-b");
+        _agent.State.Registrations[0].ResolveDirectCallbackBinding()!.NyxUserToken.Should().Be("token-a-updated");
+        _agent.State.Registrations[1].ResolveDirectCallbackBinding()!.NyxUserToken.Should().Be("token-b");
+        _agent.State.Registrations[0].NyxUserToken.Should().BeEmpty();
+        _agent.State.Registrations[1].NyxUserToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleUpdateToken_LarkRelayRegistration_IsIgnored()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxChannelBotId = "channel-bot-1",
+            NyxAgentApiKeyId = "api-key-1",
+            NyxConversationRouteId = "route-1",
+        });
+
+        var registrationId = _agent.State.Registrations[0].Id;
+
+        await _agent.HandleUpdateToken(new ChannelBotUpdateTokenCommand
+        {
+            RegistrationId = registrationId,
+            NyxUserToken = "should-not-stick",
+            NyxRefreshToken = "should-not-stick",
+        });
+
+        var entry = _agent.State.Registrations[0];
+        entry.ResolveDirectCallbackBinding().Should().BeNull();
+        entry.NyxChannelBotId.Should().Be("channel-bot-1");
+        entry.NyxAgentApiKeyId.Should().Be("api-key-1");
     }
 
     // ─── Test double ───

@@ -64,7 +64,7 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_List_Masks_NyxApiKey()
     {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
                 [
@@ -127,7 +127,7 @@ public sealed class AgentDeliveryTargetToolTests
     public async Task ExecuteAsync_Upsert_Requires_AgentId()
     {
         var services = new ServiceCollection();
-        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogRuntimeQueryPort>());
         services.AddSingleton(Substitute.For<IActorRuntime>());
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
@@ -150,7 +150,7 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Upsert_Dispatches_Command_And_Resolves_Current_User()
     {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.GetStateVersionAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(3));
         queryPort.GetAsync("agent-1", Arg.Any<CancellationToken>())
@@ -223,7 +223,7 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Delete_Requires_Confirm()
     {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.GetAsync("agent-2", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
@@ -264,7 +264,7 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Delete_Rejects_NonOwner()
     {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.GetAsync("agent-2", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
@@ -308,7 +308,7 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Delete_Dispatches_Tombstone_Command()
     {
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.GetAsync("agent-3", Arg.Any<CancellationToken>())
             .Returns(
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
@@ -369,7 +369,7 @@ public sealed class AgentDeliveryTargetToolTests
         // the new tombstone-retention contract DeleteAsync removes the document
         // (and its StateVersion) outright, so a successful tombstone must still
         // surface as "deleted" when GetStateVersionAsync permanently returns null.
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.GetAsync("agent-7", Arg.Any<CancellationToken>())
             .Returns(
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry

@@ -17,7 +17,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             return null;
 
         var document = await _documentReader.GetAsync(agentId, ct);
-        return document == null || document.Tombstoned ? null : ToEntry(document);
+        return document == null || document.Tombstoned ? null : ToEntry(document, string.Empty);
     }
 
     public async Task<long?> GetStateVersionAsync(string agentId, CancellationToken ct = default)
@@ -34,18 +34,18 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         var result = await _documentReader.QueryAsync(new ProjectionDocumentQuery { Take = 1000 }, ct);
         return result.Items
             .Where(static x => !x.Tombstoned)
-            .Select(static x => ToEntry(x))
+            .Select(static x => ToEntry(x, string.Empty))
             .ToArray();
     }
 
-    private static UserAgentCatalogEntry ToEntry(UserAgentCatalogDocument document) =>
+    internal static UserAgentCatalogEntry ToEntry(UserAgentCatalogDocument document, string nyxApiKey) =>
         new()
         {
             AgentId = document.Id ?? string.Empty,
             Platform = document.Platform ?? string.Empty,
             ConversationId = document.ConversationId ?? string.Empty,
             NyxProviderSlug = document.NyxProviderSlug ?? string.Empty,
-            NyxApiKey = document.NyxApiKey ?? string.Empty,
+            NyxApiKey = nyxApiKey ?? string.Empty,
             OwnerNyxUserId = document.OwnerNyxUserId ?? string.Empty,
             AgentType = document.AgentType ?? string.Empty,
             TemplateName = document.TemplateName ?? string.Empty,

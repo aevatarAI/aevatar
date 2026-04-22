@@ -33,19 +33,22 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     [EventHandler]
     public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
+        var directCallbackBinding = string.Equals(cmd.Platform, "lark", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : cmd.ResolveDirectCallbackBinding();
         var entry = new ChannelBotRegistrationEntry
         {
             Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
-            NyxUserToken = cmd.NyxUserToken,
-            VerificationToken = cmd.VerificationToken,
             ScopeId = cmd.ScopeId,
             WebhookUrl = cmd.WebhookUrl,
-            EncryptKey = cmd.EncryptKey,
-            CredentialRef = cmd.CredentialRef ?? string.Empty,
+            NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
+            NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
+            NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+        entry.ApplyDirectCallbackBinding(directCallbackBinding);
 
         await PersistDomainEventAsync(new ChannelBotRegisteredEvent { Entry = entry });
         Logger.LogInformation("Registered channel bot: id={Id}, platform={Platform}, slug={Slug}",
@@ -80,11 +83,20 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return;
         }
 
-        await PersistDomainEventAsync(new ChannelBotTokenUpdatedEvent
+        if (string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.LogWarning("Ignoring token update for Nyx-relay Lark registration: {Id}", cmd.RegistrationId);
+            return;
+        }
+
+        var directCallbackBinding = cmd.ResolveDirectCallbackBinding();
+        var domainEvent = new ChannelBotTokenUpdatedEvent
         {
             RegistrationId = cmd.RegistrationId,
-            NyxUserToken = cmd.NyxUserToken,
-        });
+        };
+        domainEvent.ApplyDirectCallbackBinding(directCallbackBinding);
+
+        await PersistDomainEventAsync(domainEvent);
         Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
     }
 
@@ -121,6 +133,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         if (existing is not null)
             next.Registrations.Remove(existing);
         var entry = evt.Entry.Clone();
+        entry.ApplyDirectCallbackBinding(entry.ResolveDirectCallbackBinding());
         entry.Tombstoned = false;
         entry.TombstoneStateVersion = 0;
         next.Registrations.Add(entry);
@@ -146,7 +159,9 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var next = current.Clone();
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
-            entry.NyxUserToken = evt.NyxUserToken;
+        {
+            entry.ApplyDirectCallbackBinding(evt.ResolveDirectCallbackBinding());
+        }
         return next;
     }
 
@@ -172,4 +187,5 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
         .CurrentVersion + 1;
+
 }

@@ -31,8 +31,20 @@ public sealed class ExecutionsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<ExecutionDetail>> Start(
         [FromBody] StartExecutionRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await _executionService.StartAsync(request, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _executionService.StartAsync(request, cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            // Scope mismatches, missing scope_id claim, and missing scope/workflow targets are
+            // client-side contract violations, not server faults. Surface them as 400 to match
+            // the Roles/Connectors controller convention; otherwise they bubble up as 500.
+            return BadRequest(new { message = exception.Message });
+        }
+    }
 
     [HttpPost("{executionId}/resume")]
     public async Task<ActionResult<ExecutionDetail>> Resume(
@@ -40,8 +52,15 @@ public sealed class ExecutionsController : ControllerBase
         [FromBody] ResumeExecutionRequest request,
         CancellationToken cancellationToken)
     {
-        var execution = await _executionService.ResumeAsync(executionId, request, cancellationToken);
-        return execution is null ? NotFound() : Ok(execution);
+        try
+        {
+            var execution = await _executionService.ResumeAsync(executionId, request, cancellationToken);
+            return execution is null ? NotFound() : Ok(execution);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
     }
 
     [HttpPost("{executionId}/stop")]
@@ -50,7 +69,14 @@ public sealed class ExecutionsController : ControllerBase
         [FromBody] StopExecutionRequest request,
         CancellationToken cancellationToken)
     {
-        var execution = await _executionService.StopAsync(executionId, request, cancellationToken);
-        return execution is null ? NotFound() : Ok(execution);
+        try
+        {
+            var execution = await _executionService.StopAsync(executionId, request, cancellationToken);
+            return execution is null ? NotFound() : Ok(execution);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
     }
 }

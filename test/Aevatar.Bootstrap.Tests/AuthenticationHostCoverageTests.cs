@@ -5,10 +5,13 @@ using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Bootstrap.Tests;
 
@@ -37,6 +40,27 @@ public class AuthenticationHostCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAuthentication_WhenEnabled_ShouldSetFallbackPolicyRequiringAuthenticatedUser()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://id.example.com";
+
+        builder.AddAevatarAuthentication();
+        using var app = builder.Build();
+
+        using var scope = app.Services.CreateScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<AuthorizationOptions>>().Value;
+        options.FallbackPolicy.Should().NotBeNull();
+        options.FallbackPolicy!.AuthenticationSchemes.Should().Contain(JwtBearerDefaults.AuthenticationScheme);
+        options.FallbackPolicy!.Requirements.OfType<DenyAnonymousAuthorizationRequirement>().Should().NotBeEmpty();
+    }
+
+    [Fact]
     public void AddAevatarAuthentication_WhenDisabled_ShouldSkipAuthenticationRegistration()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -53,6 +77,22 @@ public class AuthenticationHostCoverageTests
         scope.ServiceProvider.GetService<IAuthenticationService>().Should().BeNull();
         scope.ServiceProvider.GetServices<IClaimsTransformation>()
             .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddAevatarAuthentication_WhenDisabled_ShouldNotSetFallbackPolicy()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.AddAevatarAuthentication();
+        using var app = builder.Build();
+
+        using var scope = app.Services.CreateScope();
+        var options = scope.ServiceProvider.GetService<IOptions<AuthorizationOptions>>()?.Value;
+        options?.FallbackPolicy.Should().BeNull();
     }
 
     [Fact]

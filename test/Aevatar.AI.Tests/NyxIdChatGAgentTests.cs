@@ -156,6 +156,38 @@ public class NyxIdChatGAgentTests
             "only whitespace separators allowed between round-1 and round-2 text");
     }
 
+    [Fact]
+    public async Task ActivateAsync_ShouldUseConfiguredRelayCallbackUrlInSystemPrompt()
+    {
+        using var provider = BuildServiceProvider();
+        var llmProviderFactory = new StreamingToolLoopProviderFactory(
+            [
+                [
+                    new LLMStreamChunk { DeltaContent = "ok" },
+                ],
+            ]);
+        var agent = CreateAgent(
+            provider,
+            "nyxid-chat-relay-prompt",
+            llmProviderFactory,
+            relayOptions: new NyxIdRelayOptions
+            {
+                WebhookBaseUrl = "https://dev.aevatar.local/",
+            });
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "relay-prompt-session",
+        });
+
+        llmProviderFactory.StreamRequests.Should().ContainSingle();
+        var systemPrompt = llmProviderFactory.StreamRequests[0].Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
+        systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
+    }
+
     private static ServiceProvider BuildServiceProvider()
     {
         return new ServiceCollection()
@@ -169,9 +201,10 @@ public class NyxIdChatGAgentTests
         IServiceProvider provider,
         string actorId,
         ILLMProviderFactory? llmProviderFactory = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        NyxIdRelayOptions? relayOptions = null)
     {
-        var agent = new NyxIdChatGAgent(llmProviderFactory, toolSources: toolSources)
+        var agent = new NyxIdChatGAgent(llmProviderFactory, toolSources: toolSources, relayOptions: relayOptions)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),

@@ -38,7 +38,6 @@ public sealed class UserAgentCatalogProjector
             Platform = entry.Platform ?? string.Empty,
             ConversationId = entry.ConversationId ?? string.Empty,
             NyxProviderSlug = entry.NyxProviderSlug ?? string.Empty,
-            NyxApiKey = entry.NyxApiKey ?? string.Empty,
             OwnerNyxUserId = entry.OwnerNyxUserId ?? string.Empty,
             AgentType = entry.AgentType ?? string.Empty,
             TemplateName = entry.TemplateName ?? string.Empty,

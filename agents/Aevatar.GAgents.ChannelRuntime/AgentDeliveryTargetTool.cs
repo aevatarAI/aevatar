@@ -74,10 +74,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
+        var queryPort = _serviceProvider.GetService<IUserAgentCatalogRuntimeQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
         if (queryPort is null || actorRuntime is null)
-            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogQueryPort or IActorRuntime not registered in DI."}""";
+            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogRuntimeQueryPort or IActorRuntime not registered in DI."}""";
 
         using var doc = JsonDocument.Parse(argumentsJson);
         var root = doc.RootElement;
@@ -124,7 +124,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         return false;
     }
 
-    private async Task<string> ListAsync(IUserAgentCatalogQueryPort queryPort, string token, CancellationToken ct)
+    private async Task<string> ListAsync(IUserAgentCatalogRuntimeQueryPort queryPort, string token, CancellationToken ct)
     {
         var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
         if (currentOwner.error != null)
@@ -151,7 +151,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     }
 
     private async Task<string> UpsertAsync(
-        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogRuntimeQueryPort queryPort,
         IActorRuntime actorRuntime,
         string token,
         JsonElement args,
@@ -254,7 +254,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     }
 
     private async Task<string> DeleteAsync(
-        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogRuntimeQueryPort queryPort,
         IActorRuntime actorRuntime,
         string token,
         JsonElement args,

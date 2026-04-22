@@ -4,6 +4,7 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.Configuration;
 
@@ -18,6 +19,8 @@ public static class ServiceCollectionExtensions
         AevatarPaths.EnsureDirectories();
         services.TryAddSingleton<IAevatarSecretsStore, AevatarSecretsStore>();
         services.TryAddSingleton<AevatarSecretsStore>();
+        services.TryAddSingleton<ICredentialProvider, SecretsStoreCredentialProvider>();
+        services.TryAddSingleton<SecretsStoreCredentialProvider>();
         return services;
     }
 }

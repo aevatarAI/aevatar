@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
@@ -14,6 +15,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Adapters;
 /// </summary>
 public sealed class LarkPlatformAdapter : IPlatformAdapter
 {
+    private static readonly TimeSpan SignatureValidityWindow = TimeSpan.FromMinutes(5);
     private readonly ILogger<LarkPlatformAdapter> _logger;
 
     public LarkPlatformAdapter(ILogger<LarkPlatformAdapter> logger) => _logger = logger;
@@ -35,16 +37,27 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
         using var doc = JsonDocument.Parse(bodyString);
         var root = doc.RootElement;
+        var encryptKey = await ResolveEncryptKeyAsync(http, registration, http.RequestAborted);
+        var verificationToken = registration.GetVerificationToken();
+
+        if (string.IsNullOrWhiteSpace(encryptKey) &&
+            string.IsNullOrWhiteSpace(verificationToken))
+        {
+            _logger.LogWarning(
+                "Lark callback rejected because registration has neither encrypt key nor verification token: registrationId={RegistrationId}",
+                registration.Id);
+            return Results.Unauthorized();
+        }
 
         // Lark sends encrypted payloads when encrypt_key is configured:
         // { "encrypt": "<base64-encrypted-string>" }
         if (root.TryGetProperty("encrypt", out var encryptedProp) &&
-            !string.IsNullOrEmpty(registration.EncryptKey))
+            !string.IsNullOrEmpty(encryptKey))
         {
             string decrypted;
             try
             {
-                decrypted = DecryptLarkPayload(encryptedProp.GetString()!, registration.EncryptKey);
+                decrypted = DecryptLarkPayload(encryptedProp.GetString()!, encryptKey);
             }
             catch (Exception ex)
             {
@@ -74,8 +87,8 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                 ? tokenProp.GetString()
                 : null;
 
-            if (!string.IsNullOrWhiteSpace(registration.VerificationToken) &&
-                !string.Equals(incomingToken, registration.VerificationToken, StringComparison.Ordinal))
+            if (!string.IsNullOrWhiteSpace(verificationToken) &&
+                !string.Equals(incomingToken, verificationToken, StringComparison.Ordinal))
             {
                 _logger.LogWarning(
                     "Lark URL verification token mismatch — rejecting challenge");
@@ -103,18 +116,29 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
         using var doc = JsonDocument.Parse(bodyString);
         var root = doc.RootElement;
+        var encryptKey = await ResolveEncryptKeyAsync(http, registration, http.RequestAborted);
+        var verificationToken = registration.GetVerificationToken();
+
+        if (string.IsNullOrWhiteSpace(encryptKey) &&
+            string.IsNullOrWhiteSpace(verificationToken))
+        {
+            _logger.LogWarning(
+                "Lark event callback rejected because registration has neither encrypt key nor verification token: registrationId={RegistrationId}",
+                registration.Id);
+            return null;
+        }
 
         // Handle encrypted event payloads: { "encrypt": "<base64>" }
         JsonDocument? decryptedDoc = null;
         try
         {
             if (root.TryGetProperty("encrypt", out var encryptedProp) &&
-                !string.IsNullOrEmpty(registration.EncryptKey))
+                !string.IsNullOrEmpty(encryptKey))
             {
                 string decrypted;
                 try
                 {
-                    decrypted = DecryptLarkPayload(encryptedProp.GetString()!, registration.EncryptKey);
+                    decrypted = DecryptLarkPayload(encryptedProp.GetString()!, encryptKey);
                 }
                 catch (Exception ex)
                 {
@@ -144,7 +168,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             // SECURITY: When encrypt_key is configured, signature is REQUIRED — missing
             // header means forged request. Without this, an attacker can omit the header
             // and bypass verification entirely.
-            if (!string.IsNullOrEmpty(registration.EncryptKey))
+            if (!string.IsNullOrEmpty(encryptKey))
             {
                 if (!http.Request.Headers.TryGetValue("X-Lark-Signature", out var sigHeader) ||
                     string.IsNullOrWhiteSpace(sigHeader))
@@ -155,14 +179,26 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
                 var timestamp = http.Request.Headers.TryGetValue("X-Lark-Request-Timestamp", out var tsHeader)
                     ? tsHeader.ToString() : "";
+                if (!TryParseSignatureTimestamp(timestamp, out var requestTime))
+                {
+                    _logger.LogWarning("Lark event callback missing or invalid X-Lark-Request-Timestamp header");
+                    return null;
+                }
+
+                if ((DateTimeOffset.UtcNow - requestTime).Duration() > SignatureValidityWindow)
+                {
+                    _logger.LogWarning("Lark event callback timestamp outside allowed replay window");
+                    return null;
+                }
+
                 var nonce = http.Request.Headers.TryGetValue("X-Lark-Request-Nonce", out var nonceHeader)
                     ? nonceHeader.ToString() : "";
-                var expectedSignature = ComputeLarkSignature(timestamp, nonce, registration.EncryptKey,
+                var expectedSignature = ComputeLarkSignature(timestamp, nonce, encryptKey,
                     Encoding.UTF8.GetString(bodyBytes)); // always use original body for signature
 
                 if (!CryptographicOperations.FixedTimeEquals(
                         Encoding.UTF8.GetBytes(expectedSignature),
-                        Encoding.UTF8.GetBytes(sigHeader.ToString())))
+                        Encoding.UTF8.GetBytes(sigHeader.ToString().Trim().ToLowerInvariant())))
                 {
                     _logger.LogWarning("Lark event callback signature verification failed");
                     return null;
@@ -172,11 +208,11 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             }
 
             // Verify token on v2 event callbacks (header.token) — fallback when no encrypt_key.
-            if (string.IsNullOrEmpty(registration.EncryptKey) &&
-                !string.IsNullOrWhiteSpace(registration.VerificationToken))
+            if (string.IsNullOrEmpty(encryptKey) &&
+                !string.IsNullOrWhiteSpace(verificationToken))
             {
                 var headerToken = header.TryGetProperty("token", out var ht) ? ht.GetString() : null;
-                if (!string.Equals(headerToken, registration.VerificationToken, StringComparison.Ordinal))
+                if (!string.Equals(headerToken, verificationToken, StringComparison.Ordinal))
                 {
                     _logger.LogWarning("Lark event callback token mismatch — ignoring");
                     return null;
@@ -293,7 +329,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         });
 
         var result = await nyxClient.ProxyRequestAsync(
-            registration.NyxUserToken,
+            registration.GetNyxUserToken(),
             registration.NyxProviderSlug,
             "open-apis/im/v1/messages?receive_id_type=chat_id",
             "POST",
@@ -416,6 +452,42 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         }
     }
 
+    private static async Task<string> ResolveEncryptKeyAsync(
+        HttpContext http,
+        ChannelBotRegistrationEntry registration,
+        CancellationToken ct)
+    {
+        var credentialRef = registration.GetCredentialRef().Trim();
+        if (credentialRef.Length == 0)
+            return registration.GetEncryptKey();
+
+        var credentialProvider = http.RequestServices.GetService(typeof(ICredentialProvider)) as ICredentialProvider
+            ?? throw new InvalidOperationException(
+                $"No {nameof(ICredentialProvider)} is registered, but channel registration requires credential_ref '{credentialRef}'.");
+
+        var resolvedSecret = await credentialProvider.ResolveAsync(credentialRef, ct);
+        if (string.IsNullOrWhiteSpace(resolvedSecret))
+            throw new InvalidOperationException(
+                $"credential_ref '{credentialRef}' did not resolve to a Lark credential.");
+
+        return TryExtractEncryptKey(resolvedSecret);
+    }
+
+    private static string TryExtractEncryptKey(string resolvedSecret)
+    {
+        var trimmed = resolvedSecret.Trim();
+        if (trimmed.Length == 0)
+            return string.Empty;
+
+        if (trimmed[0] != '{')
+            return trimmed;
+
+        using var document = JsonDocument.Parse(trimmed);
+        return document.RootElement.TryGetProperty("encrypt_key", out var encryptKey)
+            ? encryptKey.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
     internal static bool IsInteractiveCardPayload(string replyText)
     {
         if (string.IsNullOrWhiteSpace(replyText))
@@ -438,6 +510,15 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         {
             return false;
         }
+    }
+
+    internal static bool IsRefreshableAuthFailure(PlatformReplyDeliveryResult result)
+    {
+        if (result.Succeeded || string.IsNullOrWhiteSpace(result.Detail))
+            return false;
+
+        return result.Detail.Contains("lark_error=token_expired", StringComparison.OrdinalIgnoreCase) ||
+               result.Detail.Contains("lark_error=invalid_auth", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryBuildLarkFailureResult(string? result, out PlatformReplyDeliveryResult failure)
@@ -624,6 +705,18 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         var message = timestamp + nonce + encryptKey + body;
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(message));
         return Convert.ToHexStringLower(hash);
+    }
+
+    private static bool TryParseSignatureTimestamp(string? timestamp, out DateTimeOffset requestTime)
+    {
+        requestTime = default;
+        if (!long.TryParse(timestamp, out var raw))
+            return false;
+
+        requestTime = timestamp!.Length > 10
+            ? DateTimeOffset.FromUnixTimeMilliseconds(raw)
+            : DateTimeOffset.FromUnixTimeSeconds(raw);
+        return true;
     }
 
     /// <summary>

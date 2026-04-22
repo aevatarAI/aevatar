@@ -4,6 +4,7 @@ using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.AI.ToolProviders.ChronoStorage;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.ChatbotClassifier;
@@ -48,6 +49,10 @@ builder.Services.AddNyxIdTools(o =>
     o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
                 ?? builder.Configuration["Cli:App:NyxId:Authority"]
                 ?? builder.Configuration["Aevatar:Authentication:Authority"];
+});
+builder.Services.AddLarkTools(o =>
+{
+    o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
 });
 builder.Services.AddChronoStorageTools(o =>
 {

@@ -1987,16 +1987,23 @@ public class ChannelUserGAgentContinuationTests
         return context;
     }
 
-    private static ChannelBotRegistrationEntry BuildLarkRegistration() => new()
+    private static ChannelBotRegistrationEntry BuildLarkRegistration()
     {
-        Id = "reg-1",
-        Platform = "lark",
-        NyxProviderSlug = "api-lark-bot",
-        NyxUserToken = "org-token",
-        VerificationToken = "verify-token",
-        ScopeId = "scope-1",
-        CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-    };
+        var entry = new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        entry.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
+        {
+            NyxUserToken = "org-token",
+            VerificationToken = "verify-token",
+        });
+        return entry;
+    }
 
     private static ChannelInboundEvent ToChannelInboundEvent(
         InboundMessage inbound,
@@ -2012,7 +2019,7 @@ public class ChannelUserGAgentContinuationTests
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = registration.NyxUserToken,
+            RegistrationToken = registration.GetNyxUserToken(),
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };

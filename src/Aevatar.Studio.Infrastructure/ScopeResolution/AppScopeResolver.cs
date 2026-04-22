@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.AspNetCore.Http;
@@ -6,27 +5,31 @@ using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.Studio.Infrastructure.ScopeResolution;
 
+/// <summary>
+/// Resolves the current scope from an authenticated principal.
+/// <para>
+/// The authoritative source is the <c>scope_id</c> claim. Synthesising <c>scope_id</c> from
+/// provider-specific claims (NyxID's <c>uid</c>/<c>sub</c>, generic <c>*_id</c>, etc.) belongs
+/// to the authentication provider's <see cref="Aevatar.Authentication.Abstractions.IAevatarClaimsTransformer"/>,
+/// which runs in <c>AevatarClaimsTransformation</c> before any request handler sees the principal.
+/// Duplicating the mapping here silently diverged from the provider's contract in the past
+/// (see issue #251 Q-04 / Q-08), so this resolver now only reads the canonical claim.
+/// </para>
+/// <para>
+/// When authentication is disabled (<c>Cli:App:NyxId:Enabled = false</c>) we fall back to
+/// explicit scope headers so local developer workflows keep working without a token.
+/// Configuration / environment fallbacks remain available for CLI contexts where no request
+/// is in flight.
+/// </para>
+/// </summary>
 public sealed class DefaultAppScopeResolver : IAppScopeResolver
 {
-    private static readonly HashSet<string> IgnoredGenericIdClaimTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "client_id",
-        "session_id",
-        "sid",
-    };
+    private const string ScopeIdClaimType = "scope_id";
 
     private static readonly string[] ScopeHeaders =
     [
         "X-Aevatar-Scope-Id",
         "X-Scope-Id",
-    ];
-
-    private static readonly string[] ScopeClaimTypes =
-    [
-        "scope_id",
-        "uid",
-        "sub",
-        ClaimTypes.NameIdentifier,
     ];
 
     private readonly IHttpContextAccessor _httpContextAccessor;
@@ -50,19 +53,9 @@ public sealed class DefaultAppScopeResolver : IAppScopeResolver
             var user = context.User;
             if (user?.Identity?.IsAuthenticated == true)
             {
-                foreach (var claimType in ScopeClaimTypes)
-                {
-                    var claimValue = user.FindFirst(claimType)?.Value?.Trim();
-                    if (!string.IsNullOrWhiteSpace(claimValue))
-                        return new AppScopeContext(claimValue, $"claim:{claimType}");
-                }
-
-                var genericIdClaim = user.Claims.FirstOrDefault(claim =>
-                    claim.Type.EndsWith("_id", StringComparison.OrdinalIgnoreCase) &&
-                    !IgnoredGenericIdClaimTypes.Contains(claim.Type) &&
-                    !string.IsNullOrWhiteSpace(claim.Value));
-                if (genericIdClaim != null)
-                    return new AppScopeContext(genericIdClaim.Value.Trim(), $"claim:{genericIdClaim.Type}");
+                var scopeIdValue = user.FindFirst(ScopeIdClaimType)?.Value?.Trim();
+                if (!string.IsNullOrWhiteSpace(scopeIdValue))
+                    return new AppScopeContext(scopeIdValue, $"claim:{ScopeIdClaimType}");
             }
 
             if (_nyxIdAuthEnabled)
@@ -85,5 +78,15 @@ public sealed class DefaultAppScopeResolver : IAppScopeResolver
             return new AppScopeContext(environmentScopeId, "env:AEVATAR_SCOPE_ID");
 
         return null;
+    }
+
+    public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null)
+    {
+        var context = httpContext ?? _httpContextAccessor.HttpContext;
+        if (context?.User?.Identity?.IsAuthenticated != true)
+            return false;
+
+        var scopeIdValue = context.User.FindFirst(ScopeIdClaimType)?.Value?.Trim();
+        return string.IsNullOrWhiteSpace(scopeIdValue);
     }
 }
