@@ -47,21 +47,50 @@ public class LarkToolsTests
     public async Task LarkMessagesSendTool_ValidatesInteractiveCardJson()
     {
         var tool = new LarkMessagesSendTool(new StubLarkNyxClient());
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var result = await tool.ExecuteAsync(
+            """{"target_type":"chat_id","target_id":"oc_456","message_type":"interactive_card","card_json":"{bad json}"}""");
 
-        try
-        {
-            var result = await tool.ExecuteAsync(
-                """{"target_type":"chat_id","target_id":"oc_456","message_type":"interactive_card","card_json":"{bad json}"}""");
+        result.Should().Contain("card_json is not valid JSON");
+    }
 
-            result.Should().Contain("card_json is not valid JSON");
+    [Fact]
+    public async Task LarkMessagesSendTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkMessagesSendTool(new StubLarkNyxClient());
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"target_type":"chat_id"}"""))
+                .Should().Contain("No NyxID access token available");
         }
-        finally
+
+        using (new AgentToolRequestMetadataScope("token-123"))
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            (await tool.ExecuteAsync("""{"target_type":"channel_id","target_id":"oc_456","message_type":"text","text":"hello"}"""))
+                .Should().Contain("target_type must be one of");
+            (await tool.ExecuteAsync("""{"target_type":"chat_id","target_id":" ","message_type":"text","text":"hello"}"""))
+                .Should().Contain("target_id is required");
+            (await tool.ExecuteAsync("""{"target_type":"chat_id","target_id":"oc_456","message_type":"markdown","text":"hello"}"""))
+                .Should().Contain("message_type must be one of");
+            (await tool.ExecuteAsync("""{"target_type":"chat_id","target_id":"oc_456","message_type":"text","text":" "}"""))
+                .Should().Contain("text is required when message_type=text");
+            (await tool.ExecuteAsync("""{"target_type":"chat_id","target_id":"oc_456","message_type":"interactive_card"}"""))
+                .Should().Contain("card_json is required when message_type=interactive_card");
+        }
+
+        var errorTool = new LarkMessagesSendTool(new StubLarkNyxClient
+        {
+            SendResponse = """{"error":true,"status":503,"message":"offline"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync(
+                """{"target_type":"chat_id","target_id":"oc_456","message_type":"text","text":"Hello","thread_id":"om_1"}""");
+
+            result.Should().Contain("nyx_proxy_error status=503");
+            result.Should().Contain("thread_id is ignored");
+            result.Should().Contain("\"target_type\":\"chat_id\"");
+            result.Should().Contain("\"target_id\":\"oc_456\"");
         }
     }
 
@@ -111,19 +140,50 @@ public class LarkToolsTests
     public async Task LarkChatsLookupTool_RequiresQueryOrMemberIds()
     {
         var tool = new LarkChatsLookupTool(new StubLarkNyxClient());
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        using var _ = new AgentToolRequestMetadataScope("token-123");
 
-        try
+        var result = await tool.ExecuteAsync("""{}""");
+        result.Should().Contain("At least one of query or member_ids is required");
+    }
+
+    [Fact]
+    public async Task LarkChatsLookupTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkChatsLookupTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
         {
-            var result = await tool.ExecuteAsync("""{}""");
-            result.Should().Contain("At least one of query or member_ids is required");
+            (await tool.ExecuteAsync("""{"query":"alpha"}"""))
+                .Should().Contain("No NyxID access token available");
         }
-        finally
+
+        using (new AgentToolRequestMetadataScope("token-123"))
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            (await tool.ExecuteAsync(JsonSerializer.Serialize(new
+            {
+                query = new string('a', 65),
+            })))
+                .Should().Contain("query exceeds the maximum of 64 characters");
+            (await tool.ExecuteAsync(
+                JsonSerializer.Serialize(new
+                {
+                    member_ids = Enumerable.Range(1, 51).Select(i => $"ou_{i}").ToArray(),
+                })))
+                .Should().Contain("member_ids exceeds the maximum of 50 values");
+            (await tool.ExecuteAsync("""{"query":"alpha","search_types":["private","bad-type"]}"""))
+                .Should().Contain("search_types contains invalid values: bad-type");
+            (await tool.ExecuteAsync("""{"query":"alpha","page_size":101}"""))
+                .Should().Contain("page_size must be between 1 and 100");
+        }
+
+        var errorTool = new LarkChatsLookupTool(new StubLarkNyxClient
+        {
+            SearchResponse = """{"error":true,"status":502,"message":"gateway"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await errorTool.ExecuteAsync("""{"query":"alpha","search_types":["public_joined"]}"""))
+                .Should().Contain("nyx_proxy_error status=502");
         }
     }
 
@@ -176,21 +236,45 @@ public class LarkToolsTests
     public async Task LarkSheetsAppendRowsTool_RequiresSheetContextForRelativeRange()
     {
         var tool = new LarkSheetsAppendRowsTool(new StubLarkNyxClient());
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        using var _ = new AgentToolRequestMetadataScope("token-123");
 
-        try
-        {
-            var result = await tool.ExecuteAsync(
-                """{"spreadsheet_token":"shtcn_123","range":"A1","rows":[["Alice"]]}""");
+        var result = await tool.ExecuteAsync(
+            """{"spreadsheet_token":"shtcn_123","range":"A1","rows":[["Alice"]]}""");
 
-            result.Should().Contain("range without a sheet prefix requires sheet_id");
+        result.Should().Contain("range without a sheet prefix requires sheet_id");
+    }
+
+    [Fact]
+    public async Task LarkSheetsAppendRowsTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkSheetsAppendRowsTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"spreadsheet_token":"shtcn_123","rows":[["Alice"]]}"""))
+                .Should().Contain("No NyxID access token available");
         }
-        finally
+
+        using (new AgentToolRequestMetadataScope("token-123"))
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            (await tool.ExecuteAsync("""{"rows":[["Alice"]]}"""))
+                .Should().Contain("One of spreadsheet_token or spreadsheet_url is required");
+            (await tool.ExecuteAsync("""{"spreadsheet_token":"shtcn_123","rows":[[],[]]}"""))
+                .Should().Contain("rows must contain at least one non-empty row");
+        }
+
+        var errorTool = new LarkSheetsAppendRowsTool(new StubLarkNyxClient
+        {
+            AppendSheetResponse = """{"error":true,"status":500,"message":"sheet offline"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync(
+                """{"spreadsheet_token":"shtcn_123","sheet_id":"sheet_1","range":"A1","rows":[["Alice"]]}""");
+
+            result.Should().Contain("nyx_proxy_error status=500");
+            result.Should().Contain("\"spreadsheet_token\":\"shtcn_123\"");
+            result.Should().Contain("\"range\":\"sheet_1!A1:A1\"");
         }
     }
 
@@ -255,6 +339,83 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkApprovalsListTool_ShouldValidateInputs_AndNormalizeAdditionalStatuses()
+    {
+        var tool = new LarkApprovalsListTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"topic":"todo"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{"topic":"unknown"}"""))
+                .Should().Contain("topic must be one of");
+            (await tool.ExecuteAsync("""{"topic":"todo","locale":"fr-FR"}"""))
+                .Should().Contain("locale must be one of");
+            (await tool.ExecuteAsync("""{"topic":"todo","user_id_type":"email"}"""))
+                .Should().Contain("user_id_type must be one of");
+            (await tool.ExecuteAsync("""{"topic":"todo","page_size":101}"""))
+                .Should().Contain("page_size must be between 1 and 100");
+        }
+
+        var errorTool = new LarkApprovalsListTool(new StubLarkNyxClient
+        {
+            ApprovalListResponse = """{"error":true,"status":504,"message":"timeout"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await errorTool.ExecuteAsync("""{"topic":"todo"}"""))
+                .Should().Contain("nyx_proxy_error status=504");
+        }
+
+        var successTool = new LarkApprovalsListTool(new StubLarkNyxClient
+        {
+            ApprovalListResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "count": 5,
+                    "has_more": false,
+                    "tasks": [
+                      { "task_id": "task_2", "instance_code": "inst_2", "status": "2", "topic": "2", "instance_status": "2", "summaries": [] },
+                      { "task_id": "task_3", "instance_code": "inst_3", "status": "17", "topic": "3", "instance_status": "3", "summaries": [] },
+                      { "task_id": "task_4", "instance_code": "inst_4", "status": "18", "topic": "17", "instance_status": "4", "summaries": [] },
+                      { "task_id": "task_5", "instance_code": "inst_5", "status": "33", "topic": "18", "instance_status": "5", "summaries": [] },
+                      { "task_id": "task_6", "instance_code": "inst_6", "status": "34", "topic": "99", "instance_status": "0", "summaries": [] }
+                    ]
+                  }
+                }
+                """,
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await successTool.ExecuteAsync("""{"topic":"done"}""");
+
+            using var document = JsonDocument.Parse(result);
+            var tasks = document.RootElement.GetProperty("tasks");
+            tasks[0].GetProperty("topic").GetString().Should().Be("done");
+            tasks[0].GetProperty("status").GetString().Should().Be("done");
+            tasks[0].GetProperty("instance_status").GetString().Should().Be("approved");
+            tasks[1].GetProperty("topic").GetString().Should().Be("initiated");
+            tasks[1].GetProperty("status").GetString().Should().Be("unread");
+            tasks[1].GetProperty("instance_status").GetString().Should().Be("rejected");
+            tasks[2].GetProperty("topic").GetString().Should().Be("cc_unread");
+            tasks[2].GetProperty("status").GetString().Should().Be("read");
+            tasks[2].GetProperty("instance_status").GetString().Should().Be("withdrawn");
+            tasks[3].GetProperty("topic").GetString().Should().Be("cc_read");
+            tasks[3].GetProperty("status").GetString().Should().Be("processing");
+            tasks[3].GetProperty("instance_status").GetString().Should().Be("terminated");
+            tasks[4].GetProperty("topic").GetString().Should().Be("99");
+            tasks[4].GetProperty("status").GetString().Should().Be("withdrawn");
+            tasks[4].GetProperty("instance_status").GetString().Should().Be("none");
+        }
+    }
+
+    [Fact]
     public async Task LarkApprovalsActTool_ValidatesTransferTarget()
     {
         var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
@@ -301,6 +462,51 @@ public class LarkToolsTests
         finally
         {
             AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsActTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{"action":"pause","instance_code":"inst_1","task_id":"task_1"}"""))
+                .Should().Contain("action must be one of");
+            (await tool.ExecuteAsync("""{"action":"approve","task_id":"task_1"}"""))
+                .Should().Contain("instance_code is required");
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1"}"""))
+                .Should().Contain("task_id is required");
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id_type":"email"}"""))
+                .Should().Contain("user_id_type must be one of");
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","transfer_user_id":"ou_1"}"""))
+                .Should().Contain("transfer_user_id is only allowed when action=transfer");
+            (await tool.ExecuteAsync("""{"action":"reject","instance_code":"inst_1","task_id":"task_1","form_json":"{}"}"""))
+                .Should().Contain("form_json is only supported when action=approve");
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","form_json":"{bad json}"}"""))
+                .Should().Contain("form_json is not valid JSON");
+        }
+
+        var errorTool = new LarkApprovalsActTool(new StubLarkNyxClient
+        {
+            ApprovalActionResponse = """{"error":true,"status":409,"message":"already processed"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync(
+                """{"action":"reject","instance_code":"inst_1","task_id":"task_1","comment":"nope"}""");
+
+            result.Should().Contain("nyx_proxy_error status=409");
+            result.Should().Contain("\"action\":\"reject\"");
+            result.Should().Contain("\"instance_code\":\"inst_1\"");
+            result.Should().Contain("\"task_id\":\"task_1\"");
         }
     }
 
@@ -474,6 +680,18 @@ public class LarkToolsTests
         handler.LastBody.Should().Contain("\"transfer_user_id\":\"ou_target\"");
     }
 
+    [Fact]
+    public void LarkNyxClient_NormalizeChatSearchQuery_ShouldKeepOriginalWhenUnquotingFails()
+    {
+        var method = typeof(LarkNyxClient).GetMethod(
+            "NormalizeChatSearchQuery",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        var result = (string)method.Invoke(null, new object?[] { "team-\\" })!;
+
+        result.Should().Be(JsonSerializer.Serialize("team-\\"));
+    }
+
     private sealed class StubLarkNyxClient : ILarkNyxClient
     {
         public string SendResponse { get; set; } = """{"code":0,"data":{}}""";
@@ -538,6 +756,27 @@ public class LarkToolsTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return _responder(request);
+        }
+    }
+
+    private sealed class AgentToolRequestMetadataScope : IDisposable
+    {
+        private readonly IReadOnlyDictionary<string, string>? _previous;
+
+        public AgentToolRequestMetadataScope(string? accessToken = null)
+        {
+            _previous = AgentToolRequestContext.CurrentMetadata;
+            AgentToolRequestContext.CurrentMetadata = string.IsNullOrWhiteSpace(accessToken)
+                ? null
+                : new Dictionary<string, string>
+                {
+                    [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
+                };
+        }
+
+        public void Dispose()
+        {
+            AgentToolRequestContext.CurrentMetadata = _previous;
         }
     }
 }
