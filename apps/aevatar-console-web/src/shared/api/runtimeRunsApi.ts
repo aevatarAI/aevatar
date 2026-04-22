@@ -245,6 +245,7 @@ export const runtimeRunsApi = {
       },
       body: JSON.stringify(
         compactObject({
+          eventFormat: "agui",
           prompt: request.prompt.trim(),
           workflowYamls:
             request.workflowYamls && request.workflowYamls.length > 0
