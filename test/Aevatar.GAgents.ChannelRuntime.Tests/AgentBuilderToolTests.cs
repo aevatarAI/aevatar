@@ -471,7 +471,7 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult(new UserAgentCatalogMaterializationRuntimeLease(new UserAgentCatalogMaterializationContext
             {
                 RootActorId = UserAgentCatalogGAgent.WellKnownId,
-                ProjectionKind = "agent-registry",
+                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
             })));
         var projectionPort = new UserAgentCatalogProjectionPort(activationService);
 
@@ -555,7 +555,7 @@ public sealed class AgentBuilderToolTests
             await activationService.Received(1).EnsureAsync(
                 Arg.Is<ProjectionScopeStartRequest>(request =>
                     request.RootActorId == UserAgentCatalogGAgent.WellKnownId &&
-                    request.ProjectionKind == "agent-registry"),
+                    request.ProjectionKind == UserAgentCatalogProjectionPort.ProjectionKind),
                 Arg.Any<CancellationToken>());
 
             var apiKeyRequest = handler.Requests.Should()

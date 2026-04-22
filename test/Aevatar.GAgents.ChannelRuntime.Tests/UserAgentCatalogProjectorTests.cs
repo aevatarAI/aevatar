@@ -22,7 +22,7 @@ public sealed class UserAgentCatalogProjectorTests
         _context = new UserAgentCatalogMaterializationContext
         {
             RootActorId = UserAgentCatalogGAgent.WellKnownId,
-            ProjectionKind = "agent-registry",
+            ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
         };
     }
 
