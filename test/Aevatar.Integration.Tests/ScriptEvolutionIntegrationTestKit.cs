@@ -3,6 +3,8 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
@@ -28,6 +30,11 @@ internal static class ScriptEvolutionIntegrationTestKit
         services.AddAevatarRuntime();
         configure?.Invoke(services);
         services.AddScriptCapability();
+        services.AddSingleton<IScriptEvolutionApplicationService>(sp =>
+            new AuthorityActivatingScriptEvolutionApplicationService(
+                new ScriptEvolutionApplicationService(sp.GetRequiredService<IScriptEvolutionProposalPort>()),
+                sp.GetRequiredService<IScriptAuthorityReadModelActivationPort>(),
+                sp.GetRequiredService<IScriptingActorAddressResolver>()));
         return services.BuildServiceProvider();
     }
 
@@ -54,13 +61,19 @@ internal static class ScriptEvolutionIntegrationTestKit
         string? definitionActorId,
         CancellationToken ct)
     {
+        var addressResolver = provider.GetRequiredService<IScriptingActorAddressResolver>();
+        var resolvedDefinitionActorId = string.IsNullOrWhiteSpace(definitionActorId)
+            ? addressResolver.GetDefinitionActorId(scriptId)
+            : definitionActorId;
+        await ActivateAuthorityReadModelAsync(provider, resolvedDefinitionActorId, ct);
+
         var result = await provider.GetRequiredService<IScriptDefinitionCommandPort>()
             .UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
                 sourceText,
                 ScriptingCommandEnvelopeTestKit.ComputeSourceHash(sourceText),
-                definitionActorId,
+                resolvedDefinitionActorId,
                 ct);
         RememberDefinitionSnapshot(result.ActorId, result.Snapshot);
         return result;
@@ -88,6 +101,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         ScriptDefinitionSnapshot? definitionSnapshot,
         CancellationToken ct)
     {
+        await ActivateAuthorityReadModelAsync(provider, definitionActorId, ct);
         var resolvedSnapshot = definitionSnapshot
             ?? ResolveDefinitionSnapshot(definitionActorId, revision)
             ?? await provider.GetRequiredService<IScriptDefinitionSnapshotPort>()
@@ -335,6 +349,8 @@ internal static class ScriptEvolutionIntegrationTestKit
         CancellationToken ct,
         string? expectedRevision = null)
     {
+        var addressResolver = provider.GetRequiredService<IScriptingActorAddressResolver>();
+        await ActivateAuthorityReadModelAsync(provider, addressResolver.GetCatalogActorId(), ct);
         var queryPort = provider.GetRequiredService<IScriptCatalogQueryPort>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ObservationTimeout);
@@ -367,6 +383,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         string revision,
         CancellationToken ct)
     {
+        await ActivateAuthorityReadModelAsync(provider, definitionActorId, ct);
         var snapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ObservationTimeout);
@@ -386,6 +403,50 @@ internal static class ScriptEvolutionIntegrationTestKit
         {
             throw new InvalidOperationException(
                 $"Script definition snapshot not found for actor `{definitionActorId}` revision `{revision}`.");
+        }
+    }
+
+    public static async Task ActivateAuthorityReadModelsAsync(
+        IServiceProvider provider,
+        CancellationToken ct,
+        params string[] actorIds)
+    {
+        foreach (var actorId in actorIds)
+        {
+            if (string.IsNullOrWhiteSpace(actorId))
+                continue;
+
+            await ActivateAuthorityReadModelAsync(provider, actorId, ct);
+        }
+    }
+
+    private static async Task ActivateAuthorityReadModelAsync(
+        IServiceProvider provider,
+        string actorId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        await provider.GetRequiredService<IScriptAuthorityReadModelActivationPort>()
+            .ActivateAsync(actorId, ct);
+    }
+
+    private sealed class AuthorityActivatingScriptEvolutionApplicationService(
+        IScriptEvolutionApplicationService inner,
+        IScriptAuthorityReadModelActivationPort activationPort,
+        IScriptingActorAddressResolver addressResolver)
+        : IScriptEvolutionApplicationService
+    {
+        public async Task<ScriptPromotionDecision> ProposeAsync(
+            ProposeScriptEvolutionRequest request,
+            CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            await activationPort.ActivateAsync(addressResolver.GetCatalogActorId(request.ScopeId), ct);
+            await activationPort.ActivateAsync(
+                addressResolver.GetDefinitionActorId(request.ScriptId, request.ScopeId),
+                ct);
+            return await inner.ProposeAsync(request, ct);
         }
     }
 }

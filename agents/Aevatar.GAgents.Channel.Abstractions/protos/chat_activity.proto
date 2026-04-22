@@ -1,0 +1,267 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.abstractions;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+// Identifies one logical channel.
+message ChannelId {
+  // The normalized channel identifier value.
+  string value = 1;
+}
+
+// Identifies one bot instance within a channel family.
+message BotInstanceId {
+  // The normalized bot instance identifier value.
+  string value = 1;
+}
+
+// Classifies the kind of inbound or outbound activity.
+enum ActivityType {
+  // Default zero value.
+  ACTIVITY_TYPE_UNSPECIFIED = 0;
+  // A user-visible message activity.
+  ACTIVITY_TYPE_MESSAGE = 1;
+  // A command invocation activity.
+  ACTIVITY_TYPE_COMMAND = 2;
+  // A card or component action activity.
+  ACTIVITY_TYPE_CARD_ACTION = 3;
+  // A reaction activity.
+  ACTIVITY_TYPE_REACTION = 4;
+  // A membership change activity.
+  ACTIVITY_TYPE_MEMBERSHIP_CHANGE = 5;
+  // A typing indicator activity.
+  ACTIVITY_TYPE_TYPING = 6;
+  // An adapter lifecycle activity.
+  ACTIVITY_TYPE_ADAPTER_LIFECYCLE = 7;
+}
+
+// Describes the conversation scope targeted by an activity.
+enum ConversationScope {
+  // Default zero value.
+  CONVERSATION_SCOPE_UNSPECIFIED = 0;
+  // A direct-message conversation.
+  CONVERSATION_SCOPE_DIRECT_MESSAGE = 1;
+  // A group conversation.
+  CONVERSATION_SCOPE_GROUP = 2;
+  // A channel-wide conversation.
+  CONVERSATION_SCOPE_CHANNEL = 3;
+  // A thread-scoped conversation.
+  CONVERSATION_SCOPE_THREAD = 4;
+}
+
+// Describes the kind of attachment referenced by one message.
+enum AttachmentKind {
+  // Default zero value.
+  ATTACHMENT_KIND_UNSPECIFIED = 0;
+  // A generic file attachment.
+  ATTACHMENT_KIND_FILE = 1;
+  // An image attachment.
+  ATTACHMENT_KIND_IMAGE = 2;
+  // An audio attachment.
+  ATTACHMENT_KIND_AUDIO = 3;
+  // A video attachment.
+  ATTACHMENT_KIND_VIDEO = 4;
+  // An external link attachment.
+  ATTACHMENT_KIND_LINK = 5;
+  // A card-style attachment.
+  ATTACHMENT_KIND_CARD = 6;
+}
+
+// Describes the delivery disposition requested for one message.
+enum MessageDisposition {
+  // Default zero value.
+  MESSAGE_DISPOSITION_UNSPECIFIED = 0;
+  // A normal visible message.
+  MESSAGE_DISPOSITION_NORMAL = 1;
+  // An ephemeral message visible to a limited audience.
+  MESSAGE_DISPOSITION_EPHEMERAL = 2;
+  // A silent message that avoids user-facing noise where supported.
+  MESSAGE_DISPOSITION_SILENT = 3;
+  // A pinned message where supported.
+  MESSAGE_DISPOSITION_PINNED = 4;
+}
+
+// Describes one interactive element supported by card-style payloads.
+enum ActionElementKind {
+  // Default zero value.
+  ACTION_ELEMENT_KIND_UNSPECIFIED = 0;
+  // A button action.
+  ACTION_ELEMENT_KIND_BUTTON = 1;
+  // A select-menu action.
+  ACTION_ELEMENT_KIND_SELECT = 2;
+  // A form-submit action.
+  ACTION_ELEMENT_KIND_FORM_SUBMIT = 3;
+  // A link-style action.
+  ACTION_ELEMENT_KIND_LINK = 4;
+}
+
+// Describes one card block shape.
+enum CardBlockKind {
+  // Default zero value.
+  CARD_BLOCK_KIND_UNSPECIFIED = 0;
+  // A text section block.
+  CARD_BLOCK_KIND_SECTION = 1;
+  // An actions block.
+  CARD_BLOCK_KIND_ACTIONS = 2;
+  // An image block.
+  CARD_BLOCK_KIND_IMAGE = 3;
+  // A context block.
+  CARD_BLOCK_KIND_CONTEXT = 4;
+  // A divider block.
+  CARD_BLOCK_KIND_DIVIDER = 5;
+}
+
+// Describes how the adapter receives inbound traffic.
+enum TransportMode {
+  // Default zero value.
+  TRANSPORT_MODE_UNSPECIFIED = 0;
+  // Inbound traffic is received through webhooks.
+  TRANSPORT_MODE_WEBHOOK = 1;
+  // Inbound traffic is received through a gateway connection.
+  TRANSPORT_MODE_GATEWAY = 2;
+  // Inbound traffic is received through long polling.
+  TRANSPORT_MODE_LONG_POLLING = 3;
+  // Inbound traffic uses a hybrid transport strategy.
+  TRANSPORT_MODE_HYBRID = 4;
+}
+
+// Identifies one conversation with a deterministic canonical key.
+message ConversationReference {
+  // The channel served by the conversation.
+  ChannelId channel = 1;
+  // The bot instance bound to the conversation.
+  BotInstanceId bot = 2;
+  // The optional shard or partition used for routing.
+  string partition = 3;
+  // The conversation scope.
+  ConversationScope scope = 4;
+  // The deterministic canonical key used for routing and deduplication.
+  string canonical_key = 5;
+}
+
+// Identifies one participant mentioned in or sending an activity.
+message ParticipantRef {
+  // The canonical participant identifier.
+  string canonical_id = 1;
+  // The best-effort display name.
+  string display_name = 2;
+}
+
+// References one attachment carried by or associated with a message.
+message AttachmentRef {
+  // The adapter-owned attachment identifier.
+  string attachment_id = 1;
+  // The attachment kind.
+  AttachmentKind kind = 2;
+  // The attachment display name.
+  string name = 3;
+  // The MIME content type.
+  string content_type = 4;
+  // The stable blob reference for persisted attachment content.
+  string blob_ref = 5;
+  // The attachment size in bytes.
+  int64 size_bytes = 6;
+  // The external URL when the attachment is referenced remotely.
+  string external_url = 7;
+}
+
+// Declares one selectable option for an action element.
+message ActionOption {
+  // The user-visible label.
+  string label = 1;
+  // The value submitted when the option is chosen.
+  string value = 2;
+}
+
+// Declares one interactive card element.
+message ActionElement {
+  // The element kind.
+  ActionElementKind kind = 1;
+  // The stable action identifier.
+  string action_id = 2;
+  // The user-visible label.
+  string label = 3;
+  // The submitted or linked value.
+  string value = 4;
+  // The placeholder text where supported.
+  string placeholder = 5;
+  // The selectable options for choice-based controls.
+  repeated ActionOption options = 6;
+  // Whether the element is emphasized as primary.
+  bool is_primary = 7;
+  // Whether the element is emphasized as dangerous.
+  bool is_danger = 8;
+  // Whether the element is disabled.
+  bool is_disabled = 9;
+}
+
+// Declares one title-text pair rendered inside a card.
+message CardField {
+  // The field title.
+  string title = 1;
+  // The field text.
+  string text = 2;
+  // Whether the field should render in a compact layout.
+  bool is_short = 3;
+}
+
+// Declares one structured card block.
+message CardBlock {
+  // The block kind.
+  CardBlockKind kind = 1;
+  // The stable block identifier.
+  string block_id = 2;
+  // The block title.
+  string title = 3;
+  // The main block text.
+  string text = 4;
+  // The image URL for image-style blocks.
+  string image_url = 5;
+  // The structured fields rendered by the block.
+  repeated CardField fields = 6;
+  // The interactive elements rendered by the block.
+  repeated ActionElement actions = 7;
+}
+
+// Carries the channel-agnostic message content used for send, update, and reply operations.
+message MessageContent {
+  // The primary text body.
+  string text = 1;
+  // The attachments rendered with the message.
+  repeated AttachmentRef attachments = 2;
+  // The interactive actions rendered with the message.
+  repeated ActionElement actions = 3;
+  // The structured card blocks rendered with the message.
+  repeated CardBlock cards = 4;
+  // The requested delivery disposition.
+  MessageDisposition disposition = 5;
+}
+
+// Represents one normalized activity flowing through the channel pipeline.
+message ChatActivity {
+  // The deterministic adapter-owned activity identifier.
+  string id = 1;
+  // The activity kind.
+  ActivityType type = 2;
+  // The channel that produced the activity.
+  ChannelId channel_id = 3;
+  // The bot instance that received the activity.
+  BotInstanceId bot = 4;
+  // The normalized conversation reference.
+  ConversationReference conversation = 5;
+  // The participant that originated the activity.
+  ParticipantRef from = 6;
+  // The participants mentioned by the activity.
+  repeated ParticipantRef mentions = 7;
+  // The activity timestamp.
+  google.protobuf.Timestamp timestamp = 8;
+  // The normalized message content.
+  MessageContent content = 9;
+  // The adapter-owned reply target when the activity is a reply.
+  string reply_to_activity_id = 10;
+  // The stable blob reference for sanitized raw payload storage.
+  string raw_payload_blob_ref = 11;
+}

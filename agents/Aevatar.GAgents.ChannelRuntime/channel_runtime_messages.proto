@@ -16,6 +16,26 @@ message ChannelBotRegistrationEntry {
   google.protobuf.Timestamp created_at = 7;
   string webhook_url = 8;  // Full callback URL configured via setWebhook
   string encrypt_key = 9;  // Lark Encrypt Key — used for signature verification AND event decryption
+  // Late-bound credential reference (Channel RFC §17.3).
+  //
+  // Phase 0 status (this PR): the field is persisted end-to-end (command →
+  // entry → event → state → projector → document → query port). NO caller
+  // surface exposes it yet (ChannelCallbackEndpoints / ChannelRegistrationTool
+  // do not accept credential_ref), and NO consumer reads it yet
+  // (LarkPlatformAdapter still uses EncryptKey). Setting credential_ref by
+  // protobuf-level dispatch today persists through state but has no runtime
+  // effect.
+  //
+  // Phase 1 (main Channel RFC PR): host surfaces accept credential_ref,
+  // LarkPlatformAdapter resolves it via ICredentialProvider at callback time,
+  // raw encrypt_key becomes optional, then removed.
+  string credential_ref = 10;
+  // Soft-delete marker retained for projector watermark coordination
+  // (Channel RFC §7.1.1): the registration stays in state after unregister so
+  // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
+  // .DeleteAsync. Housekeeping cleans watermark-passed entries.
+  bool tombstoned = 11;
+  int64 tombstone_state_version = 12;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -77,6 +97,12 @@ message DeviceRegistrationEntry {
   string nyx_conversation_id = 4;         // NyxID conversation ID
   string description = 5;                 // Human-readable label
   google.protobuf.Timestamp created_at = 6;
+  // Soft-delete marker retained for projector watermark coordination
+  // (Channel RFC §7.1.1): the registration stays in state after unregister so
+  // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
+  // .DeleteAsync. Housekeeping cleans watermark-passed entries.
+  bool tombstoned = 7;
+  int64 tombstone_state_version = 8;
 }
 
 message DeviceRegistrationState {
@@ -90,6 +116,7 @@ message DeviceRegisteredEvent {
 
 message DeviceUnregisteredEvent {
   string registration_id = 1;
+  int64 tombstone_state_version = 2;
 }
 
 // Commands dispatched to DeviceRegistrationGAgent via EventEnvelope
@@ -102,6 +129,15 @@ message DeviceRegisterCommand {
 
 message DeviceUnregisterCommand {
   string registration_id = 1;
+}
+
+message DeviceCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+message DeviceTombstonesCompactedEvent {
+  repeated string registration_ids = 1;
+  int64 safe_state_version = 2;
 }
 
 // Projection read model for device registrations
@@ -126,6 +162,7 @@ message ChannelBotRegisteredEvent {
 
 message ChannelBotUnregisteredEvent {
   string registration_id = 1;
+  int64 tombstone_state_version = 2;
 }
 
 // Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
@@ -138,6 +175,9 @@ message ChannelBotRegisterCommand {
   string webhook_url = 6;
   string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
   string encrypt_key = 8;   // Lark Encrypt Key for signature verification + event decryption
+  // Late-bound credential reference (Channel RFC §17.3). See
+  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
+  string credential_ref = 9;
 }
 
 message ChannelBotUnregisterCommand {
@@ -147,6 +187,15 @@ message ChannelBotUnregisterCommand {
 message ChannelBotUpdateTokenCommand {
   string registration_id = 1;
   string nyx_user_token = 2;
+}
+
+message ChannelBotCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+message ChannelBotTombstonesCompactedEvent {
+  repeated string registration_ids = 1;
+  int64 safe_state_version = 2;
 }
 
 // Domain event: token updated on an existing registration
@@ -169,11 +218,14 @@ message ChannelBotRegistrationDocument {
   string actor_id = 10;                     // Source actor ID
   string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
   string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
+  // Late-bound credential reference (Channel RFC §17.3). See
+  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
+  string credential_ref = 13;
 }
 
-// ─── Agent Registry (actor-backed delivery target store) ───
+// ─── User Agent Catalog (actor-backed delivery target store) ───
 
-message AgentRegistryEntry {
+message UserAgentCatalogEntry {
   string agent_id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -194,13 +246,14 @@ message AgentRegistryEntry {
   google.protobuf.Timestamp next_run_at = 18;
   int32 error_count = 19;
   string last_error = 20;
+  int64 tombstone_state_version = 21;
 }
 
-message AgentRegistryState {
-  repeated AgentRegistryEntry entries = 1;
+message UserAgentCatalogState {
+  repeated UserAgentCatalogEntry entries = 1;
 }
 
-message AgentRegistryUpsertCommand {
+message UserAgentCatalogUpsertCommand {
   string agent_id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -216,28 +269,11 @@ message AgentRegistryUpsertCommand {
   string status = 13;
 }
 
-message AgentRegistryTombstoneCommand {
+message UserAgentCatalogTombstoneCommand {
   string agent_id = 1;
 }
 
-message AgentRegistryExecutionUpdateCommand {
-  string agent_id = 1;
-  string status = 2;
-  google.protobuf.Timestamp last_run_at = 3;
-  google.protobuf.Timestamp next_run_at = 4;
-  int32 error_count = 5;
-  string last_error = 6;
-}
-
-message AgentRegistryUpsertedEvent {
-  AgentRegistryEntry entry = 1;
-}
-
-message AgentRegistryTombstonedEvent {
-  string agent_id = 1;
-}
-
-message AgentRegistryExecutionUpdatedEvent {
+message UserAgentCatalogExecutionUpdateCommand {
   string agent_id = 1;
   string status = 2;
   google.protobuf.Timestamp last_run_at = 3;
@@ -246,7 +282,34 @@ message AgentRegistryExecutionUpdatedEvent {
   string last_error = 6;
 }
 
-message AgentRegistryDocument {
+message UserAgentCatalogCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+message UserAgentCatalogUpsertedEvent {
+  UserAgentCatalogEntry entry = 1;
+}
+
+message UserAgentCatalogTombstonedEvent {
+  string agent_id = 1;
+  int64 tombstone_state_version = 2;
+}
+
+message UserAgentCatalogExecutionUpdatedEvent {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
+}
+
+message UserAgentCatalogTombstonesCompactedEvent {
+  repeated string agent_ids = 1;
+  int64 safe_state_version = 2;
+}
+
+message UserAgentCatalogDocument {
   string id = 1;
   string platform = 2;
   string conversation_id = 3;
@@ -280,6 +343,9 @@ message SkillRunnerOutboundConfig {
   string nyx_api_key = 3;
   string owner_nyx_user_id = 4;
   string api_key_id = 5;
+  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
+  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
+  string platform = 6;
 }
 
 message SkillRunnerState {
@@ -399,6 +465,9 @@ message WorkflowAgentState {
   string last_error = 15;
   bool enabled = 16;
   string scope_id = 17;
+  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
+  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
+  string platform = 18;
 }
 
 message InitializeWorkflowAgentCommand {
@@ -415,6 +484,8 @@ message InitializeWorkflowAgentCommand {
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
+  // Channel platform identifier; empty → default "lark" at upsert time.
+  string platform = 14;
 }
 
 message WorkflowAgentInitializedEvent {
@@ -431,6 +502,8 @@ message WorkflowAgentInitializedEvent {
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
+  // Channel platform identifier; empty → default "lark" at upsert time.
+  string platform = 14;
 }
 
 message TriggerWorkflowAgentExecutionCommand {

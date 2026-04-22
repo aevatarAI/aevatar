@@ -169,7 +169,7 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("运行正常")).toBeTruthy();
     expect(screen.getByText("需要处理")).toBeTruthy();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "切换 Scope" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "切换 Scope" })).toBeNull();
     expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
     expect(screen.queryByText("草稿团队")).toBeNull();
     expect(screen.getByText("还有草稿待整理")).toBeTruthy();

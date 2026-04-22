@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.abstractions;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
+
+import "google/protobuf/duration.proto";
+import "chat_activity.proto";
+
+// Describes how precisely a channel-native payload can represent one message intent.
+enum ComposeCapability {
+  // Default zero value.
+  COMPOSE_CAPABILITY_UNSPECIFIED = 0;
+  // The channel can render the intent without loss.
+  COMPOSE_CAPABILITY_EXACT = 1;
+  // The channel can render the intent with a deterministic downgrade.
+  COMPOSE_CAPABILITY_DEGRADED = 2;
+  // The channel cannot represent the intent.
+  COMPOSE_CAPABILITY_UNSUPPORTED = 3;
+}
+
+// Describes the streaming strategy supported by one adapter.
+enum StreamingSupport {
+  // Default zero value.
+  STREAMING_SUPPORT_UNSPECIFIED = 0;
+  // Streaming replies are not supported.
+  STREAMING_SUPPORT_NONE = 1;
+  // Streaming is implemented through repeated edit loops with rate limiting.
+  STREAMING_SUPPORT_EDIT_LOOP_RATE_LIMITED = 2;
+  // Streaming is implemented with a channel-native API.
+  STREAMING_SUPPORT_NATIVE = 3;
+}
+
+// Identifies which principal an outbound operation should use.
+enum PrincipalKind {
+  // Default zero value.
+  PRINCIPAL_KIND_UNSPECIFIED = 0;
+  // Send as the bot bound to the adapter.
+  PRINCIPAL_KIND_BOT = 1;
+  // Send on behalf of a delegated user.
+  PRINCIPAL_KIND_ON_BEHALF_OF_USER = 2;
+}
+
+// Records the outcome of one outbound send or update operation.
+message EmitResult {
+  // Whether the adapter operation succeeded.
+  bool success = 1;
+  // The opaque adapter-owned identifier for the emitted activity.
+  string sent_activity_id = 2;
+  // The composition fidelity used to emit the activity.
+  ComposeCapability capability = 3;
+  // The retry delay suggested by the adapter when the operation failed.
+  google.protobuf.Duration retry_after = 4;
+  // The structured adapter error code for failed operations.
+  string error_code = 5;
+  // The sanitized short error message for failed operations.
+  string error_message = 6;
+}
+
+// Carries the normalized conversation and capability inputs used during composition.
+message ComposeContext {
+  // The target conversation for the composed payload.
+  ConversationReference conversation = 1;
+  // The capability matrix declared by the active adapter.
+  ChannelCapabilities capabilities = 2;
+  // Additional typed-callsite annotations for composition decisions.
+  map<string, string> annotations = 3;
+}
+
+// Identifies the bot registration bound to one adapter instance.
+message ChannelBotDescriptor {
+  // The stable registration identifier owned by runtime state.
+  string registration_id = 1;
+  // The stable bot instance identifier used by the registration.
+  BotInstanceId bot = 2;
+  // The channel served by the bot registration.
+  ChannelId channel = 3;
+  // The optional runtime scope identifier associated with the registration.
+  string scope_id = 4;
+}
+
+// Carries the bootstrap data required to initialize one adapter instance.
+message ChannelTransportBinding {
+  // The bot registration descriptor bound to the adapter.
+  ChannelBotDescriptor bot = 1;
+  // The credential reference resolved by the adapter at runtime.
+  string credential_ref = 2;
+  // The optional verification token used by webhook-style transports.
+  string verification_token = 3;
+}
+
+// Declares the UX and transport capabilities exposed by one adapter instance.
+message ChannelCapabilities {
+  // Whether ephemeral delivery is supported.
+  bool supports_ephemeral = 1;
+  // Whether previously emitted messages can be edited.
+  bool supports_edit = 2;
+  // Whether previously emitted messages can be deleted.
+  bool supports_delete = 3;
+  // Whether threaded conversations are supported.
+  bool supports_thread = 4;
+  // The streaming strategy exposed by the adapter.
+  StreamingSupport streaming = 5;
+  // Whether file attachments are supported.
+  bool supports_files = 6;
+  // The recommended maximum message length in characters.
+  int32 max_message_length = 7;
+  // Whether action buttons are supported.
+  bool supports_action_buttons = 8;
+  // Whether confirm dialogs are supported.
+  bool supports_confirm_dialog = 9;
+  // Whether modal interactions are supported.
+  bool supports_modal = 10;
+  // Whether participant mentions are supported.
+  bool supports_mention = 11;
+  // Whether typing indicators are supported.
+  bool supports_typing = 12;
+  // Whether reactions are supported.
+  bool supports_reactions = 13;
+  // The recommended debounce interval for streaming edits in milliseconds.
+  int32 recommended_stream_debounce_ms = 14;
+  // The keepalive interval for typing indicators in milliseconds.
+  int32 typing_keepalive_interval_ms = 15;
+  // The maximum typing indicator lifetime in milliseconds.
+  int32 typing_ttl_ms = 16;
+  // The transport mode used to receive inbound traffic.
+  TransportMode transport = 17;
+}
+
+// Carries the explicit auth choice for proactive outbound operations.
+message AuthContext {
+  // The principal kind selected by the caller.
+  PrincipalKind kind = 1;
+  // The delegated user credential reference when sending on behalf of a user.
+  string user_credential_ref = 2;
+  // The channel-native user identifier that the delegated send should represent.
+  string on_behalf_of_user_id = 3;
+}
+
+// Represents one sequenced streaming delta emitted by caller-controlled streaming logic.
+message StreamChunk {
+  // The text delta for this chunk.
+  string delta = 1;
+  // The monotonic chunk sequence number used for idempotency.
+  int64 sequence_number = 2;
+}

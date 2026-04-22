@@ -10,12 +10,12 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     private const string AgentBuilderListAgentsAction = "list_agents";
     private const string AgentBuilderRunAgentAction = "run_agent";
 
-    private readonly IAgentRegistryQueryPort _agentRegistryQueryPort;
+    private readonly IUserAgentCatalogQueryPort _agentRegistryQueryPort;
     private readonly NyxIdApiClient _nyxIdApiClient;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
 
     public FeishuCardHumanInteractionPort(
-        IAgentRegistryQueryPort agentRegistryQueryPort,
+        IUserAgentCatalogQueryPort agentRegistryQueryPort,
         NyxIdApiClient nyxIdApiClient,
         ILogger<FeishuCardHumanInteractionPort> logger)
     {
@@ -92,21 +92,18 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         if (SupportsApproveReject(request))
         {
-            elements.Add(BuildEditedContentInput());
-            elements.Add(BuildFeedbackInput());
-            elements.Add(new
-            {
-                tag = "action",
-                actions = new object[]
-                {
-                    BuildActionButton("Approve", "primary", request, approved: true),
-                    BuildActionButton("Reject", "default", request, approved: false),
-                },
-            });
+            elements.Add(BuildForm(
+                "human_interaction_form",
+                BuildEditedContentInput(),
+                BuildFeedbackInput(),
+                BuildActionButton("Approve", "primary", request, approved: true),
+                BuildActionButton("Reject", "default", request, approved: false)
+            ));
         }
 
         return JsonSerializer.Serialize(new
         {
+            schema = "2.0",
             config = new
             {
                 wide_screen_mode = true,
@@ -120,13 +117,16 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 },
                 template = SupportsApproveReject(request) ? "orange" : "blue",
             },
-            elements,
+            body = new
+            {
+                elements,
+            },
         });
     }
 
     internal static string BuildApprovalResolutionCardJson(
         HumanApprovalResolution resolution,
-        AgentRegistryEntry? target = null)
+        UserAgentCatalogEntry? target = null)
     {
         var lines = new List<string>
         {
@@ -174,6 +174,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         return JsonSerializer.Serialize(new
         {
+            schema = "2.0",
             config = new
             {
                 wide_screen_mode = true,
@@ -187,11 +188,14 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 },
                 template = resolution.Approved ? "green" : "red",
             },
-            elements,
+            body = new
+            {
+                elements,
+            },
         });
     }
 
-    private async Task<AgentRegistryEntry> ResolveTargetAsync(
+    private async Task<UserAgentCatalogEntry> ResolveTargetAsync(
         string deliveryTargetId,
         CancellationToken cancellationToken)
     {
@@ -206,21 +210,21 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     }
 
     private static bool ShouldSendApprovedContent(
-        AgentRegistryEntry target,
+        UserAgentCatalogEntry target,
         HumanApprovalResolution resolution) =>
         resolution.Approved &&
         !string.IsNullOrWhiteSpace(resolution.ResolvedContent) &&
         string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
 
     private static bool ShouldOfferRerun(
-        AgentRegistryEntry? target,
+        UserAgentCatalogEntry? target,
         HumanApprovalResolution resolution) =>
         target is not null &&
         !resolution.Approved &&
         string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
 
     private async Task SendInteractiveCardAsync(
-        AgentRegistryEntry target,
+        UserAgentCatalogEntry target,
         string cardJson,
         string emptyResponseMessage,
         string failurePrefix,
@@ -250,7 +254,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     }
 
     private async Task SendTextMessageAsync(
-        AgentRegistryEntry target,
+        UserAgentCatalogEntry target,
         string text,
         string emptyResponseMessage,
         string failurePrefix,
@@ -284,6 +288,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         {
             tag = "button",
             type = style,
+            name = approved ? "approve" : "reject",
+            form_action_type = "submit",
             text = new
             {
                 tag = "plain_text",
@@ -296,6 +302,14 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 step_id = request.StepId,
                 approved,
             },
+        };
+
+    private static object BuildForm(string name, params object[] elements) =>
+        new
+        {
+            tag = "form",
+            name,
+            elements,
         };
 
     private static object BuildAgentActionButton(

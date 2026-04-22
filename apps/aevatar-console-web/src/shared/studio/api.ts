@@ -33,6 +33,8 @@ import type {
   StudioStartExecutionInput,
   StudioUserConfig,
   StudioUserConfigModelsResponse,
+  StudioWorkflowDraft,
+  StudioWorkflowDraftSummary,
   StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowSummary,
@@ -40,6 +42,7 @@ import type {
 } from "./models";
 import { normalizeStudioScopeBindingImplementationKind } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
+import { scopesApi } from "@/shared/api/scopesApi";
 import {
   expectArray,
   expectRecord,
@@ -53,6 +56,10 @@ import {
 import { readResponseError } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
+import type {
+  ScopeWorkflowDetail,
+  ScopeWorkflowSummary,
+} from "@/shared/models/scopes";
 import { getOrnnRuntimeConfig } from "./ornnConfig";
 
 const JSON_HEADERS = {
@@ -100,6 +107,76 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
+}
+
+function toScopeWorkflowDirectoryId(scopeId: string): string {
+  return `scope:${scopeId}`;
+}
+
+function toScopeWorkflowPath(scopeId: string, workflowId: string): string {
+  return `scope://${scopeId}/${workflowId}.yaml`;
+}
+
+function resolveScopeWorkflowName(workflow: ScopeWorkflowSummary): string {
+  return workflow.displayName?.trim() || workflow.workflowName?.trim() || workflow.workflowId;
+}
+
+function toCommittedWorkflowSummary(
+  scopeId: string,
+  workflow: ScopeWorkflowSummary
+): StudioWorkflowSummary {
+  return {
+    workflowId: workflow.workflowId,
+    name: resolveScopeWorkflowName(workflow),
+    description: "",
+    fileName: `${workflow.workflowId}.yaml`,
+    filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
+    directoryId: toScopeWorkflowDirectoryId(scopeId),
+    directoryLabel: scopeId,
+    stepCount: 0,
+    hasLayout: false,
+    updatedAtUtc: workflow.updatedAt,
+  };
+}
+
+function toCommittedWorkflowFile(
+  scopeId: string,
+  detail: ScopeWorkflowDetail
+): StudioWorkflowFile {
+  const workflow = detail.workflow;
+  if (!workflow) {
+    throw new Error("Not Found");
+  }
+
+  return {
+    workflowId: workflow.workflowId,
+    name: resolveScopeWorkflowName(workflow),
+    fileName: `${workflow.workflowId}.yaml`,
+    filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
+    directoryId: toScopeWorkflowDirectoryId(scopeId),
+    directoryLabel: scopeId,
+    yaml: detail.source?.workflowYaml ?? "",
+    document: null,
+    draftExists: false,
+    findings: [],
+    updatedAtUtc: workflow.updatedAt,
+  };
+}
+
+function toWorkflowFile(
+  draft: StudioWorkflowDraft,
+  draftExists: boolean
+): StudioWorkflowFile {
+  return {
+    ...draft,
+    document: null,
+    draftExists,
+    findings: [],
+  };
+}
+
+function selectLatestTimestamp(left: string, right: string): string {
+  return Date.parse(left) >= Date.parse(right) ? left : right;
 }
 
 function withOptionalScopeId(
@@ -265,6 +342,26 @@ function decodeStudioUserConfigModelsResponse(
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
+async function requestJsonOrNull<T>(
+  input: string,
+  init?: RequestInit
+): Promise<T | null> {
+  const response = await studioHostFetch(input, init);
+  if (response.status === 404) {
+    return null;
+  }
+
   if (!response.ok) {
     throw new Error(await readResponseError(response));
   }
@@ -824,8 +921,8 @@ export const studioApi = {
     return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
   },
 
-  listWorkflows(scopeId?: string | null): Promise<StudioWorkflowSummary[]> {
-    return requestJson(withOptionalScopeId("/api/workspace/workflows", scopeId));
+  listWorkflowDrafts(scopeId?: string | null): Promise<StudioWorkflowDraftSummary[]> {
+    return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", scopeId));
   },
 
   getTemplateWorkflow(
@@ -837,40 +934,26 @@ export const studioApi = {
     );
   },
 
-  getWorkflow(
+  getWorkflowDraft(
     workflowId: string,
     scopeId?: string | null
-  ): Promise<StudioWorkflowFile> {
+  ): Promise<StudioWorkflowDraft> {
     return requestJson(
       withOptionalScopeId(
-        `/api/workspace/workflows/${encodeURIComponent(workflowId)}`,
+        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
         scopeId
       )
     );
   },
 
-  deleteWorkflow(
-    workflowId: string,
-    scopeId?: string | null
-  ): Promise<void> {
-    return requestJson(
-      withOptionalScopeId(
-        `/api/workspace/workflows/${encodeURIComponent(workflowId)}`,
-        scopeId
-      ),
-      {
-        method: "DELETE",
-      }
-    );
-  },
-
-  saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
-    return requestJson(withOptionalScopeId("/api/workspace/workflows", input.scopeId), {
+  createWorkflowDraft(
+    input: Omit<StudioSaveWorkflowInput, "workflowId">
+  ): Promise<StudioWorkflowDraft> {
+    return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", input.scopeId), {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
-          workflowId: trimOptional(input.workflowId),
           directoryId: input.directoryId,
           workflowName: input.workflowName.trim(),
           fileName: trimOptional(input.fileName),
@@ -879,6 +962,141 @@ export const studioApi = {
         })
       ),
     });
+  },
+
+  updateWorkflowDraft(
+    input: StudioSaveWorkflowInput & { workflowId: string }
+  ): Promise<StudioWorkflowDraft> {
+    return requestJson(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(input.workflowId)}`,
+        input.scopeId
+      ),
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            directoryId: input.directoryId,
+            workflowName: input.workflowName.trim(),
+            fileName: trimOptional(input.fileName),
+            yaml: input.yaml,
+            layout: input.layout,
+          })
+        ),
+      }
+    );
+  },
+
+  deleteWorkflowDraft(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<void> {
+    return requestJson(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
+        scopeId
+      ),
+      {
+        method: "DELETE",
+      }
+    );
+  },
+
+  listWorkflows(scopeId?: string | null): Promise<StudioWorkflowSummary[]> {
+    const normalizedScopeId = trimOptional(scopeId);
+    if (!normalizedScopeId) {
+      return this.listWorkflowDrafts(scopeId);
+    }
+
+    return Promise.all([
+      this.listWorkflowDrafts(normalizedScopeId),
+      scopesApi.listWorkflows(normalizedScopeId),
+    ]).then(([drafts, committed]) => {
+      const merged = new Map<string, StudioWorkflowSummary>();
+
+      for (const workflow of committed) {
+        merged.set(
+          workflow.workflowId,
+          toCommittedWorkflowSummary(normalizedScopeId, workflow)
+        );
+      }
+
+      for (const draft of drafts) {
+        const existing = merged.get(draft.workflowId);
+        merged.set(
+          draft.workflowId,
+          existing
+            ? {
+                ...draft,
+                updatedAtUtc: selectLatestTimestamp(
+                  draft.updatedAtUtc,
+                  existing.updatedAtUtc
+                ),
+              }
+            : draft
+        );
+      }
+
+      return Array.from(merged.values()).sort(
+        (left, right) =>
+          Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc)
+      );
+    });
+  },
+
+  async getWorkflow(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<StudioWorkflowFile> {
+    const normalizedScopeId = trimOptional(scopeId);
+    if (!normalizedScopeId) {
+      const draft = await this.getWorkflowDraft(workflowId, scopeId);
+      return toWorkflowFile(draft, true);
+    }
+
+    const draft = await requestJsonOrNull<StudioWorkflowDraft>(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
+        normalizedScopeId
+      )
+    );
+    if (draft) {
+      return toWorkflowFile(draft, true);
+    }
+
+    return toCommittedWorkflowFile(
+      normalizedScopeId,
+      await scopesApi.getWorkflowDetail(normalizedScopeId, workflowId)
+    );
+  },
+
+  saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
+    const normalizedWorkflowId = trimOptional(input.workflowId);
+    const shouldUpdate =
+      Boolean(normalizedWorkflowId) &&
+      (input.draftExists ?? Boolean(normalizedWorkflowId));
+    const request = shouldUpdate && normalizedWorkflowId
+      ? this.updateWorkflowDraft({
+          ...input,
+          workflowId: normalizedWorkflowId,
+        })
+      : this.createWorkflowDraft({
+          scopeId: input.scopeId,
+          directoryId: input.directoryId,
+          workflowName: input.workflowName,
+          fileName: input.fileName,
+          yaml: input.yaml,
+          layout: input.layout,
+        });
+    return request.then((draft) => toWorkflowFile(draft, true));
+  },
+
+  deleteWorkflow(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<void> {
+    return this.deleteWorkflowDraft(workflowId, scopeId);
   },
 
   parseYaml(input: {

@@ -137,10 +137,19 @@ public sealed class ScriptNativeDocumentProjectorTests
     {
         public ScriptNativeDocumentReadModel? LastUpsert { get; private set; }
 
+        public string? LastDeletedId { get; private set; }
+
         public Task<ProjectionWriteResult> UpsertAsync(ScriptNativeDocumentReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastUpsert = readModel.Clone();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastDeletedId = id;
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

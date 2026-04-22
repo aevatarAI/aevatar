@@ -554,6 +554,14 @@ public sealed class WorkflowProjectionMaterializationTests
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            var removed = Stored.Remove(id);
+            return Task.FromResult(removed
+                ? ProjectionWriteResult.Applied()
+                : ProjectionWriteResult.Duplicate());
+        }
+
         public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
         {
             Stored.TryGetValue(key, out var value);

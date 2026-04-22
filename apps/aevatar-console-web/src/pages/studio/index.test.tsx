@@ -211,6 +211,7 @@ function resetMockState(): void {
     directoryLabel: "Workspace",
     yaml: mockBuildWorkflowYaml(mockParsedDocument),
     findings: [],
+    draftExists: true,
     updatedAtUtc: "2026-03-18T00:00:00Z",
     document: mockParsedDocument,
   };
@@ -518,6 +519,7 @@ jest.mock("@/shared/studio/api", () => ({
     saveWorkflow: jest.fn(
       async (input: {
         workflowId?: string;
+        draftExists?: boolean | null;
         directoryId: string;
         workflowName: string;
         fileName?: string | null;
@@ -533,6 +535,7 @@ jest.mock("@/shared/studio/api", () => ({
           filePath: `/tmp/workflows/${input.fileName || `${input.workflowName}.yaml`}`,
           directoryId: input.directoryId,
           yaml: input.yaml,
+          draftExists: input.draftExists ?? true,
           updatedAtUtc: "2026-03-18T00:05:00Z",
           document: {
             ...mockWorkflowFile.document,
@@ -2952,6 +2955,72 @@ describe("StudioPage", () => {
     });
   });
 
+  it("marks the first scoped save of a committed workflow as create-draft work", async () => {
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValueOnce({
+      ...mockWorkflowFile,
+      draftExists: false,
+    });
+
+    renderStudioPage("/studio?scopeId=scope-1&workflow=workflow-1&tab=studio");
+
+    const editor = await screen.findByLabelText("定义 YAML");
+    fireEvent.change(editor, {
+      target: {
+        value: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
+      },
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save draft" });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-1",
+          draftExists: false,
+          scopeId: "scope-1",
+          directoryId: "dir-1",
+          workflowName: "workspace-demo",
+        })
+      );
+    });
+  });
+
+  it("keeps the toolbar save action enabled when the draft falls back to the default directory", async () => {
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValueOnce({
+      ...mockWorkflowFile,
+      directoryId: "",
+      directoryLabel: "",
+    });
+
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    const editor = await screen.findByLabelText("定义 YAML");
+    fireEvent.change(editor, {
+      target: {
+        value: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
+      },
+    });
+
+    const toolbarSaveButton = screen.getByRole("button", { name: "Save draft" });
+    await waitFor(() => {
+      expect(toolbarSaveButton).toBeEnabled();
+    });
+    fireEvent.click(toolbarSaveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-1",
+          directoryId: "dir-1",
+          workflowName: "workspace-demo",
+        })
+      );
+    });
+  });
 
   it("starts a blank draft when the Studio route requests draft mode", async () => {
     renderStudioPage("/studio?draft=new");

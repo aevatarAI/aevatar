@@ -3,9 +3,9 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Controllers;
 
@@ -16,18 +16,18 @@ public sealed class WorkspaceController : ControllerBase
     private readonly WorkspaceService _workspaceService;
     private readonly AppScopedWorkflowService _scopeWorkflowService;
     private readonly IAppScopeResolver _scopeResolver;
-    private readonly IAuthenticationSchemeProvider _authenticationSchemeProvider;
+    private readonly StudioHostingOptions _hostingOptions;
 
     public WorkspaceController(
         WorkspaceService workspaceService,
         AppScopedWorkflowService scopeWorkflowService,
         IAppScopeResolver scopeResolver,
-        IAuthenticationSchemeProvider authenticationSchemeProvider)
+        IOptions<StudioHostingOptions> hostingOptions)
     {
         _workspaceService = workspaceService;
         _scopeWorkflowService = scopeWorkflowService;
         _scopeResolver = scopeResolver;
-        _authenticationSchemeProvider = authenticationSchemeProvider;
+        _hostingOptions = hostingOptions?.Value ?? throw new ArgumentNullException(nameof(hostingOptions));
     }
 
     [HttpGet]
@@ -93,8 +93,8 @@ public sealed class WorkspaceController : ControllerBase
         return Ok(await _workspaceService.RemoveDirectoryAsync(directoryId, cancellationToken));
     }
 
-    [HttpGet("workflows")]
-    public async Task<ActionResult<IReadOnlyList<WorkflowSummary>>> ListWorkflows(
+    [HttpGet("workflow-drafts")]
+    public async Task<ActionResult<IReadOnlyList<WorkflowDraftSummary>>> ListDrafts(
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
@@ -107,7 +107,7 @@ public sealed class WorkspaceController : ControllerBase
         {
             try
             {
-                return Ok(await _scopeWorkflowService.ListAsync(scopeContext.ScopeId, cancellationToken));
+                return Ok(await _scopeWorkflowService.ListDraftsAsync(scopeContext.ScopeId, cancellationToken));
             }
             catch (AppApiException exception)
             {
@@ -119,11 +119,54 @@ public sealed class WorkspaceController : ControllerBase
             }
         }
 
-        return Ok(await _workspaceService.ListWorkflowsAsync(cancellationToken));
+        return Ok(await _workspaceService.ListDraftsAsync(cancellationToken));
     }
 
-    [HttpGet("workflows/{workflowId}")]
-    public async Task<ActionResult<WorkflowFileResponse>> GetWorkflow(
+    #pragma warning disable CS0618
+    [Obsolete("Use /api/workspace/workflow-drafts.")]
+    [HttpGet("workflows")]
+    public async Task<ActionResult<IReadOnlyList<WorkflowSummary>>> ListWorkflows(
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
+    {
+        var result = await ListDrafts(scopeId, cancellationToken);
+        if (result.Result is OkObjectResult okResult &&
+            okResult.Value is IReadOnlyList<WorkflowDraftSummary> draftSummaries)
+        {
+            return Ok(draftSummaries.Select(static summary => new WorkflowSummary(
+                summary.WorkflowId,
+                summary.Name,
+                summary.Description,
+                summary.FileName,
+                summary.FilePath,
+                summary.DirectoryId,
+                summary.DirectoryLabel,
+                summary.StepCount,
+                summary.HasLayout,
+                summary.UpdatedAtUtc)).ToList());
+        }
+
+        if (result.Result is not null)
+        {
+            return result.Result;
+        }
+
+        return Ok(result.Value?.Select(static summary => new WorkflowSummary(
+            summary.WorkflowId,
+            summary.Name,
+            summary.Description,
+            summary.FileName,
+            summary.FilePath,
+            summary.DirectoryId,
+            summary.DirectoryLabel,
+            summary.StepCount,
+            summary.HasLayout,
+            summary.UpdatedAtUtc)).ToList() ?? []);
+    }
+    #pragma warning restore CS0618
+
+    [HttpGet("workflow-drafts/{workflowId}")]
+    public async Task<ActionResult<WorkflowDraftResponse>> GetDraft(
         string workflowId,
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
@@ -133,12 +176,12 @@ public sealed class WorkspaceController : ControllerBase
             return scopeResolution.Failure;
 
         var scopeContext = scopeResolution.Context;
-        WorkflowFileResponse? workflow;
+        WorkflowDraftResponse? workflow;
         if (scopeContext != null)
         {
             try
             {
-                workflow = await _scopeWorkflowService.GetAsync(scopeContext.ScopeId, workflowId, cancellationToken);
+                workflow = await _scopeWorkflowService.GetDraftAsync(scopeContext.ScopeId, workflowId, cancellationToken);
             }
             catch (AppApiException exception)
             {
@@ -151,15 +194,43 @@ public sealed class WorkspaceController : ControllerBase
         }
         else
         {
-            workflow = await _workspaceService.GetWorkflowAsync(workflowId, cancellationToken);
+            workflow = await _workspaceService.GetDraftAsync(workflowId, cancellationToken);
         }
 
         return workflow is null ? NotFound() : Ok(workflow);
     }
 
-    [HttpPost("workflows")]
-    public async Task<ActionResult<WorkflowFileResponse>> SaveWorkflow(
-        [FromBody] SaveWorkflowFileRequest request,
+    #pragma warning disable CS0618
+    [Obsolete("Use /api/workspace/workflow-drafts/{workflowId}.")]
+    [HttpGet("workflows/{workflowId}")]
+    public async Task<ActionResult<WorkflowFileResponse>> GetWorkflow(
+        string workflowId,
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
+    {
+        var result = await GetDraft(workflowId, scopeId, cancellationToken);
+        if (result.Result is NotFoundResult)
+        {
+            return NotFound();
+        }
+
+        if (result.Result is OkObjectResult okResult && okResult.Value is WorkflowDraftResponse draftFromResult)
+        {
+            return Ok(ToLegacyWorkflowFileResponse(draftFromResult));
+        }
+
+        if (result.Result is ObjectResult objectResult)
+        {
+            return objectResult;
+        }
+
+        return Ok(ToLegacyWorkflowFileResponse(result.Value));
+    }
+    #pragma warning restore CS0618
+
+    [HttpPost("workflow-drafts")]
+    public async Task<ActionResult<WorkflowDraftResponse>> CreateDraft(
+        [FromBody] SaveWorkflowDraftRequest request,
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
@@ -172,11 +243,15 @@ public sealed class WorkspaceController : ControllerBase
         {
             try
             {
-                return Ok(await _scopeWorkflowService.SaveAsync(scopeContext.ScopeId, request, cancellationToken));
+                return Ok(await _scopeWorkflowService.CreateDraftAsync(scopeContext.ScopeId, request, cancellationToken));
             }
             catch (AppApiException exception)
             {
                 return StatusCode(exception.StatusCode, AppApiErrors.CreatePayload(exception));
+            }
+            catch (WorkflowDraftPathConflictException exception)
+            {
+                return Conflict(CreateDraftPathConflictPayload(exception));
             }
             catch (InvalidOperationException exception)
             {
@@ -184,7 +259,104 @@ public sealed class WorkspaceController : ControllerBase
             }
         }
 
-        return Ok(await _workspaceService.SaveWorkflowAsync(request, cancellationToken));
+        try
+        {
+            return Ok(await _workspaceService.CreateDraftAsync(request, cancellationToken));
+        }
+        catch (WorkflowDraftPathConflictException exception)
+        {
+            return Conflict(CreateDraftPathConflictPayload(exception));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+    }
+
+    #pragma warning disable CS0618
+    [Obsolete("Use POST /api/workspace/workflow-drafts or PUT /api/workspace/workflow-drafts/{workflowId}.")]
+    [HttpPost("workflows")]
+    public async Task<ActionResult<WorkflowFileResponse>> SaveWorkflow(
+        [FromBody] SaveWorkflowFileRequest request,
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
+    {
+        ActionResult<WorkflowDraftResponse> draftResult = string.IsNullOrWhiteSpace(request.WorkflowId)
+            ? await CreateDraft(
+                new SaveWorkflowDraftRequest(
+                    request.DirectoryId,
+                    request.WorkflowName,
+                    request.FileName,
+                    request.Yaml,
+                    request.Layout),
+                scopeId,
+                cancellationToken)
+            : await UpdateDraft(
+                request.WorkflowId,
+                new SaveWorkflowDraftRequest(
+                    request.DirectoryId,
+                    request.WorkflowName,
+                    request.FileName,
+                    request.Yaml,
+                    request.Layout),
+                scopeId,
+                cancellationToken);
+
+        if (draftResult.Result is OkObjectResult okResult && okResult.Value is WorkflowDraftResponse draftFromResult)
+        {
+            return Ok(ToLegacyWorkflowFileResponse(draftFromResult));
+        }
+
+        if (draftResult.Result is ObjectResult objectResult)
+        {
+            return objectResult;
+        }
+
+        return Ok(ToLegacyWorkflowFileResponse(draftResult.Value));
+    }
+    #pragma warning restore CS0618
+
+    [HttpPut("workflow-drafts/{workflowId}")]
+    public async Task<ActionResult<WorkflowDraftResponse>> UpdateDraft(
+        string workflowId,
+        [FromBody] SaveWorkflowDraftRequest request,
+        [FromQuery] string? scopeId,
+        CancellationToken cancellationToken)
+    {
+        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        if (scopeResolution.Failure != null)
+            return scopeResolution.Failure;
+
+        var scopeContext = scopeResolution.Context;
+        try
+        {
+            if (scopeContext != null)
+            {
+                return Ok(await _scopeWorkflowService.UpdateDraftAsync(
+                    scopeContext.ScopeId,
+                    workflowId,
+                    request,
+                    cancellationToken));
+            }
+
+            return Ok(await _workspaceService.UpdateDraftAsync(workflowId, request, cancellationToken));
+        }
+        catch (AppApiException exception)
+        {
+            return StatusCode(exception.StatusCode, AppApiErrors.CreatePayload(exception));
+        }
+        catch (WorkflowDraftNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (WorkflowDraftPathConflictException exception)
+        {
+            return Conflict(CreateDraftPathConflictPayload(exception));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
     }
 
     private async Task<(AppScopeContext? Context, ActionResult? Failure)> ResolveScopeContextAsync(string? requestedScopeId)
@@ -210,7 +382,7 @@ public sealed class WorkspaceController : ControllerBase
             }));
         }
 
-        if (await IsAuthenticationEnabledAsync())
+        if (!_hostingOptions.AllowUnauthenticatedScopeQueryFallback)
         {
             return (null, Unauthorized(new
             {
@@ -221,14 +393,8 @@ public sealed class WorkspaceController : ControllerBase
         return (new AppScopeContext(normalizedRequestedScopeId, "query:scopeId"), null);
     }
 
-    private async Task<bool> IsAuthenticationEnabledAsync()
-    {
-        var schemes = await _authenticationSchemeProvider.GetAllSchemesAsync();
-        return schemes.Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
-    }
-
-    [HttpDelete("workflows/{workflowId}")]
-    public async Task<IActionResult> DeleteWorkflow(
+    [HttpDelete("workflow-drafts/{workflowId}")]
+    public async Task<IActionResult> DeleteDraft(
         string workflowId,
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
@@ -255,9 +421,39 @@ public sealed class WorkspaceController : ControllerBase
         {
             return StatusCode(exception.StatusCode, AppApiErrors.CreatePayload(exception));
         }
+        catch (WorkflowDraftNotFoundException)
+        {
+            return NotFound();
+        }
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
         }
     }
+
+    private static object CreateDraftPathConflictPayload(WorkflowDraftPathConflictException exception) => new
+    {
+        code = "WORKFLOW_DRAFT_PATH_CONFLICT",
+        message = exception.Message,
+    };
+
+    #pragma warning disable CS0618
+    private static WorkflowFileResponse ToLegacyWorkflowFileResponse(WorkflowDraftResponse? draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+
+        return new WorkflowFileResponse(
+            draft.WorkflowId,
+            draft.Name,
+            draft.FileName,
+            draft.FilePath,
+            draft.DirectoryId,
+            draft.DirectoryLabel,
+            draft.Yaml,
+            Document: null,
+            draft.Layout,
+            Findings: [],
+            draft.UpdatedAtUtc);
+    }
+    #pragma warning restore CS0618
 }

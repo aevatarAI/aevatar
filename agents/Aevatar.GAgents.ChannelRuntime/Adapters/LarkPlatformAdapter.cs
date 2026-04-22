@@ -301,23 +301,12 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             extraHeaders: null,
             ct);
 
-        // ProxyRequestAsync returns error JSON ({"error": true, ...}) instead of
-        // throwing on 4xx/5xx responses. Surface these as exceptions so callers
-        // can record and diagnose the failure.
-        if (result != null && result.Contains("\"error\"", StringComparison.OrdinalIgnoreCase))
+        if (TryBuildLarkFailureResult(result, out var failure))
         {
             _logger.LogWarning(
-                "Lark outbound reply failed: slug={Slug}, result={Result}",
-                registration.NyxProviderSlug, result);
-            throw new InvalidOperationException($"Lark API error: {result}");
-        }
-
-        if (TryBuildLarkErrorDetail(result, out var larkErrorDetail))
-        {
-            _logger.LogWarning(
-                "Lark outbound reply rejected by platform: chat={ChatId}, slug={Slug}, detail={Detail}",
-                inbound.ConversationId, registration.NyxProviderSlug, larkErrorDetail);
-            return new PlatformReplyDeliveryResult(false, larkErrorDetail);
+                "Lark outbound reply rejected: chat={ChatId}, slug={Slug}, detail={Detail}, kind={Kind}",
+                inbound.ConversationId, registration.NyxProviderSlug, failure.Detail, failure.FailureKind);
+            return failure;
         }
 
         var successDetail = BuildLarkSuccessDetail(result);
@@ -451,12 +440,12 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         }
     }
 
-    private static bool TryBuildLarkErrorDetail(string? result, out string detail)
+    private static bool TryBuildLarkFailureResult(string? result, out PlatformReplyDeliveryResult failure)
     {
-        detail = string.Empty;
+        failure = default;
         if (string.IsNullOrWhiteSpace(result))
         {
-            detail = "empty_lark_response";
+            failure = new PlatformReplyDeliveryResult(false, "empty_lark_response");
             return true;
         }
 
@@ -464,25 +453,141 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         {
             using var doc = JsonDocument.Parse(result);
             var root = doc.RootElement;
-            if (!root.TryGetProperty("code", out var codeProp))
-                return false;
 
-            var code = codeProp.ValueKind == JsonValueKind.Number
-                ? codeProp.GetInt32()
+            if (root.TryGetProperty("error", out var errorProp) &&
+                errorProp.ValueKind == JsonValueKind.True)
+            {
+                var status = root.TryGetProperty("status", out var statusProp) &&
+                             statusProp.ValueKind == JsonValueKind.Number
+                    ? statusProp.GetInt32()
+                    : (int?)null;
+                var body = TryReadStringProperty(root, "body");
+                var message = TryReadStringProperty(root, "message");
+
+                if (TryBuildLarkPlatformErrorDetail(body, status, out var detail, out var failureKind))
+                {
+                    failure = new PlatformReplyDeliveryResult(false, detail, failureKind);
+                    return true;
+                }
+
+                var nyxDetail = $"nyx_error status={status?.ToString() ?? "unknown"}" +
+                                (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
+                                (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+                failure = new PlatformReplyDeliveryResult(
+                    false,
+                    nyxDetail,
+                    ClassifyNyxProxyFailure(status, message));
+                return true;
+            }
+
+            if (TryBuildLarkPlatformErrorDetail(result, status: null, out var larkDetail, out var larkFailureKind))
+            {
+                failure = new PlatformReplyDeliveryResult(false, larkDetail, larkFailureKind);
+                return true;
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            failure = new PlatformReplyDeliveryResult(false, "invalid_lark_response_json");
+            return true;
+        }
+    }
+
+    private static bool TryBuildLarkPlatformErrorDetail(
+        string? body,
+        int? status,
+        out string detail,
+        out PlatformReplyFailureKind failureKind)
+    {
+        detail = string.Empty;
+        failureKind = PlatformReplyFailureKind.None;
+        if (string.IsNullOrWhiteSpace(body))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("code", out var codeProp))
+            {
+                var code = codeProp.ValueKind == JsonValueKind.Number
+                    ? codeProp.GetInt32()
+                    : 0;
+                if (code == 0)
+                    return false;
+
+                var msg = TryReadStringProperty(root, "msg");
+                detail = $"lark_code={code}" +
+                         (string.IsNullOrWhiteSpace(msg) ? string.Empty : $" msg={msg}");
+                failureKind = ClassifyLarkPlatformError(code, error: null, status);
+                return true;
+            }
+
+            var error = TryReadStringProperty(root, "error");
+            var errorCode = root.TryGetProperty("error_code", out var errorCodeProp) &&
+                            errorCodeProp.ValueKind == JsonValueKind.Number
+                ? errorCodeProp.GetInt32()
                 : 0;
-            if (code == 0)
+            var message = TryReadStringProperty(root, "message");
+            if (string.IsNullOrWhiteSpace(error) && errorCode == 0 && string.IsNullOrWhiteSpace(message))
                 return false;
 
-            var msg = root.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : null;
-            detail = $"lark_code={code}" +
-                     (string.IsNullOrWhiteSpace(msg) ? string.Empty : $" msg={msg}");
+            detail = $"nyx_status={status?.ToString() ?? "unknown"}" +
+                     (string.IsNullOrWhiteSpace(error) ? string.Empty : $" lark_error={error}") +
+                     (errorCode == 0 ? string.Empty : $" error_code={errorCode}") +
+                     (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+            failureKind = ClassifyLarkPlatformError(errorCode, error, status);
             return true;
         }
         catch (JsonException)
         {
-            detail = "invalid_lark_response_json";
-            return true;
+            return false;
         }
+    }
+
+    // Avoid JsonElement.GetString() on non-string values (e.g. boolean `error:true`),
+    // which throws InvalidOperationException and escapes the structured-failure flow.
+    private static string? TryReadStringProperty(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
+
+    private static PlatformReplyFailureKind ClassifyNyxProxyStatus(int? status) =>
+        status switch
+        {
+            400 or 401 or 403 or 404 => PlatformReplyFailureKind.Permanent,
+            408 or 425 or 429 => PlatformReplyFailureKind.Transient,
+            >= 500 => PlatformReplyFailureKind.Transient,
+            _ => PlatformReplyFailureKind.None,
+        };
+
+    private static PlatformReplyFailureKind ClassifyNyxProxyFailure(int? status, string? message)
+    {
+        if (status.HasValue)
+            return ClassifyNyxProxyStatus(status);
+
+        // NyxIdApiClient exception envelopes omit status/body and only preserve the exception message.
+        // Treat them as transient so diagnostics retain useful context without promoting them to permanent.
+        return string.IsNullOrWhiteSpace(message)
+            ? PlatformReplyFailureKind.None
+            : PlatformReplyFailureKind.Transient;
+    }
+
+    private static PlatformReplyFailureKind ClassifyLarkPlatformError(int errorCode, string? error, int? status)
+    {
+        // 230001 means the receive target no longer exists or is invalid; 230002 means the
+        // configured bot/user is not in the target chat. Both require operator/configuration fixes.
+        if (errorCode is 230001 or 230002)
+            return PlatformReplyFailureKind.Permanent;
+
+        if (string.Equals(error, "token_expired", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error, "invalid_auth", StringComparison.OrdinalIgnoreCase))
+            return PlatformReplyFailureKind.Permanent;
+
+        return ClassifyNyxProxyStatus(status);
     }
 
     private static string BuildLarkSuccessDetail(string? result)

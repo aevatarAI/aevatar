@@ -291,7 +291,7 @@ describe('studioApi host-session requests', () => {
     );
   });
 
-  it('includes the requested scope when loading a scoped workflow file', async () => {
+  it('includes the requested scope when loading a scoped workflow draft', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -315,7 +315,7 @@ describe('studioApi host-session requests', () => {
         directoryId: 'scope:scope-1',
         directoryLabel: 'scope-1',
         yaml: 'name: scope-demo\nsteps: []\n',
-        findings: [],
+        layout: null,
         updatedAtUtc: '2026-04-16T00:00:00Z',
       }),
     } as Response);
@@ -327,13 +327,183 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflows/workflow-1?scopeId=scope-1');
+    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
   });
 
-  it('includes the requested scope when saving a scoped workflow file', async () => {
+  it('merges scoped published workflows with draft workflows when listing workflows', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockImplementation(async (input: string) => {
+      if (input === '/api/workspace/workflow-drafts?scopeId=scope-1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              workflowId: 'workflow-draft',
+              name: 'draft-demo',
+              description: 'draft copy',
+              fileName: 'draft-demo.yaml',
+              filePath: 'scope://scope-1/workflow-draft.yaml',
+              directoryId: 'scope:scope-1',
+              directoryLabel: 'scope-1',
+              stepCount: 1,
+              hasLayout: true,
+              updatedAtUtc: '2026-04-16T00:00:00Z',
+            },
+          ],
+        } as Response;
+      }
+
+      if (input === '/api/scopes/scope-1/workflows?includeSource=false') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              scopeId: 'scope-1',
+              workflowId: 'workflow-draft',
+              displayName: 'published draft demo',
+              serviceKey: 'svc-draft',
+              workflowName: 'draft-demo',
+              actorId: 'actor-draft',
+              activeRevisionId: 'rev-draft',
+              deploymentId: 'dep-draft',
+              deploymentStatus: 'Running',
+              updatedAt: '2026-04-15T00:00:00Z',
+            },
+            {
+              scopeId: 'scope-1',
+              workflowId: 'workflow-published',
+              displayName: 'published-demo',
+              serviceKey: 'svc-published',
+              workflowName: 'published-demo',
+              actorId: 'actor-published',
+              activeRevisionId: 'rev-published',
+              deploymentId: 'dep-published',
+              deploymentStatus: 'Running',
+              updatedAt: '2026-04-14T00:00:00Z',
+            },
+          ],
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.listWorkflows('scope-1')).resolves.toEqual([
+      {
+        workflowId: 'workflow-draft',
+        name: 'draft-demo',
+        description: 'draft copy',
+        fileName: 'draft-demo.yaml',
+        filePath: 'scope://scope-1/workflow-draft.yaml',
+        directoryId: 'scope:scope-1',
+        directoryLabel: 'scope-1',
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: '2026-04-16T00:00:00Z',
+      },
+      {
+        workflowId: 'workflow-published',
+        name: 'published-demo',
+        description: '',
+        fileName: 'workflow-published.yaml',
+        filePath: 'scope://scope-1/workflow-published.yaml',
+        directoryId: 'scope:scope-1',
+        directoryLabel: 'scope-1',
+        stepCount: 0,
+        hasLayout: false,
+        updatedAtUtc: '2026-04-14T00:00:00Z',
+      },
+    ]);
+  });
+
+  it('falls back to the published scope workflow detail when a scoped draft is missing', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockImplementation(async (input: string) => {
+      if (input === '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1') {
+        return {
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: async () => JSON.stringify({ title: 'Not Found', status: 404 }),
+        } as Response;
+      }
+
+      if (input === '/api/scopes/scope-1/workflows/workflow-1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            available: true,
+            scopeId: 'scope-1',
+            workflow: {
+              scopeId: 'scope-1',
+              workflowId: 'workflow-1',
+              displayName: 'published-demo',
+              serviceKey: 'svc-1',
+              workflowName: 'published-demo',
+              actorId: 'actor-1',
+              activeRevisionId: 'rev-1',
+              deploymentId: 'dep-1',
+              deploymentStatus: 'Running',
+              updatedAt: '2026-04-16T00:00:00Z',
+            },
+            source: {
+              workflowYaml: 'name: published-demo\nsteps: []\n',
+              definitionActorId: 'definition-1',
+              inlineWorkflowYamls: null,
+            },
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getWorkflow('workflow-1', 'scope-1')).resolves.toEqual({
+      workflowId: 'workflow-1',
+      name: 'published-demo',
+      fileName: 'workflow-1.yaml',
+      filePath: 'scope://scope-1/workflow-1.yaml',
+      directoryId: 'scope:scope-1',
+      directoryLabel: 'scope-1',
+      yaml: 'name: published-demo\nsteps: []\n',
+      document: null,
+      draftExists: false,
+      findings: [],
+      updatedAtUtc: '2026-04-16T00:00:00Z',
+    });
+  });
+
+  it('creates a scoped workflow draft on first save when the loaded workflow is committed-only', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -357,7 +527,54 @@ describe('studioApi host-session requests', () => {
         directoryId: 'scope:scope-1',
         directoryLabel: 'scope-1',
         yaml: 'name: scope-demo\nsteps: []\n',
-        findings: [],
+        layout: null,
+        updatedAtUtc: '2026-04-16T00:00:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.saveWorkflow({
+      workflowId: 'workflow-1',
+      draftExists: false,
+      scopeId: 'scope-1',
+      directoryId: 'scope:scope-1',
+      workflowName: 'scope-demo',
+      yaml: 'name: scope-demo\nsteps: []\n',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/workspace/workflow-drafts?scopeId=scope-1');
+    expect(init?.method).toBe('POST');
+  });
+
+  it('includes the requested scope when updating a scoped workflow draft', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        workflowId: 'workflow-1',
+        name: 'scope-demo',
+        fileName: 'scope-demo.yaml',
+        filePath: 'scope://scope-1/workflow-1.yaml',
+        directoryId: 'scope:scope-1',
+        directoryLabel: 'scope-1',
+        yaml: 'name: scope-demo\nsteps: []\n',
+        layout: null,
         updatedAtUtc: '2026-04-16T00:00:00Z',
       }),
     } as Response);
@@ -375,14 +592,14 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflows?scopeId=scope-1');
-    expect(init?.method).toBe('POST');
+    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
+    expect(init?.method).toBe('PUT');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
   });
 
-  it('includes the requested scope when deleting a scoped workflow file', async () => {
+  it('includes the requested scope when deleting a scoped workflow draft', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -398,8 +615,6 @@ describe('studioApi host-session requests', () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 204,
-      text: async () => '',
-      headers: new Headers(),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
@@ -409,7 +624,7 @@ describe('studioApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflows/workflow-1?scopeId=scope-1');
+    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
     expect(init?.method).toBe('DELETE');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',

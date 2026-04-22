@@ -10,4 +10,6 @@ public interface IProjectionWriteSink<in TReadModel>
     string DisabledReason { get; }
 
     Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default);
+
+    Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default);
 }

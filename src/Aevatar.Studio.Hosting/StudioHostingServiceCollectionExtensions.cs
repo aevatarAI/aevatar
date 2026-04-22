@@ -18,6 +18,7 @@ internal static class StudioHostingServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
             .AddJsonOptions(json =>
@@ -44,7 +45,8 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceRevisionArtifactStore>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>(),
-            sp.GetService<IWorkflowStoragePort>()));
+            sp.GetService<IWorkflowDraftStore>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetService<IScopeScriptQueryPort>(),

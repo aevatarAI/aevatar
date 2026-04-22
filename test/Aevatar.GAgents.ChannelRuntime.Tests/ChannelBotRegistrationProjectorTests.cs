@@ -89,6 +89,29 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_PropagatesCredentialRef()
+    {
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-credref-1",
+                    Platform = "lark",
+                    CredentialRef = "secrets://lark/encrypt-key/bot-credref-1",
+                },
+            },
+        };
+
+        var envelope = BuildCommittedEnvelope("evt-credref-1", version: 4, state);
+        await _projector.ProjectAsync(_context, envelope, CancellationToken.None);
+
+        _dispatcher.Upserts.Should().HaveCount(1);
+        _dispatcher.Upserts[0].CredentialRef.Should().Be("secrets://lark/encrypt-key/bot-credref-1");
+    }
+
+    [Fact]
     public async Task ProjectAsync_DefaultsEncryptKeyToEmpty_WhenNotSet()
     {
         var state = new ChannelBotRegistrationStoreState
@@ -159,6 +182,48 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WithTombstonedEntry_DeletesDocument()
+    {
+        // Channel RFC §7.1.1 — tombstoned entries drive IProjectionWriteDispatcher.DeleteAsync
+        // so the read model document is removed under projector watermark coordination.
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-dead",
+                    Platform = "lark",
+                    Tombstoned = true,
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-tomb", 7, state), CancellationToken.None);
+
+        _dispatcher.Upserts.Should().BeEmpty();
+        _dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("bot-dead");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WithMixedLiveAndTombstonedEntries_DispatchesBothVerdicts()
+    {
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry { Id = "bot-live", Platform = "lark" },
+                new ChannelBotRegistrationEntry { Id = "bot-dead", Platform = "lark", Tombstoned = true },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-mixed", 8, state), CancellationToken.None);
+
+        _dispatcher.Upserts.Should().ContainSingle().Which.Id.Should().Be("bot-live");
+        _dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("bot-dead");
+    }
+
+    [Fact]
     public async Task ProjectAsync_SkipsEntryWithBlankId()
     {
         var state = new ChannelBotRegistrationStoreState
@@ -208,12 +273,21 @@ public sealed class ChannelBotRegistrationProjectorTests
     {
         public List<ChannelBotRegistrationDocument> Upserts { get; } = [];
 
+        public List<string> Deletes { get; } = [];
+
         public Task<ProjectionWriteResult> UpsertAsync(
             ChannelBotRegistrationDocument readModel,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Upserts.Add(readModel.Clone());
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

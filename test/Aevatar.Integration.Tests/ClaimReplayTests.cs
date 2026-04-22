@@ -305,6 +305,15 @@ public class ClaimReplayTests
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var removed = _store.Remove(id);
+            return Task.FromResult(removed
+                ? ProjectionWriteResult.Applied()
+                : ProjectionWriteResult.Duplicate());
+        }
+
         public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

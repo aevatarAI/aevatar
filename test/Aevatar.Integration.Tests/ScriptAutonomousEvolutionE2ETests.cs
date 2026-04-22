@@ -64,6 +64,11 @@ public sealed class ScriptAutonomousEvolutionE2ETests
             NewScriptSource = newRuntimeSource,
             WorkerV2Source = workerV2Source,
         };
+        await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
+            provider,
+            CancellationToken.None,
+            "script-catalog",
+            "script-definition:worker-script");
 
         var (fact, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
             provider,

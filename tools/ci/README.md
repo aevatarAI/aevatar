@@ -7,6 +7,7 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/coverage_quality_guard.sh`: coverage collection and threshold gate (generated files are excluded by default via file filters, e.g. `obj/**`, `Generated/**`, `*.g.cs`).
   - Produces a filtered `Cobertura.xml` under `artifacts/coverage/<timestamp>-ci-gate/report/` after applying assembly/file exclusions for non-core shells/adapters such as `Aevatar.Tools.*`, `Aevatar.Studio.*`, `Aevatar.Authentication.*`, and host app entrypoints.
 - `tools/ci/architecture_guards.sh`: architecture/static guards (includes projection route mapping guard).
+- `tools/ci/channel_mega_interface_guard.sh`: blocks regressions that merge channel runtime and outbound methods back into one mega interface.
 - `tools/ci/fetch_latest_ci_failure.sh`: downloads the latest failed GitHub Actions run metadata and failed logs into `artifacts/ci-failures/latest/` via `gh`.
 - `tools/ci/test_stability_guards.sh`: polling/unstable test pattern guard.
 - `tools/ci/solution_split_guards.sh`: split build guard.

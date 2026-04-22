@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Net;
 using System.Net.Http;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -251,6 +252,66 @@ public class LarkPlatformAdapterTests
         inbound.Extra.Should().Contain(new KeyValuePair<string, string>("step_id", "approval-1"));
         inbound.Extra.Should().Contain(new KeyValuePair<string, string>("approved", "True"));
         inbound.Extra.Should().Contain(new KeyValuePair<string, string>("user_input", "Looks good"));
+    }
+
+    [Fact]
+    public async Task ParseInbound_extracts_resume_command_from_rendered_approval_form_submit()
+    {
+        var cardJson = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        {
+            ActorId = "workflow-actor-1",
+            RunId = "run-1",
+            StepId = "approval-1",
+            SuspensionType = "human_approval",
+            Prompt = "Need approval",
+            Content = "Please confirm the publication.",
+            Options = ["approve", "reject"],
+        });
+
+        using var card = JsonDocument.Parse(cardJson);
+        var formElement = card.RootElement.GetProperty("body").GetProperty("elements")[1];
+        var approveActionValue = formElement.GetProperty("elements")[2].GetProperty("value").Clone();
+
+        var payload = new
+        {
+            schema = "2.0",
+            header = new { event_type = "card.action.trigger", token = "verify-token", event_id = "evt_card_submit_1" },
+            @event = new
+            {
+                @operator = new
+                {
+                    open_id = "ou_operator_1",
+                },
+                context = new
+                {
+                    open_chat_id = "oc_chat_card_1",
+                    open_message_id = "om_card_msg_1",
+                },
+                action = new
+                {
+                    value = approveActionValue,
+                    form_value = new
+                    {
+                        edited_content = "Updated final draft",
+                        user_input = "Looks good",
+                    },
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
+
+        inbound.Should().NotBeNull();
+        ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound!, out var command).Should().BeTrue();
+        command.Should().NotBeNull();
+        command!.ActorId.Should().Be("workflow-actor-1");
+        command.RunId.Should().Be("run-1");
+        command.StepId.Should().Be("approval-1");
+        command.Approved.Should().BeTrue();
+        command.UserInput.Should().Be("Updated final draft");
+        command.EditedContent.Should().Be("Updated final draft");
+        command.Feedback.Should().Be("Looks good");
     }
 
     [Fact]
@@ -862,9 +923,11 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
-    public async Task SendReplyAsync_throws_when_response_contains_error_field()
+    public async Task SendReplyAsync_returns_failed_result_when_proxy_reports_permanent_lark_error()
     {
-        var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"error":true,"message":"forbidden"}""", out _);
+        var httpClient = CreateHttpClient(HttpStatusCode.BadRequest, """
+            {"code":230002,"msg":"Bot/User can NOT be out of the chat."}
+            """, out _);
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             httpClient);
@@ -874,10 +937,80 @@ public class LarkPlatformAdapterTests
             SenderId = "ou_1", SenderName = "s", Text = "hi",
         };
 
-        var act = () => _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Lark API error*");
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("lark_code=230002 msg=Bot/User can NOT be out of the chat.");
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
+    }
+
+    [Fact]
+    public async Task SendReplyAsync_returns_failed_result_when_proxy_reports_token_expired()
+    {
+        var httpClient = CreateHttpClient(HttpStatusCode.Unauthorized, """
+            {"error":"token_expired","error_code":2001,"message":"Token expired"}
+            """, out _);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("nyx_status=401 lark_error=token_expired error_code=2001 message=Token expired");
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
+    }
+
+    [Fact]
+    public async Task SendReplyAsync_classifies_failure_when_lark_body_uses_boolean_error_field()
+    {
+        // Nyx wraps a non-2xx upstream whose body is {"error": true, "message": "..."}.
+        // The inner `error` is a JSON boolean, not a string, and must not throw.
+        var httpClient = CreateHttpClient(HttpStatusCode.BadRequest, """
+            {"error":true,"message":"upstream refused"}
+            """, out _);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("nyx_status=400 message=upstream refused");
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
+    }
+
+    [Fact]
+    public async Task SendReplyAsync_preserves_proxy_exception_message_and_marks_it_transient()
+    {
+        var httpClient = new HttpClient(new ThrowingHandler(new HttpRequestException("dns failure")))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("nyx_error status=unknown message=dns failure");
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Transient);
     }
 
     [Fact]
@@ -1045,5 +1178,11 @@ public class LarkPlatformAdapterTests
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(exception);
     }
 }

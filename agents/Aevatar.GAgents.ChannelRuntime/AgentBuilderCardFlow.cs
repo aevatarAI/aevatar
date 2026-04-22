@@ -533,6 +533,7 @@ internal static class AgentBuilderCardFlow
     {
         return JsonSerializer.Serialize(new
         {
+            schema = "2.0",
             config = new
             {
                 wide_screen_mode = true,
@@ -546,54 +547,39 @@ internal static class AgentBuilderCardFlow
                 },
                 template = "blue",
             },
-            elements = new object[]
+            body = new
             {
-                new
+                elements = new object[]
                 {
-                    tag = "markdown",
-                    content =
-                        "**Day One template:** Daily GitHub report\nFill in the fields below. The agent will run once now and then repeat every day at your chosen local time.",
-                },
-                BuildInput("github_username", "GitHub Username", "alice"),
-                BuildInput("repositories", "Repositories (Optional)", "owner/repo, owner/repo"),
-                BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
-                BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                new
-                {
-                    tag = "action",
-                    actions = new object[]
+                    new
                     {
-                        new
+                        tag = "markdown",
+                        content =
+                            "**Day One template:** Daily GitHub report\nFill in the fields below. The agent will run once now and then repeat every day at your chosen local time.",
+                    },
+                    BuildForm(
+                        "daily_report_form",
+                        BuildInput("github_username", "GitHub Username", "alice"),
+                        BuildInput("repositories", "Repositories (Optional)", "owner/repo, owner/repo"),
+                        BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
+                        BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
+                        BuildSubmitButton("Create Agent", "primary", "submit_daily_report", new
                         {
-                            tag = "button",
-                            type = "primary",
-                            text = new
-                            {
-                                tag = "plain_text",
-                                content = "Create Agent",
-                            },
-                            value = new
-                            {
-                                agent_builder_action = DailyReportAction,
-                                run_immediately = true,
-                            },
-                        },
-                        new
+                            agent_builder_action = DailyReportAction,
+                            run_immediately = true,
+                        })),
+                    new
+                    {
+                        tag = "action",
+                        actions = new object[]
                         {
-                            tag = "button",
-                            type = "default",
-                            text = new
-                            {
-                                tag = "plain_text",
-                                content = "List Agents",
-                            },
-                            value = new
+                            BuildButton("List Agents", "default", new
                             {
                                 agent_builder_action = ListAgentsAction,
-                            },
+                            }),
                         },
-                    },
-                },
+                    }
+                }
             },
         });
     }
@@ -602,6 +588,7 @@ internal static class AgentBuilderCardFlow
     {
         return JsonSerializer.Serialize(new
         {
+            schema = "2.0",
             config = new
             {
                 wide_screen_mode = true,
@@ -615,58 +602,51 @@ internal static class AgentBuilderCardFlow
                 },
                 template = "orange",
             },
-            elements = new object[]
+            body = new
             {
-                new
+                elements = new object[]
                 {
-                    tag = "markdown",
-                    content =
-                        "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send an approval card into this Feishu private chat.",
-                },
-                BuildInput("topic", "Topic", "Launch update for the new workflow feature"),
-                BuildInput("audience", "Audience (Optional)", "Developers and technical founders"),
-                BuildInput("style", "Style (Optional)", "Confident, concise, product-focused"),
-                BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
-                BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                new
-                {
-                    tag = "action",
-                    actions = new object[]
+                    new
                     {
-                        new
+                        tag = "markdown",
+                        content =
+                            "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send an approval card into this Feishu private chat.",
+                    },
+                    BuildForm(
+                        "social_media_form",
+                        BuildInput("topic", "Topic", "Launch update for the new workflow feature"),
+                        BuildInput("audience", "Audience (Optional)", "Developers and technical founders"),
+                        BuildInput("style", "Style (Optional)", "Confident, concise, product-focused"),
+                        BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
+                        BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
+                        BuildSubmitButton("Create Agent", "primary", "submit_social_media", new
                         {
-                            tag = "button",
-                            type = "primary",
-                            text = new
-                            {
-                                tag = "plain_text",
-                                content = "Create Agent",
-                            },
-                            value = new
-                            {
-                                agent_builder_action = SocialMediaAction,
-                                run_immediately = true,
-                            },
-                        },
-                        new
+                            agent_builder_action = SocialMediaAction,
+                            run_immediately = true,
+                        })),
+                    new
+                    {
+                        tag = "action",
+                        actions = new object[]
                         {
-                            tag = "button",
-                            type = "default",
-                            text = new
-                            {
-                                tag = "plain_text",
-                                content = "List Agents",
-                            },
-                            value = new
+                            BuildButton("List Agents", "default", new
                             {
                                 agent_builder_action = ListAgentsAction,
-                            },
+                            }),
                         },
-                    },
-                },
+                    }
+                }
             },
         });
     }
+
+    private static object BuildForm(string name, params object[] elements) =>
+        new
+        {
+            tag = "form",
+            name,
+            elements,
+        };
 
     private static object BuildInput(string name, string label, string placeholder)
     {
@@ -686,6 +666,21 @@ internal static class AgentBuilderCardFlow
             },
         };
     }
+
+    private static object BuildSubmitButton(string label, string style, string name, object value) =>
+        new
+        {
+            tag = "button",
+            type = style,
+            name,
+            form_action_type = "submit",
+            text = new
+            {
+                tag = "plain_text",
+                content = label,
+            },
+            value,
+        };
 
     private static string FormatCreateDailyReportResult(JsonElement root)
     {

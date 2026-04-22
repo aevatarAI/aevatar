@@ -82,6 +82,48 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         }
     }
 
+    public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ct.ThrowIfCancellationRequested();
+
+        var trimmedId = id.Trim();
+        var startedAt = DateTimeOffset.UtcNow;
+        try
+        {
+            bool removed;
+            lock (_gate)
+                removed = _itemsByKey.Remove(trimmedId);
+
+            var result = removed
+                ? ProjectionWriteResult.Applied()
+                : ProjectionWriteResult.Duplicate();
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogInformation(
+                "Projection read-model delete completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                trimmedId,
+                elapsedMs,
+                result.Disposition);
+            return Task.FromResult(result);
+        }
+        catch (Exception ex)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogError(
+                ex,
+                "Projection read-model delete failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                trimmedId,
+                elapsedMs,
+                "failed",
+                ex.GetType().Name);
+            throw;
+        }
+    }
+
     public Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
