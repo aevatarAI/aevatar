@@ -322,9 +322,7 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
-        [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -376,12 +374,6 @@ public static class ChannelCallbackEndpoints
             webhookUrl = baseUrl + callbackPath;
         }
 
-        // Ensure projection scope is activated BEFORE dispatch — without this,
-        // the scope agent never subscribes and the projector never runs.
-        var projectionPort = http.RequestServices.GetService<ChannelBotRegistrationProjectionPort>();
-        if (projectionPort != null)
-            await projectionPort.EnsureProjectionForActorAsync(ChannelBotRegistrationGAgent.WellKnownId, ct);
-
         var registrationId = Guid.NewGuid().ToString("N");
 
         // Dispatch register command to actor
@@ -413,40 +405,15 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Wait for projection to materialize the registration document.
-        // Without this, webhooks arriving immediately after registration
-        // (e.g. Lark URL verification) see 404 because the read model
-        // has not caught up. Mirrors the pattern in HandleUpdateTokenAsync.
-        var materialized = false;
-        for (var attempt = 0; attempt < 20; attempt++)
-        {
-            await Task.Delay(250, ct);
-            if (await queryPort.GetAsync(registrationId, ct) is not null)
-            {
-                materialized = true;
-                break;
-            }
-        }
-
-        if (!materialized)
-        {
-            logger.LogError(
-                "Registration {RegistrationId} dispatched but not materialized within 5s — projection pipeline may be unhealthy",
-                registrationId);
-        }
-
         return Results.Accepted(value: new
         {
-            status = "registered",
+            status = "accepted",
             registration_id = registrationId,
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
             callback_url = $"{callbackPath}/{registrationId}",
             auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.LegacyDirectBinding?.NyxRefreshToken),
-            projection_ready = materialized,
-            projection_warning = materialized
-                ? null
-                : "Registration dispatched but projection did not materialize within timeout. Callbacks may 404 briefly; check projection pipeline health if this persists.",
+            note = "Registration accepted. Read model visibility is asynchronous; list/query results may lag briefly until the projection pipeline catches up.",
         });
     }
 
@@ -547,10 +514,6 @@ public static class ChannelCallbackEndpoints
             request.NyxRefreshToken,
             currentLegacyDirectBinding?.NyxRefreshToken);
 
-        // Snapshot projection version. Orphaned documents retain a stale version
-        // that never advances — this lets us detect the actor dropping the command.
-        var versionBefore = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
-
         // Always dispatch to the actor — it is the authority on current state.
         var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
         var cmd = new ChannelBotUpdateTokenCommand
@@ -575,39 +538,12 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Poll: require BOTH version advance AND desired token visible.
-        var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
+        return Results.Accepted(value: new
         {
-            await Task.Delay(500, ct);
-            var versionAfter = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-            var after = await runtimeQueryPort.GetAsync(registrationId, ct);
-            if (after is not null &&
-                HasLegacyDirectTokens(after.LegacyDirectBinding, newToken, newRefreshToken))
-            {
-                confirmed = true;
-                break;
-            }
-        }
-
-        if (!confirmed)
-        {
-            logger.LogWarning("Token update for {RegistrationId} dispatched but not confirmed by projection", registrationId);
-            return Results.Json(new
-            {
-                status = "error",
-                error = "Token update dispatched but not confirmed. The registration may not exist in the actor's state.",
-                registration_id = registrationId,
-            }, statusCode: 500);
-        }
-
-        return Results.Ok(new
-        {
-            status = "token_updated",
+            status = "accepted",
             registration_id = registrationId,
             auto_refresh_ready = !string.IsNullOrWhiteSpace(newRefreshToken),
+            note = "Token update accepted. Read model visibility is asynchronous; query/list results may lag briefly until the projection pipeline catches up.",
         });
     }
 
@@ -682,13 +618,6 @@ public static class ChannelCallbackEndpoints
             CredentialRef = existing?.CredentialRef ?? string.Empty,
             EncryptKey = existing?.EncryptKey ?? string.Empty,
         };
-
-    private static bool HasLegacyDirectTokens(
-        ChannelBotLegacyDirectBinding? binding,
-        string userToken,
-        string refreshToken) =>
-        string.Equals(binding?.NyxUserToken, userToken, StringComparison.Ordinal) &&
-        string.Equals(binding?.NyxRefreshToken, refreshToken, StringComparison.Ordinal);
 
     /// <summary>
     /// Diagnostic: sends a test reply directly through the platform adapter,

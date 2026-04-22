@@ -95,7 +95,7 @@ public class ChannelRegistrationToolTests
         provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new NyxLarkProvisioningResult(
                 Succeeded: true,
-                Status: "registered",
+                Status: "accepted",
                 RegistrationId: "reg-1",
                 NyxChannelBotId: "bot-1",
                 NyxAgentApiKeyId: "key-1",
@@ -124,7 +124,7 @@ public class ChannelRegistrationToolTests
                 """);
 
             var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("registered");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-1");
             doc.RootElement.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-1");
         }
@@ -415,22 +415,12 @@ public class ChannelRegistrationToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_UpdateToken_Confirms_Via_Version_And_Token()
+    public async Task ExecuteAsync_UpdateToken_Accepts_Dispatch_Without_Projection_Confirmation()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        // Pre-dispatch: registration exists with old token at version 5
         queryPort.GetAsync("bot-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-1", Platform = "telegram", NyxUserToken = "old-token" }),
-                // Post-dispatch polls: return updated entry
-                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-1", Platform = "telegram", NyxUserToken = "new-token" }));
-
-        queryPort.GetStateVersionAsync("bot-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(5),   // before dispatch
-                Task.FromResult<long?>(6));   // after dispatch (advanced)
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                { Id = "bot-1", Platform = "telegram", NyxUserToken = "old-token" }));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-bot-registration-store");
@@ -451,92 +441,9 @@ public class ChannelRegistrationToolTests
         {
             var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-1"}""");
             var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("token_updated");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateToken_Fails_When_Version_Does_Not_Advance()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        // Registration appears in projection (could be orphaned)
-        queryPort.GetAsync("orphan-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "orphan-1", Platform = "telegram", NyxUserToken = "stale-token" }));
-
-        // Version never advances — actor dropped the command
-        queryPort.GetStateVersionAsync("orphan-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(5));
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("channel-bot-registration-store");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("channel-bot-registration-store")
-            .Returns(Task.FromResult<IActor?>(actor));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "stale-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"orphan-1"}""");
-            var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("error");
-            result.Should().Contain("not confirmed");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateToken_Fails_When_Version_Advances_But_Token_Wrong()
-    {
-        // Isolates the token check: version advances (actor persisted something)
-        // but the projected token doesn't match the desired value.
-        // Without the token check, this would falsely report success.
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("bot-2", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "bot-2", Platform = "telegram", NyxUserToken = "wrong-token" }));
-
-        queryPort.GetStateVersionAsync("bot-2", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(5),   // before dispatch
-                Task.FromResult<long?>(6));   // after dispatch — version advanced
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("channel-bot-registration-store");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("channel-bot-registration-store")
-            .Returns(Task.FromResult<IActor?>(actor));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "desired-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-2"}""");
-            var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("error");
-            result.Should().Contain("not confirmed");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            result.Should().Contain("Read model visibility is asynchronous");
+            _ = queryPort.DidNotReceive().GetStateVersionAsync("bot-1", Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -552,19 +459,6 @@ public class ChannelRegistrationToolTests
         queryPort.GetAsync("bot-3", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
                 { Id = "bot-3", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }));
-
-        // Version advances and token matches — success path
-        queryPort.GetStateVersionAsync("bot-3", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(1),
-                Task.FromResult<long?>(2));
-        // Return updated token on poll
-        queryPort.GetAsync("bot-3", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-3", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }),
-                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-3", Platform = "telegram", NyxUserToken = "fresh", NyxRefreshToken = "refresh-fresh" }));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-bot-registration-store");
@@ -611,15 +505,8 @@ public class ChannelRegistrationToolTests
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync("bot-4", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-4", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }),
-                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                    { Id = "bot-4", Platform = "telegram", NyxUserToken = "fresh", NyxRefreshToken = "refresh-old" }));
-        queryPort.GetStateVersionAsync("bot-4", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(10),
-                Task.FromResult<long?>(11));
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                { Id = "bot-4", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }));
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-bot-registration-store");
@@ -642,7 +529,7 @@ public class ChannelRegistrationToolTests
         {
             var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-4"}""");
             var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("token_updated");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("auto_refresh_ready").GetBoolean().Should().BeTrue();
 
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>

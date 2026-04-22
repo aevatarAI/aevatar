@@ -38,25 +38,19 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
     private const string DefaultNyxProviderSlug = "api-lark-bot";
     private const string LarkBotTokenPlaceholder = "__unused_for_lark__";
 
-    private readonly IServiceProvider _serviceProvider;
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
-    private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<NyxLarkProvisioningService> _logger;
 
     public NyxLarkProvisioningService(
-        IServiceProvider serviceProvider,
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
-        IChannelBotRegistrationQueryPort queryPort,
         IActorRuntime actorRuntime,
         ILogger<NyxLarkProvisioningService> logger)
     {
-        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
-        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -107,19 +101,16 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
                 routeId,
                 ct);
 
-            var confirmedId = await WaitForProjectionAsync(registrationId, ct);
             return new NyxLarkProvisioningResult(
                 Succeeded: true,
-                Status: confirmedId is null ? "accepted" : "registered",
+                Status: "accepted",
                 RegistrationId: registrationId,
                 NyxChannelBotId: channelBotId,
                 NyxAgentApiKeyId: apiKeyId,
                 NyxConversationRouteId: routeId,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
-                Note: confirmedId is null
-                    ? "Provisioning completed in Nyx, but the local registration projection is still catching up."
-                    : "Configure the Lark developer console webhook URL to point at Nyx.");
+                Note: "Provisioning completed in Nyx and the local mirror command was accepted. Configure the Lark developer console webhook URL to point at Nyx; local read model visibility is asynchronous.");
         }
         catch (Exception ex)
         {
@@ -213,10 +204,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         string routeId,
         CancellationToken ct)
     {
-        var projectionPort = _serviceProvider.GetService<ChannelBotRegistrationProjectionPort>();
-        if (projectionPort is not null)
-            await projectionPort.EnsureProjectionForActorAsync(ChannelBotRegistrationGAgent.WellKnownId, ct);
-
         var actor = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(ChannelBotRegistrationGAgent.WellKnownId);
 
@@ -245,19 +232,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         };
 
         await actor.HandleEventAsync(envelope, ct);
-    }
-
-    private async Task<string?> WaitForProjectionAsync(string registrationId, CancellationToken ct)
-    {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            await Task.Delay(500, ct);
-            var entry = await _queryPort.GetAsync(registrationId, ct);
-            if (entry is not null)
-                return entry.Id;
-        }
-
-        return null;
     }
 
     private async Task TryRollbackAsync(Func<Task<string>> rollback, string resourceType, string resourceId)

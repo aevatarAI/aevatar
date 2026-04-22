@@ -113,8 +113,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
         return action switch
         {
             "list" => await ExecuteWithRuntimeAsync((queryPort, _) => ListAsync(queryPort, ct)),
-            "register" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) =>
-                RegisterAsync(queryPort, actorRuntime, token, ResolveRegisterRefreshToken(root, refreshTokenMetadata), root, ct)),
+            "register" => await ExecuteWithRuntimeAsync((_, actorRuntime) =>
+                RegisterAsync(actorRuntime, token, ResolveRegisterRefreshToken(root, refreshTokenMetadata), root, ct)),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(root, ct),
             "delete" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) => DeleteAsync(queryPort, actorRuntime, root, ct)),
             "update_token" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) =>
@@ -238,7 +238,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
     }
 
     private async Task<string> RegisterAsync(
-        IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
+        IActorRuntime actorRuntime,
         string token, string refreshToken, JsonElement args, CancellationToken ct)
     {
         var platform = GetStr(args, "platform");
@@ -261,11 +261,6 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var webhookUrl = !string.IsNullOrWhiteSpace(webhookBaseUrl)
             ? webhookBaseUrl.TrimEnd('/') + callbackPath
             : string.Empty;
-
-        // Ensure projection scope is activated before dispatch
-        var projectionPort = _serviceProvider.GetService<ChannelBotRegistrationProjectionPort>();
-        if (projectionPort != null)
-            await projectionPort.EnsureProjectionForActorAsync(ChannelBotRegistrationGAgent.WellKnownId, ct);
 
         var registrationId = Guid.NewGuid().ToString("N");
 
@@ -300,30 +295,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
-        // Projection scope is now activated. Poll for the document to appear.
-        // The projector runs async via the materialization scope agent.
-        string? confirmedId = null;
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            await Task.Delay(500, ct);
-            var entry = await queryPort.GetAsync(registrationId, ct);
-            if (entry != null)
-            {
-                confirmedId = entry.Id;
-                break;
-            }
-        }
-
         return JsonSerializer.Serialize(new
         {
-            status = confirmedId != null ? "registered" : "accepted",
+            status = "accepted",
             registration_id = registrationId,
             platform = cmd.Platform,
             nyx_provider_slug = cmd.NyxProviderSlug,
             callback_url = $"{callbackPath}/{registrationId}",
             webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
             auto_refresh_ready = !string.IsNullOrWhiteSpace(cmd.LegacyDirectBinding?.NyxRefreshToken),
-            note = confirmedId == null ? "Registration submitted but projection not yet confirmed. Try 'list' after a few seconds." : "",
+            note = "Registration accepted. Read model visibility is asynchronous; try 'list' after a few seconds if the entry does not appear immediately.",
         });
     }
 
@@ -393,11 +374,6 @@ public sealed class ChannelRegistrationTool : IAgentTool
             metadataRefreshToken,
             runtimeRegistration.LegacyDirectBinding?.NyxRefreshToken);
 
-        // Snapshot the projection version before dispatch. An orphaned projection
-        // document (from a deleted registration) retains a stale version that never
-        // advances because the projector only re-upserts entries still in actor state.
-        var versionBefore = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
-
         // Always dispatch to the actor — it is the authority on current state.
         var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
@@ -425,47 +401,15 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
-        // Poll projection: require BOTH version advance (proves the actor persisted
-        // an event — not an orphaned document) AND desired token visible.
-        var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            await Task.Delay(500, ct);
-            var versionAfter = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-            var after = runtimeQueryPort is null
-                ? await queryPort.GetAsync(registrationId, ct)
-                : await runtimeQueryPort.GetAsync(registrationId, ct);
-            if (after is not null &&
-                string.Equals(after.LegacyDirectBinding?.NyxUserToken, token, StringComparison.Ordinal) &&
-                string.Equals(after.LegacyDirectBinding?.NyxRefreshToken, refreshToken, StringComparison.Ordinal))
-            {
-                confirmed = true;
-                break;
-            }
-        }
-
-        if (!confirmed)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                status = "error",
-                registration_id = registrationId,
-                error = "Token update was dispatched but not confirmed — the projection did not reflect the change. " +
-                        "The registration may not exist in the actor's state. Try delete + re-register.",
-            });
-        }
-
         return JsonSerializer.Serialize(new
         {
-            status = "token_updated",
+            status = "accepted",
             registration_id = registrationId,
             platform = exists.Platform,
             auto_refresh_ready = !string.IsNullOrWhiteSpace(refreshToken),
             note = !string.IsNullOrWhiteSpace(refreshToken)
-                ? "NyxID access and refresh tokens have been updated. Lark outbound replies can auto-refresh."
-                : "NyxID access token has been refreshed, but no refresh token was stored. Manual re-auth will still be required when it expires.",
+                ? "Token update accepted. Read model visibility is asynchronous; once the projection catches up, outbound replies can auto-refresh with the stored refresh token."
+                : "Token update accepted. Read model visibility is asynchronous; once the projection catches up, outbound replies will use the refreshed access token until it expires.",
         });
     }
 

@@ -3,7 +3,6 @@ using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Xunit;
 
@@ -23,29 +22,15 @@ public class NyxLarkProvisioningServiceTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler));
 
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo => Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-            {
-                Id = callInfo.ArgAt<string>(0),
-                Platform = "lark",
-                NyxChannelBotId = "bot-456",
-                NyxAgentApiKeyId = "key-123",
-                NyxConversationRouteId = "route-789",
-            }));
-
         var actor = Substitute.For<IActor>();
         actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
         var actorRuntime = Substitute.For<IActorRuntime>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(actor));
 
-        var serviceProvider = new ServiceCollection().BuildServiceProvider();
         var service = new NyxLarkProvisioningService(
-            serviceProvider,
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            queryPort,
             actorRuntime,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
@@ -61,7 +46,7 @@ public class NyxLarkProvisioningServiceTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.Status.Should().Be("registered");
+        result.Status.Should().Be("accepted");
         result.RegistrationId.Should().NotBeNullOrWhiteSpace();
         result.NyxAgentApiKeyId.Should().Be("key-123");
         result.NyxChannelBotId.Should().Be("bot-456");
