@@ -25,9 +25,8 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IPlatformAdapter) &&
             descriptor.ImplementationType == typeof(LarkPlatformAdapter));
-        services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(IPlatformAdapter) &&
-            descriptor.ImplementationType == typeof(TelegramPlatformAdapter));
+        services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
+            .Should().Be(1);
     }
 
     [Fact]

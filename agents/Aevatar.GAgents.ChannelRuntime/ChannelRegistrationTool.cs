@@ -111,7 +111,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
             : null;
 
     private static string RetiredActionError(string message) =>
-        JsonSerializer.Serialize(new { error = message });
+        JsonSerializer.Serialize(new
+        {
+            error_code = "retired_action",
+            error = message,
+        });
 
     private async Task<string> ListAsync(IChannelBotRegistrationQueryPort queryPort, CancellationToken ct)
     {

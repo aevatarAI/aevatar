@@ -63,6 +63,7 @@ The following are no longer part of the supported production contract:
 
 - ChannelRuntime registration proto/state/readmodel schemas are compacted to non-secret fields only
 - no backward-compatibility holes are preserved for removed credential fields; schema numbering follows the new compact contract
+- because of that hard cut, rollout requires either a greenfield environment or an explicit preflight wipe of persisted `channel-bot-registration-store` events/snapshots before deployment
 - public registration queries return routing/identity/status data only
 - production support is explicitly narrower but architecturally honest
 - any future non-Lark platform must first provide an external credential-authority contract before re-entering the production support surface

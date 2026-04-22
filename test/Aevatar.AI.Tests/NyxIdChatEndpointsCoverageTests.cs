@@ -698,6 +698,94 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldReuseActorAndSessionId_ForDuplicateDailyReportWebhook()
+    {
+        const string scopeId = "scope-daily";
+        const string conversationId = "conv-daily";
+        const string messageId = "msg-daily-1";
+        const string dailyReportPrompt =
+            "/daily-report github_username=alice schedule_time=09:00 repositories=owner/repo";
+
+        var relay = CreateRelayInvocationDependencies(scopeId: scopeId, relayApiKeyId: scopeId);
+        var payload = """
+            {
+              "message_id":"msg-daily-1",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-daily"},
+              "conversation":{"id":"conv-daily","platform_id":"chat-daily"},
+              "content":{"text":"/daily-report github_username=alice schedule_time=09:00 repositories=owner/repo"}
+            }
+            """;
+
+        DefaultHttpContext BuildContext()
+        {
+            var context = new DefaultHttpContext
+            {
+                RequestServices = new ServiceCollection()
+                    .AddLogging()
+                    .BuildServiceProvider(),
+            };
+            context.Request.ContentType = "application/json";
+            context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+            context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+            return context;
+        }
+
+        var runtime = new StubActorRuntime();
+        var subscriptions = new StubSubscriptionProvider();
+        var store = new StubGAgentActorStore();
+
+        var firstResult = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            BuildContext(),
+            runtime,
+            subscriptions,
+            store,
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var firstResponse = await ExecuteResultAsync(firstResult);
+
+        var secondResult = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            BuildContext(),
+            runtime,
+            subscriptions,
+            store,
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var secondResponse = await ExecuteResultAsync(secondResult);
+
+        firstResponse.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        secondResponse.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+
+        using var firstDoc = JsonDocument.Parse(firstResponse.Body);
+        using var secondDoc = JsonDocument.Parse(secondResponse.Body);
+        firstDoc.RootElement.GetProperty("session_id").GetString().Should().Be($"{conversationId}-{messageId}");
+        secondDoc.RootElement.GetProperty("session_id").GetString().Should().Be($"{conversationId}-{messageId}");
+        firstDoc.RootElement.GetProperty("message_id").GetString().Should().Be(messageId);
+        secondDoc.RootElement.GetProperty("message_id").GetString().Should().Be(messageId);
+
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Id == "nyxid-relay-conv-daily");
+        runtime.Actors.Should().ContainKey("nyxid-relay-conv-daily");
+
+        var actor = (StubActor)runtime.Actors["nyxid-relay-conv-daily"];
+        var requests = actor.HandledEnvelopes
+            .Select(envelope => envelope.Payload.Unpack<ChatRequestEvent>())
+            .ToList();
+        requests.Should().HaveCount(2);
+        requests.Select(request => request.Prompt).Should().OnlyContain(prompt => prompt == dailyReportPrompt);
+        requests.Select(request => request.SessionId).Should().OnlyContain(sessionId => sessionId == $"{conversationId}-{messageId}");
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldRejectMismatchedRelayApiKeyId()
     {
         var relay = CreateRelayInvocationDependencies(scopeId: "scope-a", relayApiKeyId: "scope-a");

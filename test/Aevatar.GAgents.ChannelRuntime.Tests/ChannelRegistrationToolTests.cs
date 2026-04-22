@@ -128,8 +128,10 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var result = await tool.ExecuteAsync("""{"action":"update_token"}""");
+        using var doc = JsonDocument.Parse(result);
 
-        result.Should().Contain("update_token is retired");
+        doc.RootElement.GetProperty("error_code").GetString().Should().Be("retired_action");
+        doc.RootElement.GetProperty("error").GetString().Should().Contain("update_token is retired");
     }
 
     [Fact]
