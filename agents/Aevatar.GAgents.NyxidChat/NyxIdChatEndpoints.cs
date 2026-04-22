@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
@@ -678,33 +679,24 @@ public static class NyxIdChatEndpoints
     }
 
     /// <summary>
-    /// Decode the JWT payload (without verification) to extract the 'sub' claim.
-    /// Used by the relay endpoint to resolve the user's scope ID for chrono-storage
-    /// config access, since the auth middleware has already run by the time the handler
-    /// executes and won't re-process the injected Authorization header.
+    /// Parse the JWT (without verification) to extract the 'sub' claim.
+    /// Signature validation is handled earlier by the auth middleware / relay JWT
+    /// validator; this helper only re-reads the already-accepted bearer token so the
+    /// handler can recover the user scope id after header injection.
     /// </summary>
     private static string? TryExtractJwtSubject(string token)
     {
         try
         {
-            var parts = token.Split('.');
-            if (parts.Length < 2) return null;
+            var handler = new JwtSecurityTokenHandler();
+            if (!handler.CanReadToken(token))
+                return null;
 
-            // JWT payload is base64url-encoded
-            var payload = parts[1];
-            // Pad to multiple of 4
-            payload = payload.Replace('-', '+').Replace('_', '/');
-            switch (payload.Length % 4)
-            {
-                case 2: payload += "=="; break;
-                case 3: payload += "="; break;
-            }
-
-            var json = Encoding.UTF8.GetString(Convert.FromBase64String(payload));
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("sub", out var sub))
-                return sub.GetString()?.Trim();
-            return null;
+            var jwt = handler.ReadJwtToken(token);
+            return jwt.Claims
+                .FirstOrDefault(claim => string.Equals(claim.Type, "sub", StringComparison.Ordinal))
+                ?.Value
+                ?.Trim();
         }
         catch
         {
