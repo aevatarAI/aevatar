@@ -151,6 +151,7 @@ last_updated: 2026-04-20
 
 - [ ] 为 Studio 引入新的 route state 解析模型：
   - `scopeId`
+  - `teamId`
   - `memberId`
   - `step`
   - `buildMode`
@@ -160,7 +161,10 @@ last_updated: 2026-04-20
   - `script`
   - `execution`
   - `tab`
-- [ ] 把 `teamMode / teamName / entryName` 从普通编辑主链路剥离
+- [ ] 把 create-team 草稿参数从普通编辑主链路剥离：
+  - `draftTeamName`
+  - `initialMemberName`
+  - 旧 `entryName` 兼容映射
 - [ ] 为 Team Detail -> Studio 的入口统一 route builder
 - [ ] 明确深链优先级：
   1. member

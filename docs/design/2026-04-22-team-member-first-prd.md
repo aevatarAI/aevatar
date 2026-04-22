@@ -27,19 +27,19 @@ references:
 
 但产品想表达的模型必须收敛成：
 
-`scope -> team -> team entry -> team member -> implementation -> published service -> endpoint -> run`
+`scope -> team -> team member -> implementation -> published service -> endpoint -> run`
 
-这里有两个关键判断：
+这里有三条必须写死的规则：
 
 1. `scope` 不是 `team`
-2. `team` 可以被 invoke，但必须先通过显式的 `team entry` 落到某个具体 `member`
+2. `team` 不是 `service`
+3. 只有 `team member` 能被 invoke
 
-如果这两层不写死，用户会一直搞不清：
+`team` 最多只维护一份 `router` 配置：
 
-1. 我现在在哪个 scope
-2. 我现在在哪个 team
-3. 我现在操作的是哪个 member
-4. “Invoke team” 最终到底调的是谁
+1. 它只表达默认路由应该落到哪个 member
+2. 它属于 team 自己的配置，不是新的成员类型
+3. 被指向的仍然只是一个普通 member
 
 ---
 
@@ -71,37 +71,29 @@ references:
 2. 这支团队属于哪个 `scope`
 3. 这支团队有哪些成员
 4. 这支团队最近发生了什么
-5. 这支团队是否具备可调用入口
+5. 这支团队的默认路由指向谁
 
 关键约束：
 
 1. `teamId` 全局唯一
-2. `team` 可以先存在，再逐步补成员和入口
-3. `team` 不是某个 `service` 的别名
+2. `team` 可以先存在，再逐步补成员
+3. `team` 自己不是 invoke target
 
-## 2.3 Team Entry
+## 2.3 Team Router
 
-`Team Entry` 是 `team` 的团队级调用前门。
+`Team Router` 是 team 自己维护的默认路由配置。
 
-它回答的是：
+它的语义是：
 
-1. 这个 `team` 被 invoke 时默认落到哪个 `member`
-2. 这个 `team` 当前是否具备可调用入口
-3. 当前团队入口暴露的是哪个契约、哪个 revision、哪个 endpoint
-
-它至少包含：
-
-1. `entryTargetMemberId`
-2. `publishedServiceId`
-3. `defaultEndpointId`
-4. `activeRevisionId`
-5. `status`
+1. 当用户从 team 视角进入成员链路时，系统默认先落到哪个 member
+2. 这通常用于 intake / route / dispatch / hand-off 这类入口能力
+3. 它不创造新的 team invoke 语义
 
 关键原则：
 
-1. `team` 支持被 invoke，不代表系统会“调用一个抽象 team”
-2. 所有 `Invoke Team` 都必须先 resolve `Team Entry`
-3. `Team Entry` 指向具体 `member`
+1. `routeTargetMemberId` 只是 `team -> member` 的映射
+2. `router` 是 team 的配置，不是 `member` 的新类型
+3. 如果产品提供 team 级快捷动作，它也只能先解析路由配置，再跳到某个 member 页面
 
 ## 2.4 Team Member
 
@@ -128,7 +120,7 @@ references:
 1. `memberId` 不是 `serviceId`
 2. `memberId` 不是 `actorId`
 3. `memberId` 不是 `workflowId`
-4. `memberId` 是“这个 team 里的这个成员是谁”的稳定身份
+4. 只有 `member` 才是 invoke target
 
 ## 2.5 Implementation
 
@@ -140,28 +132,15 @@ references:
 2. `script`
 3. `gagent`
 
-因此：
-
-1. 用户先选中一个 member
-2. 再决定这个 member 用哪种 implementation
-3. 再进入对应的 Build surface
-
 ## 2.6 Published Service
 
-`Published Service` 是 team 或 member 的发布面，不是业务对象本体。
-
-在本期范围内，需要区分两种发布面：
-
-1. `Team Entry Published Service`
-   团队级调用前门
-2. `Member Published Service`
-   成员级直接调用面
+`Published Service` 是 member 的发布面，不是 team 或 member 本体。
 
 关键原则：
 
-1. `service` 只是发布面，不是 `team` 或 `member` 本体
-2. `Team Entry Published Service` 必须通过 `Team Entry` 绑定到某个 member
-3. `Member Published Service` 只表达某个 member 的直接调用面
+1. `service` 只表达调用契约
+2. `serviceId` 不能再冒充 `teamId` 或 `memberId`
+3. team 若配置了默认路由，最终仍然是路由到某个 member 的 published service
 
 ## 2.7 Runtime Actor / Run
 
@@ -191,22 +170,26 @@ references:
 2. 在 scope 下创建 team
 3. 在 team 下新增 member
 4. 为 member 选择实现方式
-5. 配置 team entry 或 member publish
-6. 调用并观察 team 或 member
+5. 为 member 绑定发布契约
+6. 调用并观察 member
 
-## 3.2 Team 支持 invoke，但必须经过 Team Entry
+## 3.2 只有 Member 能被 Invoke
 
 允许：
 
-1. `Invoke Team`
-2. `Invoke Member`
+1. `Invoke Member`
 
-但二者语义不同：
+不把下面两件事当成新的真实语义：
 
-1. `Invoke Team`
-   先 resolve `teamId -> Team Entry -> entryTargetMemberId`
-2. `Invoke Member`
-   直接对某个 member 的 published contract 发起调用
+1. `Team` 作为独立 invoke target
+2. `Team Published Service`
+
+如果产品需要从 Team Detail 直接进入默认成员调用页，只允许这样做：
+
+1. 从 team 详情出发
+2. resolve `routeTargetMemberId`
+3. 跳到该 member 的 invoke surface
+4. 发起的仍然是 `member invoke`
 
 ## 3.3 Member 先于 Implementation
 
@@ -226,12 +209,7 @@ references:
 
 ## 3.5 Service 是发布面，不是身份
 
-`serviceId` 只能表达：
-
-1. team entry 的发布面
-2. member 的发布面
-
-不能表达：
+`serviceId` 只能表达 member 的 published contract，不能表达：
 
 1. team 身份
 2. member 身份
@@ -240,20 +218,19 @@ references:
 
 ## 4. 关键用户链路
 
-## 4.1 Invoke Team
+## 4.1 从 Team 视角进入调用
 
 用户动作：
 
 1. 进入 Team Detail
-2. 点击 `Invoke Team`
+2. 点击 `Open Default Routed Member` 或同义导航动作
 
 系统语义：
 
 1. resolve `teamId`
-2. 读取 `Team Entry`
-3. resolve `entryTargetMemberId`
-4. 通过 `Team Entry Published Service` 发起调用
-5. 返回 run、events、summary
+2. 读取 `routeTargetMemberId`
+3. 跳到该 member 的 invoke surface
+4. 发起的仍然是 member invoke
 
 ## 4.2 Invoke Member
 
@@ -276,9 +253,9 @@ Studio 的直接对象仍然是 `member`。
 
 也就是说：
 
-1. team 可以被 invoke
-2. 但 Studio 仍然是 `member-first`
-3. team-level invoke 配置属于 Team Detail / Team Entry 设置，不是把 Studio 重新变成 team builder
+1. team 有上下文
+2. team 可维护一份 router 配置
+3. 但 Studio 主链路始终只围绕 member
 
 ---
 
@@ -288,25 +265,19 @@ Studio 的直接对象仍然是 `member`。
 
 当前 `Teams Home / Team Detail / Studio` 大量把 `scopeId` 当当前团队上下文。
 
-结果是：
+## 5.2 把 Team 和 Team Router 混成同一个对象
 
-1. 切换 scope 就像切换 team
-2. `/teams/{scopeId}` 看起来像 team detail
-3. scope 下多个 team 没有显式位置
-
-## 5.2 把 Team 和 Team Entry 混成一个对象
-
-当前很多文档和页面会把：
+当前很多页面会把：
 
 1. team
-2. 团队入口
+2. 默认入口
 3. 默认 service
 
 说成同一件事。
 
 这会让用户误以为：
 
-1. team 只有在发布了入口以后才存在
+1. team 自己可以直接被 invoke
 2. team 本体就是某个 service
 
 ## 5.3 把 Service 冒充 Member
@@ -328,8 +299,6 @@ Studio 的直接对象仍然是 `member`。
 
 来“推断”成员。
 
-这会让 roster 在没有运行信号时不稳定。
-
 ---
 
 ## 6. 正确的信息架构
@@ -342,17 +311,11 @@ Teams Home 的主语是 “当前 scope 下的 teams”。
 
 1. team name
 2. member count
-3. team entry status
-4. current entry target
+3. routing status
+4. current route target
 5. health
 6. recent activity
 7. next action
-
-团队卡可选主动作：
-
-1. `查看团队`
-2. `Invoke Team`
-   仅当 team entry ready 时可用
 
 ## 6.2 Team Detail
 
@@ -360,7 +323,7 @@ Team Detail 的一等对象是：
 
 1. Scope breadcrumb
 2. Team summary
-3. Team Entry
+3. Team router
 4. Members
 5. Integrations
 6. Runtime health
@@ -378,9 +341,9 @@ Team Detail 的一等对象是：
 
 其中：
 
-1. `Overview` 需要有 `Invoke Team`
+1. `Overview` 展示 routing 状态和跳转动作
 2. `Members` 展示真实 member roster
-3. `Bindings` 既能看 team entry，也能看 member publish
+3. `Bindings` 讲 member publish，不再发明 team publish
 
 ## 6.3 Studio
 
@@ -395,11 +358,6 @@ Studio 的一等主语必须是：
 3. 中间 stepper：`Build / Bind / Invoke / Observe`
 4. 主区：围绕当前 member 的生命周期工作台
 
-补充原则：
-
-1. Team-level invoke 存在
-2. 但 Studio 主链路仍然只围绕 member
-
 ---
 
 ## 7. 目标数据模型
@@ -413,23 +371,21 @@ TeamSummary
 - displayName
 - description
 - memberCount
-- entryTargetMemberId?
-- entryTargetDisplayName?
-- entryStatus
+- routeTargetMemberId?
+- routeTargetMemberDisplayName?
+- routingStatus
 - healthStatus
 - createdAt
 - updatedAt
 ```
 
-## 7.2 Team Entry
+## 7.2 Team Router
 
 ```text
-TeamEntryConfig
+TeamRouterConfig
 - teamId
-- entryTargetMemberId
-- publishedServiceId
-- defaultEndpointId
-- activeRevisionId
+- routeTargetMemberId?
+- routeTargetMemberDisplayName?
 - status
 - updatedAt
 ```
@@ -447,7 +403,7 @@ TeamMemberSummary
 - implementationStatus
 - publishedServiceId
 - publishedServiceStatus
-- isEntryTarget
+- isRouteTarget
 - latestRunStatus
 - latestRunAt
 - createdAt
@@ -480,16 +436,6 @@ PublishedMemberService
 - deploymentStatus
 ```
 
-```text
-PublishedTeamEntryService
-- teamId
-- entryTargetMemberId
-- serviceId
-- defaultEndpointId
-- activeServingRevisionId
-- deploymentStatus
-```
-
 ---
 
 ## 8. 路由与 URL 规则
@@ -499,14 +445,6 @@ PublishedTeamEntryService
 `teamId` 全局唯一，因此 Team Detail 应直接使用：
 
 `/teams/{teamId}?memberId=...`
-
-允许补充：
-
-1. `tab`
-2. `runId`
-3. `workflowId`
-
-`scopeId` 可以作为上下文恢复信息存在，但不是 team 身份主键。
 
 ## 8.2 Studio
 
@@ -522,7 +460,7 @@ Studio 深链必须至少支持：
 
 `/studio?teamId={teamId}&memberId={memberId}&step=build`
 
-`scopeId` 可选，用于返回路径或 scope 恢复，但不作为 team 身份必需字段。
+`scopeId` 可选，只用于上下文恢复。
 
 ---
 
@@ -540,17 +478,14 @@ POST /api/scopes/{scopeId}/teams
 ```text
 GET /api/teams/{teamId}
 PUT /api/teams/{teamId}
-PUT /api/teams/{teamId}/entry
-POST /api/teams/{teamId}/invoke/{endpointId}:stream
-GET /api/teams/{teamId}/runs
-GET /api/teams/{teamId}/runs/{runId}
+PUT /api/teams/{teamId}/router
+GET /api/teams/{teamId}/members
+POST /api/teams/{teamId}/members
 ```
 
 ## 9.3 Member 接口按 Team 组织
 
 ```text
-GET  /api/teams/{teamId}/members
-POST /api/teams/{teamId}/members
 GET  /api/teams/{teamId}/members/{memberId}
 PUT  /api/teams/{teamId}/members/{memberId}
 
@@ -567,36 +502,35 @@ GET  /api/teams/{teamId}/members/{memberId}/runs/{runId}
 
 关键不是 URL 形状，而是语义：
 
-1. Team list 按 scope
-2. Team detail 按全局唯一 `teamId`
-3. Team invoke 先 resolve `Team Entry`
-4. Member invoke 直接 resolve member published service
+1. team list 按 scope
+2. team detail 按全局唯一 `teamId`
+3. 只有 member invoke 是真实 invoke
 
 ---
 
 ## 10. 迁移方案
 
-## 10.1 Phase 1: 先补 Team / Team Entry / Member 模型
+## 10.1 Phase 1: 先补 Team / Router / Member 模型
 
 目标：
 
 1. Scope 内可以拿到真实 team roster
-2. Team Detail 能拿到真实 team entry
+2. Team Detail 能拿到默认路由配置
 3. Team 和 Studio 都能拿到真实 member roster
 
 动作：
 
-1. 新增 `TeamSummary / TeamEntryConfig / TeamMemberSummary / TeamMemberDetail`
-2. 新增 `teamId -> team entry` 与 `teamId -> members[]` 映射
+1. 新增 `TeamSummary / TeamRouterConfig / TeamMemberSummary / TeamMemberDetail`
+2. 新增 `teamId -> routeTargetMemberId` 与 `teamId -> members[]` 映射
 3. Team Detail / Studio 都切到 `teamId + memberId` 深链
 
-## 10.2 Phase 2: Team Detail 先支持 Invoke Team
+## 10.2 Phase 2: Team Detail 先支持 Routing Overview
 
 动作：
 
-1. Team header 增加 `Invoke Team`
-2. Team Overview 展示 team entry status
-3. Bindings tab 区分 `Team Entry` 与 `Member Publish`
+1. Team header 展示 routing 状态
+2. Team Overview 提供 `Open Default Routed Member`
+3. Bindings tab 只讲 team router mapping 与 member publish 的边界
 
 ## 10.3 Phase 3: Studio 改成真正的 member-first
 
@@ -612,7 +546,7 @@ GET  /api/teams/{teamId}/members/{memberId}/runs/{runId}
 
 1. 先在当前 scope 下创建 team
 2. 默认引导创建第一个 member
-3. 默认把这个 member 设为初始 team entry target
+3. 默认允许把该 member 设为默认路由目标
 4. 创建完成后进入该 member 的 Build
 
 ---
@@ -623,16 +557,15 @@ GET  /api/teams/{teamId}/members/{memberId}/runs/{runId}
 
 1. 我现在在哪个 scope
 2. 我现在在哪个 team
-3. 这个 team 能不能被 invoke
-4. 如果能，默认会落到哪个 member
-5. 我现在操作的是哪个 member
-6. 这个 member 的实现方式是什么
-7. 这个 member 的 published service 是什么
+3. 这个 team 的默认路由指向谁
+4. 我现在操作的是哪个 member
+5. 这个 member 的实现方式是什么
+6. 这个 member 的 published service 是什么
 
 同时：
 
 1. Teams Home 不再把 team 和 service 混成一个对象
-2. Team Detail 支持 `Invoke Team`
+2. Team Detail 不再伪装 team 自己能直接被 invoke
 3. Studio 保持 member-first，不再退回到 service-first
 4. `serviceId` 不再冒充 `teamId` 或 `memberId`
 
@@ -655,9 +588,9 @@ GET  /api/teams/{teamId}/members/{memberId}/runs/{runId}
 
 1. 我先进入某个 scope
 2. 我在这个 scope 下管理很多 team
-3. 每个 team 都可以有自己的团队入口
-4. 每个 team 下有很多 member
-5. 我可以 invoke 整个 team，也可以直接 invoke 某个 member
+3. 每个 team 下有很多 member
+4. team 可以维护一份 router 配置，把默认路由指向某个 member
+5. 我真正调用的永远是 member
 6. Studio 永远是在编辑某个 member，而不是在编辑一个抽象 service
 
 这才是正确的主语链。

@@ -18,7 +18,7 @@ references:
 
 1. `Studio` 到底在编辑什么
 2. 页面、区域、导航、深链如何表达 `scope / team / member`
-3. team-level invoke 与 member-level workbench 如何共存
+3. team router 如何在页面中诚实出现
 
 ---
 
@@ -44,15 +44,15 @@ references:
 2. 当前 members 的集合
 3. 返回 Team Detail 的上级导航
 
-## 1.3 Team Entry
+## 1.3 Team Router
 
-`Team Entry` 是 team-level invoke 的前门。
+`Team Router` 是 team 声明出来的默认路由配置。
 
 在 Studio 里不作为主工作区对象，但需要被看见：
 
-1. 当前 member 是否是 team entry target
-2. 是否可以从这里快速回到 Team Entry 设置
-3. 是否可以直接 `Invoke Team`
+1. 当前 member 是否就是默认路由目标
+2. 是否可以从这里快速回到 Team Detail
+3. 是否可以一眼知道团队默认路由当前落到谁
 
 ## 1.4 Member
 
@@ -74,8 +74,6 @@ Studio 内所有主流程都围绕当前选中的 member 展开：
 1. `Workflow`
 2. `Script`
 3. `GAgent`
-
-它们只应该出现在 `Build` 阶段的 mode switch 中。
 
 ## 1.6 Binding
 
@@ -116,7 +114,7 @@ Studio 内所有主流程都围绕当前选中的 member 展开：
 1. `Teams`
    看当前 scope 下有哪些 team
 2. `Team Detail`
-   看这个 team 的整体状态、team entry、members、拓扑、事件流
+   看 team 的整体状态、routing、members、拓扑、事件流
 3. `Studio`
    选一个 member 继续做 build / bind / invoke / observe
 4. `Platform`
@@ -124,8 +122,9 @@ Studio 内所有主流程都围绕当前选中的 member 展开：
 
 关键规则：
 
-1. Team-level invoke 属于 `Teams / Team Detail`
-2. Member-level lifecycle 属于 `Studio`
+1. team 自己不是 invoke target
+2. team router 只是 team 的默认路由配置
+3. member 才是 Studio 和 invoke 的真实主语
 
 ---
 
@@ -152,15 +151,12 @@ Studio 页面推荐使用四段式结构：
 
 1. `Save`
 2. `Invoke Member`
-3. `Invoke Team`
-4. `Open Team Entry Settings`
-5. `Back to Team`
+3. `Back to Team`
 
-其中：
+补充状态：
 
-1. `Invoke Team` 是 team-level 动作
-2. `Invoke Member` 是当前 member 动作
-3. 当前 member 若是 `team entry target`，需要明显 badge
+1. 当前 member 若是默认路由目标，显示 `Routed` badge
+2. 提供 `Open Team Routing` 次级动作
 
 ## 3.2 Member Rail
 
@@ -176,7 +172,7 @@ Studio 页面推荐使用四段式结构：
 4. Health dot
 5. Revision
 6. Last run
-7. Entry target badge
+7. Routed badge
 
 Rail 顶部功能：
 
@@ -212,7 +208,7 @@ stepper 的意义不是页面分类，而是 `member lifecycle stage`。
 1. Build
    `Dry-run / Preview / Inspector`
 2. Bind
-   `Smoke-test / current contract / team entry status`
+   `Smoke-test / current contract / routing status`
 3. Invoke
    `Request history / run summary / raw payload`
 4. Observe
@@ -235,16 +231,6 @@ stepper 的意义不是页面分类，而是 `member lifecycle stage`。
 3. 右侧：dry-run / preview / inspector
 4. 底部：save / continue to bind
 
-Build 顶部必须先问：
-
-1. 这个 member 用哪种实现方式？
-
-可选项：
-
-1. `Workflow`
-2. `Script`
-3. `GAgent`
-
 ## 4.2 Bind
 
 页面目标：
@@ -262,8 +248,8 @@ Build 顶部必须先问：
 
 额外状态：
 
-1. 当前 member 是否是 `team entry target`
-2. 若是，显示 team invoke 的次级说明或 deep link
+1. 当前 member 是否是默认路由目标
+2. 若是，展示 “This member is the default route target”
 
 ## 4.3 Invoke
 
@@ -305,8 +291,6 @@ Observe 默认只讲：
 1. 当前 member
 2. 当前 selected run
 3. 当前 member 的 bindings / revisions / trust
-
-不是 team-wide 运营总览。
 
 ---
 
@@ -379,11 +363,6 @@ Studio 路由最低应稳定表达：
 3. `Member`
 4. `Current Step`
 
-例如：
-
-1. `runtime-ops / Support Ops / Support Triage Router / Build`
-2. `runtime-ops / Support Ops / Risk Review / Bind`
-
 主语规则：
 
 1. 先说当前 member
@@ -400,4 +379,4 @@ Studio 路由最低应稳定表达：
 
 ## 8. 一句话准则
 
-> Scope 提供工作空间，Team 提供协作边界与 team invoke，Team Entry 负责入口解析，Member 提供 Studio 主语，Build/Bind/Invoke/Observe 提供流程，Workflow/Script/GAgent 提供实现。
+> Scope 提供工作空间，Team 提供协作边界，Team Router 提供默认路由配置，Member 提供 Studio 主语，Build/Bind/Invoke/Observe 提供流程，Workflow/Script/GAgent 提供实现。

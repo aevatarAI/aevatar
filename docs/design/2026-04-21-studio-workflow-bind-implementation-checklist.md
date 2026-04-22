@@ -22,7 +22,7 @@
 
 当前可复用的能力包括：
 
-1. published service 选择
+1. member published service 选择
 2. endpoint 选择
 3. service bindings 查询
 4. service revisions 查询
@@ -141,6 +141,8 @@
 - [ ] 保留 `ScopeServiceRuntimeWorkbench` 给 `/scopes/invoke` 等现有 runtime 页面继续使用
 - [ ] 给 `StudioMemberBindPanel` 传入：
   - `scopeId`
+  - `teamId`
+  - `memberId`
   - `scopeBinding`
   - `services`
   - `initialServiceId`
