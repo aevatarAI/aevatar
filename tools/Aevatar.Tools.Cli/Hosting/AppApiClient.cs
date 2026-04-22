@@ -50,7 +50,8 @@ internal sealed class AppApiClient : IDisposable
         int take,
         CancellationToken ct)
     {
-        var path = $"api/services?tenantId={Uri.EscapeDataString(scopeId)}&appId=default&namespace=default&take={take}";
+        _ = scopeId;
+        var path = $"api/services?take={take}";
         return await GetJsonAsync(path, ct);
     }
 
@@ -59,9 +60,8 @@ internal sealed class AppApiClient : IDisposable
         string? tenantId,
         CancellationToken ct)
     {
+        _ = tenantId;
         var path = $"api/services/{Uri.EscapeDataString(serviceId)}/bindings";
-        if (!string.IsNullOrWhiteSpace(tenantId))
-            path += $"?tenantId={Uri.EscapeDataString(tenantId)}";
         return await GetJsonAsync(path, ct);
     }
 

@@ -650,9 +650,9 @@ export const scope = {
     );
   },
 
-  /** GET /api/services?tenantId=... — list services in scope */
-  listServices: (scopeId: string, take = 20) =>
-    request<any[]>(`/services?tenantId=${enc(scopeId)}&appId=default&namespace=default&take=${take}`),
+  /** GET /api/services?take=... — list services for the authenticated identity */
+  listServices: (_scopeId: string, take = 20) =>
+    request<any[]>(`/services?take=${take}`),
 
   /** POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume — resume a suspended workflow run (human_input) */
   resumeRun: (

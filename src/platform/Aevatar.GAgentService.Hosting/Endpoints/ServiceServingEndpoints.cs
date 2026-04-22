@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -28,52 +29,108 @@ public static partial class ServiceEndpoints
     }
 
     private static async Task<IResult> HandleDeployRevisionAsync(
+        HttpContext http,
         string serviceId,
         ActivateServiceRevisionHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RevisionId = request.RevisionId ?? string.Empty,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/deployments", receipt);
     }
 
     private static async Task<IResult> HandleDeactivateDeploymentAsync(
+        HttpContext http,
         string serviceId,
         string deploymentId,
         ServiceIdentityHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.DeactivateServiceDeploymentAsync(new DeactivateServiceDeploymentCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             DeploymentId = deploymentId ?? string.Empty,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/deployments/{deploymentId}", receipt);
     }
 
-    private static Task<ServiceDeploymentCatalogSnapshot?> HandleGetDeploymentsAsync(
+    private static async Task<IResult> HandleGetDeploymentsAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceLifecycleQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetServiceDeploymentsAsync(
-            ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        return JsonOrNull(await queryPort.GetServiceDeploymentsAsync(identity, ct));
+    }
 
     private static async Task<IResult> HandleReplaceServingTargetsAsync(
+        HttpContext http,
         string serviceId,
         ReplaceServiceServingTargetsHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.ReplaceServiceServingTargetsAsync(new ReplaceServiceServingTargetsCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             Targets = { request.Targets.Select(ToServingTargetSpec) },
             RolloutId = request.RolloutId ?? string.Empty,
             Reason = request.Reason ?? string.Empty,
@@ -81,24 +138,52 @@ public static partial class ServiceEndpoints
         return Results.Accepted($"/api/services/{serviceId}/serving", receipt);
     }
 
-    private static Task<ServiceServingSetSnapshot?> HandleGetServingSetAsync(
+    private static async Task<IResult> HandleGetServingSetAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceServingQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetServiceServingSetAsync(
-            ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        return JsonOrNull(await queryPort.GetServiceServingSetAsync(identity, ct));
+    }
 
     private static async Task<IResult> HandleStartRolloutAsync(
+        HttpContext http,
         string serviceId,
         StartServiceRolloutHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.StartServiceRolloutAsync(new StartServiceRolloutCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             Plan = new ServiceRolloutPlanSpec
             {
                 RolloutId = request.RolloutId ?? string.Empty,
@@ -111,30 +196,58 @@ public static partial class ServiceEndpoints
     }
 
     private static async Task<IResult> HandleAdvanceRolloutAsync(
+        HttpContext http,
         string serviceId,
         string rolloutId,
         ServiceIdentityHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.AdvanceServiceRolloutAsync(new AdvanceServiceRolloutCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RolloutId = rolloutId ?? string.Empty,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/rollouts/{rolloutId}", receipt);
     }
 
     private static async Task<IResult> HandlePauseRolloutAsync(
+        HttpContext http,
         string serviceId,
         string rolloutId,
         RolloutActionHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.PauseServiceRolloutAsync(new PauseServiceRolloutCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RolloutId = rolloutId ?? string.Empty,
             Reason = request.Reason ?? string.Empty,
         }, ct);
@@ -142,53 +255,109 @@ public static partial class ServiceEndpoints
     }
 
     private static async Task<IResult> HandleResumeRolloutAsync(
+        HttpContext http,
         string serviceId,
         string rolloutId,
         ServiceIdentityHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RolloutId = rolloutId ?? string.Empty,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/rollouts/{rolloutId}", receipt);
     }
 
     private static async Task<IResult> HandleRollbackRolloutAsync(
+        HttpContext http,
         string serviceId,
         string rolloutId,
         RolloutActionHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.RollbackServiceRolloutAsync(new RollbackServiceRolloutCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RolloutId = rolloutId ?? string.Empty,
             Reason = request.Reason ?? string.Empty,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/rollouts/{rolloutId}", receipt);
     }
 
-    private static Task<ServiceRolloutSnapshot?> HandleGetRolloutAsync(
+    private static async Task<IResult> HandleGetRolloutAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceServingQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetServiceRolloutAsync(
-            ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
 
-    private static Task<ServiceTrafficViewSnapshot?> HandleGetTrafficViewAsync(
+        return JsonOrNull(await queryPort.GetServiceRolloutAsync(identity, ct));
+    }
+
+    private static async Task<IResult> HandleGetTrafficViewAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceServingQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetServiceTrafficViewAsync(
-            ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        return JsonOrNull(await queryPort.GetServiceTrafficViewAsync(identity, ct));
+    }
 
     private static ServiceServingTargetSpec ToServingTargetSpec(ServiceServingTargetHttpRequest request) =>
         new()

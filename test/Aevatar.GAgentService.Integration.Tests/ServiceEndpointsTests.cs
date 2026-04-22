@@ -1,12 +1,16 @@
+using System.Security.Claims;
 using System.Net;
 using System.Net.Http.Json;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,6 +52,61 @@ public sealed class ServiceEndpointsTests
         });
         host.CommandPort.CreateServiceCommand.Spec.Endpoints.Should().ContainSingle();
         host.CommandPort.CreateServiceCommand.Spec.Endpoints[0].Kind.Should().Be(ServiceEndpointKind.Command);
+    }
+
+    [Fact]
+    public async Task CreateServiceAsync_WhenAuthenticatedIdentityConflictsWithBody_ShouldUseClaimIdentity()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateServiceHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                "service-a",
+                "Orders",
+                [])),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.CommandPort.CreateServiceCommand!.Spec.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant-claim",
+            AppId = "app-claim",
+            Namespace = "ns-claim",
+            ServiceId = "service-a",
+        });
+    }
+
+    [Fact]
+    public async Task CreateServiceAsync_WhenAuthenticatedIdentityMissingClaims_ShouldReturnForbidden()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateServiceHttpRequest(
+                "tenant",
+                "app",
+                "ns",
+                "service-a",
+                "Orders",
+                [])),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        host.CommandPort.CreateServiceCommand.Should().BeNull();
     }
 
     [Fact]
@@ -281,6 +340,38 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ReplaceServingTargetsAsync_WhenAuthenticatedIdentityConflictsWithBody_ShouldUseClaimIdentity()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders:serving-targets")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.ReplaceServiceServingTargetsHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                [
+                    new ServiceEndpoints.ServiceServingTargetHttpRequest("rev-1", 100),
+                ])),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.CommandPort.ReplaceServiceServingTargetsCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant-claim",
+            AppId = "app-claim",
+            Namespace = "ns-claim",
+            ServiceId = "orders",
+        });
+    }
+
+    [Fact]
     public async Task ServingActionEndpoints_ShouldDispatchDeactivateAndRolloutLifecycleCommands()
     {
         await using var host = await EndpointTestHost.StartAsync();
@@ -375,6 +466,44 @@ public sealed class ServiceEndpointsTests
         host.QueryPort.LastListServicesTake.Should().Be(10);
         host.QueryPort.LastGetServiceIdentity!.ServiceId.Should().Be("orders");
         host.QueryPort.LastGetServiceRevisionsIdentity!.Namespace.Should().Be("ns");
+    }
+
+    [Fact]
+    public async Task GetServiceAsync_WhenAuthenticatedIdentityConflictsWithQuery_ShouldUseClaimIdentity()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.QueryPort.GetServiceResult = new ServiceCatalogSnapshot(
+            "tenant/app/ns/orders",
+            "tenant-claim",
+            "app-claim",
+            "ns-claim",
+            "orders",
+            "Orders",
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/services/orders?tenantId=spoof-tenant&appId=spoof-app&namespace=spoof-ns");
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.QueryPort.LastGetServiceIdentity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant-claim",
+            AppId = "app-claim",
+            Namespace = "ns-claim",
+            ServiceId = "orders",
+        });
     }
 
     [Fact]
@@ -781,12 +910,29 @@ public sealed class ServiceEndpointsTests
             var commandPort = new RecordingServiceCommandPort();
             var queryPort = new RecordingServiceQueryPort();
             var invocationPort = new RecordingServiceInvocationPort();
+            builder.Services.AddHttpContextAccessor();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceServingQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
+            builder.Services.AddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
 
             var app = builder.Build();
+            app.Use(async (http, next) =>
+            {
+                if (http.Request.Headers.TryGetValue("X-Test-Authenticated", out var authenticatedValues) &&
+                    bool.TryParse(authenticatedValues, out var authenticated) &&
+                    authenticated)
+                {
+                    var claims = new List<Claim>();
+                    AddClaims(http, "X-Test-Tenant-Id", AevatarStandardClaimTypes.TenantId, claims);
+                    AddClaims(http, "X-Test-App-Id", AevatarStandardClaimTypes.AppId, claims);
+                    AddClaims(http, "X-Test-Namespace", AevatarStandardClaimTypes.Namespace, claims);
+                    http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
+                }
+
+                await next();
+            });
             app.MapGAgentServiceEndpoints();
             await app.StartAsync();
 
@@ -808,6 +954,17 @@ public sealed class ServiceEndpointsTests
         {
             Client.Dispose();
             await _app.DisposeAsync();
+        }
+
+        private static void AddClaims(HttpContext http, string headerName, string claimType, ICollection<Claim> claims)
+        {
+            if (!http.Request.Headers.TryGetValue(headerName, out var values))
+                return;
+
+            foreach (var value in values.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                claims.Add(new Claim(claimType, value));
+            }
         }
     }
 

@@ -1,7 +1,9 @@
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -20,61 +22,126 @@ internal static class ServiceBindingEndpoints
     }
 
     private static async Task<IResult> HandleCreateAsync(
+        HttpContext http,
         string serviceId,
         ServiceBindingHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (ServiceIdentityEndpointAccess.TryResolveContext(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                out _,
+                out var denied) == false)
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.CreateBindingAsync(new CreateServiceBindingCommand
         {
-            Spec = ToSpec(serviceId, request, request.BindingId ?? string.Empty),
+            Spec = ToSpec(serviceId, request, request.BindingId ?? string.Empty, identityResolver),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/bindings/{request.BindingId}", receipt);
     }
 
     private static async Task<IResult> HandleUpdateAsync(
+        HttpContext http,
         string serviceId,
         string bindingId,
         ServiceBindingHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (ServiceIdentityEndpointAccess.TryResolveContext(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                out _,
+                out var denied) == false)
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.UpdateBindingAsync(new UpdateServiceBindingCommand
         {
-            Spec = ToSpec(serviceId, request, bindingId),
+            Spec = ToSpec(serviceId, request, bindingId, identityResolver),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/bindings/{bindingId}", receipt);
     }
 
     private static async Task<IResult> HandleRetireAsync(
+        HttpContext http,
         string serviceId,
         string bindingId,
         GAgentServiceGovernanceEndpointModels.ServiceIdentityHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.RetireBindingAsync(new RetireServiceBindingCommand
         {
-            Identity = GAgentServiceGovernanceEndpointModels.ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             BindingId = bindingId,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/bindings/{bindingId}", receipt);
     }
 
-    private static Task<ServiceBindingCatalogSnapshot?> HandleGetAsync(
+    private static async Task<IResult> HandleGetAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] GAgentServiceGovernanceEndpointModels.ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceGovernanceQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetBindingsAsync(
-            GAgentServiceGovernanceEndpointModels.ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
-
-    private static ServiceBindingSpec ToSpec(string serviceId, ServiceBindingHttpRequest request, string bindingId)
+        CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        return JsonOrNull(await queryPort.GetBindingsAsync(identity, ct));
+    }
+
+    private static ServiceBindingSpec ToSpec(
+        string serviceId,
+        ServiceBindingHttpRequest request,
+        string bindingId,
+        IServiceIdentityContextResolver identityResolver)
+    {
+        var resolvedContext = identityResolver.Resolve();
+        var ownerContext = resolvedContext ?? new ServiceIdentityContext(
+            request.TenantId?.Trim() ?? string.Empty,
+            request.AppId?.Trim() ?? string.Empty,
+            request.Namespace?.Trim() ?? string.Empty,
+            "request");
+
         var spec = new ServiceBindingSpec
         {
-            Identity = GAgentServiceGovernanceEndpointModels.ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = GAgentServiceGovernanceEndpointModels.ToIdentity(ownerContext.TenantId, ownerContext.AppId, ownerContext.Namespace, serviceId),
             BindingId = bindingId,
             DisplayName = request.DisplayName ?? string.Empty,
             BindingKind = ParseBindingKind(request.BindingKind),
@@ -83,12 +150,17 @@ internal static class ServiceBindingEndpoints
         switch (spec.BindingKind)
         {
             case ServiceBindingKind.Service:
+                var boundServiceContext = resolvedContext ?? new ServiceIdentityContext(
+                    request.Service?.TenantId?.Trim() ?? request.TenantId?.Trim() ?? string.Empty,
+                    request.Service?.AppId?.Trim() ?? request.AppId?.Trim() ?? string.Empty,
+                    request.Service?.Namespace?.Trim() ?? request.Namespace?.Trim() ?? string.Empty,
+                    "request");
                 spec.ServiceRef = new BoundServiceRef
                 {
                     Identity = GAgentServiceGovernanceEndpointModels.ToIdentity(
-                        request.Service?.TenantId ?? request.TenantId,
-                        request.Service?.AppId ?? request.AppId,
-                        request.Service?.Namespace ?? request.Namespace,
+                        boundServiceContext.TenantId,
+                        boundServiceContext.AppId,
+                        boundServiceContext.Namespace,
                         request.Service?.ServiceId ?? string.Empty),
                     EndpointId = request.Service?.EndpointId ?? string.Empty,
                 };
@@ -112,6 +184,11 @@ internal static class ServiceBindingEndpoints
 
         return spec;
     }
+
+    private static IResult JsonOrNull<T>(T? value) =>
+        value is null
+            ? Results.Text("null", "application/json")
+            : Results.Json(value);
 
     private static ServiceBindingKind ParseBindingKind(string? rawValue)
     {

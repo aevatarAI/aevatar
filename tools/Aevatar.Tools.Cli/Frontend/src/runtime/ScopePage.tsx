@@ -3494,7 +3494,7 @@ export default function ScopePage() {
 
   const rawShortcuts = [
     { label: 'Binding', path: `/scopes/${scopeId}/binding`, method: 'GET' },
-    { label: 'Services', path: `/services?tenantId=${scopeId}&appId=default&namespace=default&take=20`, method: 'GET' },
+    { label: 'Services', path: '/services?take=20', method: 'GET' },
     { label: 'Workflows', path: `/scopes/${scopeId}/workflows`, method: 'GET' },
     { label: 'GAgent Types', path: `/scopes/gagent-types`, method: 'GET' },
     { label: 'Auth Session', path: `/auth/me`, method: 'GET' },
