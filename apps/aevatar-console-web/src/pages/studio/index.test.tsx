@@ -2399,23 +2399,18 @@ describe("StudioPage", () => {
     expect(searchParams.get("tab")).toBe("studio");
   });
 
-  it("ignores removed create-team route params and opens a normal blank draft", async () => {
+  it("ignores removed create-team route params and falls back to the explicit member-selection empty state", async () => {
     renderStudioPage(
       "/studio?draft=new&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
     );
 
     expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回创建页" })).toBeNull();
-    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft");
-    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent(
-      "workflow canvas"
-    );
-    expect(screen.getByTestId("studio-context-meta")).not.toHaveTextContent("创建团队入口");
-    expect(screen.getByRole("button", { name: "Save draft" })).toBeTruthy();
+    expect(await screen.findByTestId("studio-empty-member-state")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "发布团队入口" })).toBeNull();
-    expect(
-      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
-    ).toHaveValue("name: draft\nsteps: []\n");
+
+    const rail = await screen.findByLabelText("Team members");
+    expect(within(rail).queryByRole("button", { name: "draft" })).toBeNull();
 
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("teamMode")).toBeNull();
@@ -2423,7 +2418,8 @@ describe("StudioPage", () => {
     expect(searchParams.get("entryName")).toBeNull();
     expect(searchParams.get("teamDraftWorkflowId")).toBeNull();
     expect(searchParams.get("teamDraftWorkflowName")).toBeNull();
-    expect(searchParams.get("draft")).toBe("new");
+    expect(searchParams.get("draft")).toBeNull();
+    expect(searchParams.get("focus")).toBeNull();
   });
 
   it("resyncs the Studio deep link when the target workflow changes after mount", async () => {
@@ -3022,14 +3018,18 @@ describe("StudioPage", () => {
     });
   });
 
-  it("starts a blank draft when the Studio route requests draft mode", async () => {
+  it("falls back to the existing workflow when the removed draft route flag is present", async () => {
     renderStudioPage("/studio?draft=new");
 
     expect(await screen.findByText("DAG Canvas")).toBeTruthy();
-    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft");
-    expect(
-      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
-    ).toHaveValue("name: draft\nsteps: []\n");
+    const rail = await screen.findByLabelText("Team members");
+    expect(within(rail).queryByRole("button", { name: "draft" })).toBeNull();
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("draft")).toBeNull();
+      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+    });
   });
 
   it("does not auto-create a draft when Studio opens without any team members", async () => {
@@ -3092,19 +3092,15 @@ describe("StudioPage", () => {
     expect(screen.queryByText("DAG Canvas")).toBeNull();
   });
 
-  it("ignores the legacy playground handoff route flag and opens a blank Studio draft", async () => {
+  it("ignores the legacy playground handoff route flag and opens the existing workflow workspace", async () => {
     renderStudioPage("/studio?draft=new&legacy=playground");
 
     expect(await screen.findByText("DAG Canvas")).toBeTruthy();
-    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft");
-    expect(
-      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
-    ).toHaveValue("name: draft\nsteps: []\n");
-
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("legacy")).toBeNull();
-      expect(searchParams.get("draft")).toBe("new");
+      expect(searchParams.get("draft")).toBeNull();
+      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
     });
   });
 
@@ -3226,14 +3222,16 @@ describe("StudioPage", () => {
 
     const rail = await screen.findByLabelText("Team members");
     await within(rail).findByText("other-workflow");
-    const workspaceButtonBefore = within(rail).getByRole("button", {
+    const workspaceButtonsBefore = within(rail).getAllByRole("button", {
       name: "workspace-demo",
     });
+    const workspaceButtonBefore = workspaceButtonsBefore[0];
     const otherWorkflowButtonBefore = within(rail).getByRole("button", {
       name: "other-workflow",
     });
 
     expect(workspaceButtonBefore).toBeTruthy();
+    expect(workspaceButtonsBefore).toHaveLength(1);
     expect(otherWorkflowButtonBefore).toBeTruthy();
     expect(
       workspaceButtonBefore!.compareDocumentPosition(otherWorkflowButtonBefore!) &
@@ -3243,18 +3241,22 @@ describe("StudioPage", () => {
     await replaceStudioRoute("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-2&tab=studio");
 
     await waitFor(() => {
-      expect(within(rail).getByRole("button", { name: "workspace-demo" })).toBeTruthy();
+      expect(
+        within(rail).getAllByRole("button", { name: "workspace-demo" })
+      ).toHaveLength(1);
       expect(within(rail).getByRole("button", { name: "other-workflow" })).toBeTruthy();
     });
 
-    const workspaceButtonAfter = within(rail).getByRole("button", {
+    const workspaceButtonsAfter = within(rail).getAllByRole("button", {
       name: "workspace-demo",
     });
+    const workspaceButtonAfter = workspaceButtonsAfter[0];
     const otherWorkflowButtonAfter = within(rail).getByRole("button", {
       name: "other-workflow",
     });
 
     expect(workspaceButtonAfter).toBeTruthy();
+    expect(workspaceButtonsAfter).toHaveLength(1);
     expect(otherWorkflowButtonAfter).toBeTruthy();
     expect(
       workspaceButtonAfter!.compareDocumentPosition(otherWorkflowButtonAfter!) &
@@ -3328,12 +3330,28 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
   });
 
-  it("opens the Studio invoke surface from the lifecycle stepper", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+  it("shows published members in the left rail even when the workflow inventory is empty", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Invoke" }));
+    renderStudioPage("/studio?scopeId=scope-1&tab=studio");
 
-    expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
+    const rail = await screen.findByLabelText("Team members");
+    expect(await within(rail).findByRole("button", { name: "workspace-demo" })).toBeTruthy();
+    expect(screen.queryByText("No team members yet. Create a member to start building in Studio.")).toBeNull();
+  });
+
+  it("keeps Invoke unavailable until the member enters Bind", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-1&memberId=default&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    expect(await screen.findByRole("button", { name: "Invoke" })).toBeDisabled();
+    expect(screen.queryByTestId("studio-invoke-surface")).toBeNull();
   });
 
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {

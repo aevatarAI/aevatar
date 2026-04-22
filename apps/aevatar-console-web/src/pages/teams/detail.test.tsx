@@ -945,11 +945,9 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("tab")).toBe("studio");
     if (params.get("focus")) {
       expect(params.get("focus")).toBe("workflow:workflow-1");
-      expect(params.get("tab")).toBe("studio");
-    } else {
-      expect(params.get("tab")).toBe("workflows");
     }
   });
 

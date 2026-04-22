@@ -91,7 +91,6 @@ const TeamCreatePage: React.FC = () => {
         focus: resolvedDraftWorkflowId
           ? `workflow:${resolvedDraftWorkflowId}`
           : undefined,
-        draftMode: resolvedDraftWorkflowId ? undefined : 'new',
         tab: 'studio',
       }),
     );

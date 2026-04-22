@@ -446,6 +446,11 @@ const StudioShell: React.FC<StudioShellProps> = ({
         label: 'GAgent',
         count: counts.gagent ?? 0,
       },
+      {
+        key: 'member' as const,
+        label: 'Member',
+        count: counts.member ?? 0,
+      },
     ].filter((item) => item.key === 'all' || item.count > 0);
   }, [members]);
 

@@ -345,9 +345,7 @@ export const TeamContextUnavailable: React.FC<{
               <Button
                 onClick={() =>
                   history.push(
-                    buildStudioWorkflowEditorRoute({
-                      draftMode: "new",
-                    }),
+                    buildStudioWorkflowEditorRoute(),
                   )
                 }
                 type="primary"
@@ -359,9 +357,7 @@ export const TeamContextUnavailable: React.FC<{
               <Button
                 onClick={() =>
                   history.push(
-                    buildStudioWorkflowEditorRoute({
-                      draftMode: "new",
-                    }),
+                    buildStudioWorkflowEditorRoute(),
                   )
                 }
               >

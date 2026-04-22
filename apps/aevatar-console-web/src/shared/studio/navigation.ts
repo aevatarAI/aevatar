@@ -16,7 +16,6 @@ type StudioRouteOptions = {
   step?: StudioStep;
   focus?: StudioBuildFocus;
   tab?: StudioTab;
-  draftMode?: 'new';
   prompt?: string;
   executionId?: string;
   logsMode?: 'popout';
@@ -70,7 +69,6 @@ function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
   if (
     focus?.startsWith('workflow:') ||
     focus?.startsWith('template:') ||
-    options?.draftMode === 'new' ||
     options?.prompt?.trim()
   ) {
     return 'studio';
@@ -97,9 +95,6 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   const tab = resolveStudioTab(options);
   if (tab) {
     params.set('tab', tab);
-  }
-  if (options?.draftMode === 'new') {
-    params.set('draft', 'new');
   }
   if (options?.prompt?.trim()) {
     params.set('prompt', options.prompt.trim());
@@ -130,7 +125,6 @@ export function buildStudioWorkflowEditorRoute(options?: {
   memberId?: string;
   workflowId?: string;
   template?: string;
-  draftMode?: 'new';
   prompt?: string;
 } & Record<string, unknown>): string {
   const workflowId = trimOptional(options?.workflowId);

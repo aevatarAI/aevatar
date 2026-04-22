@@ -23,16 +23,16 @@ describe('buildStudioRoute', () => {
     );
   });
 
-  it('includes the blank draft mode when requested', () => {
+  it('ignores the removed blank draft mode when requested', () => {
     expect(
       buildStudioRoute({
         draftMode: 'new',
         tab: 'workflows',
       }),
-    ).toBe('/studio?tab=workflows&draft=new');
+    ).toBe('/studio?tab=workflows');
   });
 
-  it('ignores legacy create-team route params when opening a blank Studio draft', () => {
+  it('ignores legacy create-team route params when opening Studio', () => {
     expect(
       buildStudioRoute({
         teamMode: 'create',
@@ -40,7 +40,7 @@ describe('buildStudioRoute', () => {
         entryName: '订单入口',
         draftMode: 'new',
       }),
-    ).toBe('/studio?tab=studio&draft=new');
+    ).toBe('/studio');
   });
 
   it('ignores the removed create-team draft pointer params', () => {
@@ -90,7 +90,7 @@ describe('buildStudioRoute', () => {
         prompt: 'Review the current draft',
         legacySource: 'playground',
       }),
-    ).toBe('/studio?tab=studio&draft=new&prompt=Review+the+current+draft');
+    ).toBe('/studio?tab=studio&prompt=Review+the+current+draft');
   });
 
   it('infers the scripts workspace when only a script id is provided', () => {
