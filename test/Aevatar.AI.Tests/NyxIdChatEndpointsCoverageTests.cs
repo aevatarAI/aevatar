@@ -56,6 +56,7 @@ public class NyxIdChatEndpointsCoverageTests
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stream");
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:approve");
         routes.Should().Contain("/api/webhooks/nyxid-relay");
+        routes.Should().NotContain("/api/webhooks/nyxid-relay/diag");
     }
 
     [Fact]
@@ -386,7 +387,7 @@ public class NyxIdChatEndpointsCoverageTests
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_STARTED");
         body.Should().Contain("RUN_ERROR");
-        body.Should().Contain("subscription failed");
+        body.Should().Contain("The chat request failed. Please try again.");
     }
 
     [Fact]
@@ -478,7 +479,7 @@ public class NyxIdChatEndpointsCoverageTests
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_STARTED");
         body.Should().Contain("RUN_ERROR");
-        body.Should().Contain("approval subscription failed");
+        body.Should().Contain("The approval continuation failed. Please try again.");
     }
 
     [Fact]
@@ -867,12 +868,42 @@ public class NyxIdChatEndpointsCoverageTests
         {
             terminal.Should().Be("RUN_ERROR");
             body.Should().Contain("RUN_ERROR");
+            body.Should().NotContain("boom");
+            body.Should().Contain("something went wrong");
         }
         else
         {
             terminal.Should().BeNull();
             body.Should().Contain("TEXT_MESSAGE_START");
         }
+    }
+
+    [Fact]
+    public void RelayReplyAccumulator_ShouldTruncateBufferedTextAtConfiguredLimit()
+    {
+        var accumulatorType = EndpointsType.GetNestedType("RelayReplyAccumulator", BindingFlags.NonPublic);
+        accumulatorType.Should().NotBeNull();
+
+        var ctor = accumulatorType!.GetConstructor(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            [typeof(int)],
+            modifiers: null);
+        ctor.Should().NotBeNull();
+
+        var instance = ctor!.Invoke([5]);
+        instance.Should().NotBeNull();
+
+        accumulatorType!.GetMethod("Append")!.Invoke(instance, ["hello"]);
+        accumulatorType.GetMethod("Append")!.Invoke(instance, [" world"]);
+
+        var snapshot = (string)accumulatorType.GetMethod("Snapshot")!.Invoke(instance, [])!;
+        var truncated = (bool)accumulatorType.GetProperty("WasTruncated")!.GetValue(instance)!;
+        var maxChars = (int)accumulatorType.GetProperty("MaxChars")!.GetValue(instance)!;
+
+        snapshot.Should().Be("hello");
+        truncated.Should().BeTrue();
+        maxChars.Should().Be(5);
     }
 
     [Fact]

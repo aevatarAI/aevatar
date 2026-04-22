@@ -32,7 +32,7 @@ public static class ChannelCallbackEndpoints
 
         // Diagnostic: test reply path without going through full LLM chat
         group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
-        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync);
+        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
     }
@@ -183,11 +183,11 @@ public static class ChannelCallbackEndpoints
             logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
                 inbound.Platform, registration.Id);
             RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registration.Id,
-                $"{ex.GetType().Name}: {ex.Message}");
+                ex.GetType().Name);
             // Return 500 so webhook providers (Lark/Telegram) retry the delivery
             // instead of treating the message as successfully processed.
             return Results.Json(
-                new { status = "dispatch_error", error = ex.Message },
+                new { status = "dispatch_error", error = "dispatch_failed" },
                 statusCode: 500);
         }
     }
@@ -692,7 +692,7 @@ public static class ChannelCallbackEndpoints
             return Results.Json(new
             {
                 status = "error",
-                error = ex.Message,
+                error = "reply_delivery_failed",
                 error_type = ex.GetType().Name,
                 diagnostics,
             }, statusCode: 500);

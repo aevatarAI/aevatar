@@ -80,9 +80,9 @@ internal sealed class LarkConversationIngressRuntime : ILarkConversationIngressR
                 ex,
                 "Lark ingress failed: registrationId={RegistrationId}",
                 registration.Id);
-            RecordDiagnostic("Callback:error", registration.Platform, registration.Id, $"{ex.GetType().Name}: {ex.Message}");
+            RecordDiagnostic("Callback:error", registration.Platform, registration.Id, ex.GetType().Name);
             return Results.Json(
-                new { status = "dispatch_error", error = ex.Message },
+                new { status = "dispatch_error", error = "dispatch_failed" },
                 statusCode: StatusCodes.Status500InternalServerError);
         }
     }

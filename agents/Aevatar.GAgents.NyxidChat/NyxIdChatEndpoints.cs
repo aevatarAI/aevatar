@@ -40,38 +40,6 @@ public static class NyxIdChatEndpoints
             last_check = DateTimeOffset.UtcNow,
         })).WithTags("NyxIdRelay");
 
-        // Temporary diagnostic: test NyxID gateway connectivity from this server
-        app.MapPost("/api/webhooks/nyxid-relay/diag", async (HttpContext http, CancellationToken ct) =>
-        {
-            var token = http.Request.Headers["X-Test-Token"].FirstOrDefault()
-                ?? http.Request.Headers.Authorization.FirstOrDefault()?.Replace("Bearer ", "");
-            if (string.IsNullOrWhiteSpace(token))
-                return Results.Json(new { error = "Provide token via X-Test-Token header" });
-
-            var configuration = http.RequestServices.GetService<IConfiguration>();
-            var gateway = configuration?["Aevatar:NyxId:GatewayUrl"]
-                ?? "https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1/chat/completions";
-            var body = """{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}""";
-
-            using var client = new System.Net.Http.HttpClient();
-            var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, gateway);
-            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            req.Content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
-            // Clear default User-Agent to mimic clean request
-            client.DefaultRequestHeaders.UserAgent.Clear();
-
-            var resp = await client.SendAsync(req, ct);
-            var respBody = await resp.Content.ReadAsStringAsync(ct);
-
-            return Results.Json(new
-            {
-                status = (int)resp.StatusCode,
-                statusText = resp.StatusCode.ToString(),
-                responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
-                serverOutboundIp = "check response headers",
-            });
-        }).WithTags("NyxIdRelay");
-
         // Access control for relay is handled by NyxID's route configuration.
 
         return app;
@@ -212,8 +180,9 @@ public static class NyxIdChatEndpoints
             {
                 if (tcs.Task.IsFaulted)
                 {
-                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
+                    await writer.WriteRunErrorAsync(
+                        "The chat request failed before completion. Please try again.",
+                        CancellationToken.None);
                 }
                 else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
                 {
@@ -238,7 +207,9 @@ public static class NyxIdChatEndpoints
                 return;
             }
 
-            await writer.WriteRunErrorAsync(ex.Message, CancellationToken.None);
+            await writer.WriteRunErrorAsync(
+                "The chat request failed. Please try again.",
+                CancellationToken.None);
         }
     }
 
@@ -299,13 +270,15 @@ public static class NyxIdChatEndpoints
                 if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
                 {
                     await writer.WriteRunErrorAsync(
-                        evt.Content[llmErrorPrefix.Length..].Trim(), CancellationToken.None);
+                        ClassifyError(evt.Content[llmErrorPrefix.Length..].Trim()), CancellationToken.None);
                     return "RUN_ERROR";
                 }
 
                 if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
                 {
-                    await writer.WriteRunErrorAsync(evt.Content.Trim(), CancellationToken.None);
+                    await writer.WriteRunErrorAsync(
+                        ClassifyError(evt.Content.Trim()),
+                        CancellationToken.None);
                     return "RUN_ERROR";
                 }
             }
@@ -422,8 +395,9 @@ public static class NyxIdChatEndpoints
             {
                 if (tcs.Task.IsFaulted)
                 {
-                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
+                    await writer.WriteRunErrorAsync(
+                        "The approval continuation failed before completion. Please try again.",
+                        CancellationToken.None);
                 }
                 else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
                 {
@@ -448,7 +422,9 @@ public static class NyxIdChatEndpoints
                 return;
             }
 
-            await writer.WriteRunErrorAsync(ex.Message, CancellationToken.None);
+            await writer.WriteRunErrorAsync(
+                "The approval continuation failed. Please try again.",
+                CancellationToken.None);
         }
     }
 
@@ -832,7 +808,7 @@ public static class NyxIdChatEndpoints
 
             // ─── Subscribe before dispatch so we can relay the response asynchronously ───
             var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var relayReply = new RelayReplyAccumulator();
+            var relayReply = new RelayReplyAccumulator(relayOptions.MaxBufferedResponseChars);
             var sessionId = !string.IsNullOrWhiteSpace(message.MessageId)
                 ? $"{conversationId}-{message.MessageId}"
                 : $"{conversationId}-{Guid.NewGuid():N}";
@@ -849,8 +825,7 @@ public static class NyxIdChatEndpoints
                         var evt = payload.Unpack<TextMessageContentEvent>();
                         if (!string.Equals(evt.SessionId, sessionId, StringComparison.Ordinal))
                             return Task.CompletedTask;
-                        if (!string.IsNullOrEmpty(evt.Delta))
-                            relayReply.ResponseBuilder.Append(evt.Delta);
+                        relayReply.Append(evt.Delta);
                     }
                     else if (payload.Is(TextMessageEndEvent.Descriptor))
                     {
@@ -860,14 +835,14 @@ public static class NyxIdChatEndpoints
 
                         if (TryExtractLlmError(evt.Content, out var extractedError))
                         {
-                            relayReply.ErrorMessage = extractedError;
+                            relayReply.SetError(extractedError);
                         }
-                        else if (relayReply.ResponseBuilder.Length == 0 && !string.IsNullOrWhiteSpace(evt.Content))
+                        else if (relayReply.IsEmpty && !string.IsNullOrWhiteSpace(evt.Content))
                         {
-                            relayReply.ResponseBuilder.Append(evt.Content);
+                            relayReply.Append(evt.Content);
                         }
 
-                        responseTcs.TrySetResult(relayReply.ResponseBuilder.ToString());
+                        responseTcs.TrySetResult(relayReply.Snapshot());
                     }
 
                     return Task.CompletedTask;
@@ -1026,7 +1001,7 @@ public static class NyxIdChatEndpoints
         }
         else
         {
-            var partial = relayReply.ResponseBuilder.ToString();
+            var partial = relayReply.Snapshot();
             logger.LogWarning(
                 "Relay response timed out: session={SessionId}, partial_length={Length}",
                 sessionId,
@@ -1036,16 +1011,25 @@ public static class NyxIdChatEndpoints
                 : "Sorry, it's taking too long to respond. Please try again.";
         }
 
-        if (!string.IsNullOrWhiteSpace(relayReply.ErrorMessage))
+        if (relayReply.WasTruncated)
+        {
+            logger.LogWarning(
+                "Relay response buffer truncated: session={SessionId}, max_chars={MaxChars}",
+                sessionId,
+                relayReply.MaxChars);
+        }
+
+        var relayError = relayReply.GetErrorMessage();
+        if (!string.IsNullOrWhiteSpace(relayError))
         {
             logger.LogWarning(
                 "Relay LLM error surfaced through async reply: session={SessionId}, error={Error}",
                 sessionId,
-                relayReply.ErrorMessage);
-            replyText = ClassifyError(relayReply.ErrorMessage);
+                relayError);
+            replyText = ClassifyError(relayError);
             if (relayOptions.EnableDebugDiagnostics)
             {
-                var diagnostic = BuildRelayDiagnostic(metadata, configuration, relayReply.ErrorMessage);
+                var diagnostic = BuildRelayDiagnostic(metadata, configuration, relayError);
                 replyText += $"\n\n[Debug]\n{diagnostic}";
             }
         }
@@ -1147,8 +1131,81 @@ public static class NyxIdChatEndpoints
 
     private sealed class RelayReplyAccumulator
     {
-        public StringBuilder ResponseBuilder { get; } = new();
-        public string? ErrorMessage { get; set; }
+        private readonly object _gate = new();
+        private readonly StringBuilder _responseBuilder = new();
+        private string? _errorMessage;
+        private bool _wasTruncated;
+
+        public RelayReplyAccumulator(int maxChars)
+        {
+            MaxChars = maxChars > 0 ? maxChars : 16 * 1024;
+        }
+
+        public int MaxChars { get; }
+
+        public bool WasTruncated
+        {
+            get
+            {
+                lock (_gate)
+                    return _wasTruncated;
+            }
+        }
+
+        public bool IsEmpty
+        {
+            get
+            {
+                lock (_gate)
+                    return _responseBuilder.Length == 0;
+            }
+        }
+
+        public void Append(string? text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return;
+
+            lock (_gate)
+            {
+                if (_responseBuilder.Length >= MaxChars)
+                {
+                    _wasTruncated = true;
+                    return;
+                }
+
+                var remaining = MaxChars - _responseBuilder.Length;
+                if (text.Length <= remaining)
+                {
+                    _responseBuilder.Append(text);
+                    return;
+                }
+
+                _responseBuilder.Append(text, 0, remaining);
+                _wasTruncated = true;
+            }
+        }
+
+        public void SetError(string? errorMessage)
+        {
+            if (string.IsNullOrWhiteSpace(errorMessage))
+                return;
+
+            lock (_gate)
+                _errorMessage = errorMessage.Trim();
+        }
+
+        public string? GetErrorMessage()
+        {
+            lock (_gate)
+                return _errorMessage;
+        }
+
+        public string Snapshot()
+        {
+            lock (_gate)
+                return _responseBuilder.ToString();
+        }
     }
 
 }

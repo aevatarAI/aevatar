@@ -12,6 +12,12 @@ public sealed class NyxIdRelayOptions
     public int ResponseTimeoutSeconds { get; set; } = 120;
 
     /// <summary>
+    /// Maximum number of response characters buffered while waiting for the relay turn
+    /// to complete. Excess content is truncated before async delivery.
+    /// </summary>
+    public int MaxBufferedResponseChars { get; set; } = 16 * 1024;
+
+    /// <summary>
     /// When enabled, relay error replies include a [Debug] block with diagnostic details
     /// (model, route, scope, token, tool warnings, raw error). Set to true during
     /// development/debugging, false in production.

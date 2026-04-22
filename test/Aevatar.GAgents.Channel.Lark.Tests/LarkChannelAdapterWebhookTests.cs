@@ -153,6 +153,33 @@ public sealed class LarkChannelAdapterWebhookTests
     }
 
     [Fact]
+    public async Task HandleWebhookAsync_UrlVerificationWithoutVerificationToken_FailsClosed()
+    {
+        var harness = new LarkAdapterHarness();
+        var adapter = harness.Reset();
+        await adapter.InitializeAsync(
+            ChannelTransportBinding.Create(
+                harness.DefaultBinding.Bot,
+                harness.DefaultBinding.CredentialRef,
+                verificationToken: string.Empty),
+            CancellationToken.None);
+        await adapter.StartReceivingAsync(CancellationToken.None);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            type = "url_verification",
+            token = "verify-token",
+            challenge = "challenge-123",
+        });
+
+        var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(Encoding.UTF8.GetBytes(payload)));
+
+        response.StatusCode.ShouldBe(401);
+        response.ResponseBody.ShouldBeNull();
+        response.Activity.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task HandleWebhookAsync_CardAction_UsesTypedPayloadAndDirectMessageScope()
     {
         var harness = new LarkAdapterHarness();

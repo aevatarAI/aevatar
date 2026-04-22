@@ -570,7 +570,7 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
     private bool TokenMatches(JsonElement element, string propertyName)
     {
         if (_binding is null || string.IsNullOrWhiteSpace(_binding.VerificationToken))
-            return true;
+            return false;
 
         var token = TryReadString(element, propertyName);
         return string.Equals(token, _binding.VerificationToken, StringComparison.Ordinal);

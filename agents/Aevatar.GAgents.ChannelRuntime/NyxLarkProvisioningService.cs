@@ -83,6 +83,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         string? apiKeyId = null;
         string? channelBotId = null;
         string? routeId = null;
+        var localMirrorAccepted = false;
 
         try
         {
@@ -100,6 +101,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
                 channelBotId,
                 routeId,
                 ct);
+            localMirrorAccepted = true;
 
             return new NyxLarkProvisioningResult(
                 Succeeded: true,
@@ -122,14 +124,16 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
                 apiKeyId,
                 routeId);
 
-            if (routeId is not null)
+            if (!localMirrorAccepted && routeId is not null)
                 await TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, ct), "channel_route", routeId);
-            if (channelBotId is not null)
+            if (!localMirrorAccepted && channelBotId is not null)
                 await TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId);
-            if (apiKeyId is not null)
+            if (!localMirrorAccepted && apiKeyId is not null)
                 await TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId);
 
-            return Failure(ex.Message);
+            return Failure(localMirrorAccepted
+                ? "local_mirror_accepted_remote_cleanup_skipped"
+                : ex.Message);
         }
     }
 
