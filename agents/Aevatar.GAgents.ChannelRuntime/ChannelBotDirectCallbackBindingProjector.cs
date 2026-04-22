@@ -7,18 +7,18 @@ using Aevatar.GAgents.Channel.Abstractions;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Materializes legacy direct-platform secret bindings into a runtime-only
+/// Materializes direct platform-callback secret bindings into a runtime-only
 /// document. Lark registrations on the Nyx relay path leave this empty.
 /// </summary>
-public sealed class ChannelBotLegacyDirectBindingProjector
+public sealed class ChannelBotDirectCallbackBindingProjector
     : PerEntryDocumentProjector<
         ChannelBotRegistrationStoreState,
         ChannelBotRegistrationEntry,
-        ChannelBotLegacyDirectBindingDocument,
+        ChannelBotDirectCallbackBindingDocument,
         ChannelBotRegistrationMaterializationContext>
 {
-    public ChannelBotLegacyDirectBindingProjector(
-        IProjectionWriteDispatcher<ChannelBotLegacyDirectBindingDocument> writeDispatcher,
+    public ChannelBotDirectCallbackBindingProjector(
+        IProjectionWriteDispatcher<ChannelBotDirectCallbackBindingDocument> writeDispatcher,
         IProjectionClock clock)
         : base(writeDispatcher, clock)
     {
@@ -30,18 +30,20 @@ public sealed class ChannelBotLegacyDirectBindingProjector
     protected override string EntryKey(ChannelBotRegistrationEntry entry) => entry.Id ?? string.Empty;
 
     protected override ProjectionVerdict Evaluate(ChannelBotRegistrationEntry entry) =>
-        entry.Tombstoned || entry.ResolveLegacyDirectBinding() is null
+        entry.Tombstoned ||
+        string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase) ||
+        entry.ResolveDirectCallbackBinding() is null
             ? ProjectionVerdict.Tombstone
             : ProjectionVerdict.Project;
 
-    protected override ChannelBotLegacyDirectBindingDocument Materialize(
+    protected override ChannelBotDirectCallbackBindingDocument Materialize(
         ChannelBotRegistrationEntry entry,
         ChannelBotRegistrationMaterializationContext context,
         StateEvent stateEvent,
         DateTimeOffset updatedAt)
     {
-        var binding = entry.ResolveLegacyDirectBinding() ?? new ChannelBotLegacyDirectBinding();
-        return new ChannelBotLegacyDirectBindingDocument
+        var binding = entry.ResolveDirectCallbackBinding() ?? new ChannelBotDirectCallbackBinding();
+        return new ChannelBotDirectCallbackBindingDocument
         {
             Id = entry.Id,
             NyxUserToken = binding.NyxUserToken ?? string.Empty,

@@ -18,7 +18,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_channel_bot_id")!.FieldNumber.Should().Be(14);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(15);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(16);
-        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("legacy_direct_binding")!.FieldNumber.Should().Be(17);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("direct_callback_binding")!.FieldNumber.Should().Be(17);
     }
 
     [Fact]
@@ -34,24 +34,25 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_channel_bot_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(12);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(13);
-        ChannelBotRegisterCommand.Descriptor.FindFieldByName("legacy_direct_binding")!.FieldNumber.Should().Be(14);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("direct_callback_binding")!.FieldNumber.Should().Be(14);
 
         ChannelBotUpdateTokenCommand.Descriptor.FindFieldByName("nyx_user_token")!.FieldNumber.Should().Be(2);
         ChannelBotUpdateTokenCommand.Descriptor.FindFieldByName("nyx_refresh_token")!.FieldNumber.Should().Be(3);
-        ChannelBotUpdateTokenCommand.Descriptor.FindFieldByName("legacy_direct_binding")!.FieldNumber.Should().Be(4);
+        ChannelBotUpdateTokenCommand.Descriptor.FindFieldByName("direct_callback_binding")!.FieldNumber.Should().Be(4);
 
         ChannelBotTokenUpdatedEvent.Descriptor.FindFieldByName("nyx_user_token")!.FieldNumber.Should().Be(2);
         ChannelBotTokenUpdatedEvent.Descriptor.FindFieldByName("nyx_refresh_token")!.FieldNumber.Should().Be(3);
-        ChannelBotTokenUpdatedEvent.Descriptor.FindFieldByName("legacy_direct_binding")!.FieldNumber.Should().Be(4);
+        ChannelBotTokenUpdatedEvent.Descriptor.FindFieldByName("direct_callback_binding")!.FieldNumber.Should().Be(4);
     }
 
     [Fact]
-    public void ChannelBotRegistrationDocument_ShouldKeepLegacyReadModelFieldNumbersStable()
+    public void ChannelBotRegistrationDocument_ShouldExposeOnlyNonSecretFields()
     {
-        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_user_token")!.FieldNumber.Should().Be(11);
-        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("encrypt_key")!.FieldNumber.Should().Be(12);
-        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("credential_ref")!.FieldNumber.Should().Be(13);
-        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_refresh_token")!.FieldNumber.Should().Be(14);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("verification_token").Should().BeNull();
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_user_token").Should().BeNull();
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("encrypt_key").Should().BeNull();
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_refresh_token").Should().BeNull();
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_channel_bot_id")!.FieldNumber.Should().Be(15);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(16);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(17);

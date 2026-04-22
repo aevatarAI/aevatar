@@ -72,13 +72,13 @@ internal sealed class LarkConversationAdapterFactory
             ct.ThrowIfCancellationRequested();
 
             var credentialRef = registration.GetCredentialRef().Trim();
-            var legacyEncryptKey = registration.GetEncryptKey().Trim();
+            var fallbackEncryptKey = registration.GetEncryptKey().Trim();
             var bindingCredentialRef = credentialRef.Length == 0
                 ? $"channel-registration:lark:{registration.Id ?? string.Empty}"
                 : credentialRef;
 
             var secretJson = credentialRef.Length == 0
-                ? BuildSecretJson(legacyEncryptKey)
+                ? BuildSecretJson(fallbackEncryptKey)
                 : BuildSecretJson(await ResolveSecretAsync(credentialRef, credentialProvider, ct));
 
             return new AdapterSnapshot(

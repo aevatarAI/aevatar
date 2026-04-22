@@ -423,7 +423,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             NyxProviderSlug = session.NyxProviderSlug,
             ScopeId = session.RegistrationScopeId,
         };
-        registration.ApplyLegacyDirectBinding(new ChannelBotLegacyDirectBinding
+        registration.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
         {
             NyxUserToken = session.OrgToken,
         });
@@ -524,7 +524,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             NyxProviderSlug = evt.NyxProviderSlug,
             ScopeId = evt.RegistrationScopeId,
         };
-        registration.ApplyLegacyDirectBinding(new ChannelBotLegacyDirectBinding
+        registration.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
         {
             NyxUserToken = evt.RegistrationToken,
         });

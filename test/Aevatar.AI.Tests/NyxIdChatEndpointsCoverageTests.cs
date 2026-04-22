@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -56,7 +57,82 @@ public class NyxIdChatEndpointsCoverageTests
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stream");
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:approve");
         routes.Should().Contain("/api/webhooks/nyxid-relay");
-        routes.Should().NotContain("/api/webhooks/nyxid-relay/diag");
+        routes.Should().Contain("/api/webhooks/nyxid-relay/diag");
+    }
+
+    [Fact]
+    public async Task NyxRelayDiagRoute_ShouldReturnGuidance_WhenTokenIsMissing()
+    {
+        var endpoint = BuildRouteEndpoint("/api/webhooks/nyxid-relay/diag");
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton(new NyxIdToolOptions())
+                .BuildServiceProvider(),
+        };
+        context.Request.Method = HttpMethods.Post;
+
+        var response = await ExecuteEndpointAsync(endpoint, context);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("Provide token via X-Test-Token header");
+    }
+
+    [Fact]
+    public async Task NyxRelayDiagRoute_ShouldProxyGatewayResponse_WhenTokenIsProvided()
+    {
+        var endpoint = BuildRouteEndpoint("/api/webhooks/nyxid-relay/diag");
+        var port = GetFreeTcpPort();
+        var prefix = $"http://127.0.0.1:{port}/";
+        using var listener = new HttpListener();
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+
+        var capturedRequest = new TaskCompletionSource<(string? Authorization, string Body, string Path)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var serverTask = Task.Run(async () =>
+        {
+            var listenerContext = await listener.GetContextAsync();
+            using var reader = new StreamReader(listenerContext.Request.InputStream);
+            var requestBody = await reader.ReadToEndAsync();
+            capturedRequest.TrySetResult((
+                listenerContext.Request.Headers["Authorization"],
+                requestBody,
+                listenerContext.Request.RawUrl ?? string.Empty));
+
+            var responseBody = new string('x', 640);
+            var buffer = Encoding.UTF8.GetBytes(responseBody);
+            listenerContext.Response.StatusCode = (int)HttpStatusCode.Created;
+            listenerContext.Response.ContentType = "application/json";
+            await listenerContext.Response.OutputStream.WriteAsync(buffer);
+            listenerContext.Response.Close();
+        });
+
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton(new NyxIdToolOptions { BaseUrl = prefix.TrimEnd('/') })
+                .BuildServiceProvider(),
+        };
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Headers["X-Test-Token"] = "diag-token";
+
+        var response = await ExecuteEndpointAsync(endpoint, context);
+        var captured = await capturedRequest.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await serverTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var doc = JsonDocument.Parse(response.Body);
+        doc.RootElement.GetProperty("status").GetInt32().Should().Be((int)HttpStatusCode.Created);
+        doc.RootElement.GetProperty("statusText").GetString().Should().Be("Created");
+        doc.RootElement.GetProperty("responseBody").GetString()!.Length.Should().Be(500);
+
+        captured.Authorization.Should().Be("Bearer diag-token");
+        captured.Path.Should().Be("/api/v1/llm/gateway/v1/chat/completions");
+        captured.Body.Should().Contain("\"model\":\"gpt-5.4\"");
+        captured.Body.Should().Contain("\"content\":\"hi\"");
     }
 
     [Fact]
@@ -1184,6 +1260,40 @@ public class NyxIdChatEndpointsCoverageTests
         await result.ExecuteAsync(context);
         context.Response.Body.Position = 0;
         return (context.Response.StatusCode, await new StreamReader(context.Response.Body).ReadToEndAsync());
+    }
+
+    private static RouteEndpoint BuildRouteEndpoint(string routePattern)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapNyxIdChatEndpoints();
+
+        return routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(endpoint => string.Equals(endpoint.RoutePattern.RawText, routePattern, StringComparison.Ordinal));
+    }
+
+    private static async Task<(int StatusCode, string Body)> ExecuteEndpointAsync(RouteEndpoint endpoint, DefaultHttpContext context)
+    {
+        await using var body = new MemoryStream();
+        context.Response.Body = body;
+
+        await endpoint.RequestDelegate!(context);
+        context.Response.Body.Position = 0;
+        return (context.Response.StatusCode, await new StreamReader(context.Response.Body).ReadToEndAsync());
+    }
+
+    private static int GetFreeTcpPort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private static RelayInvocationDependencies CreateRelayInvocationDependencies(

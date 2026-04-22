@@ -207,7 +207,7 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
-    public async Task ParseInbound_extracts_card_action_with_resume_fields()
+    public async Task ParseInbound_extracts_card_action_fields_for_agent_builder_submit()
     {
         var payload = new
         {
@@ -228,14 +228,12 @@ public class LarkPlatformAdapterTests
                 {
                     value = new
                     {
-                        actor_id = "run-actor-1",
-                        run_id = "run-1",
-                        step_id = "approval-1",
-                        approved = true,
+                        agent_builder_action = "create_daily_report",
                     },
                     form_value = new
                     {
-                        user_input = "Looks good",
+                        github_username = "alice",
+                        schedule_time = "09:00",
                     },
                 },
             },
@@ -249,11 +247,9 @@ public class LarkPlatformAdapterTests
         inbound.ConversationId.Should().Be("oc_chat_card_1");
         inbound.SenderId.Should().Be("ou_operator_1");
         inbound.MessageId.Should().Be("evt_card_123");
-        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("actor_id", "run-actor-1"));
-        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("run_id", "run-1"));
-        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("step_id", "approval-1"));
-        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("approved", "True"));
-        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("user_input", "Looks good"));
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("agent_builder_action", "create_daily_report"));
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("github_username", "alice"));
+        inbound.Extra.Should().Contain(new KeyValuePair<string, string>("schedule_time", "09:00"));
     }
 
     [Fact]

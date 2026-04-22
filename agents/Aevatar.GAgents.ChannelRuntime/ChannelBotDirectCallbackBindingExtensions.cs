@@ -1,19 +1,19 @@
 namespace Aevatar.GAgents.ChannelRuntime;
 
-internal static class ChannelBotLegacyDirectBindingExtensions
+internal static class ChannelBotDirectCallbackBindingExtensions
 {
     public static string GetNyxUserToken(this ChannelBotRegistrationEntry registration) =>
-        registration.ResolveLegacyDirectBinding()?.NyxUserToken ?? string.Empty;
+        registration.ResolveDirectCallbackBinding()?.NyxUserToken ?? string.Empty;
 
     public static string GetNyxRefreshToken(this ChannelBotRegistrationEntry registration) =>
-        registration.ResolveLegacyDirectBinding()?.NyxRefreshToken ?? string.Empty;
+        registration.ResolveDirectCallbackBinding()?.NyxRefreshToken ?? string.Empty;
 
     public static string GetVerificationToken(this ChannelBotRegistrationEntry registration) =>
-        registration.ResolveLegacyDirectBinding()?.VerificationToken ?? string.Empty;
+        registration.ResolveDirectCallbackBinding()?.VerificationToken ?? string.Empty;
 
     public static string GetCredentialRef(this ChannelBotRegistrationEntry registration) =>
-        registration.ResolveLegacyDirectBinding()?.CredentialRef ?? string.Empty;
+        registration.ResolveDirectCallbackBinding()?.CredentialRef ?? string.Empty;
 
     public static string GetEncryptKey(this ChannelBotRegistrationEntry registration) =>
-        registration.ResolveLegacyDirectBinding()?.EncryptKey ?? string.Empty;
+        registration.ResolveDirectCallbackBinding()?.EncryptKey ?? string.Empty;
 }

@@ -29,7 +29,7 @@ message ChannelBotRegistrationEntry {
   string nyx_channel_bot_id = 14;
   string nyx_agent_api_key_id = 15;
   string nyx_conversation_route_id = 16;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 17;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 17;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -160,13 +160,13 @@ message ChannelBotUnregisteredEvent {
 }
 
 // Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
-message ChannelBotLegacyDirectBinding {
+message ChannelBotDirectCallbackBinding {
   string nyx_user_token = 1;
   string nyx_refresh_token = 2;
   string verification_token = 3;
   // Late-bound credential reference for direct platform/webhook secrets.
   string credential_ref = 4;
-  string encrypt_key = 5;   // Deprecated legacy raw field retained only for migration fallback.
+  string encrypt_key = 5;   // Deprecated raw field retained only for migration fallback.
 }
 
 message ChannelBotRegisterCommand {
@@ -183,7 +183,7 @@ message ChannelBotRegisterCommand {
   string nyx_channel_bot_id = 11;
   string nyx_agent_api_key_id = 12;
   string nyx_conversation_route_id = 13;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 14;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 14;
 }
 
 message ChannelBotUnregisterCommand {
@@ -194,7 +194,7 @@ message ChannelBotUpdateTokenCommand {
   string registration_id = 1;
   string nyx_user_token = 2;
   string nyx_refresh_token = 3;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 4;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 4;
 }
 
 message ChannelBotCompactTombstonesCommand {
@@ -211,34 +211,32 @@ message ChannelBotTokenUpdatedEvent {
   string registration_id = 1;
   string nyx_user_token = 2;
   string nyx_refresh_token = 3;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 4;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 4;
 }
 
 // Projection read model for channel bot registrations
 message ChannelBotRegistrationDocument {
+  reserved 5, 11, 12, 13, 14;
+  reserved "verification_token", "nyx_user_token", "encrypt_key", "credential_ref", "nyx_refresh_token";
   string id = 1;                            // Registration ID (= document key)
   string platform = 2;
   string nyx_provider_slug = 3;
   string scope_id = 4;
-  string verification_token = 5;
   string webhook_url = 6;
   int64 state_version = 7;
   string last_event_id = 8;
   google.protobuf.Timestamp updated_at_utc = 9;
   string actor_id = 10;                     // Source actor ID
-  string nyx_user_token = 11;
-  string encrypt_key = 12;
-  string credential_ref = 13;
-  string nyx_refresh_token = 14;
   string nyx_channel_bot_id = 15;
   string nyx_agent_api_key_id = 16;
   string nyx_conversation_route_id = 17;
 }
 
-// Runtime-only legacy direct binding read model. This is intentionally separate
+// Runtime-only direct callback binding read model. This is intentionally separate
 // from ChannelBotRegistrationDocument so the normal registration query surface
-// carries only non-secret identifiers.
-message ChannelBotLegacyDirectBindingDocument {
+// carries only non-secret identifiers. Lark registrations on the Nyx relay
+// path should never project into this document.
+message ChannelBotDirectCallbackBindingDocument {
   string id = 1;                            // Registration ID (= document key)
   string nyx_user_token = 2;
   string nyx_refresh_token = 3;

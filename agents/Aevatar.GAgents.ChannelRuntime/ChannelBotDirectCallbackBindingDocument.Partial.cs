@@ -3,7 +3,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed partial class ChannelBotLegacyDirectBindingDocument : IProjectionReadModel<ChannelBotLegacyDirectBindingDocument>
+public sealed partial class ChannelBotDirectCallbackBindingDocument : IProjectionReadModel<ChannelBotDirectCallbackBindingDocument>
 {
     public DateTimeOffset UpdatedAt
     {

@@ -116,6 +116,31 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         return string.Join('\n', lines);
     }
 
+    internal static string BuildApprovalResolutionText(
+        HumanApprovalResolution resolution,
+        UserAgentCatalogEntry? target = null)
+    {
+        var lines = new List<string>
+        {
+            resolution.Approved ? "Approval recorded." : "Rejection recorded.",
+            $"Run ID: {resolution.RunId}",
+            $"Step ID: {resolution.StepId}",
+        };
+
+        if (!string.IsNullOrWhiteSpace(resolution.Feedback))
+            lines.Add($"Feedback: {resolution.Feedback}");
+
+        if (!resolution.Approved && target is not null &&
+            string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase))
+        {
+            lines.Add(string.Empty);
+            lines.Add($"Run again: /run-agent {target.AgentId}");
+            lines.Add("View agents: /agents");
+        }
+
+        return string.Join('\n', lines);
+    }
+
     internal static string BuildCardJson(HumanInteractionRequest request)
     {
         var elements = new List<object>
@@ -158,31 +183,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             },
             body = new { elements },
         });
-    }
-
-    internal static string BuildApprovalResolutionText(
-        HumanApprovalResolution resolution,
-        UserAgentCatalogEntry? target = null)
-    {
-        var lines = new List<string>
-        {
-            resolution.Approved ? "Approval recorded." : "Rejection recorded.",
-            $"Run ID: {resolution.RunId}",
-            $"Step ID: {resolution.StepId}",
-        };
-
-        if (!string.IsNullOrWhiteSpace(resolution.Feedback))
-            lines.Add($"Feedback: {resolution.Feedback}");
-
-        if (!resolution.Approved && target is not null &&
-            string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase))
-        {
-            lines.Add(string.Empty);
-            lines.Add($"Run again: /run-agent {target.AgentId}");
-            lines.Add("View agents: /agents");
-        }
-
-        return string.Join('\n', lines);
     }
 
     private async Task<UserAgentCatalogEntry> ResolveTargetAsync(
@@ -318,6 +318,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         lines.Add($"Step: `{request.StepId}`");
         return string.Concat(lines);
     }
+
 
     private static string? NormalizeOptional(string? value)
     {

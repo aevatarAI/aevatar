@@ -6,7 +6,7 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
 /// Sends outbound platform replies.
-/// Legacy direct Lark replies fail fast with manual re-auth when the persisted
+/// Direct Lark replies fail fast with manual re-auth when the persisted
 /// Nyx session token has expired.
 /// </summary>
 internal sealed class ChannelPlatformReplyService

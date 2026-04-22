@@ -33,7 +33,9 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     [EventHandler]
     public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
-        var legacyDirectBinding = cmd.ResolveLegacyDirectBinding();
+        var directCallbackBinding = string.Equals(cmd.Platform, "lark", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : cmd.ResolveDirectCallbackBinding();
         var entry = new ChannelBotRegistrationEntry
         {
             Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
@@ -46,7 +48,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
-        entry.ApplyLegacyDirectBinding(legacyDirectBinding);
+        entry.ApplyDirectCallbackBinding(directCallbackBinding);
 
         await PersistDomainEventAsync(new ChannelBotRegisteredEvent { Entry = entry });
         Logger.LogInformation("Registered channel bot: id={Id}, platform={Platform}, slug={Slug}",
@@ -81,12 +83,18 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return;
         }
 
-        var legacyDirectBinding = cmd.ResolveLegacyDirectBinding();
+        if (string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.LogWarning("Ignoring token update for Nyx-relay Lark registration: {Id}", cmd.RegistrationId);
+            return;
+        }
+
+        var directCallbackBinding = cmd.ResolveDirectCallbackBinding();
         var domainEvent = new ChannelBotTokenUpdatedEvent
         {
             RegistrationId = cmd.RegistrationId,
         };
-        domainEvent.ApplyLegacyDirectBinding(legacyDirectBinding);
+        domainEvent.ApplyDirectCallbackBinding(directCallbackBinding);
 
         await PersistDomainEventAsync(domainEvent);
         Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
@@ -125,6 +133,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         if (existing is not null)
             next.Registrations.Remove(existing);
         var entry = evt.Entry.Clone();
+        entry.ApplyDirectCallbackBinding(entry.ResolveDirectCallbackBinding());
         entry.Tombstoned = false;
         entry.TombstoneStateVersion = 0;
         next.Registrations.Add(entry);
@@ -151,7 +160,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
         {
-            entry.ApplyLegacyDirectBinding(evt.ResolveLegacyDirectBinding());
+            entry.ApplyDirectCallbackBinding(evt.ResolveDirectCallbackBinding());
         }
         return next;
     }

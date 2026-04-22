@@ -5,14 +5,14 @@ namespace Aevatar.GAgents.ChannelRuntime;
 public sealed class ChannelBotRegistrationRuntimeQueryPort : IChannelBotRegistrationRuntimeQueryPort
 {
     private readonly IProjectionDocumentReader<ChannelBotRegistrationDocument, string> _documentReader;
-    private readonly IProjectionDocumentReader<ChannelBotLegacyDirectBindingDocument, string> _legacyDirectBindingReader;
+    private readonly IProjectionDocumentReader<ChannelBotDirectCallbackBindingDocument, string> _directCallbackBindingReader;
 
     public ChannelBotRegistrationRuntimeQueryPort(
         IProjectionDocumentReader<ChannelBotRegistrationDocument, string> documentReader,
-        IProjectionDocumentReader<ChannelBotLegacyDirectBindingDocument, string> legacyDirectBindingReader)
+        IProjectionDocumentReader<ChannelBotDirectCallbackBindingDocument, string> directCallbackBindingReader)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
-        _legacyDirectBindingReader = legacyDirectBindingReader ?? throw new ArgumentNullException(nameof(legacyDirectBindingReader));
+        _directCallbackBindingReader = directCallbackBindingReader ?? throw new ArgumentNullException(nameof(directCallbackBindingReader));
     }
 
     public async Task<ChannelBotRegistrationEntry?> GetAsync(string registrationId, CancellationToken ct = default)
@@ -24,7 +24,6 @@ public sealed class ChannelBotRegistrationRuntimeQueryPort : IChannelBotRegistra
         if (document is null)
             return null;
 
-        var legacyDirectBindingDocument = await _legacyDirectBindingReader.GetAsync(registrationId, ct);
         var entry = new ChannelBotRegistrationEntry
         {
             Id = document.Id ?? string.Empty,
@@ -37,16 +36,21 @@ public sealed class ChannelBotRegistrationRuntimeQueryPort : IChannelBotRegistra
             NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
         };
 
-        entry.ApplyLegacyDirectBinding(legacyDirectBindingDocument is null
-            ? document.ResolveLegacyDirectBinding()
-            : new ChannelBotLegacyDirectBinding
-            {
-                NyxUserToken = legacyDirectBindingDocument.NyxUserToken ?? string.Empty,
-                NyxRefreshToken = legacyDirectBindingDocument.NyxRefreshToken ?? string.Empty,
-                VerificationToken = legacyDirectBindingDocument.VerificationToken ?? string.Empty,
-                CredentialRef = legacyDirectBindingDocument.CredentialRef ?? string.Empty,
-                EncryptKey = legacyDirectBindingDocument.EncryptKey ?? string.Empty,
-            });
+        if (string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+            return entry;
+
+        var directCallbackBindingDocument = await _directCallbackBindingReader.GetAsync(registrationId, ct);
+        if (directCallbackBindingDocument is null)
+            return entry;
+
+        entry.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
+        {
+            NyxUserToken = directCallbackBindingDocument.NyxUserToken ?? string.Empty,
+            NyxRefreshToken = directCallbackBindingDocument.NyxRefreshToken ?? string.Empty,
+            VerificationToken = directCallbackBindingDocument.VerificationToken ?? string.Empty,
+            CredentialRef = directCallbackBindingDocument.CredentialRef ?? string.Empty,
+            EncryptKey = directCallbackBindingDocument.EncryptKey ?? string.Empty,
+        });
 
         return entry;
     }

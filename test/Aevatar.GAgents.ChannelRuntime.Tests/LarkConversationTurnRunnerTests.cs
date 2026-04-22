@@ -28,7 +28,7 @@ public sealed class LarkConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        result.SentActivityId.Should().Be("legacy-reply:msg-1");
+        result.SentActivityId.Should().Be("direct-reply:msg-1");
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Be("reply-1");
         adapter.Replies[0].Inbound.ConversationId.Should().Be("oc_group_chat_1");

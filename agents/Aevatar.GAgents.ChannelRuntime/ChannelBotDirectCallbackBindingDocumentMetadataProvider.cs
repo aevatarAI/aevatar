@@ -2,11 +2,11 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class ChannelBotLegacyDirectBindingDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<ChannelBotLegacyDirectBindingDocument>
+public sealed class ChannelBotDirectCallbackBindingDocumentMetadataProvider
+    : IProjectionDocumentMetadataProvider<ChannelBotDirectCallbackBindingDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
-        IndexName: "channel-bot-legacy-direct-bindings",
+        IndexName: "channel-bot-direct-callback-bindings",
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,

@@ -37,7 +37,7 @@ public sealed class ChannelBotRegistrationProjectorTests
                     NyxChannelBotId = "nyx-bot-1",
                     NyxAgentApiKeyId = "api-key-1",
                     NyxConversationRouteId = "route-1",
-                    LegacyDirectBinding = new ChannelBotLegacyDirectBinding
+                    DirectCallbackBinding = new ChannelBotDirectCallbackBinding
                     {
                         NyxUserToken = "token-abc",
                         NyxRefreshToken = "refresh-abc",
@@ -67,10 +67,10 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
-    public async Task LegacyBindingProjector_UpsertsRuntimeOnlySecretDocument()
+    public async Task DirectCallbackBindingProjector_UpsertsRuntimeOnlySecretDocument()
     {
-        var dispatcher = new RecordingLegacyBindingWriteDispatcher();
-        var projector = new ChannelBotLegacyDirectBindingProjector(dispatcher, _clock);
+        var dispatcher = new RecordingDirectCallbackBindingWriteDispatcher();
+        var projector = new ChannelBotDirectCallbackBindingProjector(dispatcher, _clock);
         var state = new ChannelBotRegistrationStoreState
         {
             Registrations =
@@ -78,8 +78,8 @@ public sealed class ChannelBotRegistrationProjectorTests
                 new ChannelBotRegistrationEntry
                 {
                     Id = "bot-secret-1",
-                    Platform = "lark",
-                    LegacyDirectBinding = new ChannelBotLegacyDirectBinding
+                    Platform = "telegram",
+                    DirectCallbackBinding = new ChannelBotDirectCallbackBinding
                     {
                         NyxUserToken = "token-abc",
                         NyxRefreshToken = "refresh-abc",
@@ -107,10 +107,38 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
-    public async Task LegacyBindingProjector_DeletesDocument_WhenBindingIsMissing()
+    public async Task DirectCallbackBindingProjector_DeletesDocument_ForLarkRelayRegistrations()
     {
-        var dispatcher = new RecordingLegacyBindingWriteDispatcher();
-        var projector = new ChannelBotLegacyDirectBindingProjector(dispatcher, _clock);
+        var dispatcher = new RecordingDirectCallbackBindingWriteDispatcher();
+        var projector = new ChannelBotDirectCallbackBindingProjector(dispatcher, _clock);
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-lark-relay",
+                    Platform = "lark",
+                    DirectCallbackBinding = new ChannelBotDirectCallbackBinding
+                    {
+                        NyxUserToken = "stale-token",
+                        CredentialRef = "secrets://lark/stale",
+                    },
+                },
+            },
+        };
+
+        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-lark-relay", 31, state), CancellationToken.None);
+
+        dispatcher.Upserts.Should().BeEmpty();
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("bot-lark-relay");
+    }
+
+    [Fact]
+    public async Task DirectCallbackBindingProjector_DeletesDocument_WhenBindingIsMissing()
+    {
+        var dispatcher = new RecordingDirectCallbackBindingWriteDispatcher();
+        var projector = new ChannelBotDirectCallbackBindingProjector(dispatcher, _clock);
         var state = new ChannelBotRegistrationStoreState
         {
             Registrations =
@@ -130,36 +158,36 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
-    public async Task LegacyBindingProjector_UsesLegacyScalarFields_WhenGroupedBindingIsMissing()
+    public async Task DirectCallbackBindingProjector_UsesFallbackScalarFields_WhenGroupedBindingIsMissing()
     {
-        var dispatcher = new RecordingLegacyBindingWriteDispatcher();
-        var projector = new ChannelBotLegacyDirectBindingProjector(dispatcher, _clock);
+        var dispatcher = new RecordingDirectCallbackBindingWriteDispatcher();
+        var projector = new ChannelBotDirectCallbackBindingProjector(dispatcher, _clock);
         var state = new ChannelBotRegistrationStoreState
         {
             Registrations =
             {
                 new ChannelBotRegistrationEntry
                 {
-                    Id = "bot-legacy-state",
-                    Platform = "lark",
+                    Id = "bot-fallback-state",
+                    Platform = "telegram",
                     NyxUserToken = "token-from-state",
                     NyxRefreshToken = "refresh-from-state",
                     VerificationToken = "verify-from-state",
-                    CredentialRef = "secrets://legacy/state",
+                    CredentialRef = "secrets://fallback/state",
                     EncryptKey = "encrypt-from-state",
                 },
             },
         };
 
-        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-legacy-state", 5, state), CancellationToken.None);
+        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-fallback-state", 5, state), CancellationToken.None);
 
         dispatcher.Upserts.Should().ContainSingle();
         var doc = dispatcher.Upserts[0];
-        doc.Id.Should().Be("bot-legacy-state");
+        doc.Id.Should().Be("bot-fallback-state");
         doc.NyxUserToken.Should().Be("token-from-state");
         doc.NyxRefreshToken.Should().Be("refresh-from-state");
         doc.VerificationToken.Should().Be("verify-from-state");
-        doc.CredentialRef.Should().Be("secrets://legacy/state");
+        doc.CredentialRef.Should().Be("secrets://fallback/state");
         doc.EncryptKey.Should().Be("encrypt-from-state");
     }
 
@@ -212,9 +240,9 @@ public sealed class ChannelBotRegistrationProjectorTests
     public async Task Projectors_IgnoreUnrelatedEvents()
     {
         var registrationDispatcher = new RecordingRegistrationWriteDispatcher();
-        var legacyDispatcher = new RecordingLegacyBindingWriteDispatcher();
+        var directCallbackDispatcher = new RecordingDirectCallbackBindingWriteDispatcher();
         var registrationProjector = new ChannelBotRegistrationProjector(registrationDispatcher, _clock);
-        var legacyProjector = new ChannelBotLegacyDirectBindingProjector(legacyDispatcher, _clock);
+        var directCallbackProjector = new ChannelBotDirectCallbackBindingProjector(directCallbackDispatcher, _clock);
         var envelope = new EventEnvelope
         {
             Id = "evt-unrelated",
@@ -224,12 +252,12 @@ public sealed class ChannelBotRegistrationProjectorTests
         };
 
         await registrationProjector.ProjectAsync(_context, envelope, CancellationToken.None);
-        await legacyProjector.ProjectAsync(_context, envelope, CancellationToken.None);
+        await directCallbackProjector.ProjectAsync(_context, envelope, CancellationToken.None);
 
         registrationDispatcher.Upserts.Should().BeEmpty();
         registrationDispatcher.Deletes.Should().BeEmpty();
-        legacyDispatcher.Upserts.Should().BeEmpty();
-        legacyDispatcher.Deletes.Should().BeEmpty();
+        directCallbackDispatcher.Upserts.Should().BeEmpty();
+        directCallbackDispatcher.Deletes.Should().BeEmpty();
     }
 
     private static EventEnvelope BuildCommittedEnvelope(
@@ -279,13 +307,13 @@ public sealed class ChannelBotRegistrationProjectorTests
         }
     }
 
-    private sealed class RecordingLegacyBindingWriteDispatcher : IProjectionWriteDispatcher<ChannelBotLegacyDirectBindingDocument>
+    private sealed class RecordingDirectCallbackBindingWriteDispatcher : IProjectionWriteDispatcher<ChannelBotDirectCallbackBindingDocument>
     {
-        public List<ChannelBotLegacyDirectBindingDocument> Upserts { get; } = [];
+        public List<ChannelBotDirectCallbackBindingDocument> Upserts { get; } = [];
         public List<string> Deletes { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(
-            ChannelBotLegacyDirectBindingDocument readModel,
+            ChannelBotDirectCallbackBindingDocument readModel,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

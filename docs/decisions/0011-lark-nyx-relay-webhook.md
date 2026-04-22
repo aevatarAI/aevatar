@@ -68,20 +68,18 @@ These are explicit current limitations, not hidden assumptions:
 
 Because of that:
 
-- `social_media` and approval-style card-action flows must migrate off `card.action.trigger`
+- `social_media` and approval-style interactions now use text commands such as `/approve`, `/reject`, and `/submit` instead of `card.action.trigger`
 - supported interactive pattern is `open_url` / deep-link or text-driven interaction
 
 ## Cutover Order
-
-Cutover is not a one-shot URL flip.
 
 The required order is:
 
 1. Build and validate `/api/webhooks/nyxid-relay`
 2. Build and validate `channel-relay/reply`
 3. Switch the Lark console callback URL to Nyx
-4. Keep the legacy direct Aevatar callback path during an explicit rollback window
-5. Only after Nyx ingress and relay reply are stable, return `410` or delete the legacy direct callback path
+4. Remove the direct Aevatar Lark callback path from the supported runtime contract
+5. Return `410 Gone` for `POST /api/channels/lark/callback/{registrationId}` or delete that endpoint entirely
 
 ## Consequences
 
@@ -89,4 +87,5 @@ The required order is:
 - public read models do not persist `NyxApiKey`; runtime-only Nyx credential material lives in a separate runtime projection used only by host-side delivery ports
 - callback-edge cryptographic verification shifts to JWT-via-JWKS
 - HMAC callback signature remains defense-in-depth only under the current zero-secret constraint
-- card-action-dependent Lark UX must be redesigned before final cutover
+- Lark approval and `social_media` relay UX are text-driven; card-action callbacks are no longer part of the supported approval path
+- no rollback-window contract remains for direct `Lark -> Aevatar` ingress

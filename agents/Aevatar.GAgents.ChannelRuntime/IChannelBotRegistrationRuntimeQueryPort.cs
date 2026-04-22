@@ -2,8 +2,8 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
 /// Runtime-only registration read path used by callback ingress.
-/// Preserves legacy secret material from the read model so pre-migration
-/// registrations keep working until credential_ref backfill completes.
+/// Composes any runtime-only direct callback binding material that should stay
+/// off the public registration read model.
 /// </summary>
 public interface IChannelBotRegistrationRuntimeQueryPort
 {

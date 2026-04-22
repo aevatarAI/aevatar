@@ -491,8 +491,9 @@ public class ChannelRegistrationToolTests
                 e.Payload != null &&
                 e.Payload.Is(ChannelBotUpdateTokenCommand.Descriptor) &&
                 e.Payload.Unpack<ChannelBotUpdateTokenCommand>().RegistrationId == "bot-3" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().NyxUserToken == "fresh" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().NyxRefreshToken == "refresh-fresh"));
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding != null &&
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxUserToken == "fresh" &&
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxRefreshToken == "refresh-fresh"));
         }
         finally
         {
@@ -536,8 +537,9 @@ public class ChannelRegistrationToolTests
                 e.Payload != null &&
                 e.Payload.Is(ChannelBotUpdateTokenCommand.Descriptor) &&
                 e.Payload.Unpack<ChannelBotUpdateTokenCommand>().RegistrationId == "bot-4" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().NyxUserToken == "fresh" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().NyxRefreshToken == "refresh-old"),
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding != null &&
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxUserToken == "fresh" &&
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxRefreshToken == "refresh-old"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -615,9 +617,10 @@ public class ChannelRegistrationToolTests
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&
                 e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().CredentialRef == "vault://channels/lark/reg-1" &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().NyxRefreshToken == "refresh-token-1" &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().EncryptKey == ""));
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding != null &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.CredentialRef == "vault://channels/lark/reg-1" &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.NyxRefreshToken == "refresh-token-1" &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.EncryptKey == ""));
         }
         finally
         {
@@ -658,13 +661,15 @@ public class ChannelRegistrationToolTests
                 }
                 """);
 
-            // Verify credential_ref defaults to empty
+            // Verify direct callback binding still carries the access token but
+            // leaves secret-bearing fields empty by default.
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
                 e.Payload != null &&
                 e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().CredentialRef == "" &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().NyxRefreshToken == "" &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().EncryptKey == ""));
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding != null &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.NyxUserToken == "test-token" &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.CredentialRef == string.Empty &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.EncryptKey == string.Empty));
         }
         finally
         {

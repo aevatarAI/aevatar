@@ -135,7 +135,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
         var result = await SendReplyAsync(replyPayload, activity, ToInboundMessage(activity), registration, ct);
         return result.Success
             ? ConversationTurnResult.Sent(
-                sentActivityId: $"legacy-reply:{activity.Id}",
+                sentActivityId: $"direct-reply:{activity.Id}",
                 outbound: new MessageContent { Text = replyPayload },
                 authPrincipal: "bot")
             : result;
@@ -184,7 +184,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
         }
 
         return ConversationTurnResult.Sent(
-            sentActivityId: $"legacy-reply:{sentActivitySeed}",
+            sentActivityId: $"direct-reply:{sentActivitySeed}",
             outbound: new MessageContent { Text = replyText },
             authPrincipal: "bot");
     }
@@ -201,8 +201,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(inbound);
 
-        var routed = ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand) ||
-                     ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out resumeCommand);
+        var routed = ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand);
         if (!routed ||
             resumeCommand is null)
         {

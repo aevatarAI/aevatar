@@ -11,6 +11,8 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Lark;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -192,6 +194,131 @@ public sealed class LarkConversationHostCutoverTests
     }
 
     [Fact]
+    public async Task Ingress_RelaySocialMediaCommand_ShouldCreateWorkflowAgentWithoutCardCallback()
+    {
+        var registration = BuildRelayRegistration();
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var runtime = new HybridActorRuntime();
+        var streams = new InMemoryStreamProvider();
+        var eventStore = new InMemoryEventStore();
+        var outbound = new RecordingPlatformAdapter("lark");
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-1");
+        runtime.RegisterFactory<WorkflowAgentGAgent>(_ => workflowAgentActor);
+
+        var userAgentQueryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        userAgentQueryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        userAgentQueryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = call.ArgAt<string>(0),
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+            }));
+
+        ScopeWorkflowUpsertRequest? capturedWorkflowUpsert = null;
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+        workflowCommandPort.UpsertAsync(
+                Arg.Do<ScopeWorkflowUpsertRequest>(request => capturedWorkflowUpsert = request),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var request = call.ArgAt<ScopeWorkflowUpsertRequest>(0);
+                return Task.FromResult(new ScopeWorkflowUpsertResult(
+                    new ScopeWorkflowSummary(
+                        request.ScopeId,
+                        request.WorkflowId,
+                        request.DisplayName ?? "Social Media Approval",
+                        "service-key",
+                        request.WorkflowName ?? "social_media_workflow",
+                        "workflow-actor-1",
+                        "rev-1",
+                        "deploy-1",
+                        "active",
+                        DateTimeOffset.UtcNow),
+                    "rev-1",
+                    "workflow-actor-prefix",
+                    "workflow-actor-1"));
+            });
+
+        var nyxHandler = new RoutingJsonHandler();
+        nyxHandler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        nyxHandler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
+        nyxHandler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
+
+        await using var services = await BuildServicesAsync(
+            runtime,
+            streams,
+            eventStore,
+            outbound,
+            registrationQueryPort,
+            nyxClient: new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(nyxHandler) { BaseAddress = new Uri("https://nyx.example.com") }),
+            replyGenerator: new StubReplyGenerator("group-reply"),
+            credentialProvider: BuildCredentialProvider(registration),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(userAgentQueryPort);
+                serviceCollection.AddSingleton(workflowCommandPort);
+            });
+
+        var ingress = services.GetRequiredService<ILarkConversationIngressRuntime>();
+        var result = await ingress.HandleAsync(
+            BuildHttpContext(BuildMessageWebhookJson(
+                text: "/social-media topic=\"Launch update for the new workflow feature\" audience=\"Developers\" style=\"Confident and concise\" schedule_time=09:00 schedule_timezone=UTC",
+                messageId: "om_social_media_1",
+                chatId: "oc_social_chat_1",
+                chatType: "p2p")),
+            registration,
+            CancellationToken.None);
+
+        var executed = await ExecuteAsync(result, services);
+        executed.StatusCode.Should().Be(StatusCodes.Status200OK);
+        outbound.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(outbound.Replies[0].ReplyText).Should().BeFalse();
+        outbound.Replies[0].ReplyText.Should().Contain("Social media agent registered.");
+        outbound.Replies[0].ReplyText.Should().Contain("Approvals will arrive as text instructions in this chat.");
+        outbound.Replies[0].ReplyText.Should().Contain("/approve");
+        outbound.Replies[0].Inbound.ConversationId.Should().Be("oc_social_chat_1");
+
+        runtime.CreatedActorIds.Should().Contain(ConversationGAgent.BuildActorId("lark:dm:ou_123"));
+        runtime.CreatedActorIds.Should().NotContain(id => id.StartsWith("channel-user-", StringComparison.Ordinal));
+        runtime.GetConversationAgent("lark:dm:ou_123").State.ProcessedMessageIds.Should().ContainSingle("om_social_media_1");
+        capturedWorkflowUpsert.Should().NotBeNull();
+        capturedWorkflowUpsert!.ScopeId.Should().Be("scope-1");
+        capturedWorkflowUpsert.WorkflowId.Should().StartWith("social-media-workflow-agent-");
+        capturedWorkflowUpsert.WorkflowName.Should().StartWith("social_media_workflow_agent_");
+        capturedWorkflowUpsert.DisplayName.Should().StartWith("Social Media Approval workflow-agent-");
+        capturedWorkflowUpsert.WorkflowYaml.Should().Contain("type: human_approval");
+        capturedWorkflowUpsert.WorkflowYaml.Should().Contain("delivery_target_id: \"workflow-agent-");
+        outbound.Replies[0].ReplyText.Should().Contain($"Workflow ID: {capturedWorkflowUpsert.WorkflowId}");
+
+        await workflowAgentActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(envelope =>
+                envelope.Payload != null &&
+                envelope.Payload.Is(InitializeWorkflowAgentCommand.Descriptor) &&
+                envelope.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowId == capturedWorkflowUpsert.WorkflowId &&
+                envelope.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowActorId == "workflow-actor-1" &&
+                envelope.Payload.Unpack<InitializeWorkflowAgentCommand>().ConversationId == "oc_social_chat_1" &&
+                envelope.Payload.Unpack<InitializeWorkflowAgentCommand>().ApiKeyId == "key-2"),
+            Arg.Any<CancellationToken>());
+
+        await workflowAgentActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(envelope =>
+                envelope.Payload != null &&
+                envelope.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
+                envelope.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "create_agent"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Ingress_GroupChat_ShouldReplyThroughConversationActor()
     {
         var registration = BuildRegistration();
@@ -284,6 +411,13 @@ public sealed class LarkConversationHostCutoverTests
         ScopeId = "scope-1",
         CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
     };
+
+    private static ChannelBotRegistrationEntry BuildRelayRegistration()
+    {
+        var registration = BuildRegistration();
+        registration.NyxAgentApiKeyId = "relay-api-key-1";
+        return registration;
+    }
 
     private static FoundationCredentialProvider BuildCredentialProvider(ChannelBotRegistrationEntry registration) =>
         new TestCredentialProvider(new Dictionary<string, string>(StringComparer.Ordinal)

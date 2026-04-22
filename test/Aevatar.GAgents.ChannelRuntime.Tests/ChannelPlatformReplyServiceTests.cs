@@ -51,8 +51,8 @@ public sealed class ChannelPlatformReplyServiceTests
         result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
         result.Detail.Should().Contain("manual_reauth_required");
         result.Detail.Should().Contain("reply_path_token_refresh_disabled");
-        store.Current.NyxUserToken.Should().Be("old-access");
-        store.Current.NyxRefreshToken.Should().Be("old-refresh");
+        store.Current.GetNyxUserToken().Should().Be("old-access");
+        store.Current.GetNyxRefreshToken().Should().Be("old-refresh");
         handler.ProxyCalls.Should().Be(1);
         handler.RefreshCalls.Should().Be(0);
     }
@@ -87,8 +87,8 @@ public sealed class ChannelPlatformReplyServiceTests
         result.FailureKind.Should().Be(PlatformReplyFailureKind.Permanent);
         result.Detail.Should().Contain("manual_reauth_required");
         result.Detail.Should().Contain("missing_nyx_refresh_token");
-        store.Current.NyxUserToken.Should().Be("old-access");
-        store.Current.NyxRefreshToken.Should().BeEmpty();
+        store.Current.GetNyxUserToken().Should().Be("old-access");
+        store.Current.GetNyxRefreshToken().Should().BeEmpty();
         handler.ProxyCalls.Should().Be(1);
         handler.RefreshCalls.Should().Be(0);
     }
@@ -166,8 +166,8 @@ public sealed class ChannelPlatformReplyServiceTests
             result.Detail.Contains("manual_reauth_required", StringComparison.Ordinal));
         handler.ProxyCalls.Should().Be(2);
         handler.RefreshCalls.Should().Be(0);
-        store.Current.NyxUserToken.Should().Be("old-access");
-        store.Current.NyxRefreshToken.Should().Be("old-refresh");
+        store.Current.GetNyxUserToken().Should().Be("old-access");
+        store.Current.GetNyxRefreshToken().Should().Be("old-refresh");
     }
 
     [Fact]
@@ -192,8 +192,8 @@ public sealed class ChannelPlatformReplyServiceTests
 
         result.Should().Be(new PlatformReplyDeliveryResult(true, "ok"));
         adapter.Registrations.Should().ContainSingle();
-        adapter.Registrations[0].NyxUserToken.Should().Be("new-access");
-        adapter.Registrations[0].NyxRefreshToken.Should().Be("new-refresh");
+        adapter.Registrations[0].GetNyxUserToken().Should().Be("new-access");
+        adapter.Registrations[0].GetNyxRefreshToken().Should().Be("new-refresh");
     }
 
     [Fact]
@@ -224,18 +224,24 @@ public sealed class ChannelPlatformReplyServiceTests
         result.FailureKind.Should().Be(PlatformReplyFailureKind.Transient);
     }
 
-    private static ChannelBotRegistrationEntry MakeRegistration(string accessToken, string refreshToken) =>
-        new()
+    private static ChannelBotRegistrationEntry MakeRegistration(string accessToken, string refreshToken)
+    {
+        var entry = new ChannelBotRegistrationEntry
         {
             Id = "bot-1",
             Platform = "lark",
             NyxProviderSlug = "api-lark-bot",
-            NyxUserToken = accessToken,
-            NyxRefreshToken = refreshToken,
-            VerificationToken = "verify-token",
             ScopeId = "scope-1",
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+        entry.ApplyDirectCallbackBinding(new ChannelBotDirectCallbackBinding
+        {
+            NyxUserToken = accessToken,
+            NyxRefreshToken = refreshToken,
+            VerificationToken = "verify-token",
+        });
+        return entry;
+    }
 
     private static InboundMessage MakeInbound() =>
         new()
