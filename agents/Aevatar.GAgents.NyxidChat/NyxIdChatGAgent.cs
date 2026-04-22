@@ -24,6 +24,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private readonly SkillRegistry? _skillRegistry;
     private readonly IToolApprovalHandler? _remoteApprovalHandler;
+    private readonly NyxIdRelayOptions? _relayOptions;
 
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -33,12 +34,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         SkillRegistry? skillRegistry = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IToolApprovalHandler? approvalHandler = null,
+        NyxIdRelayOptions? relayOptions = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                approvalHandler: new YieldApprovalHandler())
     {
         _skillRegistry = skillRegistry;
         _remoteApprovalHandler = approvalHandler;
+        _relayOptions = relayOptions;
     }
 
     /// <summary>Provides the NyxID remote handler for approval timeout escalation.</summary>
@@ -61,19 +64,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     protected override string DecorateSystemPrompt(string basePrompt)
     {
         var prompt = basePrompt;
-
-        // Inject channel runtime callback base URL
-        prompt += """
-
-## Channel Runtime Configuration (Auto-Injected)
-
-Aevatar's Nyx relay callback URL is: `https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay`
-
-When registering channel bots, use `channel_registrations` tool (NOT `nyxid_channel_bots`).
-For Lark, use `channel_registrations action=register_lark_via_nyx`.
-The Lark developer console callback URL must point to the Nyx webhook URL returned by that tool, not to an Aevatar `/api/channels/lark/callback/...` URL.
-For proactive Lark chat discovery, sends, spreadsheet appends, and approval actions, prefer typed Lark tools such as `lark_chats_lookup`, `lark_messages_send`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
-""";
+        prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
         if (_skillRegistry != null && _skillRegistry.Count > 0)
         {

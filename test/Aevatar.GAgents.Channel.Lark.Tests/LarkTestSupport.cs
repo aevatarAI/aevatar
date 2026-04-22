@@ -24,6 +24,8 @@ internal sealed class LarkAdapterHarness
         credentialRef: CredentialRef,
         verificationToken: VerificationToken);
 
+    public TestCredentialProvider CredentialProvider { get; private set; } = null!;
+
     public RecordingLarkHttpHandler HttpHandler { get; private set; } = null!;
 
     public LarkWebhookFixture Webhook { get; private set; } = null!;
@@ -35,20 +37,20 @@ internal sealed class LarkAdapterHarness
     public LarkChannelAdapter Reset()
     {
         HttpHandler = new RecordingLarkHttpHandler();
-        var credentialProvider = new TestCredentialProvider();
-        credentialProvider.Set(CredentialRef, JsonSerializer.Serialize(new
+        CredentialProvider = new TestCredentialProvider();
+        CredentialProvider.Set(CredentialRef, JsonSerializer.Serialize(new
         {
             access_token = "bot-access-token",
             encrypt_key = EncryptKey,
         }));
-        credentialProvider.Set("vault://users/delegate", JsonSerializer.Serialize(new
+        CredentialProvider.Set("vault://users/delegate", JsonSerializer.Serialize(new
         {
             access_token = "user-access-token",
         }));
 
         Redactor = new LarkPayloadRedactor();
         var adapter = new LarkChannelAdapter(
-            credentialProvider,
+            CredentialProvider,
             new LarkMessageComposer(),
             Redactor,
             NullLogger<LarkChannelAdapter>.Instance,

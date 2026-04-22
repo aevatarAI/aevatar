@@ -506,15 +506,6 @@ public sealed class LarkConversationHostCutoverTests
         }
     }
 
-    private sealed class TestCredentialProvider(IReadOnlyDictionary<string, string> values) : FoundationCredentialProvider
-    {
-        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(values.TryGetValue(credentialRef, out var secret) ? secret : null);
-        }
-    }
-
     private sealed class RecordingPlatformAdapter(string platform) : IPlatformAdapter
     {
         public string Platform { get; } = platform;
@@ -573,17 +564,19 @@ public sealed class LarkConversationHostCutoverTests
             where TAgent : IAgent =>
             CreateAsync(typeof(TAgent), id, ct);
 
-        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        public async Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var actorId = id ?? Guid.NewGuid().ToString("N");
             if (_actors.TryGetValue(actorId, out var existing))
-                return Task.FromResult(existing);
+                return existing;
 
             IActor actor;
             if (agentType == typeof(ConversationGAgent))
             {
-                actor = ConversationActor.Create(actorId, _services ?? throw new InvalidOperationException("Services not attached."));
+                actor = await ConversationActor.CreateAsync(
+                    actorId,
+                    _services ?? throw new InvalidOperationException("Services not attached."));
             }
             else if (_factories.TryGetValue(agentType, out var factory))
             {
@@ -596,7 +589,7 @@ public sealed class LarkConversationHostCutoverTests
 
             _actors[actorId] = actor;
             CreatedActorIds.Add(actorId);
-            return Task.FromResult(actor);
+            return actor;
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
@@ -637,7 +630,7 @@ public sealed class LarkConversationHostCutoverTests
 
             public ConversationGAgent Instance { get; }
 
-            public static ConversationActor Create(string actorId, IServiceProvider services)
+            public static async Task<ConversationActor> CreateAsync(string actorId, IServiceProvider services)
             {
                 var agent = new ConversationGAgent
                 {
@@ -647,7 +640,7 @@ public sealed class LarkConversationHostCutoverTests
                         services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
                 };
                 SetAgentId(agent, actorId);
-                agent.ActivateAsync().GetAwaiter().GetResult();
+                await agent.ActivateAsync();
                 return new ConversationActor(actorId, agent);
             }
 

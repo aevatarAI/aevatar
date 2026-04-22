@@ -27,8 +27,7 @@ internal sealed class ConversationDispatchMiddleware : IChannelMiddleware
         }
 
         var actorId = ConversationGAgent.BuildActorId(canonicalKey);
-        var actor = await _actorRuntime.GetAsync(actorId)
-                    ?? await _actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
+        var actor = await _actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
 
         var envelope = new EventEnvelope
         {

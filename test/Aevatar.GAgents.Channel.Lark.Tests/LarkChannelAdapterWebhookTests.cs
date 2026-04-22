@@ -95,6 +95,33 @@ public sealed class LarkChannelAdapterWebhookTests
     }
 
     [Fact]
+    public async Task SendAsync_RefreshesBotCredentialBeforeOutboundRequest()
+    {
+        var harness = new LarkAdapterHarness();
+        var adapter = harness.Reset();
+        await adapter.InitializeAsync(harness.DefaultBinding, CancellationToken.None);
+        await adapter.StartReceivingAsync(CancellationToken.None);
+        harness.CredentialProvider.Set("vault://bots/lark-conformance", JsonSerializer.Serialize(new
+        {
+            access_token = "rotated-access-token",
+            encrypt_key = "encrypt-key",
+        }));
+
+        var result = await adapter.SendAsync(
+            ConversationReference.Create(
+                ChannelId.From("lark"),
+                BotInstanceId.From("conformance-bot"),
+                ConversationScope.DirectMessage,
+                partition: null,
+                "user-open-id"),
+            SampleMessageContent.SimpleText("hello"),
+            CancellationToken.None);
+
+        result.Success.ShouldBeTrue();
+        harness.HttpHandler.LastAuthorization.ShouldBe("rotated-access-token");
+    }
+
+    [Fact]
     public async Task HandleWebhookAsync_EncryptedPayloadWithExpiredTimestamp_Returns401()
     {
         var harness = new LarkAdapterHarness();

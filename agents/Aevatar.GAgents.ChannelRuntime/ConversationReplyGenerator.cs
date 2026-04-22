@@ -31,6 +31,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly SkillRegistry? _skillRegistry;
+    private readonly NyxIdRelayOptions? _relayOptions;
 
     public NyxIdConversationReplyGenerator(
         ILLMProviderFactory llmProviderFactory,
@@ -38,7 +39,8 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        SkillRegistry? skillRegistry = null)
+        SkillRegistry? skillRegistry = null,
+        NyxIdRelayOptions? relayOptions = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -46,6 +48,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _skillRegistry = skillRegistry;
+        _relayOptions = relayOptions;
     }
 
     public async Task<string?> GenerateReplyAsync(
@@ -142,17 +145,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
     private string BuildSystemPrompt()
     {
         var prompt = LoadBaseSystemPrompt();
-        prompt += """
-
-## Channel Runtime Configuration (Auto-Injected)
-
-Aevatar's Nyx relay callback URL is: `https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay`
-
-When registering channel bots, use `channel_registrations` tool (NOT `nyxid_channel_bots`).
-For Lark, use `channel_registrations action=register_lark_via_nyx`.
-The Lark developer console callback URL must point to the Nyx webhook URL returned by that tool, not to an Aevatar `/api/channels/lark/callback/...` URL.
-For proactive Lark chat discovery, sends, spreadsheet appends, and approval actions, prefer typed Lark tools such as `lark_chats_lookup`, `lark_messages_send`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
-""";
+        prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
         if (_skillRegistry != null && _skillRegistry.Count > 0)
         {

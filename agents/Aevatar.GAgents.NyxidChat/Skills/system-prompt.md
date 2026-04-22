@@ -139,7 +139,7 @@ If not: `nyxid_catalog action=list` → find the slug → guide user to add it
 
 ### Step 2: Register channel bot in Aevatar
 
-`channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> webhook_base_url=https://aevatar-console-backend-api.aevatar.ai`
+`channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> webhook_base_url=https://<your-aevatar-host>`
 
 For **Telegram**:
 `channel_registrations action=register platform=telegram nyx_provider_slug=api-telegram-bot`
@@ -160,7 +160,7 @@ Add event: `im.message.receive_v1`
 Do not rely on `card.action.trigger` for the Nyx relay path.
 
 **Telegram:** User must call Telegram's setWebhook API manually or via BotFather, pointing to:
-`https://aevatar-console-backend-api.aevatar.ai/api/channels/telegram/callback/<registration_id>`
+`https://<your-aevatar-host>/api/channels/telegram/callback/<registration_id>`
 
 ### Managing registrations
 

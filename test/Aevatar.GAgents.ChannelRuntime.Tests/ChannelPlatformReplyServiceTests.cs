@@ -5,6 +5,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -169,6 +170,60 @@ public sealed class ChannelPlatformReplyServiceTests
         store.Current.NyxRefreshToken.Should().Be("old-refresh");
     }
 
+    [Fact]
+    public async Task DeliverAsync_should_use_current_registration_and_return_success_when_adapter_succeeds()
+    {
+        var store = new FakeChannelBotRegistrationStore(MakeRegistration("new-access", "new-refresh"));
+        var staleRegistration = MakeRegistration("old-access", "old-refresh");
+        var adapter = new StubPlatformAdapter(
+            platform: "lark",
+            result: new PlatformReplyDeliveryResult(true, "ok"));
+        var replyService = new ChannelPlatformReplyService(
+            store,
+            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
+            NullLogger<ChannelPlatformReplyService>.Instance);
+
+        var result = await replyService.DeliverAsync(
+            adapter,
+            "hello",
+            MakeInbound(),
+            staleRegistration,
+            CancellationToken.None);
+
+        result.Should().Be(new PlatformReplyDeliveryResult(true, "ok"));
+        adapter.Registrations.Should().ContainSingle();
+        adapter.Registrations[0].NyxUserToken.Should().Be("new-access");
+        adapter.Registrations[0].NyxRefreshToken.Should().Be("new-refresh");
+    }
+
+    [Fact]
+    public async Task DeliverAsync_should_not_translate_non_lark_failures_to_manual_reauth()
+    {
+        var store = new FakeChannelBotRegistrationStore(MakeRegistration("old-access", "old-refresh"));
+        var adapter = new StubPlatformAdapter(
+            platform: "telegram",
+            result: new PlatformReplyDeliveryResult(
+                false,
+                "lark_error=token_expired platform rejected",
+                PlatformReplyFailureKind.Transient));
+        var replyService = new ChannelPlatformReplyService(
+            store,
+            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
+            NullLogger<ChannelPlatformReplyService>.Instance);
+
+        var result = await replyService.DeliverAsync(
+            adapter,
+            "hello",
+            MakeInbound(),
+            store.Current,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("lark_error=token_expired platform rejected");
+        result.Detail.Should().NotContain("manual_reauth_required");
+        result.FailureKind.Should().Be(PlatformReplyFailureKind.Transient);
+    }
+
     private static ChannelBotRegistrationEntry MakeRegistration(string accessToken, string refreshToken) =>
         new()
         {
@@ -199,6 +254,32 @@ public sealed class ChannelPlatformReplyServiceTests
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+
+    private sealed class StubPlatformAdapter(
+        string platform,
+        PlatformReplyDeliveryResult result) : IPlatformAdapter
+    {
+        public string Platform { get; } = platform;
+
+        public List<ChannelBotRegistrationEntry> Registrations { get; } = [];
+
+        public Task<IResult?> TryHandleVerificationAsync(HttpContext http, ChannelBotRegistrationEntry registration) =>
+            Task.FromResult<IResult?>(null);
+
+        public Task<InboundMessage?> ParseInboundAsync(HttpContext http, ChannelBotRegistrationEntry registration) =>
+            Task.FromResult<InboundMessage?>(null);
+
+        public Task<PlatformReplyDeliveryResult> SendReplyAsync(
+            string replyText,
+            InboundMessage inbound,
+            ChannelBotRegistrationEntry registration,
+            NyxIdApiClient nyxClient,
+            CancellationToken ct)
+        {
+            Registrations.Add(registration.Clone());
+            return Task.FromResult(result);
+        }
+    }
 
     private sealed class FakeChannelBotRegistrationStore(ChannelBotRegistrationEntry registration)
         : IChannelBotRegistrationQueryPort, IChannelBotRegistrationRuntimeQueryPort

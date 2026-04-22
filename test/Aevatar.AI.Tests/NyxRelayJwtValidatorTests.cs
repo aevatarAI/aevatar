@@ -21,7 +21,7 @@ public sealed class NyxRelayJwtValidatorTests
     {
         using var rsa = RSA.Create(2048);
         var key = CreateSigningKey(rsa, "kid-1");
-        var handler = new OidcDocumentHandler(
+        var handler = new NyxRelayOidcDocumentHandler(
             CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
             () => CreateJwksJson(key));
         var validator = CreateValidator(handler, "https://nyx.example.com");
@@ -43,7 +43,7 @@ public sealed class NyxRelayJwtValidatorTests
         var staleKey = CreateSigningKey(staleRsa, "kid-stale");
         var freshKey = CreateSigningKey(freshRsa, "kid-fresh");
         var callCount = 0;
-        var handler = new OidcDocumentHandler(
+        var handler = new NyxRelayOidcDocumentHandler(
             CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
             () =>
             {
@@ -64,7 +64,7 @@ public sealed class NyxRelayJwtValidatorTests
     {
         using var rsa = RSA.Create(2048);
         var key = CreateSigningKey(rsa, "kid-1");
-        var handler = new OidcDocumentHandler(
+        var handler = new NyxRelayOidcDocumentHandler(
             CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
             () => CreateJwksJson(key));
         var validator = CreateValidator(handler, "https://nyx.example.com");
@@ -74,6 +74,130 @@ public sealed class NyxRelayJwtValidatorTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be("invalid_audience");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectMissingToken()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+
+        var result = await validator.ValidateAsync("   ", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("missing_token");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectExpiredToken()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(
+            key,
+            "https://nyx.example.com",
+            "https://nyx.example.com",
+            "scope-123",
+            "api-key-123",
+            notBeforeUtc: DateTime.UtcNow.AddMinutes(-10),
+            expiresAtUtc: DateTime.UtcNow.AddMinutes(-5));
+
+        var result = await validator.ValidateAsync(token, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("token_expired");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectWrongIssuer()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(
+            key,
+            "https://issuer.other.example.com",
+            "https://nyx.example.com",
+            "scope-123",
+            "api-key-123");
+
+        var result = await validator.ValidateAsync(token, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("invalid_issuer");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectTokenWithoutSubject()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(
+            key,
+            "https://nyx.example.com",
+            "https://nyx.example.com",
+            subject: "scope-123",
+            relayApiKeyId: "api-key-123",
+            includeSubject: false);
+
+        var result = await validator.ValidateAsync(token, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("jwt_missing_sub");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectTokenWithoutRelayApiKeyId()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(
+            key,
+            "https://nyx.example.com",
+            "https://nyx.example.com",
+            subject: "scope-123",
+            relayApiKeyId: "api-key-123",
+            includeRelayApiKeyId: false);
+
+        var result = await validator.ValidateAsync(token, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("jwt_missing_relay_api_key_id");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldReturnSecurityTokenError_ForMalformedToken()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+
+        var result = await validator.ValidateAsync("not-a-jwt", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(nameof(SecurityTokenMalformedException));
     }
 
     [Fact]
@@ -106,7 +230,7 @@ public sealed class NyxRelayJwtValidatorTests
 
     private static NyxRelayJwtValidator CreateValidator(HttpMessageHandler handler, string baseUrl)
     {
-        var factory = new StubHttpClientFactory(new HttpClient(handler));
+        var factory = new NyxRelayTestHttpClientFactory(new HttpClient(handler));
         return new NyxRelayJwtValidator(
             factory,
             new NyxIdToolOptions { BaseUrl = baseUrl },
@@ -129,21 +253,29 @@ public sealed class NyxRelayJwtValidatorTests
         string issuer,
         string audience,
         string subject,
-        string relayApiKeyId)
+        string relayApiKeyId,
+        bool includeSubject = true,
+        bool includeRelayApiKeyId = true,
+        DateTime? notBeforeUtc = null,
+        DateTime? expiresAtUtc = null)
     {
         var credentials = new SigningCredentials(key, SecurityAlgorithms.RsaSha256);
+        var claims = new List<Claim>
+        {
+            new("relay", "true"),
+        };
+        if (includeSubject)
+            claims.Add(new Claim("sub", subject));
+        if (includeRelayApiKeyId)
+            claims.Add(new Claim("relay_api_key_id", relayApiKeyId));
+
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = issuer,
             Audience = audience,
-            Subject = new ClaimsIdentity(
-            [
-                new Claim("sub", subject),
-                new Claim("relay_api_key_id", relayApiKeyId),
-                new Claim("relay", "true"),
-            ]),
-            NotBefore = DateTime.UtcNow.AddMinutes(-1),
-            Expires = DateTime.UtcNow.AddMinutes(5),
+            Subject = new ClaimsIdentity(claims),
+            NotBefore = notBeforeUtc ?? DateTime.UtcNow.AddMinutes(-1),
+            Expires = expiresAtUtc ?? DateTime.UtcNow.AddMinutes(5),
             SigningCredentials = credentials,
         };
 
@@ -166,52 +298,6 @@ public sealed class NyxRelayJwtValidatorTests
         {
             keys = new[] { jsonWebKey },
         });
-    }
-
-    private sealed class OidcDocumentHandler : HttpMessageHandler
-    {
-        private readonly string _discoveryJson;
-        private readonly Func<string> _jwksJsonFactory;
-
-        public OidcDocumentHandler(string discoveryJson, Func<string> jwksJsonFactory)
-        {
-            _discoveryJson = discoveryJson;
-            _jwksJsonFactory = jwksJsonFactory;
-        }
-
-        public int JwksRequests { get; private set; }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var uri = request.RequestUri?.AbsoluteUri ?? string.Empty;
-            if (uri.EndsWith("/.well-known/openid-configuration", StringComparison.Ordinal))
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(_discoveryJson, Encoding.UTF8, "application/json"),
-                });
-            }
-
-            if (uri.EndsWith("/jwks", StringComparison.Ordinal))
-            {
-                JwksRequests++;
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(_jwksJsonFactory(), Encoding.UTF8, "application/json"),
-                });
-            }
-
-            throw new InvalidOperationException($"Unexpected URL: {uri}");
-        }
-    }
-
-    private sealed class StubHttpClientFactory : IHttpClientFactory
-    {
-        private readonly HttpClient _client;
-
-        public StubHttpClientFactory(HttpClient client) => _client = client;
-
-        public HttpClient CreateClient(string name) => _client;
     }
 
     private sealed class CaptureHandler : HttpMessageHandler

@@ -68,6 +68,96 @@ public class NyxLarkProvisioningServiceTests
         handler.Requests[2].Body.Should().Contain("\"default_agent\":true");
     }
 
+    [Theory]
+    [InlineData("", "cli_a1b2c3", "secret-xyz", "https://aevatar.example.com", "missing_access_token")]
+    [InlineData("user-token", "", "secret-xyz", "https://aevatar.example.com", "missing_app_id")]
+    [InlineData("user-token", "cli_a1b2c3", "", "https://aevatar.example.com", "missing_app_secret")]
+    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "", "missing_webhook_base_url")]
+    public async Task ProvisionAsync_ShouldRejectInvalidRequests_BeforeCallingNyx(
+        string accessToken,
+        string appId,
+        string appSecret,
+        string webhookBaseUrl,
+        string expectedError)
+    {
+        var handler = new RecordingHandler();
+        var service = CreateService(handler);
+
+        var result = await service.ProvisionAsync(
+            new NyxLarkProvisioningRequest(
+                AccessToken: accessToken,
+                AppId: appId,
+                AppSecret: appSecret,
+                WebhookBaseUrl: webhookBaseUrl,
+                ScopeId: "scope-1",
+                Label: "Ops Bot",
+                NyxProviderSlug: "api-lark-bot"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Status.Should().Be("error");
+        result.Error.Should().Be(expectedError);
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldReject_WhenNyxBaseUrlIsNotConfigured()
+    {
+        var handler = new RecordingHandler();
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions(), new HttpClient(handler));
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var service = new NyxLarkProvisioningService(
+            nyxClient,
+            new NyxIdToolOptions(),
+            actorRuntime,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("nyx_base_url_not_configured");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldRollbackRemoteResources_WhenLocalMirrorRegistrationFails()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123"}""");
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-conversations/route-789", """{"ok":true}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-bots/bot-456", """{"ok":true}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
+        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(_ => throw new InvalidOperationException("mirror failed"));
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            actorRuntime,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("mirror failed");
+        handler.Requests.Should().HaveCount(6);
+        handler.Requests[3].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[3].Path.Should().Be("/api/v1/channel-conversations/route-789");
+        handler.Requests[4].Path.Should().Be("/api/v1/channel-bots/bot-456");
+        handler.Requests[5].Path.Should().Be("/api/v1/api-keys/key-123");
+    }
+
     private static bool MatchesLocalMirror(ChannelBotRegisterCommand command, string registrationId) =>
         command.RequestedId == registrationId &&
         command.Platform == "lark" &&
@@ -81,27 +171,55 @@ public class NyxLarkProvisioningServiceTests
         command.NyxConversationRouteId == "route-789" &&
         command.WebhookUrl == "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456";
 
+    private static NyxLarkProvisioningRequest BuildRequest() =>
+        new(
+            AccessToken: "user-token",
+            AppId: "cli_a1b2c3",
+            AppSecret: "secret-xyz",
+            WebhookBaseUrl: "https://aevatar.example.com",
+            ScopeId: "scope-1",
+            Label: "Ops Bot",
+            NyxProviderSlug: "api-lark-bot");
+
+    private static NyxLarkProvisioningService CreateService(RecordingHandler handler)
+    {
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler));
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        return new NyxLarkProvisioningService(
+            nyxClient,
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            actorRuntime,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
-        private readonly Queue<(string Path, string Body)> _responses = new();
+        private readonly Queue<(HttpMethod? Method, string Path, string Body)> _responses = new();
 
-        public List<(string Path, string Body)> Requests { get; } = [];
+        public List<(HttpMethod Method, string Path, string Body)> Requests { get; } = [];
 
-        public void Enqueue(string path, string body) => _responses.Enqueue((path, body));
+        public void Enqueue(string path, string body) => _responses.Enqueue((null, path, body));
+
+        public void Enqueue(HttpMethod method, string path, string body) => _responses.Enqueue((method, path, body));
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (_responses.Count == 0)
                 throw new InvalidOperationException("No more queued responses.");
 
-            var (expectedPath, responseBody) = _responses.Dequeue();
+            var (expectedMethod, expectedPath, responseBody) = _responses.Dequeue();
             request.RequestUri.Should().NotBeNull();
             request.RequestUri!.AbsolutePath.Should().Be(expectedPath);
+            if (expectedMethod is not null)
+                request.Method.Should().Be(expectedMethod);
 
             var body = request.Content is null
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            Requests.Add((expectedPath, body));
+            Requests.Add((request.Method, expectedPath, body));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {

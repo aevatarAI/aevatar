@@ -1228,9 +1228,4 @@ public class LarkPlatformAdapterTests
             Task.FromException<HttpResponseMessage>(exception);
     }
 
-    private sealed class TestCredentialProvider(IReadOnlyDictionary<string, string> values) : ICredentialProvider
-    {
-        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default) =>
-            Task.FromResult(values.TryGetValue(credentialRef, out var value) ? value : null);
-    }
 }

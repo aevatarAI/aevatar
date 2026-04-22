@@ -104,15 +104,29 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         return Task.CompletedTask;
     }
 
-    public Task<EmitResult> SendAsync(ConversationReference to, MessageContent content, CancellationToken ct) =>
-        SendCoreAsync(to, content, _botCredential, activityId: null, HttpMethod.Post, ct, ComposeContextFor(to));
+    public async Task<EmitResult> SendAsync(ConversationReference to, MessageContent content, CancellationToken ct) =>
+        await SendCoreAsync(
+            to,
+            content,
+            await RefreshBotCredentialAsync(ct),
+            activityId: null,
+            HttpMethod.Post,
+            ct,
+            ComposeContextFor(to));
 
-    public Task<EmitResult> UpdateAsync(
+    public async Task<EmitResult> UpdateAsync(
         ConversationReference to,
         string activityId,
         MessageContent content,
         CancellationToken ct) =>
-        SendCoreAsync(to, content, _botCredential, activityId, HttpMethod.Put, ct, ComposeContextFor(to));
+        await SendCoreAsync(
+            to,
+            content,
+            await RefreshBotCredentialAsync(ct),
+            activityId,
+            HttpMethod.Put,
+            ct,
+            ComposeContextFor(to));
 
     public async Task DeleteAsync(ConversationReference to, string activityId, CancellationToken ct)
     {
@@ -121,8 +135,9 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
         if (string.IsNullOrWhiteSpace(activityId))
             throw new ArgumentException("Activity id cannot be empty.", nameof(activityId));
 
+        var credential = await RefreshBotCredentialAsync(ct);
         using var request = new HttpRequestMessage(HttpMethod.Delete, $"/open-apis/im/v1/messages/{Uri.EscapeDataString(activityId.Trim())}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _botCredential.AccessToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
 
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.IsSuccessStatusCode)
@@ -143,7 +158,7 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
 
         var credential = auth.Kind == PrincipalKind.OnBehalfOfUser
             ? LarkCredentialSnapshot.Parse(await _credentialProvider.ResolveUserCredentialAsync(auth, ct))
-            : _botCredential;
+            : await RefreshBotCredentialAsync(ct);
 
         if (string.IsNullOrWhiteSpace(credential.AccessToken))
             return EmitResult.Failed("credential_resolution_failed", "Resolved credential is empty.");
@@ -170,6 +185,7 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
     {
         ArgumentNullException.ThrowIfNull(request);
         EnsureReady();
+        await RefreshBotCredentialAsync(ct);
 
         var rawBytes = request.Body ?? Array.Empty<byte>();
         var rawText = Encoding.UTF8.GetString(rawBytes);
@@ -732,6 +748,26 @@ public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
     {
         var hash = SHA256.HashData(sanitizedPayload);
         return $"lark-raw:{Convert.ToHexString(hash).ToLowerInvariant()}";
+    }
+
+    private async Task<LarkCredentialSnapshot> RefreshBotCredentialAsync(CancellationToken ct)
+    {
+        EnsureInitialized();
+        var secret = await _credentialProvider.ResolveBotCredentialAsync(_binding!, ct);
+        var refreshed = LarkCredentialSnapshot.Parse(secret);
+        if (string.IsNullOrWhiteSpace(refreshed.AccessToken) &&
+            string.IsNullOrWhiteSpace(refreshed.EncryptKey))
+        {
+            return _botCredential;
+        }
+
+        if (string.IsNullOrWhiteSpace(refreshed.AccessToken))
+            refreshed = refreshed with { AccessToken = _botCredential.AccessToken };
+        if (string.IsNullOrWhiteSpace(refreshed.EncryptKey))
+            refreshed = refreshed with { EncryptKey = _botCredential.EncryptKey };
+
+        _botCredential = refreshed;
+        return refreshed;
     }
 
     private void EnsureInitialized()

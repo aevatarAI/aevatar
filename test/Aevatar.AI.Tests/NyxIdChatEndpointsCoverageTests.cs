@@ -622,6 +622,45 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldRejectMismatchedRelayApiKeyId()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-a", relayApiKeyId: "scope-a");
+        var payload = """
+            {
+              "message_id":"msg-mismatch",
+              "platform":"slack",
+              "agent":{"api_key_id":"scope-b"},
+              "conversation":{"platform_id":"room-1"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            new StubActorRuntime(),
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions(),
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldUseConversationId_WhenPresent()
     {
         var relay = CreateRelayInvocationDependencies(scopeId: "scope-b", relayApiKeyId: "scope-b");
@@ -1167,7 +1206,7 @@ public class NyxIdChatEndpointsCoverageTests
         });
 
         var validator = new NyxRelayJwtValidator(
-            new StubHttpClientFactory(new HttpClient(new OidcDocumentHandler(discoveryJson, jwksJson))),
+            new NyxRelayTestHttpClientFactory(new HttpClient(new NyxRelayOidcDocumentHandler(discoveryJson, jwksJson))),
             new NyxIdToolOptions { BaseUrl = baseUrl },
             new NyxIdRelayOptions
             {
@@ -1216,26 +1255,6 @@ public class NyxIdChatEndpointsCoverageTests
         NyxRelayJwtValidator Validator,
         NyxIdApiClient Client,
         string Token);
-
-    private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
-    {
-        public HttpClient CreateClient(string name) => client;
-    }
-
-    private sealed class OidcDocumentHandler(string discoveryJson, string jwksJson) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var content = request.RequestUri?.AbsolutePath.EndsWith("/jwks", StringComparison.OrdinalIgnoreCase) == true
-                ? jwksJson
-                : discoveryJson;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(content, Encoding.UTF8, "application/json"),
-            });
-        }
-    }
 
     private sealed class StubJsonHttpHandler(string body) : HttpMessageHandler
     {

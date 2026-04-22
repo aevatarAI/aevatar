@@ -16,6 +16,32 @@ public sealed class SecretsStoreCredentialProviderTests
 
         resolved.ShouldBe("""{"encrypt_key":"abc"}""");
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ResolveAsync_ShouldReturnNull_ForNullOrWhitespaceCredentialRef(string? credentialRef)
+    {
+        var provider = new SecretsStoreCredentialProvider(new InMemorySecretsStore());
+
+        var resolved = await provider.ResolveAsync(credentialRef!);
+
+        resolved.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldTrimCredentialRef()
+    {
+        var store = new InMemorySecretsStore();
+        store.Set("vault://channels/lark/reg-2", "secret-2");
+        var provider = new SecretsStoreCredentialProvider(store);
+
+        var resolved = await provider.ResolveAsync("  vault://channels/lark/reg-2  ");
+
+        resolved.ShouldBe("secret-2");
+    }
+
     private sealed class InMemorySecretsStore : IAevatarSecretsStore
     {
         private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

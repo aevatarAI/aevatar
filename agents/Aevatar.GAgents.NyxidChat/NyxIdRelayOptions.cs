@@ -45,4 +45,10 @@ public sealed class NyxIdRelayOptions
     /// Cache lifetime in seconds for Nyx OIDC discovery + JWKS documents.
     /// </summary>
     public int OidcCacheTtlSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Optional public base URL for this host's webhook endpoints.
+    /// When set, prompts can render the concrete Nyx relay callback URL for the current environment.
+    /// </summary>
+    public string? WebhookBaseUrl { get; set; }
 }

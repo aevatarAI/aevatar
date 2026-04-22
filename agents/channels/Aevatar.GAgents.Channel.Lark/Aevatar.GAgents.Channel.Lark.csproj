@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Aevatar.GAgents.Channel.Lark.Tests" />
+    <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />

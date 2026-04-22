@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Lark;
@@ -74,7 +73,7 @@ public sealed class LarkConversationAdapterFactoryTests
                 {
                     ["X-Lark-Request-Timestamp"] = timestamp,
                     ["X-Lark-Request-Nonce"] = nonce,
-                    ["X-Lark-Signature"] = ComputeLarkSignature(timestamp, nonce, encryptKey, payload),
+                    ["X-Lark-Signature"] = LarkChannelAdapter.ComputeLarkSignature(timestamp, nonce, encryptKey, payload),
                 }));
 
             credentialProvider.ResolvedRefs.Should().ContainSingle(credentialRef);
@@ -145,7 +144,7 @@ public sealed class LarkConversationAdapterFactoryTests
                 {
                     ["X-Lark-Request-Timestamp"] = timestamp,
                     ["X-Lark-Request-Nonce"] = nonce,
-                    ["X-Lark-Signature"] = ComputeLarkSignature(timestamp, nonce, encryptKey, payload),
+                    ["X-Lark-Signature"] = LarkChannelAdapter.ComputeLarkSignature(timestamp, nonce, encryptKey, payload),
                 }));
 
             response.StatusCode.Should().Be(200);
@@ -158,6 +157,52 @@ public sealed class LarkConversationAdapterFactoryTests
         }
     }
 
+    [Fact]
+    public async Task CreateAsync_WithCredentialRefAndNoCredentialProvider_ShouldThrow()
+    {
+        var factory = new LarkConversationAdapterFactory(
+            new LarkMessageComposer(),
+            new LarkPayloadRedactor(),
+            new StubHttpClientFactory(),
+            NullLoggerFactory.Instance);
+
+        var act = async () => await factory.CreateAsync(new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            Platform = "lark",
+            ScopeId = "scope-1",
+            CredentialRef = "vault://channels/lark/reg-1",
+        }, CancellationToken.None);
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.Which.Message.Should().Contain("No ICredentialProvider is registered");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithCredentialRefThatResolvesToWhitespace_ShouldThrow()
+    {
+        var factory = new LarkConversationAdapterFactory(
+            new LarkMessageComposer(),
+            new LarkPayloadRedactor(),
+            new StubHttpClientFactory(),
+            NullLoggerFactory.Instance,
+            new RecordingCredentialProvider(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["vault://channels/lark/reg-1"] = "   ",
+            }));
+
+        var act = async () => await factory.CreateAsync(new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            Platform = "lark",
+            ScopeId = "scope-1",
+            CredentialRef = "vault://channels/lark/reg-1",
+        }, CancellationToken.None);
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.Which.Message.Should().Contain("did not resolve to a usable Lark secret");
+    }
+
     private sealed class StubHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) =>
@@ -165,13 +210,6 @@ public sealed class LarkConversationAdapterFactoryTests
             {
                 BaseAddress = LarkConversationHostDefaults.BaseAddress,
             };
-    }
-
-    private static string ComputeLarkSignature(string timestamp, string nonce, string encryptKey, string body)
-    {
-        var raw = string.Concat(timestamp, nonce, encryptKey, body);
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
     private sealed class RecordingCredentialProvider(IReadOnlyDictionary<string, string> values) : FoundationCredentialProvider
