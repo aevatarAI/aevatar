@@ -358,6 +358,147 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldReturnWorkflowChatStreamContract()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            "scope-a",
+            "default",
+            "default",
+            "default",
+            "Orders App",
+            "rev-chat",
+            "rev-chat",
+            "dep-chat",
+            "workflow-actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "Chat",
+                    "chat",
+                    Any.Pack(new ChatRequestEvent()).TypeUrl,
+                    Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    "Chat entrypoint"),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-chat",
+                    "workflow",
+                    "Published",
+                    "hash-chat",
+                    string.Empty,
+                    [
+                        new ServiceEndpointSnapshot(
+                            "chat",
+                            "Chat",
+                            "chat",
+                            Any.Pack(new ChatRequestEvent()).TypeUrl,
+                            Any.Pack(new ChatResponseEvent()).TypeUrl,
+                            "Chat entrypoint"),
+                    ],
+                    DateTimeOffset.UtcNow.AddMinutes(-10),
+                    DateTimeOffset.UtcNow.AddMinutes(-9),
+                    DateTimeOffset.UtcNow.AddMinutes(-8),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceEndpointContractHttpResponse>(
+            "/api/scopes/scope-a/services/default/endpoints/chat/contract");
+
+        response.Should().NotBeNull();
+        response!.InvokePath.Should().Be("/api/scopes/scope-a/services/default/invoke/chat:stream");
+        response.Method.Should().Be("POST");
+        response.RequestContentType.Should().Be("application/json");
+        response.ResponseContentType.Should().Be("text/event-stream");
+        response.SupportsSse.Should().BeTrue();
+        response.SupportsAguiFrames.Should().BeFalse();
+        response.StreamFrameFormat.Should().Be("workflow-run-event");
+        response.DefaultSmokeInputMode.Should().Be("prompt");
+        response.DefaultSmokePrompt.Should().Be("Hello from Studio Bind.");
+        response.SampleRequestJson.Should().BeNull();
+        response.RevisionId.Should().Be("rev-chat");
+        response.CurlExample.Should().Contain("Accept: text/event-stream");
+        response.FetchExample.Should().Contain("prompt");
+    }
+
+    [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldReturnTypedInvokeContractForCommandEndpoint()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            "scope-a",
+            "default",
+            "default",
+            "default",
+            "Orders App",
+            "rev-cmd",
+            "rev-cmd",
+            "dep-cmd",
+            "gagent-actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "run",
+                    "Run",
+                    "command",
+                    Any.Pack(new StringValue()).TypeUrl,
+                    string.Empty,
+                    "Run command"),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-cmd",
+                    "gagent",
+                    "Published",
+                    "hash-cmd",
+                    string.Empty,
+                    [
+                        new ServiceEndpointSnapshot(
+                            "run",
+                            "Run",
+                            "command",
+                            Any.Pack(new StringValue()).TypeUrl,
+                            string.Empty,
+                            "Run command"),
+                    ],
+                    DateTimeOffset.UtcNow.AddMinutes(-10),
+                    DateTimeOffset.UtcNow.AddMinutes(-9),
+                    DateTimeOffset.UtcNow.AddMinutes(-8),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceEndpointContractHttpResponse>(
+            "/api/scopes/scope-a/services/default/endpoints/run/contract");
+
+        response.Should().NotBeNull();
+        response!.InvokePath.Should().Be("/api/scopes/scope-a/services/default/invoke/run");
+        response.ResponseContentType.Should().Be("application/json");
+        response.SupportsSse.Should().BeFalse();
+        response.SupportsAguiFrames.Should().BeFalse();
+        response.StreamFrameFormat.Should().BeNull();
+        response.DefaultSmokeInputMode.Should().Be("typed-payload");
+        response.DefaultSmokePrompt.Should().BeNull();
+        response.SampleRequestJson.Should().Contain("payloadTypeUrl");
+        response.SampleRequestJson.Should().Contain("StringValue");
+        response.CurlExample.Should().Contain("payloadBase64");
+        response.FetchExample.Should().Contain("payloadTypeUrl");
+        response.RevisionId.Should().Be("rev-cmd");
+    }
+
+    [Fact]
     public async Task ActivateBindingRevisionEndpoint_ShouldPromoteHistoricalRevisionOnDefaultService()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

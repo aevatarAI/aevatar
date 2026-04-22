@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
@@ -23,6 +24,8 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 
 internal static class StudioEndpoints
 {
+    private const string AuthenticationSectionName = "Aevatar:Authentication";
+
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
         app.MapGet("/api/auth/me", HandleGetAuthMeAsync)
@@ -182,17 +185,106 @@ internal static class StudioEndpoints
         var scopeResolver = http.RequestServices.GetService<IAppScopeResolver>();
         var scope = scopeResolver?.Resolve(http);
         var schemeProvider = http.RequestServices.GetService<IAuthenticationSchemeProvider>();
+        var configuration = http.RequestServices.GetService<IConfiguration>();
         var authEnabled = schemeProvider != null &&
                           (await schemeProvider.GetAllSchemesAsync())
                           .Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
+        var providerDisplayName = await ResolveAuthProviderDisplayNameAsync(configuration, schemeProvider);
+        var loginUrl = authEnabled
+            ? AppApiErrors.BuildLoginUrl("/")
+            : null;
+        var logoutUrl = authEnabled
+            ? BuildLogoutUrl("/")
+            : null;
+        var invokeAuthMode = ResolveInvokeAuthMode(authEnabled, isAuthenticated);
+        var externalCallerHint = BuildExternalCallerHint(
+            providerDisplayName,
+            authEnabled,
+            invokeAuthMode);
 
         return new AppAuthMeResponse(
             Enabled: authEnabled,
             Authenticated: isAuthenticated,
+            ProviderDisplayName: providerDisplayName,
+            LoginUrl: loginUrl,
+            LogoutUrl: logoutUrl,
             Name: user?.Identity?.Name,
             Email: user?.FindFirst("email")?.Value,
+            InvokeAuthMode: invokeAuthMode,
+            ExternalCallerHint: externalCallerHint,
             ScopeId: scope?.ScopeId,
             ScopeSource: scope?.Source);
+    }
+
+    private static async Task<string?> ResolveAuthProviderDisplayNameAsync(
+        IConfiguration? configuration,
+        IAuthenticationSchemeProvider? schemeProvider)
+    {
+        var nyxIdAuthority = configuration?["Cli:App:NyxId:Authority"]
+            ?? configuration?["Aevatar:NyxId:Authority"]
+            ?? configuration?[$"{AuthenticationSectionName}:Authority"];
+        if (!string.IsNullOrWhiteSpace(nyxIdAuthority) &&
+            nyxIdAuthority.Contains("nyx", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NyxID";
+        }
+
+        var configuredAuthority = configuration?[$"{AuthenticationSectionName}:Authority"];
+        if (!string.IsNullOrWhiteSpace(configuredAuthority) &&
+            configuredAuthority.Contains("nyx", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NyxID";
+        }
+
+        if (schemeProvider == null)
+            return null;
+
+        var scheme = (await schemeProvider.GetAllSchemesAsync())
+            .FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.DisplayName) || !string.IsNullOrWhiteSpace(item.Name));
+        if (scheme == null)
+            return null;
+
+        var displayName = string.IsNullOrWhiteSpace(scheme.DisplayName)
+            ? scheme.Name
+            : scheme.DisplayName;
+        return string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
+    }
+
+    private static string BuildLogoutUrl(string returnUrl)
+    {
+        var normalizedReturnUrl = string.IsNullOrWhiteSpace(returnUrl)
+            ? "/"
+            : returnUrl.Trim();
+        return $"/auth/logout?returnUrl={Uri.EscapeDataString(normalizedReturnUrl)}";
+    }
+
+    private static string ResolveInvokeAuthMode(bool authEnabled, bool isAuthenticated) =>
+        !authEnabled
+            ? "anonymous"
+            : isAuthenticated
+                ? "studio-session"
+                : "bearer-token";
+
+    private static string? BuildExternalCallerHint(
+        string? providerDisplayName,
+        bool authEnabled,
+        string invokeAuthMode)
+    {
+        if (!authEnabled)
+            return "Invoke requests are accepted without authentication.";
+
+        var providerLabel = string.IsNullOrWhiteSpace(providerDisplayName)
+            ? "the configured identity provider"
+            : providerDisplayName.Trim();
+        return invokeAuthMode switch
+        {
+            "studio-session" =>
+                $"Studio invoke uses your current {providerLabel} session. External callers should send Authorization: Bearer <token> from the same provider.",
+            "bearer-token" =>
+                $"Sign in with {providerLabel} to establish a Studio session, or call the invoke endpoints directly with Authorization: Bearer <token>.",
+            _ =>
+                $"Use {providerLabel} credentials when the invoke endpoints require authentication.",
+        };
     }
 
     private static async Task<IResult> HandleGetHealthAsync(
@@ -1137,8 +1229,13 @@ internal static class StudioEndpoints
 public sealed record AppAuthMeResponse(
     bool Enabled,
     bool Authenticated,
+    string? ProviderDisplayName,
+    string? LoginUrl,
+    string? LogoutUrl,
     string? Name,
     string? Email,
+    string? InvokeAuthMode,
+    string? ExternalCallerHint,
     string? ScopeId,
     string? ScopeSource);
 
