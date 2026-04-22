@@ -3,9 +3,11 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
@@ -263,14 +265,13 @@ public static class ScopeGAgentEndpoints
         HttpContext http,
         string scopeId,
         GAgentDraftRunHttpRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints");
         var writer = new AGUISseWriter(http.Response);
+        var responseStarted = false;
 
         try
         {
@@ -286,218 +287,184 @@ public static class ScopeGAgentEndpoints
                 return;
             }
 
-            // Resolve agent type
-            var agentType = ResolveAgentType(request.ActorTypeName);
-            if (agentType is null)
+            async Task EnsureSseStartedAsync(CancellationToken token)
             {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonErrorAsync(http.Response, "UNKNOWN_GAGENT_TYPE",
-                    $"GAgent type '{request.ActorTypeName}' could not be resolved.", ct);
-                return;
+                if (responseStarted)
+                    return;
+
+                http.Response.StatusCode = StatusCodes.Status200OK;
+                http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
+                http.Response.Headers.CacheControl = "no-store";
+                http.Response.Headers["X-Accel-Buffering"] = "no";
+                await http.Response.StartAsync(token);
+                responseStarted = true;
             }
 
-            // Create or reuse actor
-            var preferredId = string.IsNullOrWhiteSpace(request.PreferredActorId)
-                ? null
-                : request.PreferredActorId.Trim();
-
-            IActor actor;
-            bool isNewActor;
-            if (preferredId is not null)
+            async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken token)
             {
-                var existing = await actorRuntime.GetAsync(preferredId);
-                actor = existing ?? await actorRuntime.CreateAsync(agentType, preferredId, ct);
-                isNewActor = existing is null;
-            }
-            else
-            {
-                actor = await actorRuntime.CreateAsync(agentType, null, ct);
-                isNewActor = true;
+                await EnsureSseStartedAsync(token);
+                await writer.WriteAsync(aguiEvent, token);
             }
 
-            // Persist newly created actor to the actor-backed GAgent actor store so it is
-            // visible to scope-level listings.
-            if (isNewActor)
+            async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
             {
-                try
-                {
-                    await actorStore.AddActorAsync(scopeId, request.ActorTypeName.Trim(), actor.Id, ct);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to persist actor {ActorId} to actor store", actor.Id);
-                }
-            }
-
-            // Set up SSE response
-            http.Response.StatusCode = StatusCodes.Status200OK;
-            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            http.Response.Headers.CacheControl = "no-store";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.StartAsync(ct);
-
-            // Write run started
-            var runId = Guid.NewGuid().ToString("N");
-            await writer.WriteAsync(new AGUIEvent
-            {
-                RunStarted = new RunStartedEvent
-                {
-                    ThreadId = actor.Id,
-                    RunId = runId,
-                },
-            }, ct);
-
-            // Subscribe to raw EventEnvelope on the actor's stream.
-            // RoleGAgent publishes individual event types (TextMessageStartEvent, etc.)
-            // with TopologyAudience.Parent. When no parent exists, events fall back to self stream.
-            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var ctr = ct.Register(() => tcs.TrySetCanceled());
-
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope =>
-                {
-                    try
+                http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+                await EnsureSseStartedAsync(token);
+                await writer.WriteAsync(
+                    new AGUIEvent
                     {
-                        var aguiEvent = TryMapEnvelopeToAguiEvent(envelope);
-                        if (aguiEvent is null)
-                            return;
-
-                        await writer.WriteAsync(aguiEvent, CancellationToken.None);
-
-                        // Detect completion: RoleGAgent ends with TextMessageEnd;
-                        // other agents may use RunFinished/RunError directly.
-                        if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
-                            or AGUIEvent.EventOneofCase.RunError
-                            or AGUIEvent.EventOneofCase.TextMessageEnd)
+                        RunStarted = new RunStartedEvent
                         {
-                            tcs.TrySetResult();
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.TrySetException(ex);
-                    }
-                },
-                ct);
+                            ThreadId = receipt.ActorId,
+                            RunId = receipt.CommandId,
+                        },
+                    },
+                    token);
+            }
 
-            // Dispatch ChatRequestEvent to the actor
-            var chatRequest = new ChatRequestEvent
-            {
-                Prompt = request.Prompt.Trim(),
-                SessionId = request.SessionId ?? string.Empty,
-                ScopeId = scopeId,
-            };
-
-            // Forward caller's Bearer token so NyxID-backed GAgents can pass it
-            // to the NyxID LLM gateway. Other LLM providers ignore this metadata key.
             var bearerToken = ExtractBearerToken(http);
-            if (!string.IsNullOrWhiteSpace(bearerToken))
-                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
-
-            // Forward the user's preferred model from their config.
+            string? defaultModel = null;
+            string? preferredRoute = null;
             var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
             if (userConfigStore != null)
             {
                 try
                 {
                     var userConfig = await userConfigStore.GetAsync(ct);
-                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
+                    defaultModel = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                        ? null
+                        : userConfig.DefaultModel.Trim();
+                    preferredRoute = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                        ? null
+                        : userConfig.PreferredLlmRoute.Trim();
                 }
                 catch
                 {
-                    // Best-effort
+                    // Best-effort.
                 }
             }
 
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
+            var command = new GAgentDraftRunCommand(
+                ScopeId: scopeId,
+                ActorTypeName: request.ActorTypeName.Trim(),
+                Prompt: request.Prompt.Trim(),
+                PreferredActorId: string.IsNullOrWhiteSpace(request.PreferredActorId) ? null : request.PreferredActorId.Trim(),
+                SessionId: string.IsNullOrWhiteSpace(request.SessionId) ? null : request.SessionId.Trim(),
+                NyxIdAccessToken: bearerToken,
+                ModelOverride: defaultModel,
+                PreferredLlmRoute: preferredRoute);
 
-            await actor.HandleEventAsync(envelope, ct);
-
-            // Wait for completion or timeout
             var timeoutMs = request.TimeoutMs > 0 ? request.TimeoutMs : 120_000;
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs, ct));
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(timeoutMs);
 
-            if (completedTask == tcs.Task)
+            var interaction = await interactionService.ExecuteAsync(
+                command,
+                EmitAsync,
+                OnAcceptedAsync,
+                timeoutCts.Token);
+
+            if (!interaction.Succeeded)
             {
-                if (tcs.Task.IsFaulted)
+                if (interaction.Error == GAgentDraftRunStartError.UnknownActorType)
                 {
-                    var faultEx = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    var isAuthRequired = IsNyxIdAuthenticationRequired(faultEx!);
-                    await writer.WriteAsync(new AGUIEvent
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonErrorAsync(
+                        http.Response,
+                        "UNKNOWN_GAGENT_TYPE",
+                        $"GAgent type '{request.ActorTypeName}' could not be resolved.",
+                        ct);
+                }
+
+                return;
+            }
+
+            if (!responseStarted && interaction.Receipt != null)
+                await OnAcceptedAsync(interaction.Receipt, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await EnsureTimeoutErrorAsync(writer, http.Response, responseStarted, ct: CancellationToken.None);
+                responseStarted = true;
+            }
+            catch
+            {
+                // Best-effort.
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Client disconnected.
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
+            var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
+
+            if (!responseStarted)
+            {
+                http.Response.StatusCode = isAuthRequired
+                    ? StatusCodes.Status401Unauthorized
+                    : StatusCodes.Status500InternalServerError;
+                await WriteJsonErrorAsync(
+                    http.Response,
+                    isAuthRequired ? "authentication_required" : "GAGENT_DRAFT_RUN_FAILED",
+                    isAuthRequired ? "NyxID authentication required. Please sign in." : ex.Message,
+                    ct);
+                return;
+            }
+
+            try
+            {
+                await writer.WriteAsync(
+                    new AGUIEvent
                     {
                         RunError = new RunErrorEvent
                         {
                             Message = isAuthRequired
                                 ? "NyxID authentication required. Please sign in."
-                                : (faultEx?.Message ?? "An error occurred."),
+                                : ex.Message,
                             Code = isAuthRequired ? "authentication_required" : null,
                         },
-                    }, CancellationToken.None);
-                }
-                else
-                {
-                    // Completed — write RunFinished to close the SSE stream
-                    await writer.WriteAsync(new AGUIEvent
-                    {
-                        RunFinished = new RunFinishedEvent
-                        {
-                            ThreadId = actor.Id,
-                            RunId = runId,
-                        },
-                    }, CancellationToken.None);
-                }
-            }
-            else
-            {
-                // Timeout — write error and finish
-                await writer.WriteAsync(new AGUIEvent
-                {
-                    RunError = new RunErrorEvent
-                    {
-                        Message = "GAgent draft-run timed out.",
                     },
-                }, ct);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Client disconnected
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
-            try
-            {
-                var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
-                await writer.WriteAsync(new AGUIEvent
-                {
-                    RunError = new RunErrorEvent
-                    {
-                        Message = isAuthRequired
-                            ? "NyxID authentication required. Please sign in."
-                            : ex.Message,
-                        Code = isAuthRequired ? "authentication_required" : null,
-                    },
-                }, CancellationToken.None);
+                    CancellationToken.None);
             }
             catch
             {
-                // Best-effort
+                // Best-effort.
             }
         }
+    }
+
+    private static async Task EnsureTimeoutErrorAsync(
+        AGUISseWriter writer,
+        HttpResponse response,
+        bool responseStarted,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (!responseStarted)
+        {
+            response.StatusCode = StatusCodes.Status200OK;
+            response.Headers.ContentType = "text/event-stream; charset=utf-8";
+            response.Headers.CacheControl = "no-store";
+            response.Headers["X-Accel-Buffering"] = "no";
+            await response.StartAsync(ct);
+        }
+
+        await writer.WriteAsync(
+            new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    Message = "GAgent draft-run timed out.",
+                }
+            },
+            ct);
     }
 
     /// <summary>
@@ -506,140 +473,7 @@ public static class ScopeGAgentEndpoints
     /// this maps them to the AGUI presentation types for SSE streaming.
     /// </summary>
     internal static AGUIEvent? TryMapEnvelopeToAguiEvent(EventEnvelope envelope)
-    {
-        var payload = envelope.Payload;
-        if (payload is null)
-            return null;
-
-        // Match AI Abstractions types (published by RoleGAgent) → AGUI presentation types
-        if (payload.Is(AiTextStart.Descriptor))
-        {
-            var ai = payload.Unpack<AiTextStart>();
-            return new AGUIEvent
-            {
-                TextMessageStart = new Presentation.AGUI.TextMessageStartEvent
-                {
-                    MessageId = ai.SessionId,
-                    Role = "assistant",
-                },
-            };
-        }
-
-        if (payload.Is(AiTextContent.Descriptor))
-        {
-            var ai = payload.Unpack<AiTextContent>();
-            return new AGUIEvent
-            {
-                TextMessageContent = new Presentation.AGUI.TextMessageContentEvent
-                {
-                    MessageId = ai.SessionId,
-                    Delta = ai.Delta,
-                },
-            };
-        }
-
-        if (payload.Is(AiTextReasoning.Descriptor))
-        {
-            // Map reasoning to a custom event (AGUI has no reasoning oneof field)
-            var ai = payload.Unpack<AiTextReasoning>();
-            return new AGUIEvent
-            {
-                Custom = new CustomEvent
-                {
-                    Name = "TEXT_MESSAGE_REASONING",
-                    Payload = Any.Pack(new Presentation.AGUI.TextMessageContentEvent
-                    {
-                        MessageId = ai.SessionId,
-                        Delta = ai.Delta,
-                    }),
-                },
-            };
-        }
-
-        if (payload.Is(AiTextEnd.Descriptor))
-        {
-            var ai = payload.Unpack<AiTextEnd>();
-            // RoleGAgent embeds LLM errors in TextMessageEnd.Content with known prefixes.
-            // Normal completion content also arrives here (duplicate of already-streamed deltas) — ignore it.
-            if (!string.IsNullOrEmpty(ai.Content))
-            {
-                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                const string llmFailedPrefix = "LLM request failed:";
-                if (ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent { Message = ai.Content[llmErrorPrefix.Length..].Trim() },
-                    };
-                }
-
-                if (ai.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent { Message = ai.Content.Trim() },
-                    };
-                }
-            }
-
-            return new AGUIEvent
-            {
-                TextMessageEnd = new Presentation.AGUI.TextMessageEndEvent
-                {
-                    MessageId = ai.SessionId,
-                },
-            };
-        }
-
-        if (payload.Is(AiToolCall.Descriptor))
-        {
-            var ai = payload.Unpack<AiToolCall>();
-            return new AGUIEvent
-            {
-                ToolCallStart = new ToolCallStartEvent
-                {
-                    ToolCallId = ai.CallId,
-                    ToolName = ai.ToolName,
-                },
-            };
-        }
-
-        if (payload.Is(AiToolResult.Descriptor))
-        {
-            var ai = payload.Unpack<AiToolResult>();
-            return new AGUIEvent
-            {
-                ToolCallEnd = new ToolCallEndEvent
-                {
-                    ToolCallId = ai.CallId,
-                    Result = ai.ResultJson,
-                },
-            };
-        }
-
-        // ToolApprovalRequestEvent → AGUI CustomEvent.
-        // Use TypeUrl string match to avoid TypeRegistry issues (AI.Abstractions
-        // proto types are not registered in the AGUI SSE writer's TypeRegistry).
-        // Serialize fields into a Struct so the JSON formatter can handle it.
-        if (payload.TypeUrl.EndsWith("ToolApprovalRequestEvent", StringComparison.Ordinal))
-        {
-            var approvalPayload = BuildToolApprovalStruct(payload);
-            return new AGUIEvent
-            {
-                Custom = new CustomEvent
-                {
-                    Name = "TOOL_APPROVAL_REQUEST",
-                    Payload = Any.Pack(approvalPayload),
-                },
-            };
-        }
-
-        // Also accept pre-wrapped AGUIEvent
-        if (payload.Is(AGUIEvent.Descriptor))
-            return payload.Unpack<AGUIEvent>();
-
-        return null;
-    }
+        => ScopeGAgentAguiEventMapper.TryMap(envelope);
 
     /// <summary>
     /// Decode ToolApprovalRequestEvent from raw Any bytes into a google.protobuf.Struct
@@ -647,76 +481,10 @@ public static class ScopeGAgentEndpoints
     /// type registered in its TypeRegistry.
     /// </summary>
     private static Google.Protobuf.WellKnownTypes.Struct BuildToolApprovalStruct(Any payload)
-    {
-        // Decode the raw bytes using the well-known field numbers from ai_messages.proto:
-        //   string request_id = 1; string session_id = 2; string tool_name = 3;
-        //   string tool_call_id = 4; string arguments_json = 5; string approval_mode = 6;
-        //   bool is_destructive = 7; int32 timeout_seconds = 8;
-        var s = new Google.Protobuf.WellKnownTypes.Struct();
-        try
-        {
-            var input = new CodedInputStream(payload.Value.ToByteArray());
-            string requestId = "", toolName = "", toolCallId = "", argumentsJson = "";
-            bool isDestructive = false;
-            int timeoutSeconds = 15;
-
-            while (!input.IsAtEnd)
-            {
-                var tag = input.ReadTag();
-                switch (WireFormat.GetTagFieldNumber(tag))
-                {
-                    case 1: requestId = input.ReadString(); break;
-                    case 3: toolName = input.ReadString(); break;
-                    case 4: toolCallId = input.ReadString(); break;
-                    case 5: argumentsJson = input.ReadString(); break;
-                    case 7: isDestructive = input.ReadBool(); break;
-                    case 8: timeoutSeconds = input.ReadInt32(); break;
-                    default: input.SkipLastField(); break;
-                }
-            }
-
-            s.Fields["requestId"] = Value.ForString(requestId);
-            s.Fields["toolName"] = Value.ForString(toolName);
-            s.Fields["toolCallId"] = Value.ForString(toolCallId);
-            s.Fields["argumentsJson"] = Value.ForString(argumentsJson);
-            s.Fields["isDestructive"] = Value.ForBool(isDestructive);
-            s.Fields["timeoutSeconds"] = Value.ForNumber(timeoutSeconds);
-        }
-        catch
-        {
-            // Fallback: empty struct — frontend will show approval without details
-            s.Fields["requestId"] = Value.ForString("");
-            s.Fields["error"] = Value.ForString("Failed to decode approval request");
-        }
-
-        return s;
-    }
+        => ScopeGAgentAguiEventMapper.BuildToolApprovalStruct(payload);
 
     internal static Type? ResolveAgentType(string typeName)
-    {
-        // Try exact match first
-        var type = Type.GetType(typeName, throwOnError: false);
-        if (type is not null)
-            return type;
-
-        // Search loaded assemblies
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.IsDynamic) continue;
-            try
-            {
-                type = assembly.GetType(typeName);
-                if (type is not null)
-                    return type;
-            }
-            catch
-            {
-                // ignored
-            }
-        }
-
-        return null;
-    }
+        => ScopeGAgentActorTypeResolver.Resolve(typeName);
 
     // ─── Actor CRUD (chrono-storage) ───
 

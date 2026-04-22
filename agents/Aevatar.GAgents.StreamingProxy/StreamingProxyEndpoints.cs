@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Google.Protobuf.WellKnownTypes;
@@ -160,7 +162,8 @@ public static class StreamingProxyEndpoints
         string roomId,
         ChatTopicRequest request,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
+        [FromServices] StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] StreamingProxyNyxParticipantCoordinator participantCoordinator,
         [FromServices] ILoggerFactory loggerFactory,
@@ -189,97 +192,153 @@ public static class StreamingProxyEndpoints
             await writer.StartAsync(ct);
 
             var activityChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
-
-            // Subscribe to actor events — will receive all group chat events
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope =>
-                {
-                    var signal = await MapAndWriteEventAsync(envelope, writer);
-                    if (signal.HasValue)
-                        activityChannel.Writer.TryWrite(signal.Value);
-                },
-                ct);
-
             var sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
-            var accessToken = ExtractBearerToken(http);
-            var preferredRoute = request.LlmRoute?.Trim();
-            var defaultModel = request.LlmModel?.Trim();
+            var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
+            var projectionLease = await roomSessionProjectionPort.EnsureAndAttachAsync(
+                token => roomSessionProjectionPort.EnsureRoomProjectionAsync(actor.Id, sessionId, token),
+                eventChannel,
+                ct);
+            if (projectionLease == null)
+                throw new InvalidOperationException("StreamingProxy room session projection pipeline is unavailable.");
 
-            // Emit the room topic immediately so the client sees visible progress
-            // even when Nyx participant discovery is slow.
-            var chatRequest = new ChatRequestEvent
+            Task? pumpTask = null;
+
+            try
             {
-                Prompt = prompt,
-                SessionId = sessionId,
-                ScopeId = scopeId,
-            };
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
-            };
-            await actor.HandleEventAsync(envelope, ct);
+                pumpTask = PumpRoomSessionEventsAsync(
+                    eventChannel,
+                    writer,
+                    activityChannel.Writer);
 
-            IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
-                ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
-                : await participantCoordinator.EnsureParticipantsJoinedAsync(
-                    scopeId,
-                    roomId,
-                    actor,
-                    participantStore,
-                    accessToken,
-                    ct,
-                    preferredRoute,
-                    defaultModel);
+                var accessToken = ExtractBearerToken(http);
+                var preferredRoute = request.LlmRoute?.Trim();
+                var defaultModel = request.LlmModel?.Trim();
 
-            if (participants.Count > 0 && !string.IsNullOrWhiteSpace(accessToken))
-            {
-                await participantCoordinator.GenerateRepliesAsync(
-                    participants,
-                    actor,
-                    prompt,
-                    sessionId,
-                    accessToken,
-                    ct,
-                    participantStore,
-                    roomId);
-                await writer.WriteRunFinishedAsync(CancellationToken.None);
-                return;
-            }
-
-            var sawActivity = false;
-            var sawAgentMessage = false;
-            while (!ct.IsCancellationRequested)
-            {
-                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                idleCts.CancelAfter(sawAgentMessage
-                    ? StreamingProxyDefaults.IdleCompletionTimeoutMs
-                    : sawActivity
-                        ? StreamingProxyDefaults.PostTopicTimeoutMs
-                        : StreamingProxyDefaults.InitialResponseTimeoutMs);
-
-                try
+                // Emit the room topic immediately so the client sees visible progress
+                // even when Nyx participant discovery is slow.
+                var chatRequest = new ChatRequestEvent
                 {
-                    if (!await activityChannel.Reader.WaitToReadAsync(idleCts.Token))
+                    Prompt = prompt,
+                    SessionId = sessionId,
+                    ScopeId = scopeId,
+                };
+                var envelope = new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Payload = Any.Pack(chatRequest),
+                    Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
+                };
+                await actor.HandleEventAsync(envelope, ct);
+
+                IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
+                    ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
+                    : await participantCoordinator.EnsureParticipantsJoinedAsync(
+                        scopeId,
+                        roomId,
+                        actor,
+                        participantStore,
+                        accessToken,
+                        ct,
+                        preferredRoute,
+                        defaultModel);
+
+                if (participants.Count > 0 && !string.IsNullOrWhiteSpace(accessToken))
+                {
+                    await participantCoordinator.GenerateRepliesAsync(
+                        participants,
+                        actor,
+                        prompt,
+                        sessionId,
+                        accessToken,
+                        ct,
+                        participantStore,
+                        roomId);
+                    await PublishTerminalStateAsync(
+                        actor,
+                        sessionId,
+                        StreamingProxyChatSessionTerminalStatus.Completed,
+                        null,
+                        ct);
+                    await FinalizeFromLiveOrDurableCompletionAsync(
+                        actor.Id,
+                        sessionId,
+                        activityChannel.Reader,
+                        durableCompletionResolver,
+                        writer,
+                        ct);
+                    return;
+                }
+
+                var sawActivity = false;
+                var sawAgentMessage = false;
+                while (!ct.IsCancellationRequested)
+                {
+                    using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    idleCts.CancelAfter(sawAgentMessage
+                        ? StreamingProxyDefaults.IdleCompletionTimeoutMs
+                        : sawActivity
+                            ? StreamingProxyDefaults.PostTopicTimeoutMs
+                            : StreamingProxyDefaults.InitialResponseTimeoutMs);
+
+                    try
+                    {
+                        if (!await activityChannel.Reader.WaitToReadAsync(idleCts.Token))
+                            break;
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
                         break;
-                }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                {
-                    break;
+                    }
+
+                    while (activityChannel.Reader.TryRead(out var signal))
+                    {
+                        sawActivity = true;
+                        if (signal == StreamingProxyStreamSignal.AgentMessage)
+                            sawAgentMessage = true;
+                        if (signal is StreamingProxyStreamSignal.RunFinished or StreamingProxyStreamSignal.RunFailed)
+                            return;
+                    }
                 }
 
-                while (activityChannel.Reader.TryRead(out var signal))
+                await PublishTerminalStateAsync(
+                    actor,
+                    sessionId,
+                    StreamingProxyChatSessionTerminalStatus.Completed,
+                    null,
+                    ct);
+                await FinalizeFromLiveOrDurableCompletionAsync(
+                    actor.Id,
+                    sessionId,
+                    activityChannel.Reader,
+                    durableCompletionResolver,
+                    writer,
+                    ct);
+            }
+            finally
+            {
+                await roomSessionProjectionPort.DetachReleaseAndDisposeAsync(
+                    projectionLease,
+                    eventChannel,
+                    () =>
+                    {
+                        activityChannel.Writer.TryComplete();
+                        return Task.CompletedTask;
+                    },
+                    CancellationToken.None);
+
+                if (pumpTask != null)
                 {
-                    sawActivity = true;
-                    if (signal == StreamingProxyStreamSignal.AgentMessage)
-                        sawAgentMessage = true;
+                    try
+                    {
+                        await pumpTask;
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        // Client disconnected.
+                    }
                 }
             }
-
-            await writer.WriteRunFinishedAsync(CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -341,7 +400,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -358,21 +417,45 @@ public static class StreamingProxyEndpoints
             }
 
             await writer.StartAsync(ct);
-
-            // Subscribe to actor events — long-lived SSE connection
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope => await MapAndWriteEventAsync(envelope, writer),
+            var sessionId = Guid.NewGuid().ToString("N");
+            var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
+            var projectionLease = await roomSessionProjectionPort.EnsureAndAttachAsync(
+                token => roomSessionProjectionPort.EnsureRoomProjectionAsync(actor.Id, sessionId, token),
+                eventChannel,
                 ct);
+            if (projectionLease == null)
+                throw new InvalidOperationException("StreamingProxy room session projection pipeline is unavailable.");
 
-            // Keep connection open until client disconnects
+            Task? pumpTask = null;
+
             try
             {
+                pumpTask = PumpRoomSessionEventsAsync(eventChannel, writer);
                 await Task.Delay(Timeout.Infinite, ct);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 // Client disconnected — normal
+            }
+            finally
+            {
+                await roomSessionProjectionPort.DetachReleaseAndDisposeAsync(
+                    projectionLease,
+                    eventChannel,
+                    null,
+                    CancellationToken.None);
+
+                if (pumpTask != null)
+                {
+                    try
+                    {
+                        await pumpTask;
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        // Client disconnected.
+                    }
+                }
             }
         }
         catch (OperationCanceledException)
@@ -470,7 +553,29 @@ public static class StreamingProxyEndpoints
 
     private static async ValueTask<StreamingProxyStreamSignal?> MapAndWriteEventAsync(EventEnvelope envelope, StreamingProxySseWriter writer)
     {
+        if (TryGetObservedTerminalEvent(envelope, out var terminalEvent))
+        {
+            if (terminalEvent.Status == StreamingProxyChatSessionTerminalStatus.Failed)
+            {
+                await writer.WriteRunErrorAsync(
+                    string.IsNullOrWhiteSpace(terminalEvent.ErrorMessage)
+                        ? "StreamingProxy chat failed."
+                        : terminalEvent.ErrorMessage,
+                    CancellationToken.None);
+                return StreamingProxyStreamSignal.RunFailed;
+            }
+
+            await writer.WriteRunFinishedAsync(CancellationToken.None);
+            return StreamingProxyStreamSignal.RunFinished;
+        }
+
         var payload = envelope.Payload;
+        if (CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var observedPayload, out _, out _) &&
+            observedPayload != null)
+        {
+            payload = observedPayload;
+        }
+
         if (payload is null || !ShouldWriteToSse(envelope))
             return null;
 
@@ -500,8 +605,140 @@ public static class StreamingProxyEndpoints
         return null;
     }
 
+    private static async Task PumpRoomSessionEventsAsync(
+        IEventSink<StreamingProxyRoomSessionEnvelope> eventSink,
+        StreamingProxySseWriter writer,
+        ChannelWriter<StreamingProxyStreamSignal>? signalWriter = null)
+    {
+        ArgumentNullException.ThrowIfNull(eventSink);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        try
+        {
+            await foreach (var sessionEnvelope in eventSink.ReadAllAsync(CancellationToken.None))
+            {
+                if (sessionEnvelope.Envelope == null)
+                    continue;
+
+                var signal = await MapAndWriteEventAsync(sessionEnvelope.Envelope, writer);
+                if (signal.HasValue)
+                    signalWriter?.TryWrite(signal.Value);
+            }
+        }
+        finally
+        {
+            signalWriter?.TryComplete();
+        }
+    }
+
     private static bool ShouldWriteToSse(EventEnvelope envelope) =>
-        envelope.Route?.IsTopologyPublication() == true;
+        envelope.Route?.IsTopologyPublication() == true ||
+        CommittedStateEventEnvelope.TryUnpack(envelope, out _) ||
+        TryGetObservedTerminalEvent(envelope, out _);
+
+    private static bool TryGetObservedTerminalEvent(
+        EventEnvelope envelope,
+        out StreamingProxyChatSessionTerminalStateChanged terminalEvent)
+    {
+        terminalEvent = new StreamingProxyChatSessionTerminalStateChanged();
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
+            payload?.Is(StreamingProxyChatSessionTerminalStateChanged.Descriptor) != true)
+        {
+            return false;
+        }
+
+        terminalEvent = payload.Unpack<StreamingProxyChatSessionTerminalStateChanged>();
+        return !string.IsNullOrWhiteSpace(terminalEvent.SessionId);
+    }
+
+    private static async Task PublishTerminalStateAsync(
+        IActor actor,
+        string sessionId,
+        StreamingProxyChatSessionTerminalStatus status,
+        string? errorMessage,
+        CancellationToken ct)
+    {
+        var terminalEvent = new StreamingProxyChatSessionTerminalStateChanged
+        {
+            SessionId = sessionId,
+            Status = status,
+            TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ErrorMessage = errorMessage ?? string.Empty,
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(terminalEvent),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute
+                {
+                    TargetActorId = actor.Id,
+                },
+            },
+        };
+        await actor.HandleEventAsync(envelope, ct);
+    }
+
+    private static async Task FinalizeFromLiveOrDurableCompletionAsync(
+        string actorId,
+        string sessionId,
+        ChannelReader<StreamingProxyStreamSignal> signalReader,
+        StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
+        StreamingProxySseWriter writer,
+        CancellationToken ct)
+    {
+        var signalWaitWindow = TimeSpan.FromSeconds(2);
+        while (!ct.IsCancellationRequested)
+        {
+            if (await WaitForTerminalSignalAsync(signalReader, signalWaitWindow, ct))
+                return;
+
+            var durableCompletion = await durableCompletionResolver.ResolveAsync(actorId, sessionId, ct);
+            switch (durableCompletion)
+            {
+                case StreamingProxyProjectionCompletionStatus.Failed:
+                    await writer.WriteRunErrorAsync("StreamingProxy chat failed.", CancellationToken.None);
+                    return;
+                case StreamingProxyProjectionCompletionStatus.Completed:
+                    await writer.WriteRunFinishedAsync(CancellationToken.None);
+                    return;
+                case StreamingProxyProjectionCompletionStatus.Unknown:
+                default:
+                    signalWaitWindow = TimeSpan.FromMilliseconds(200);
+                    await Task.Delay(signalWaitWindow, ct);
+                    break;
+            }
+        }
+    }
+
+    private static async Task<bool> WaitForTerminalSignalAsync(
+        ChannelReader<StreamingProxyStreamSignal> signalReader,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        waitCts.CancelAfter(timeout);
+
+        try
+        {
+            while (await signalReader.WaitToReadAsync(waitCts.Token))
+            {
+                while (signalReader.TryRead(out var signal))
+                {
+                    if (signal is StreamingProxyStreamSignal.RunFinished or StreamingProxyStreamSignal.RunFailed)
+                        return true;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        return false;
+    }
 
     private static async Task TryRollbackRoomCreationAsync(
         string scopeId,
@@ -556,9 +793,11 @@ public static class StreamingProxyEndpoints
             : null;
     }
 
-    private enum StreamingProxyStreamSignal
+    internal enum StreamingProxyStreamSignal
     {
         TopicStarted,
         AgentMessage,
+        RunFinished,
+        RunFailed,
     }
 }

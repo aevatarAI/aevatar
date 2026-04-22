@@ -8,4 +8,5 @@ internal static class ServiceProjectionKinds
     public const string Serving = "service-serving";
     public const string Rollouts = "service-rollouts";
     public const string Traffic = "service-traffic";
+    public const string DraftRunSession = "service-draft-run-session";
 }

@@ -4,9 +4,12 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -20,6 +23,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using AiTextContentEvent = Aevatar.AI.Abstractions.TextMessageContentEvent;
+using AiTextEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;
+using AiTextStartEvent = Aevatar.AI.Abstractions.TextMessageStartEvent;
 
 namespace Aevatar.AI.Tests;
 
@@ -199,8 +205,6 @@ public class NyxIdChatEndpointsCoverageTests
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer";
-        var runtime = new StubActorRuntime();
-        var subscriptions = new StubSubscriptionProvider();
 
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
@@ -208,8 +212,7 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
-            runtime,
-            subscriptions,
+            new FakeGAgentDraftRunInteractionService(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
@@ -220,7 +223,6 @@ public class NyxIdChatEndpointsCoverageTests
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
-        var runtime = new StubActorRuntime();
 
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
@@ -228,8 +230,7 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdChatStreamRequest(null),
-            runtime,
-            new StubSubscriptionProvider(),
+            new FakeGAgentDraftRunInteractionService(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -240,7 +241,6 @@ public class NyxIdChatEndpointsCoverageTests
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer";
-        var runtime = new StubActorRuntime();
 
         await InvokeTaskAsync(
             "HandleApproveAsync",
@@ -248,8 +248,7 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req"),
-            runtime,
-            new StubSubscriptionProvider(),
+            new FakeGAgentApprovalInteractionService(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
@@ -260,7 +259,6 @@ public class NyxIdChatEndpointsCoverageTests
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
-        var runtime = new StubActorRuntime();
 
         await InvokeTaskAsync(
             "HandleApproveAsync",
@@ -268,8 +266,7 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdApprovalRequest(null),
-            runtime,
-            new StubSubscriptionProvider(),
+            new FakeGAgentApprovalInteractionService(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -278,6 +275,44 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldDispatchChatRequest_AndWriteRunFinished()
     {
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = async (command, emitAsync, onAcceptedAsync, ct) =>
+            {
+                await onAcceptedAsync!(
+                    new GAgentDraftRunAcceptedReceipt(command.PreferredActorId!, "NyxIdChatGAgent", "cmd-1", "corr-1"),
+                    ct);
+                await emitAsync(new AGUIEvent
+                {
+                    TextMessageStart = new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                    {
+                        MessageId = "msg-1",
+                        Role = "assistant",
+                    },
+                }, ct);
+                await emitAsync(new AGUIEvent
+                {
+                    TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    {
+                        MessageId = "msg-1",
+                        Delta = "hello",
+                    },
+                }, ct);
+                await emitAsync(new AGUIEvent
+                {
+                    TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                    {
+                        MessageId = "msg-1",
+                    },
+                }, ct);
+
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                    new GAgentDraftRunAcceptedReceipt(command.PreferredActorId!, "NyxIdChatGAgent", "cmd-1", "corr-1"),
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
+                        GAgentDraftRunCompletionStatus.TextMessageCompleted,
+                        true));
+            },
+        };
         var context = new DefaultHttpContext
         {
             RequestServices = new ServiceCollection()
@@ -289,40 +324,28 @@ public class NyxIdChatEndpointsCoverageTests
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
 
-        var runtime = new StubActorRuntime();
-        var subscriptions = new StubSubscriptionProvider
-        {
-            Messages =
-            {
-                new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) },
-                new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "hello" }) },
-                new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
-            },
-        };
-
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
             context,
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello there"),
-            runtime,
-            subscriptions,
+            interactionService,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        runtime.CreateCalls.Should().ContainSingle();
-        var actor = runtime.Actors["actor-1"].Should().BeOfType<StubActor>().Subject;
-        var chatRequest = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
+        var chatRequest = interactionService.Commands.Should().ContainSingle().Subject;
         chatRequest.Prompt.Should().Be("hello there");
         chatRequest.ScopeId.Should().Be("scope-a");
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("valid-token");
-        chatRequest.Metadata["scope_id"].Should().Be("scope-a");
-        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("relay-model");
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/relay-route");
-        chatRequest.Metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
-        chatRequest.Metadata[LLMRequestMetadataKeys.UserMemoryPrompt].Should().Be("remember this");
+        chatRequest.ActorTypeName.Should().Contain("NyxIdChatGAgent");
+        chatRequest.PreferredActorId.Should().Be("actor-1");
+        chatRequest.NyxIdAccessToken.Should().Be("valid-token");
+        chatRequest.Headers!["scope_id"].Should().Be("scope-a");
+        chatRequest.ModelOverride.Should().Be("relay-model");
+        chatRequest.PreferredLlmRoute.Should().Be("/relay-route");
+        chatRequest.Headers[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        chatRequest.Headers[LLMRequestMetadataKeys.UserMemoryPrompt].Should().Be("remember this");
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
@@ -336,7 +359,10 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldReturn500_WhenFailureOccursBeforeWriterStarts()
     {
-        var context = new DefaultHttpContext();
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection().BuildServiceProvider(),
+        };
         context.Request.Headers.Authorization = "Bearer valid-token";
 
         await InvokeTaskAsync(
@@ -345,8 +371,10 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
-            new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
-            new StubSubscriptionProvider(),
+            new FakeGAgentDraftRunInteractionService
+            {
+                ResultFactory = (_, _, _, _) => throw new InvalidOperationException("runtime failed"),
+            },
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -356,12 +384,12 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldWriteRunError_WhenFailureOccursAfterWriterStarts()
     {
-        var context = new DefaultHttpContext();
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection().BuildServiceProvider(),
+        };
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
-
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
 
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
@@ -369,8 +397,16 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
-            runtime,
-            new ThrowingSubscriptionProvider(new InvalidOperationException("subscription failed")),
+            new FakeGAgentDraftRunInteractionService
+            {
+                ResultFactory = async (command, _, onAcceptedAsync, ct) =>
+                {
+                    await onAcceptedAsync!(
+                        new GAgentDraftRunAcceptedReceipt(command.PreferredActorId!, "NyxIdChatGAgent", "cmd-1", "corr-1"),
+                        ct);
+                    throw new InvalidOperationException("subscription failed");
+                },
+            },
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -385,20 +421,39 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleApproveAsync_ShouldDispatchDecision_AndWriteRunFinished()
     {
+        var interactionService = new FakeGAgentApprovalInteractionService
+        {
+            ResultFactory = async (command, emitAsync, onAcceptedAsync, ct) =>
+            {
+                await onAcceptedAsync!(
+                    new GAgentApprovalAcceptedReceipt(command.ActorId, "cmd-2", "corr-2"),
+                    ct);
+                await emitAsync(new AGUIEvent
+                {
+                    TextMessageStart = new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                    {
+                        MessageId = "msg-2",
+                        Role = "assistant",
+                    },
+                }, ct);
+                await emitAsync(new AGUIEvent
+                {
+                    TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                    {
+                        MessageId = "msg-2",
+                    },
+                }, ct);
+
+                return CommandInteractionResult<GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, GAgentApprovalCompletionStatus>.Success(
+                    new GAgentApprovalAcceptedReceipt(command.ActorId, "cmd-2", "corr-2"),
+                    new CommandInteractionFinalizeResult<GAgentApprovalCompletionStatus>(
+                        GAgentApprovalCompletionStatus.TextMessageCompleted,
+                        true));
+            },
+        };
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
-
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
-        {
-            Messages =
-            {
-                new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) },
-                new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
-            },
-        };
 
         await InvokeTaskAsync(
             "HandleApproveAsync",
@@ -406,14 +461,12 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1", Approved: false, Reason: "deny", SessionId: "session-1"),
-            runtime,
-            subscriptions,
+            interactionService,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        var actor = runtime.Actors["actor-1"].Should().BeOfType<StubActor>().Subject;
-        var decision = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ToolApprovalDecisionEvent>();
+        var decision = interactionService.Commands.Should().ContainSingle().Subject;
         decision.RequestId.Should().Be("req-1");
         decision.Approved.Should().BeFalse();
         decision.Reason.Should().Be("deny");
@@ -437,8 +490,10 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
-            new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
-            new StubSubscriptionProvider(),
+            new FakeGAgentApprovalInteractionService
+            {
+                ResultFactory = (_, _, _, _) => throw new InvalidOperationException("runtime failed"),
+            },
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -452,17 +507,22 @@ public class NyxIdChatEndpointsCoverageTests
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
 
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
-
         await InvokeTaskAsync(
             "HandleApproveAsync",
             context,
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
-            runtime,
-            new ThrowingSubscriptionProvider(new InvalidOperationException("approval subscription failed")),
+            new FakeGAgentApprovalInteractionService
+            {
+                ResultFactory = async (command, _, onAcceptedAsync, ct) =>
+                {
+                    await onAcceptedAsync!(
+                        new GAgentApprovalAcceptedReceipt(command.ActorId, "cmd-2", "corr-2"),
+                        ct);
+                    throw new InvalidOperationException("approval subscription failed");
+                },
+            },
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -483,8 +543,7 @@ public class NyxIdChatEndpointsCoverageTests
         var result = await InvokeResultAsync(
             "HandleRelayWebhookAsync",
             context,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider(),
+            new FakeGAgentDraftRunInteractionService(),
             new StubGAgentActorStore(),
             new NyxIdRelayOptions(),
             NullLoggerFactory.Instance,
@@ -505,8 +564,7 @@ public class NyxIdChatEndpointsCoverageTests
         var result = await InvokeResultAsync(
             "HandleRelayWebhookAsync",
             context,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider(),
+            new FakeGAgentDraftRunInteractionService(),
             new StubGAgentActorStore(),
             new NyxIdRelayOptions(),
             NullLoggerFactory.Instance,
@@ -531,8 +589,7 @@ public class NyxIdChatEndpointsCoverageTests
         var result = await InvokeResultAsync(
             "HandleRelayWebhookAsync",
             context,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider(),
+            new FakeGAgentDraftRunInteractionService(),
             new StubGAgentActorStore(),
             new NyxIdRelayOptions(),
             NullLoggerFactory.Instance,
@@ -565,12 +622,29 @@ public class NyxIdChatEndpointsCoverageTests
         context.Request.Headers["X-NyxID-User-Token"] = "not-a-jwt";
         context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
 
-        var runtime = new StubActorRuntime();
-        var subscriptions = new StubSubscriptionProvider
+        var interactionService = new FakeGAgentDraftRunInteractionService
         {
-            Messages =
+            ResultFactory = async (command, emitAsync, _, ct) =>
             {
-                new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "partial reply" }) },
+                await emitAsync(
+                    new AGUIEvent
+                    {
+                        TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                        {
+                            MessageId = command.SessionId ?? "session-1",
+                            Delta = "partial reply",
+                        },
+                    },
+                    ct);
+
+                var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = ct.Register(() => cancelled.TrySetCanceled(ct));
+                await cancelled.Task;
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                    new GAgentDraftRunAcceptedReceipt(command.PreferredActorId ?? "actor-1", command.ActorTypeName, "cmd-relay-timeout", "corr-relay-timeout"),
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
+                        GAgentDraftRunCompletionStatus.Unknown,
+                        false));
             },
         };
         var store = new StubGAgentActorStore();
@@ -578,8 +652,7 @@ public class NyxIdChatEndpointsCoverageTests
         var result = await InvokeResultAsync(
             "HandleRelayWebhookAsync",
             context,
-            runtime,
-            subscriptions,
+            interactionService,
             store,
             new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
             NullLoggerFactory.Instance,
@@ -624,18 +697,25 @@ public class NyxIdChatEndpointsCoverageTests
         var result = await InvokeResultAsync(
             "HandleRelayWebhookAsync",
             context,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider
+            new FakeGAgentDraftRunInteractionService
             {
-                Messages =
+                ResultFactory = async (_, emitAsync, _, ct) =>
                 {
-                    new EventEnvelope
-                    {
-                        Payload = Any.Pack(new TextMessageEndEvent
+                    await emitAsync(
+                        new AGUIEvent
                         {
-                            Content = "[[AEVATAR_LLM_ERROR]]request failed with 403",
-                        }),
-                    },
+                            RunError = new RunErrorEvent
+                            {
+                                Message = "request failed with 403",
+                            },
+                        },
+                        ct);
+
+                    return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                        new GAgentDraftRunAcceptedReceipt("nyxid-relay-conv-1", typeof(NyxIdChatGAgent).FullName!, "cmd-relay-error", "corr-relay-error"),
+                        new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
+                            GAgentDraftRunCompletionStatus.Failed,
+                            true));
                 },
             },
             new StubGAgentActorStore(),
@@ -681,8 +761,7 @@ public class NyxIdChatEndpointsCoverageTests
         var act = async () => await InvokeResultAsync(
             "HandleRelayWebhookAsync",
             context,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider(),
+            new FakeGAgentDraftRunInteractionService(),
             new StubGAgentActorStore
             {
                 AddActorException = new InvalidOperationException("actor store unavailable"),
@@ -693,6 +772,73 @@ public class NyxIdChatEndpointsCoverageTests
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("actor store unavailable");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldCaptureSuccessfulReply_AndCommandHeaders()
+    {
+        var payload = """
+            {
+              "message_id":"msg-4",
+              "platform":"slack",
+              "agent":{"api_key_id":"scope-d"},
+              "conversation":{"platform_id":"room-4"},
+              "sender":{"display_name":"Alice"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = "not-a-jwt";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = async (command, emitAsync, _, ct) =>
+            {
+                await emitAsync(
+                    new AGUIEvent
+                    {
+                        TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                        {
+                            MessageId = command.SessionId ?? "session-1",
+                            Delta = "hello back",
+                        },
+                    },
+                    ct);
+
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                    new GAgentDraftRunAcceptedReceipt(command.PreferredActorId ?? "actor-1", command.ActorTypeName, "cmd-relay-ok", "corr-relay-ok"),
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
+                        GAgentDraftRunCompletionStatus.TextMessageCompleted,
+                        true));
+            },
+        };
+        var store = new StubGAgentActorStore();
+
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            interactionService,
+            store,
+            new NyxIdRelayOptions(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("hello back");
+        interactionService.Commands.Should().ContainSingle();
+        interactionService.Commands[0].PreferredActorId.Should().Be("nyxid-relay-slack-room-4");
+        interactionService.Commands[0].Headers.Should().Contain(new KeyValuePair<string, string>("relay.sender", "Alice"));
+        interactionService.Commands[0].Headers.Should().Contain(new KeyValuePair<string, string>("relay.message_id", "msg-4"));
+        interactionService.Commands[0].Headers.Should().Contain(new KeyValuePair<string, string>("scope_id", "scope-d"));
+        store.AddedActors.Should().ContainSingle(entry => entry.ActorId == "nyxid-relay-slack-room-4");
     }
 
     [Fact]
@@ -814,8 +960,8 @@ public class NyxIdChatEndpointsCoverageTests
     public async Task MapAndWriteEventAsync_ShouldSerializePayloads(bool hasError)
     {
         var envelope = hasError
-            ? new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = hasError ? "[[AEVATAR_LLM_ERROR]]boom" : string.Empty }) }
-            : new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) };
+            ? new EventEnvelope { Payload = Any.Pack(new AiTextEndEvent { Content = hasError ? "[[AEVATAR_LLM_ERROR]]boom" : string.Empty }) }
+            : new EventEnvelope { Payload = Any.Pack(new AiTextStartEvent()) };
         var context = new DefaultHttpContext();
         context.Response.Body = new MemoryStream();
 
@@ -856,7 +1002,7 @@ public class NyxIdChatEndpointsCoverageTests
 
         (await InvokeValueTaskAsync<string?>(
             method,
-            new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "delta-1" }) },
+            new EventEnvelope { Payload = Any.Pack(new AiTextContentEvent { Delta = "delta-1" }) },
             "m-2",
             writer)).Should().BeNull();
         (await InvokeValueTaskAsync<string?>(
@@ -1008,7 +1154,7 @@ public class NyxIdChatEndpointsCoverageTests
             writer)).Should().BeNull();
         (await InvokeValueTaskAsync<string?>(
             method,
-            new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+            new EventEnvelope { Payload = Any.Pack(new AiTextEndEvent { Content = "done" }) },
             "m-2",
             writer)).Should().Be("TEXT_MESSAGE_END");
 
@@ -1134,24 +1280,65 @@ public class NyxIdChatEndpointsCoverageTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class StubSubscriptionProvider : IActorEventSubscriptionProvider
+    private sealed class FakeGAgentDraftRunInteractionService
+        : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
     {
-        public List<EventEnvelope> Messages { get; } = [];
+        public List<GAgentDraftRunCommand> Commands { get; } = [];
 
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
-            string actorId,
-            Func<TMessage, Task> handler,
+        public Func<
+            GAgentDraftRunCommand,
+            Func<AGUIEvent, CancellationToken, ValueTask>,
+            Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>?,
+            CancellationToken,
+            Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>>>? ResultFactory { get; init; }
+
+        public Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
+            GAgentDraftRunCommand command,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
         {
-            _ = actorId;
-            _ = ct;
-            if (typeof(TMessage) == typeof(EventEnvelope))
-            {
-                foreach (var message in Messages)
-                    handler((TMessage)(object)message).GetAwaiter().GetResult();
-            }
-            return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
+            Commands.Add(command);
+            if (ResultFactory != null)
+                return ResultFactory(command, emitAsync, onAcceptedAsync, ct);
+
+            return Task.FromResult(
+                CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                    new GAgentDraftRunAcceptedReceipt(command.PreferredActorId ?? "actor-1", "NyxIdChatGAgent", "cmd-1", "corr-1"),
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
+                        GAgentDraftRunCompletionStatus.Unknown,
+                        false)));
+        }
+    }
+
+    private sealed class FakeGAgentApprovalInteractionService
+        : ICommandInteractionService<GAgentApprovalCommand, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, AGUIEvent, GAgentApprovalCompletionStatus>
+    {
+        public List<GAgentApprovalCommand> Commands { get; } = [];
+
+        public Func<
+            GAgentApprovalCommand,
+            Func<AGUIEvent, CancellationToken, ValueTask>,
+            Func<GAgentApprovalAcceptedReceipt, CancellationToken, ValueTask>?,
+            CancellationToken,
+            Task<CommandInteractionResult<GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, GAgentApprovalCompletionStatus>>>? ResultFactory { get; init; }
+
+        public Task<CommandInteractionResult<GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, GAgentApprovalCompletionStatus>> ExecuteAsync(
+            GAgentApprovalCommand command,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<GAgentApprovalAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            if (ResultFactory != null)
+                return ResultFactory(command, emitAsync, onAcceptedAsync, ct);
+
+            return Task.FromResult(
+                CommandInteractionResult<GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, GAgentApprovalCompletionStatus>.Success(
+                    new GAgentApprovalAcceptedReceipt(command.ActorId, "cmd-2", "corr-2"),
+                    new CommandInteractionFinalizeResult<GAgentApprovalCompletionStatus>(
+                        GAgentApprovalCompletionStatus.Unknown,
+                        false)));
         }
     }
 
@@ -1332,8 +1519,4 @@ public class NyxIdChatEndpointsCoverageTests
             Task.FromResult(promptSection);
     }
 
-    private sealed class NoopDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
 }

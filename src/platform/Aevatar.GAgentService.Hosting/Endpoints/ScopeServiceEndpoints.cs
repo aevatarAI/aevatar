@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -10,11 +11,14 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Presentation.AGUI;
@@ -480,8 +484,9 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
+        [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
+        [FromServices] IScriptExecutionProjectionPort scriptExecutionProjectionPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -503,8 +508,9 @@ public static class ScopeServiceEndpoints
                 resolutionService,
                 admissionAuthorizer,
                 chatRunService,
-                actorRuntime,
-                subscriptionProvider,
+                gagentDraftRunService,
+                scriptRuntimeCommandPort,
+                scriptExecutionProjectionPort,
                 options,
                 ct);
             return;
@@ -851,8 +857,9 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
+        [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
+        [FromServices] IScriptExecutionProjectionPort scriptExecutionProjectionPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -910,8 +917,7 @@ public static class ScopeServiceEndpoints
                         scopeId,
                         scopedHeaders,
                         request.InputParts,
-                        actorRuntime,
-                        subscriptionProvider,
+                        gagentDraftRunService,
                         ct);
                     break;
 
@@ -923,8 +929,8 @@ public static class ScopeServiceEndpoints
                         request.SessionId,
                         scopeId,
                         scopedHeaders,
-                        actorRuntime,
-                        subscriptionProvider,
+                        scriptRuntimeCommandPort,
+                        scriptExecutionProjectionPort,
                         ct);
                     break;
 
@@ -962,149 +968,109 @@ public static class ScopeServiceEndpoints
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
         IReadOnlyList<StreamContentPartHttpRequest>? inputParts,
-        IActorRuntime actorRuntime,
-        IActorEventSubscriptionProvider subscriptionProvider,
+        ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
         CancellationToken ct)
     {
         var plan = target.Artifact.DeploymentPlan.StaticPlan;
         var resolvedActorId = string.IsNullOrWhiteSpace(actorId)
             ? null
             : actorId.Trim();
-        var agentType = ScopeGAgentEndpoints.ResolveAgentType(plan.ActorTypeName);
-        if (agentType is null)
-            throw new InvalidOperationException(
-                $"GAgent type '{plan.ActorTypeName}' could not be resolved.");
-
-        IActor actor;
-        if (resolvedActorId is not null)
-        {
-            var existing = await actorRuntime.GetAsync(resolvedActorId);
-            actor = existing ?? await actorRuntime.CreateAsync(agentType, resolvedActorId, ct);
-        }
-        else
-        {
-            actor = await actorRuntime.CreateAsync(agentType, null, ct);
-        }
 
         var writer = new AGUISseWriter(http.Response);
-        http.Response.StatusCode = StatusCodes.Status200OK;
-        http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-        http.Response.Headers.CacheControl = "no-store";
-        http.Response.Headers["X-Accel-Buffering"] = "no";
-        await http.Response.StartAsync(ct);
+        var responseStarted = false;
 
-        var runId = Guid.NewGuid().ToString("N");
-        await writer.WriteAsync(new AGUIEvent
+        async Task EnsureSseStartedAsync(CancellationToken token)
         {
-            RunStarted = new RunStartedEvent { ThreadId = actor.Id, RunId = runId },
-        }, ct);
+            if (responseStarted)
+                return;
 
-        var tcs = new TaskCompletionSource<AGUIEvent.EventOneofCase>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var ctr = ct.Register(() => tcs.TrySetCanceled());
-
-        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-            actor.Id,
-            async envelope =>
-            {
-                try
-                {
-                    var aguiEvent = ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent(envelope);
-                    if (aguiEvent is null) return;
-
-                    await writer.WriteAsync(aguiEvent, CancellationToken.None);
-
-                    if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
-                        or AGUIEvent.EventOneofCase.RunError
-                        or AGUIEvent.EventOneofCase.TextMessageEnd)
-                    {
-                        tcs.TrySetResult(aguiEvent.EventCase);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    tcs.TrySetException(ex);
-                }
-            },
-            ct);
-
-        var chatRequest = new ChatRequestEvent
-        {
-            Prompt = prompt,
-            SessionId = sessionId ?? string.Empty,
-            ScopeId = scopeId,
-        };
-        CopyHeaders(headers, chatRequest.Metadata);
-        if (inputParts is { Count: > 0 })
-        {
-            foreach (var p in inputParts)
-            {
-                chatRequest.InputParts.Add(new ChatContentPart
-                {
-                    Kind = p.Type?.ToLowerInvariant() switch
-                    {
-                        "image" => ChatContentPartKind.Image,
-                        "audio" => ChatContentPartKind.Audio,
-                        "video" => ChatContentPartKind.Video,
-                        "text" => ChatContentPartKind.Text,
-                        _ => ChatContentPartKind.Unspecified,
-                    },
-                    Text = p.Text ?? string.Empty,
-                    DataBase64 = p.DataBase64 ?? string.Empty,
-                    MediaType = p.MediaType ?? string.Empty,
-                    Uri = p.Uri ?? string.Empty,
-                    Name = p.Name ?? string.Empty,
-                });
-            }
+            http.Response.StatusCode = StatusCodes.Status200OK;
+            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
+            http.Response.Headers.CacheControl = "no-store";
+            http.Response.Headers["X-Accel-Buffering"] = "no";
+            await http.Response.StartAsync(token);
+            responseStarted = true;
         }
 
-        var envelope = new EventEnvelope
+        async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken token)
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(chatRequest),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
+            await EnsureSseStartedAsync(token);
+            await writer.WriteAsync(aguiEvent, token);
+        }
 
-        var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
-        if (completedTask == tcs.Task)
+        async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
         {
-            if (tcs.Task.IsFaulted)
+            http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+            await EnsureSseStartedAsync(token);
+            await writer.WriteAsync(
+                new AGUIEvent
+                {
+                    RunStarted = new RunStartedEvent
+                    {
+                        ThreadId = receipt.ActorId,
+                        RunId = receipt.CommandId,
+                    },
+                },
+                token);
+        }
+
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromMinutes(2));
+
+            var interaction = await interactionService.ExecuteAsync(
+                new GAgentDraftRunCommand(
+                    ScopeId: scopeId,
+                    ActorTypeName: plan.ActorTypeName,
+                    Prompt: prompt,
+                    PreferredActorId: resolvedActorId,
+                    SessionId: sessionId,
+                    Headers: headers,
+                    InputParts: MapGAgentDraftRunInputParts(inputParts),
+                    PersistActorToScopeStore: false,
+                    UseCorrelationIdAsFallbackSessionId: false),
+                EmitAsync,
+                OnAcceptedAsync,
+                timeoutCts.Token);
+
+            if (!interaction.Succeeded && interaction.Error == GAgentDraftRunStartError.UnknownActorType)
             {
-                var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
-                await writer.WriteAsync(new AGUIEvent
+                throw new InvalidOperationException(
+                    $"GAgent type '{plan.ActorTypeName}' could not be resolved.");
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            await EnsureSseStartedAsync(CancellationToken.None);
+            await writer.WriteAsync(
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = "GAgent service chat stream timed out.",
+                    },
+                },
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
+            if (!responseStarted)
+                throw;
+
+            await writer.WriteAsync(
+                new AGUIEvent
                 {
                     RunError = new RunErrorEvent
                     {
                         Message = isAuthRequired
                             ? "NyxID authentication required. Please sign in."
-                            : (ex?.Message ?? "An error occurred."),
+                            : ex.Message,
                         Code = isAuthRequired ? "authentication_required" : null,
                     },
-                }, CancellationToken.None);
-            }
-            else
-            {
-                var terminalEventCase = tcs.Task.Result;
-                if (ShouldEmitSyntheticRunFinished(terminalEventCase))
-                {
-                    await writer.WriteAsync(new AGUIEvent
-                    {
-                        RunFinished = new RunFinishedEvent { ThreadId = actor.Id, RunId = runId },
-                    }, CancellationToken.None);
-                }
-            }
-        }
-        else
-        {
-            await writer.WriteAsync(new AGUIEvent
-            {
-                RunError = new RunErrorEvent { Message = "GAgent service chat stream timed out." },
-            }, CancellationToken.None);
+                },
+                CancellationToken.None);
         }
     }
 
@@ -1118,8 +1084,8 @@ public static class ScopeServiceEndpoints
         string? sessionId,
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
-        IActorRuntime actorRuntime,
-        IActorEventSubscriptionProvider subscriptionProvider,
+        IScriptRuntimeCommandPort scriptRuntimeCommandPort,
+        IScriptExecutionProjectionPort scriptExecutionProjectionPort,
         CancellationToken ct)
     {
         var actorId = target.Service.PrimaryActorId;
@@ -1127,52 +1093,7 @@ public static class ScopeServiceEndpoints
             throw new InvalidOperationException(
                 "Script runtime actor is not available. The service may not be activated.");
 
-        var actor = await actorRuntime.GetAsync(actorId);
-        if (actor is null)
-            throw new InvalidOperationException(
-                $"Script runtime actor '{actorId}' could not be resolved. The service may not be activated.");
-
-        var writer = new AGUISseWriter(http.Response);
-        http.Response.StatusCode = StatusCodes.Status200OK;
-        http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-        http.Response.Headers.CacheControl = "no-store";
-        http.Response.Headers["X-Accel-Buffering"] = "no";
-        await http.Response.StartAsync(ct);
-
         var runId = Guid.NewGuid().ToString("N");
-        await writer.WriteAsync(new AGUIEvent
-        {
-            RunStarted = new RunStartedEvent { ThreadId = actorId, RunId = runId },
-        }, ct);
-
-        var tcs = new TaskCompletionSource<AGUIEvent.EventOneofCase>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var ctr = ct.Register(() => tcs.TrySetCanceled());
-
-        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-            actorId,
-            async envelope =>
-            {
-                try
-                {
-                    var aguiEvent = ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent(envelope);
-                    if (aguiEvent is null) return;
-
-                    await writer.WriteAsync(aguiEvent, CancellationToken.None);
-
-                    if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
-                        or AGUIEvent.EventOneofCase.RunError
-                        or AGUIEvent.EventOneofCase.TextMessageEnd)
-                    {
-                        tcs.TrySetResult(aguiEvent.EventCase);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    tcs.TrySetException(ex);
-                }
-            },
-            ct);
-
         var chatRequest = new ChatRequestEvent
         {
             Prompt = prompt,
@@ -1180,55 +1101,114 @@ public static class ScopeServiceEndpoints
             ScopeId = scopeId,
         };
         CopyHeaders(headers, chatRequest.Metadata);
+        var inputPayload = Any.Pack(chatRequest);
+        var eventChannel = new EventChannel<EventEnvelope>();
+        var projectionLease = await scriptExecutionProjectionPort.EnsureAndAttachAsync(
+            token => scriptExecutionProjectionPort.EnsureActorProjectionAsync(actorId, token),
+            eventChannel,
+            ct);
+        if (projectionLease == null)
+            throw new InvalidOperationException("Script execution projection pipeline is unavailable.");
 
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(chatRequest),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actorId },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
+        Task? pumpTask = null;
 
-        var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
-        if (completedTask == tcs.Task)
+        try
         {
-            if (tcs.Task.IsFaulted)
+            await scriptRuntimeCommandPort.RunRuntimeAsync(
+                actorId,
+                runId,
+                inputPayload,
+                target.Artifact.DeploymentPlan.ScriptingPlan.Revision,
+                target.Artifact.DeploymentPlan.ScriptingPlan.DefinitionActorId,
+                inputPayload.TypeUrl,
+                scopeId,
+                ct);
+
+            var writer = new AGUISseWriter(http.Response);
+            http.Response.StatusCode = StatusCodes.Status200OK;
+            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
+            http.Response.Headers.CacheControl = "no-store";
+            http.Response.Headers["X-Accel-Buffering"] = "no";
+            await http.Response.StartAsync(ct);
+            await writer.WriteAsync(new AGUIEvent
             {
-                var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
+                RunStarted = new RunStartedEvent { ThreadId = actorId, RunId = runId },
+            }, ct);
+
+            var tcs = new TaskCompletionSource<AGUIEvent.EventOneofCase>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var ctr = ct.Register(() => tcs.TrySetCanceled(ct));
+            pumpTask = PumpScriptEventsAsync(eventChannel, writer, tcs);
+
+            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, CancellationToken.None));
+            if (completedTask != tcs.Task)
+            {
                 await writer.WriteAsync(new AGUIEvent
                 {
-                    RunError = new RunErrorEvent
-                    {
-                        Message = isAuthRequired
-                            ? "NyxID authentication required. Please sign in."
-                            : (ex?.Message ?? "An error occurred."),
-                        Code = isAuthRequired ? "authentication_required" : null,
-                    },
+                    RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
+                }, CancellationToken.None);
+                return;
+            }
+
+            var terminalEventCase = await tcs.Task;
+            if (ShouldEmitSyntheticRunFinished(terminalEventCase))
+            {
+                await writer.WriteAsync(new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent { ThreadId = actorId, RunId = runId },
                 }, CancellationToken.None);
             }
-            else
+        }
+        finally
+        {
+            await scriptExecutionProjectionPort.DetachReleaseAndDisposeAsync(
+                projectionLease,
+                eventChannel,
+                null,
+                CancellationToken.None);
+
+            if (pumpTask != null)
             {
-                var terminalEventCase = tcs.Task.Result;
-                if (ShouldEmitSyntheticRunFinished(terminalEventCase))
+                try
                 {
-                    await writer.WriteAsync(new AGUIEvent
-                    {
-                        RunFinished = new RunFinishedEvent { ThreadId = actorId, RunId = runId },
-                    }, CancellationToken.None);
+                    await pumpTask;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Client disconnected.
                 }
             }
         }
-        else
+    }
+
+    private static async Task PumpScriptEventsAsync(
+        IEventSink<EventEnvelope> eventSink,
+        AGUISseWriter writer,
+        TaskCompletionSource<AGUIEvent.EventOneofCase> completionSource)
+    {
+        ArgumentNullException.ThrowIfNull(eventSink);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(completionSource);
+
+        try
         {
-            await writer.WriteAsync(new AGUIEvent
+            await foreach (var envelope in eventSink.ReadAllAsync(CancellationToken.None))
             {
-                RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
-            }, CancellationToken.None);
+                var aguiEvent = ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent(envelope);
+                if (aguiEvent is null)
+                    continue;
+
+                await writer.WriteAsync(aguiEvent, CancellationToken.None);
+                if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
+                    or AGUIEvent.EventOneofCase.RunError
+                    or AGUIEvent.EventOneofCase.TextMessageEnd)
+                {
+                    completionSource.TrySetResult(aguiEvent.EventCase);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            completionSource.TrySetException(ex);
         }
     }
 
@@ -1940,6 +1920,32 @@ public static class ScopeServiceEndpoints
             .Select(p => new ChatInputContentPart
             {
                 Type = p.Type,
+                Text = p.Text,
+                DataBase64 = p.DataBase64,
+                MediaType = p.MediaType,
+                Uri = p.Uri,
+                Name = p.Name,
+            }).ToList();
+    }
+
+    private static IReadOnlyList<GAgentDraftRunInputPart>? MapGAgentDraftRunInputParts(
+        IReadOnlyList<StreamContentPartHttpRequest>? parts)
+    {
+        if (parts is not { Count: > 0 })
+            return null;
+
+        return parts
+            .Where(p => p != null)
+            .Select(p => new GAgentDraftRunInputPart
+            {
+                Kind = p.Type?.ToLowerInvariant() switch
+                {
+                    "image" => GAgentDraftRunInputPartKind.Image,
+                    "audio" => GAgentDraftRunInputPartKind.Audio,
+                    "video" => GAgentDraftRunInputPartKind.Video,
+                    "text" => GAgentDraftRunInputPartKind.Text,
+                    _ => GAgentDraftRunInputPartKind.Unspecified,
+                },
                 Text = p.Text,
                 DataBase64 = p.DataBase64,
                 MediaType = p.MediaType,

@@ -3,9 +3,12 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Presentation.AGUI;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -16,6 +19,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
+using AiTextContentEvent = Aevatar.AI.Abstractions.TextMessageContentEvent;
+using AiTextEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;
+using AiTextStartEvent = Aevatar.AI.Abstractions.TextMessageStartEvent;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -114,13 +120,14 @@ public static class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         NyxIdChatStreamRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
         var writer = new NyxIdChatSseWriter(http.Response);
+        var accepted = false;
+        var runFinishedWritten = false;
 
         try
         {
@@ -137,85 +144,96 @@ public static class NyxIdChatEndpoints
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
             }
-
-            // Get or create the actor
-            var actor = await actorRuntime.GetAsync(actorId)
-                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-
-            // Set up SSE response
-            await writer.StartAsync(ct);
-
             var messageId = Guid.NewGuid().ToString("N");
-            await writer.WriteRunStartedAsync(actorId, ct);
-
-            // Subscribe to actor events and map to SSE frames
-            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var ctr = ct.Register(() => tcs.TrySetCanceled());
-
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope =>
-                {
-                    try
-                    {
-                        var terminalFrame = await MapAndWriteEventAsync(envelope, messageId, writer);
-                        if (!string.IsNullOrWhiteSpace(terminalFrame))
-                            tcs.TrySetResult(terminalFrame);
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.TrySetException(ex);
-                    }
-                },
-                ct);
-
-            // Build and dispatch ChatRequestEvent to the actor
-            var chatRequest = new ChatRequestEvent
+            var headers = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                Prompt = prompt,
-                SessionId = request.SessionId ?? messageId,
-                ScopeId = scopeId,
+                ["scope_id"] = scopeId,
             };
-            if (request.InputParts is { Count: > 0 })
+            string? defaultModel = null;
+            string? preferredRoute = null;
+            var userConfigStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
+            if (userConfigStore != null)
             {
-                foreach (var part in request.InputParts)
-                    chatRequest.InputParts.Add(part.ToProto());
-            }
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
-            chatRequest.Metadata["scope_id"] = scopeId;
-            await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
-            await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
-            await InjectConnectedServicesAsync(http, accessToken, chatRequest.Metadata, ct);
-
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = new EnvelopeRoute
+                try
                 {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
-
-            await actor.HandleEventAsync(envelope, ct);
-
-            // Wait for completion or timeout
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
-
-            if (completedTask == tcs.Task)
-            {
-                if (tcs.Task.IsFaulted)
-                {
-                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
+                    var preferences = await userConfigStore.GetAsync(ct);
+                    defaultModel = string.IsNullOrWhiteSpace(preferences.DefaultModel)
+                        ? null
+                        : preferences.DefaultModel.Trim();
+                    preferredRoute = string.IsNullOrWhiteSpace(preferences.PreferredRoute)
+                        ? null
+                        : preferences.PreferredRoute.Trim();
+                    if (preferences.MaxToolRounds > 0)
+                        headers[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
                 }
-                else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
+                catch
                 {
-                    await writer.WriteRunFinishedAsync(CancellationToken.None);
+                    // Best-effort.
                 }
             }
-            else
+
+            await InjectUserMemoryAsync(http, headers, ct);
+            await InjectConnectedServicesAsync(http, accessToken, headers, ct);
+
+            var command = new GAgentDraftRunCommand(
+                ScopeId: scopeId,
+                ActorTypeName: typeof(NyxIdChatGAgent).AssemblyQualifiedName ?? typeof(NyxIdChatGAgent).FullName ?? nameof(NyxIdChatGAgent),
+                Prompt: prompt,
+                PreferredActorId: actorId,
+                SessionId: request.SessionId ?? messageId,
+                NyxIdAccessToken: accessToken,
+                ModelOverride: defaultModel,
+                PreferredLlmRoute: preferredRoute,
+                Headers: headers,
+                InputParts: request.InputParts is { Count: > 0 }
+                    ? request.InputParts.Select(ToDraftRunInputPart).ToArray()
+                    : null,
+                PersistActorToScopeStore: false,
+                UseCorrelationIdAsFallbackSessionId: false);
+
+            async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
+            {
+                accepted = true;
+                await writer.StartAsync(token);
+                await writer.WriteRunStartedAsync(receipt.ActorId, token);
+            }
+
+            async ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
+            {
+                var terminal = await MapAndWriteAguiEventAsync(evt, messageId, writer, token);
+                if (string.Equals(terminal, "RUN_FINISHED", StringComparison.Ordinal))
+                    runFinishedWritten = true;
+            }
+
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromMinutes(2));
+
+                var interaction = await interactionService.ExecuteAsync(
+                    command,
+                    EmitAsync,
+                    OnAcceptedAsync,
+                    timeoutCts.Token);
+
+                if (!interaction.Succeeded)
+                {
+                    if (interaction.Error == GAgentDraftRunStartError.UnknownActorType)
+                        throw new InvalidOperationException("NyxIdChatGAgent type could not be resolved.");
+                    return;
+                }
+
+                if (!writer.Started && interaction.Receipt != null)
+                    await OnAcceptedAsync(interaction.Receipt, ct);
+
+                if (interaction.FinalizeResult is { Completed: true } finalize &&
+                    !runFinishedWritten &&
+                    finalize.Completion is GAgentDraftRunCompletionStatus.TextMessageCompleted or GAgentDraftRunCompletionStatus.RunFinished)
+                {
+                    await writer.WriteRunFinishedAsync(ct);
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 await writer.WriteRunErrorAsync("Request timed out.", CancellationToken.None);
             }
@@ -227,7 +245,7 @@ public static class NyxIdChatEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "NyxID chat stream failed for actor {ActorId}", actorId);
-            if (!writer.Started)
+            if (!accepted && !writer.Started)
             {
                 http.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 return;
@@ -249,13 +267,13 @@ public static class NyxIdChatEndpoints
         if (payload is null)
             return null;
 
-        if (payload.Is(TextMessageStartEvent.Descriptor))
+        if (payload.Is(AiTextStartEvent.Descriptor))
         {
             await writer.WriteTextStartAsync(messageId, CancellationToken.None);
         }
-        else if (payload.Is(TextMessageContentEvent.Descriptor))
+        else if (payload.Is(AiTextContentEvent.Descriptor))
         {
-            var evt = payload.Unpack<TextMessageContentEvent>();
+            var evt = payload.Unpack<AiTextContentEvent>();
             if (!string.IsNullOrEmpty(evt.Delta))
                 await writer.WriteTextDeltaAsync(evt.Delta, CancellationToken.None);
         }
@@ -282,9 +300,9 @@ public static class NyxIdChatEndpoints
             var evt = payload.Unpack<MediaContentEvent>();
             await writer.WriteMediaContentAsync(evt, CancellationToken.None);
         }
-        else if (payload.Is(TextMessageEndEvent.Descriptor))
+        else if (payload.Is(AiTextEndEvent.Descriptor))
         {
-            var evt = payload.Unpack<TextMessageEndEvent>();
+            var evt = payload.Unpack<AiTextEndEvent>();
 
             // Check for LLM error markers
             if (!string.IsNullOrEmpty(evt.Content))
@@ -334,13 +352,14 @@ public static class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         NyxIdApprovalRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ICommandInteractionService<GAgentApprovalCommand, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, AGUIEvent, GAgentApprovalCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
         var writer = new NyxIdChatSseWriter(http.Response);
+        var accepted = false;
+        var runFinishedWritten = false;
 
         try
         {
@@ -356,76 +375,60 @@ public static class NyxIdChatEndpoints
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
             }
-
-            var actor = await actorRuntime.GetAsync(actorId);
-            if (actor == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
-
-            await writer.StartAsync(ct);
-            await writer.WriteRunStartedAsync(actorId, ct);
-
             var messageId = Guid.NewGuid().ToString("N");
-            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var ctr = ct.Register(() => tcs.TrySetCanceled());
 
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope =>
+            async ValueTask OnAcceptedAsync(GAgentApprovalAcceptedReceipt receipt, CancellationToken token)
+            {
+                accepted = true;
+                await writer.StartAsync(token);
+                await writer.WriteRunStartedAsync(receipt.ActorId, token);
+            }
+
+            async ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
+            {
+                var terminal = await MapAndWriteAguiEventAsync(evt, messageId, writer, token);
+                if (string.Equals(terminal, "RUN_FINISHED", StringComparison.Ordinal))
+                    runFinishedWritten = true;
+            }
+
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromMinutes(2));
+
+                var interaction = await interactionService.ExecuteAsync(
+                    new GAgentApprovalCommand(
+                        ActorId: actorId,
+                        RequestId: request.RequestId,
+                        Approved: request.Approved,
+                        Reason: request.Reason,
+                        SessionId: request.SessionId ?? scopeId),
+                    EmitAsync,
+                    OnAcceptedAsync,
+                    timeoutCts.Token);
+
+                if (!interaction.Succeeded)
                 {
-                    try
+                    if (interaction.Error == GAgentApprovalStartError.ActorNotFound)
                     {
-                        var terminalFrame = await MapAndWriteEventAsync(envelope, messageId, writer);
-                        if (!string.IsNullOrWhiteSpace(terminalFrame))
-                            tcs.TrySetResult(terminalFrame);
+                        http.Response.StatusCode = StatusCodes.Status404NotFound;
+                        return;
                     }
-                    catch (Exception ex)
-                    {
-                        tcs.TrySetException(ex);
-                    }
-                },
-                ct);
 
-            // Send the approval decision to the actor
-            var decisionEvent = new ToolApprovalDecisionEvent
-            {
-                RequestId = request.RequestId,
-                SessionId = request.SessionId ?? scopeId,
-                Approved = request.Approved,
-                Reason = request.Reason ?? string.Empty,
-            };
-
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(decisionEvent),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
-
-            await actor.HandleEventAsync(envelope, ct);
-
-            // Wait for the continuation chat to complete (or timeout)
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
-
-            if (completedTask == tcs.Task)
-            {
-                if (tcs.Task.IsFaulted)
-                {
-                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
+                    return;
                 }
-                else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
+
+                if (!writer.Started && interaction.Receipt != null)
+                    await OnAcceptedAsync(interaction.Receipt, ct);
+
+                if (interaction.FinalizeResult is { Completed: true } finalize &&
+                    !runFinishedWritten &&
+                    finalize.Completion is GAgentApprovalCompletionStatus.TextMessageCompleted or GAgentApprovalCompletionStatus.RunFinished)
                 {
-                    await writer.WriteRunFinishedAsync(CancellationToken.None);
+                    await writer.WriteRunFinishedAsync(ct);
                 }
             }
-            else
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 await writer.WriteRunErrorAsync("Approval continuation timed out.", CancellationToken.None);
             }
@@ -437,7 +440,7 @@ public static class NyxIdChatEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "NyxID approval stream failed for actor {ActorId}", actorId);
-            if (!writer.Started)
+            if (!accepted && !writer.Started)
             {
                 http.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 return;
@@ -445,6 +448,107 @@ public static class NyxIdChatEndpoints
 
             await writer.WriteRunErrorAsync(ex.Message, CancellationToken.None);
         }
+    }
+
+    private static GAgentDraftRunInputPart ToDraftRunInputPart(ContentPartDto source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new GAgentDraftRunInputPart
+        {
+            Kind = source.Type?.ToLowerInvariant() switch
+            {
+                "image" => GAgentDraftRunInputPartKind.Image,
+                "audio" => GAgentDraftRunInputPartKind.Audio,
+                "video" => GAgentDraftRunInputPartKind.Video,
+                "text" => GAgentDraftRunInputPartKind.Text,
+                _ => GAgentDraftRunInputPartKind.Unspecified,
+            },
+            Text = source.Text,
+            DataBase64 = source.DataBase64,
+            MediaType = source.MediaType,
+            Uri = source.Uri,
+            Name = source.Name,
+        };
+    }
+
+    private static async ValueTask<string?> MapAndWriteAguiEventAsync(
+        AGUIEvent evt,
+        string fallbackMessageId,
+        NyxIdChatSseWriter writer,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        switch (evt.EventCase)
+        {
+            case AGUIEvent.EventOneofCase.TextMessageStart:
+                await writer.WriteTextStartAsync(
+                    string.IsNullOrWhiteSpace(evt.TextMessageStart.MessageId) ? fallbackMessageId : evt.TextMessageStart.MessageId,
+                    ct);
+                return null;
+            case AGUIEvent.EventOneofCase.TextMessageContent:
+                if (!string.IsNullOrEmpty(evt.TextMessageContent.Delta))
+                    await writer.WriteTextDeltaAsync(evt.TextMessageContent.Delta, ct);
+                return null;
+            case AGUIEvent.EventOneofCase.ToolCallStart:
+                await writer.WriteToolCallStartAsync(evt.ToolCallStart.ToolName, evt.ToolCallStart.ToolCallId, ct);
+                return null;
+            case AGUIEvent.EventOneofCase.ToolCallEnd:
+                await writer.WriteToolCallEndAsync(evt.ToolCallEnd.ToolCallId, evt.ToolCallEnd.Result, ct);
+                return null;
+            case AGUIEvent.EventOneofCase.TextMessageEnd:
+                await writer.WriteTextEndAsync(
+                    string.IsNullOrWhiteSpace(evt.TextMessageEnd.MessageId) ? fallbackMessageId : evt.TextMessageEnd.MessageId,
+                    ct);
+                return "TEXT_MESSAGE_END";
+            case AGUIEvent.EventOneofCase.RunFinished:
+                await writer.WriteRunFinishedAsync(ct);
+                return "RUN_FINISHED";
+            case AGUIEvent.EventOneofCase.RunError:
+                await writer.WriteRunErrorAsync(evt.RunError.Message, ct);
+                return "RUN_ERROR";
+            case AGUIEvent.EventOneofCase.Custom:
+                return await MapAndWriteCustomAguiEventAsync(evt.Custom, writer, ct);
+            default:
+                return null;
+        }
+    }
+
+    private static async ValueTask<string?> MapAndWriteCustomAguiEventAsync(
+        CustomEvent custom,
+        NyxIdChatSseWriter writer,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(custom);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        if (string.Equals(custom.Name, "TOOL_APPROVAL_REQUEST", StringComparison.Ordinal))
+        {
+            if (custom.Payload?.Is(Struct.Descriptor) == true)
+            {
+                var payload = custom.Payload.Unpack<Struct>();
+                await writer.WriteToolApprovalRequestAsync(
+                    payload.Fields.TryGetValue("requestId", out var requestId) ? requestId.StringValue : string.Empty,
+                    payload.Fields.TryGetValue("toolName", out var toolName) ? toolName.StringValue : string.Empty,
+                    payload.Fields.TryGetValue("toolCallId", out var toolCallId) ? toolCallId.StringValue : string.Empty,
+                    payload.Fields.TryGetValue("argumentsJson", out var argumentsJson) ? argumentsJson.StringValue : string.Empty,
+                    payload.Fields.TryGetValue("isDestructive", out var isDestructive) && isDestructive.BoolValue,
+                    payload.Fields.TryGetValue("timeoutSeconds", out var timeoutSeconds) ? (int)timeoutSeconds.NumberValue : 15,
+                    ct);
+            }
+
+            return null;
+        }
+
+        if (string.Equals(custom.Name, "MEDIA_CONTENT", StringComparison.Ordinal) &&
+            custom.Payload?.Is(MediaContentEvent.Descriptor) == true)
+        {
+            await writer.WriteMediaContentAsync(custom.Payload.Unpack<MediaContentEvent>(), ct);
+        }
+
+        return null;
     }
 
     public sealed record NyxIdApprovalRequest(
@@ -723,8 +827,7 @@ public static class NyxIdChatEndpoints
     /// </summary>
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
         [FromServices] IGAgentActorStore actorStore,
         [FromServices] NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
@@ -787,51 +890,14 @@ public static class NyxIdChatEndpoints
                 "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
                 platform, conversationId, message.Sender?.DisplayName);
 
-            // ─── Get or create actor ───
+            // ─── Register conversation actor ───
             // Relay follows the same strict lifecycle contract as create:
             // registry persistence via IGAgentActorStore is mandatory, and
             // registry failures must surface instead of silently degrading.
-            var actor = await actorRuntime.GetAsync(actorId)
-                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
             await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
 
-            // ─── Subscribe and collect response ───
-            var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var responseBuilder = new StringBuilder();
             string? errorMessage = null;
-            using var ctr = ct.Register(() => responseTcs.TrySetCanceled());
-
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                envelope =>
-                {
-                    var payload = envelope.Payload;
-                    if (payload is null) return Task.CompletedTask;
-
-                    if (payload.Is(TextMessageContentEvent.Descriptor))
-                    {
-                        var evt = payload.Unpack<TextMessageContentEvent>();
-                        if (!string.IsNullOrEmpty(evt.Delta))
-                            responseBuilder.Append(evt.Delta);
-                    }
-                    else if (payload.Is(TextMessageEndEvent.Descriptor))
-                    {
-                        var evt = payload.Unpack<TextMessageEndEvent>();
-                        if (!string.IsNullOrEmpty(evt.Content))
-                        {
-                            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                            const string llmFailedPrefix = "LLM request failed:";
-                            if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                                errorMessage = evt.Content[llmErrorPrefix.Length..].Trim();
-                            else if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                                errorMessage = evt.Content.Trim();
-                        }
-                        responseTcs.TrySetResult(responseBuilder.ToString());
-                    }
-
-                    return Task.CompletedTask;
-                },
-                ct);
 
             // ─── Dispatch to actor ───
             // SessionId = per-message unique ID (for idempotent retry),
@@ -841,48 +907,76 @@ public static class NyxIdChatEndpoints
                 ? $"{conversationId}-{relayMessageId}"
                 : $"{conversationId}-{Guid.NewGuid():N}";
 
-            var chatRequest = new ChatRequestEvent
+            var relayMetadata = new Google.Protobuf.Collections.MapField<string, string>
             {
-                Prompt = message.Content.Text,
-                SessionId = sessionId,
-                ScopeId = scopeId,
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = userToken,
+                ["scope_id"] = scopeId,
+                ["relay.platform"] = message.Platform ?? string.Empty,
+                ["relay.sender"] = message.Sender?.DisplayName ?? string.Empty,
+                ["relay.message_id"] = message.MessageId ?? string.Empty,
             };
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
-            chatRequest.Metadata["scope_id"] = scopeId;
-            chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
-            chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";
-            chatRequest.Metadata["relay.message_id"] = message.MessageId ?? "";
-            await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
-            await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
+            await InjectUserConfigMetadataAsync(http, relayMetadata, ct);
+            await InjectUserMemoryAsync(http, relayMetadata, ct);
 
-            var envelope = new EventEnvelope
+            async ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
             {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = new EnvelopeRoute
+                _ = token;
+                switch (evt.EventCase)
                 {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
+                    case AGUIEvent.EventOneofCase.TextMessageContent when !string.IsNullOrEmpty(evt.TextMessageContent.Delta):
+                        responseBuilder.Append(evt.TextMessageContent.Delta);
+                        break;
+                    case AGUIEvent.EventOneofCase.RunError:
+                        errorMessage = evt.RunError.Message?.Trim();
+                        break;
+                }
 
-            await actor.HandleEventAsync(envelope, ct);
+                await ValueTask.CompletedTask;
+            }
 
             // ─── Wait for response ───
             var timeoutMs = relayOptions.ResponseTimeoutSeconds * 1000;
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(timeoutMs, ct));
-            sw.Stop();
-
             string replyText;
-            if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
+
+            try
             {
-                replyText = responseTcs.Task.Result;
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(0, timeoutMs)));
+
+                var interaction = await interactionService.ExecuteAsync(
+                    new GAgentDraftRunCommand(
+                        ScopeId: scopeId,
+                        ActorTypeName: typeof(NyxIdChatGAgent).AssemblyQualifiedName ?? typeof(NyxIdChatGAgent).FullName ?? nameof(NyxIdChatGAgent),
+                        Prompt: message.Content.Text,
+                        PreferredActorId: actorId,
+                        SessionId: sessionId,
+                        NyxIdAccessToken: userToken,
+                        Headers: relayMetadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal),
+                        PersistActorToScopeStore: false,
+                        UseCorrelationIdAsFallbackSessionId: false),
+                    EmitAsync,
+                    null,
+                    timeoutCts.Token);
+
+                sw.Stop();
+
+                if (!interaction.Succeeded)
+                {
+                    logger.LogWarning("Relay interaction failed to start for actor {ActorId}. error={Error}", actorId, interaction.Error);
+                    replyText = "Sorry, I wasn't able to start the response. Please try again.";
+                }
+                else
+                {
+                    replyText = responseBuilder.ToString();
+                }
+
                 logger.LogInformation("Relay response in {ElapsedMs}ms, length={Length}",
                     sw.ElapsedMilliseconds, replyText.Length);
             }
-            else
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
+                sw.Stop();
                 var partial = responseBuilder.ToString();
                 logger.LogWarning("Relay timed out after {ElapsedMs}ms, partial={Length}",
                     sw.ElapsedMilliseconds, partial.Length);
@@ -902,7 +996,7 @@ public static class NyxIdChatEndpoints
                 if (relayOptions.EnableDebugDiagnostics)
                 {
                     var config = http.RequestServices.GetService<IConfiguration>();
-                    var diagnostic = BuildRelayDiagnostic(chatRequest.Metadata, config, errorMessage);
+                    var diagnostic = BuildRelayDiagnostic(relayMetadata, config, errorMessage);
                     replyText += $"\n\n[Debug]\n{diagnostic}";
                 }
             }

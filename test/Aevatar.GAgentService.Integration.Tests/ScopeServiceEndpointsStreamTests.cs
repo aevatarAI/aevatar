@@ -1,14 +1,27 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
+using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Projection.Orchestration;
+using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.Presentation.AGUI;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
+using AiTextContentEvent = Aevatar.AI.Abstractions.TextMessageContentEvent;
 using AiTextEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;
 
 namespace Aevatar.GAgentService.Integration.Tests;
@@ -41,7 +54,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     {
         var http = CreateHttpContext();
         var runtime = new StubActorRuntime();
-        var subscriptions = new StubSubscriptionProvider
+        var projectionPort = new StubDraftRunProjectionPort
         {
             Messages =
             {
@@ -51,6 +64,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 },
             },
         };
+        var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
         await InvokePrivateTaskAsync(
             HandleGAgentStreamMethod,
@@ -62,8 +76,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "scope-a",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
             null,
-            runtime,
-            subscriptions,
+            interactionService,
             CancellationToken.None);
 
         runtime.CreateCalls.Should().ContainSingle(call => call.Id == "actor-1");
@@ -86,7 +99,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         var http = CreateHttpContext();
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
+        var projectionPort = new StubDraftRunProjectionPort
         {
             Messages =
             {
@@ -103,6 +116,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 },
             },
         };
+        var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
         await InvokePrivateTaskAsync(
             HandleGAgentStreamMethod,
@@ -114,8 +128,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "scope-a",
             null,
             null,
-            runtime,
-            subscriptions,
+            interactionService,
             CancellationToken.None);
 
         runtime.CreateCalls.Should().BeEmpty();
@@ -128,7 +141,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     {
         var http = CreateHttpContext();
         var runtime = new StubActorRuntime();
-        var subscriptions = new StubSubscriptionProvider
+        var projectionPort = new StubDraftRunProjectionPort
         {
             Messages =
             {
@@ -138,6 +151,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 },
             },
         };
+        var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
         await InvokePrivateTaskAsync(
             HandleGAgentStreamMethod,
@@ -156,8 +170,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 new("text", "hello text"),
                 new("custom", "unknown"),
             },
-            runtime,
-            subscriptions,
+            interactionService,
             CancellationToken.None);
 
         runtime.CreateCalls.Should().ContainSingle(call => call.Id == null);
@@ -182,7 +195,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         var http = CreateHttpContext();
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
+        var projectionPort = new StubDraftRunProjectionPort
         {
             Messages =
             {
@@ -198,6 +211,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 },
             },
         };
+        var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
         await InvokePrivateTaskAsync(
             HandleGAgentStreamMethod,
@@ -209,13 +223,43 @@ public sealed class ScopeServiceEndpointsStreamTests
             "scope-a",
             null,
             null,
-            runtime,
-            subscriptions,
+            interactionService,
             CancellationToken.None);
 
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runError");
         body.Should().NotContain("runFinished");
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishMappedAguiEvent_ToCommandSession()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new AiTextContentEvent
+                {
+                    SessionId = "msg-1",
+                    Delta = "hello",
+                }),
+            },
+            CancellationToken.None);
+
+        var published = sessionHub.Published.Should().ContainSingle().Subject;
+        published.ScopeId.Should().Be("actor-1");
+        published.SessionId.Should().Be("cmd-1");
+        published.Event.TextMessageContent.MessageId.Should().Be("msg-1");
+        published.Event.TextMessageContent.Delta.Should().Be("hello");
     }
 
     [Fact]
@@ -231,8 +275,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "scope-a",
             null,
             null,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider(),
+            CreateStaticStreamInteractionService(new StubActorRuntime(), new StubDraftRunProjectionPort()),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -245,13 +288,13 @@ public sealed class ScopeServiceEndpointsStreamTests
         var act = () => InvokePrivateTaskAsync(
             HandleScriptingStreamMethod,
             CreateHttpContext(),
-            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: string.Empty),
+            CreateScriptingTarget(primaryActorId: string.Empty),
             "hello",
             "session-1",
             "scope-a",
             null,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider(),
+            new StubScriptRuntimeCommandPort(),
+            new StubScriptExecutionProjectionPort(),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -264,13 +307,13 @@ public sealed class ScopeServiceEndpointsStreamTests
         var act = () => InvokePrivateTaskAsync(
             HandleScriptingStreamMethod,
             CreateHttpContext(),
-            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
             "session-1",
             "scope-a",
             null,
-            new StubActorRuntime(),
-            new StubSubscriptionProvider(),
+            new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'actor-1' could not be resolved. The service may not be activated.")),
+            new StubScriptExecutionProjectionPort(),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -281,9 +324,8 @@ public sealed class ScopeServiceEndpointsStreamTests
     public async Task HandleScriptingServiceChatStreamAsync_ShouldEmitSyntheticFinish()
     {
         var http = CreateHttpContext();
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
+        var commandPort = new StubScriptRuntimeCommandPort();
+        var projectionPort = new StubScriptExecutionProjectionPort
         {
             Messages =
             {
@@ -297,18 +339,19 @@ public sealed class ScopeServiceEndpointsStreamTests
         await InvokePrivateTaskAsync(
             HandleScriptingStreamMethod,
             http,
-            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
             "session-1",
             "scope-a",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
-            runtime,
-            subscriptions,
+            commandPort,
+            projectionPort,
             CancellationToken.None);
 
-        var actor = runtime.Actors["actor-1"].Should().BeOfType<StubActor>().Subject;
-        var request = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
+        var request = commandPort.Invocations.Should().ContainSingle().Subject.InputPayload.Unpack<ChatRequestEvent>();
         request.Metadata["trace-id"].Should().Be("abc");
+        request.ScopeId.Should().Be("scope-a");
+        request.SessionId.Should().Be("session-1");
 
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runStarted");
@@ -320,9 +363,8 @@ public sealed class ScopeServiceEndpointsStreamTests
     public async Task HandleScriptingServiceChatStreamAsync_ShouldPreserveRunErrorWithoutSyntheticFinish()
     {
         var http = CreateHttpContext();
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
+        var commandPort = new StubScriptRuntimeCommandPort();
+        var projectionPort = new StubScriptExecutionProjectionPort
         {
             Messages =
             {
@@ -342,13 +384,13 @@ public sealed class ScopeServiceEndpointsStreamTests
         await InvokePrivateTaskAsync(
             HandleScriptingStreamMethod,
             http,
-            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
             "session-1",
             "scope-a",
             null,
-            runtime,
-            subscriptions,
+            commandPort,
+            projectionPort,
             CancellationToken.None);
 
         var body = await ReadBodyAsync(http);
@@ -360,9 +402,8 @@ public sealed class ScopeServiceEndpointsStreamTests
     public async Task HandleScriptingServiceChatStreamAsync_ShouldAvoidSyntheticDuplicateFinish_WhenRunFinishedArrives()
     {
         var http = CreateHttpContext();
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
+        var commandPort = new StubScriptRuntimeCommandPort();
+        var projectionPort = new StubScriptExecutionProjectionPort
         {
             Messages =
             {
@@ -383,13 +424,13 @@ public sealed class ScopeServiceEndpointsStreamTests
         await InvokePrivateTaskAsync(
             HandleScriptingStreamMethod,
             http,
-            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
             "session-1",
             "scope-a",
             null,
-            runtime,
-            subscriptions,
+            commandPort,
+            projectionPort,
             CancellationToken.None);
 
         var body = await ReadBodyAsync(http);
@@ -447,6 +488,50 @@ public sealed class ScopeServiceEndpointsStreamTests
             artifact.Endpoints[0]);
     }
 
+    private static ServiceInvocationResolvedTarget CreateScriptingTarget(string primaryActorId)
+    {
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = identity.Clone(),
+            RevisionId = "rev-1",
+            ImplementationKind = ServiceImplementationKind.Scripting,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                ScriptingPlan = new ScriptingServiceDeploymentPlan
+                {
+                    Revision = "rev-1",
+                    DefinitionActorId = "definition-1",
+                },
+            },
+        };
+        artifact.Endpoints.Add(new ServiceEndpointDescriptor
+        {
+            EndpointId = "chat",
+            DisplayName = "chat",
+            Kind = ServiceEndpointKind.Chat,
+            RequestTypeUrl = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+        });
+
+        return new ServiceInvocationResolvedTarget(
+            new ServiceInvocationResolvedService(
+                "svc-key",
+                "rev-1",
+                "dep-1",
+                primaryActorId,
+                "Active",
+                []),
+            artifact,
+            artifact.Endpoints[0]);
+    }
+
     private static async Task InvokePrivateTaskAsync(MethodInfo method, params object?[] args)
     {
         var result = method.Invoke(null, args);
@@ -467,6 +552,31 @@ public sealed class ScopeServiceEndpointsStreamTests
     {
         http.Response.Body.Position = 0;
         return await new StreamReader(http.Response.Body).ReadToEndAsync();
+    }
+
+    private static ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> CreateStaticStreamInteractionService(
+        StubActorRuntime runtime,
+        StubDraftRunProjectionPort projectionPort)
+    {
+        var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
+            new GAgentDraftRunCommandTargetResolver(
+                runtime,
+                new StubGAgentActorStore(),
+                projectionPort,
+                NullLogger<GAgentDraftRunCommandTargetResolver>.Instance),
+            new DefaultCommandContextPolicy(),
+            new GAgentDraftRunCommandTargetBinder(projectionPort),
+            new GAgentDraftRunCommandEnvelopeFactory(),
+            new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
+            new GAgentDraftRunAcceptedReceiptFactory());
+
+        return new DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>(
+            pipeline,
+            new DefaultEventOutputStream<AGUIEvent, AGUIEvent>(new IdentityEventFrameMapper<AGUIEvent>()),
+            new GAgentDraftRunCompletionPolicy(),
+            new GAgentDraftRunFinalizeEmitter(),
+            new GAgentDraftRunDurableCompletionResolver(),
+            NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance);
     }
 
     private sealed class StubActorRuntime : IActorRuntime
@@ -492,6 +602,18 @@ public sealed class ScopeServiceEndpointsStreamTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
+    private sealed class InlineActorDispatchPort(StubActorRuntime runtime) : IActorDispatchPort
+    {
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            var actor = await runtime.GetAsync(actorId);
+            if (actor == null)
+                throw new InvalidOperationException($"Actor '{actorId}' not found.");
+
+            await actor.HandleEventAsync(envelope, ct);
+        }
+    }
+
     private sealed class StubActor(string id) : IActor
     {
         public string Id { get; } = id;
@@ -509,6 +631,232 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class StubDraftRunProjectionPort : IGAgentDraftRunProjectionPort
+    {
+        public List<EventEnvelope> Messages { get; } = [];
+
+        public bool ProjectionEnabled => true;
+
+        public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
+            string actorId,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult<IGAgentDraftRunProjectionLease?>(new StubDraftRunProjectionLease(actorId, commandId));
+        }
+
+        public async Task AttachLiveSinkAsync(
+            IGAgentDraftRunProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(lease);
+            ArgumentNullException.ThrowIfNull(sink);
+            _ = ct;
+
+            foreach (var message in Messages)
+            {
+                var mapped = ScopeGAgentAguiEventMapper.TryMap(message);
+                if (mapped == null)
+                    continue;
+
+                try
+                {
+                    await sink.PushAsync(mapped, CancellationToken.None);
+                }
+                catch (EventSinkCompletedException)
+                {
+                    break;
+                }
+            }
+        }
+
+        public Task DetachLiveSinkAsync(
+            IGAgentDraftRunProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IGAgentDraftRunProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record StubDraftRunProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class StubScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    {
+        public List<EventEnvelope> Messages { get; } = [];
+
+        public bool ProjectionEnabled => true;
+
+        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult<IScriptExecutionProjectionLease?>(new StubScriptExecutionProjectionLease(actorId));
+        }
+
+        public async Task AttachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = ct;
+
+            foreach (var message in Messages)
+            {
+                try
+                {
+                    await sink.PushAsync(message, CancellationToken.None);
+                }
+                catch (EventSinkCompletedException)
+                {
+                    break;
+                }
+            }
+        }
+
+        public Task DetachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IScriptExecutionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record StubScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
+
+    private sealed class StubScriptRuntimeCommandPort : IScriptRuntimeCommandPort
+    {
+        public List<ScriptRuntimeInvocation> Invocations { get; } = [];
+
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct) =>
+            RunRuntimeAsync(
+                runtimeActorId,
+                runId,
+                inputPayload,
+                scriptRevision,
+                definitionActorId,
+                requestedEventType,
+                scopeId: null,
+                ct);
+
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            string? scopeId,
+            CancellationToken ct)
+        {
+            _ = ct;
+            Invocations.Add(new ScriptRuntimeInvocation(
+                runtimeActorId,
+                runId,
+                inputPayload?.Clone() ?? new Any(),
+                scriptRevision,
+                definitionActorId,
+                requestedEventType,
+                scopeId));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingScriptRuntimeCommandPort(Exception exception) : IScriptRuntimeCommandPort
+    {
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct) =>
+            Task.FromException(exception);
+
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            string? scopeId,
+            CancellationToken ct) =>
+            Task.FromException(exception);
+    }
+
+    private sealed record ScriptRuntimeInvocation(
+        string RuntimeActorId,
+        string RunId,
+        Any InputPayload,
+        string ScriptRevision,
+        string DefinitionActorId,
+        string RequestedEventType,
+        string? ScopeId);
+
+    private sealed class RecordingProjectionSessionEventHub : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionSessionEventHub<AGUIEvent>
+    {
+        public List<(string ScopeId, string SessionId, AGUIEvent Event)> Published { get; } = [];
+
+        public Task PublishAsync(string scopeId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
+        {
+            _ = ct;
+            Published.Add((scopeId, sessionId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(string scopeId, string sessionId, Func<AGUIEvent, ValueTask> handler, CancellationToken ct = default)
+        {
+            _ = scopeId;
+            _ = sessionId;
+            _ = handler;
+            _ = ct;
+            return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+        }
+    }
+
+    private sealed class NoopAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class StubSubscriptionProvider : IActorEventSubscriptionProvider
@@ -530,13 +878,25 @@ public sealed class ScopeServiceEndpointsStreamTests
                     handler((TMessage)(object)message).GetAwaiter().GetResult();
             }
 
-            return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
+            return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
         }
     }
 
-    private sealed class NoopDisposable : IAsyncDisposable
+    private sealed class StubGAgentActorStore : Aevatar.Studio.Application.Studio.Abstractions.IGAgentActorStore
     {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public Task<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>>([]);
+
+        public Task<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>> GetAsync(string scopeId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>>([]);
+
+        public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task AddActorAsync(string scopeId, string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task RemoveActorAsync(string scopeId, string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class StreamTestAgent : IAgent
