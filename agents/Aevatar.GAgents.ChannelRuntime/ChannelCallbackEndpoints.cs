@@ -63,12 +63,29 @@ public static class ChannelCallbackEndpoints
         [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] ILarkConversationIngressRuntime larkIngressRuntime,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
         var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
+
+        if (string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            RecordDiagnostic(
+                diagnostics,
+                "Callback:retired",
+                "lark",
+                registrationId,
+                "lark_direct_callback_retired");
+            return Results.Json(
+                new
+                {
+                    error = "Lark direct callback is retired. Point the Lark Developer Console callback URL to the NyxID webhook URL and use Nyx relay ingress instead.",
+                    registration_id = registrationId,
+                    platform = "lark",
+                },
+                statusCode: StatusCodes.Status410Gone);
+        }
 
         // Resolve registration from projection read model
         var registration = await runtimeQueryPort.GetAsync(registrationId, ct);
@@ -84,27 +101,6 @@ public static class ChannelCallbackEndpoints
             RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "platform_mismatch");
             return Results.BadRequest(new { error = "Platform mismatch" });
         }
-
-        if (string.Equals(registration.Platform, "lark", StringComparison.OrdinalIgnoreCase))
-        {
-            RecordDiagnostic(
-                diagnostics,
-                "Callback:retired",
-                registration.Platform,
-                registration.Id,
-                "lark_direct_callback_retired");
-            return Results.Json(
-                new
-                {
-                    error = "Lark direct callback is retired. Point the Lark Developer Console callback URL to the NyxID webhook URL and use Nyx relay ingress instead.",
-                    registration_id = registration.Id,
-                    platform = registration.Platform,
-                },
-                statusCode: StatusCodes.Status410Gone);
-        }
-
-        if (string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
-            return await larkIngressRuntime.HandleAsync(http, registration, ct);
 
         // Resolve adapter
         var adapter = adapters.FirstOrDefault(a =>

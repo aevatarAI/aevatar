@@ -61,12 +61,6 @@ public sealed class ChannelCallbackEndpointsTests
     public async Task HandleCallbackAsync_ReturnsGone_ForRetiredLarkDirectCallbacks()
     {
         var runtimeQueryPort = Substitute.For<IChannelBotRegistrationRuntimeQueryPort>();
-        runtimeQueryPort.GetAsync("reg-lark", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-            {
-                Id = "reg-lark",
-                Platform = "lark",
-            }));
 
         var result = await InvokeResultAsync(
             "HandleCallbackAsync",
@@ -76,7 +70,6 @@ public sealed class ChannelCallbackEndpointsTests
             runtimeQueryPort,
             Array.Empty<IPlatformAdapter>(),
             Substitute.For<IActorRuntime>(),
-            null!,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -84,6 +77,7 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status410Gone);
         response.Body.Should().Contain("Lark direct callback is retired");
         response.Body.Should().Contain("reg-lark");
+        await runtimeQueryPort.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -121,7 +115,6 @@ public sealed class ChannelCallbackEndpointsTests
             runtimeQueryPort,
             new[] { adapter },
             Substitute.For<IActorRuntime>(),
-            null!,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -184,7 +177,6 @@ public sealed class ChannelCallbackEndpointsTests
             runtimeQueryPort,
             new[] { adapter },
             actorRuntime,
-            null!,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
