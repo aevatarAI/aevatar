@@ -350,12 +350,12 @@ public static class ChannelCallbackEndpoints
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
             RequestedId = registrationId,
-            LegacyDirectBinding = BuildLegacyDirectBinding(
-                request.NyxUserToken,
-                request.NyxRefreshToken,
-                request.VerificationToken,
-                request.CredentialRef),
         };
+        cmd.ApplyLegacyDirectBinding(BuildLegacyDirectBinding(
+            request.NyxUserToken,
+            request.NyxRefreshToken,
+            request.VerificationToken,
+            request.CredentialRef));
 
         var cmdEnvelope = new EventEnvelope
         {
@@ -474,7 +474,7 @@ public static class ChannelCallbackEndpoints
 
         var newToken = request.NyxUserToken.Trim();
         var runtimeRegistration = await runtimeQueryPort.GetAsync(registrationId, ct) ?? exists;
-        var currentLegacyDirectBinding = runtimeRegistration.LegacyDirectBinding;
+        var currentLegacyDirectBinding = runtimeRegistration.ResolveLegacyDirectBinding();
         var newRefreshToken = ResolveUpdatedRefreshToken(
             request.NyxRefreshToken,
             currentLegacyDirectBinding?.NyxRefreshToken);
@@ -484,11 +484,11 @@ public static class ChannelCallbackEndpoints
         var cmd = new ChannelBotUpdateTokenCommand
         {
             RegistrationId = registrationId,
-            LegacyDirectBinding = MergeLegacyDirectBinding(
-                currentLegacyDirectBinding,
-                newToken,
-                newRefreshToken),
         };
+        cmd.ApplyLegacyDirectBinding(MergeLegacyDirectBinding(
+            currentLegacyDirectBinding,
+            newToken,
+            newRefreshToken));
 
         var cmdEnvelope = new EventEnvelope
         {

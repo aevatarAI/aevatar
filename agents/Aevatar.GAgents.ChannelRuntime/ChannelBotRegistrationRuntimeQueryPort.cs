@@ -24,8 +24,8 @@ public sealed class ChannelBotRegistrationRuntimeQueryPort : IChannelBotRegistra
         if (document is null)
             return null;
 
-        var legacyDirectBinding = await _legacyDirectBindingReader.GetAsync(registrationId, ct);
-        return new ChannelBotRegistrationEntry
+        var legacyDirectBindingDocument = await _legacyDirectBindingReader.GetAsync(registrationId, ct);
+        var entry = new ChannelBotRegistrationEntry
         {
             Id = document.Id ?? string.Empty,
             Platform = document.Platform ?? string.Empty,
@@ -35,16 +35,19 @@ public sealed class ChannelBotRegistrationRuntimeQueryPort : IChannelBotRegistra
             NyxChannelBotId = document.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = document.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
-            LegacyDirectBinding = legacyDirectBinding is null
-                ? null
-                : new ChannelBotLegacyDirectBinding
-                {
-                    NyxUserToken = legacyDirectBinding.NyxUserToken ?? string.Empty,
-                    NyxRefreshToken = legacyDirectBinding.NyxRefreshToken ?? string.Empty,
-                    VerificationToken = legacyDirectBinding.VerificationToken ?? string.Empty,
-                    CredentialRef = legacyDirectBinding.CredentialRef ?? string.Empty,
-                    EncryptKey = legacyDirectBinding.EncryptKey ?? string.Empty,
-                },
         };
+
+        entry.ApplyLegacyDirectBinding(legacyDirectBindingDocument is null
+            ? document.ResolveLegacyDirectBinding()
+            : new ChannelBotLegacyDirectBinding
+            {
+                NyxUserToken = legacyDirectBindingDocument.NyxUserToken ?? string.Empty,
+                NyxRefreshToken = legacyDirectBindingDocument.NyxRefreshToken ?? string.Empty,
+                VerificationToken = legacyDirectBindingDocument.VerificationToken ?? string.Empty,
+                CredentialRef = legacyDirectBindingDocument.CredentialRef ?? string.Empty,
+                EncryptKey = legacyDirectBindingDocument.EncryptKey ?? string.Empty,
+            });
+
+        return entry;
     }
 }

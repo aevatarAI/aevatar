@@ -33,6 +33,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     [EventHandler]
     public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
+        var legacyDirectBinding = cmd.ResolveLegacyDirectBinding();
         var entry = new ChannelBotRegistrationEntry
         {
             Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
@@ -43,9 +44,9 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
-            LegacyDirectBinding = CloneLegacyDirectBinding(cmd.LegacyDirectBinding),
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+        entry.ApplyLegacyDirectBinding(legacyDirectBinding);
 
         await PersistDomainEventAsync(new ChannelBotRegisteredEvent { Entry = entry });
         Logger.LogInformation("Registered channel bot: id={Id}, platform={Platform}, slug={Slug}",
@@ -80,11 +81,14 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return;
         }
 
-        await PersistDomainEventAsync(new ChannelBotTokenUpdatedEvent
+        var legacyDirectBinding = cmd.ResolveLegacyDirectBinding();
+        var domainEvent = new ChannelBotTokenUpdatedEvent
         {
             RegistrationId = cmd.RegistrationId,
-            LegacyDirectBinding = CloneLegacyDirectBinding(cmd.LegacyDirectBinding),
-        });
+        };
+        domainEvent.ApplyLegacyDirectBinding(legacyDirectBinding);
+
+        await PersistDomainEventAsync(domainEvent);
         Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
     }
 
@@ -147,7 +151,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
         {
-            entry.LegacyDirectBinding = CloneLegacyDirectBinding(evt.LegacyDirectBinding);
+            entry.ApplyLegacyDirectBinding(evt.ResolveLegacyDirectBinding());
         }
         return next;
     }
@@ -175,20 +179,4 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
         .CurrentVersion + 1;
 
-    private static ChannelBotLegacyDirectBinding? CloneLegacyDirectBinding(ChannelBotLegacyDirectBinding? binding)
-    {
-        if (binding is null)
-            return null;
-
-        if (string.IsNullOrWhiteSpace(binding.NyxUserToken) &&
-            string.IsNullOrWhiteSpace(binding.NyxRefreshToken) &&
-            string.IsNullOrWhiteSpace(binding.VerificationToken) &&
-            string.IsNullOrWhiteSpace(binding.CredentialRef) &&
-            string.IsNullOrWhiteSpace(binding.EncryptKey))
-        {
-            return null;
-        }
-
-        return binding.Clone();
-    }
 }

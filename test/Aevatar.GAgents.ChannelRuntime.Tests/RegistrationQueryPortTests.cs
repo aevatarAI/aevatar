@@ -349,6 +349,38 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
+    public async Task BotRuntimeQueryPort_GetAsync_FallsBackToLegacyFieldsStoredOnRegistrationDocument()
+    {
+        var documentReader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        documentReader.GetAsync("bot-legacy-doc", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
+            {
+                Id = "bot-legacy-doc",
+                Platform = "lark",
+                NyxUserToken = "access-from-doc",
+                NyxRefreshToken = "refresh-from-doc",
+                VerificationToken = "verify-from-doc",
+                CredentialRef = "secrets://legacy/doc",
+                EncryptKey = "encrypt-from-doc",
+            }));
+
+        var bindingReader = Substitute.For<IProjectionDocumentReader<ChannelBotLegacyDirectBindingDocument, string>>();
+        bindingReader.GetAsync("bot-legacy-doc", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotLegacyDirectBindingDocument?>(null));
+
+        var queryPort = new ChannelBotRegistrationRuntimeQueryPort(documentReader, bindingReader);
+        var result = await queryPort.GetAsync("bot-legacy-doc");
+
+        result.Should().NotBeNull();
+        result!.LegacyDirectBinding.Should().NotBeNull();
+        result.NyxUserToken.Should().Be("access-from-doc");
+        result.NyxRefreshToken.Should().Be("refresh-from-doc");
+        result.VerificationToken.Should().Be("verify-from-doc");
+        result.CredentialRef.Should().Be("secrets://legacy/doc");
+        result.EncryptKey.Should().Be("encrypt-from-doc");
+    }
+
+    [Fact]
     public async Task BotRuntimeQueryPort_GetAsync_ReturnsNull_WhenDocumentNotFound()
     {
         var documentReader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();

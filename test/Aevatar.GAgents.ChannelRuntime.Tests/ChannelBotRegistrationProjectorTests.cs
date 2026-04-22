@@ -130,6 +130,40 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
+    public async Task LegacyBindingProjector_UsesLegacyScalarFields_WhenGroupedBindingIsMissing()
+    {
+        var dispatcher = new RecordingLegacyBindingWriteDispatcher();
+        var projector = new ChannelBotLegacyDirectBindingProjector(dispatcher, _clock);
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-legacy-state",
+                    Platform = "lark",
+                    NyxUserToken = "token-from-state",
+                    NyxRefreshToken = "refresh-from-state",
+                    VerificationToken = "verify-from-state",
+                    CredentialRef = "secrets://legacy/state",
+                    EncryptKey = "encrypt-from-state",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-legacy-state", 5, state), CancellationToken.None);
+
+        dispatcher.Upserts.Should().ContainSingle();
+        var doc = dispatcher.Upserts[0];
+        doc.Id.Should().Be("bot-legacy-state");
+        doc.NyxUserToken.Should().Be("token-from-state");
+        doc.NyxRefreshToken.Should().Be("refresh-from-state");
+        doc.VerificationToken.Should().Be("verify-from-state");
+        doc.CredentialRef.Should().Be("secrets://legacy/state");
+        doc.EncryptKey.Should().Be("encrypt-from-state");
+    }
+
+    [Fact]
     public async Task PublicProjector_DeletesDocument_WhenEntryIsTombstoned()
     {
         var dispatcher = new RecordingRegistrationWriteDispatcher();

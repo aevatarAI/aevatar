@@ -275,12 +275,12 @@ public sealed class ChannelRegistrationTool : IAgentTool
             ScopeId = GetStr(args, "scope_id")?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl,
             RequestedId = registrationId,
-            LegacyDirectBinding = BuildLegacyDirectBinding(
-                token,
-                refreshToken,
-                GetStr(args, "verification_token"),
-                GetStr(args, "credential_ref")),
         };
+        cmd.ApplyLegacyDirectBinding(BuildLegacyDirectBinding(
+            token,
+            refreshToken,
+            GetStr(args, "verification_token"),
+            GetStr(args, "credential_ref")));
 
         var envelope = new EventEnvelope
         {
@@ -369,10 +369,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var runtimeRegistration = runtimeQueryPort is null
             ? exists
             : await runtimeQueryPort.GetAsync(registrationId, ct) ?? exists;
+        var currentLegacyDirectBinding = runtimeRegistration.ResolveLegacyDirectBinding();
         var refreshToken = ResolveUpdateRefreshToken(
             args,
             metadataRefreshToken,
-            runtimeRegistration.LegacyDirectBinding?.NyxRefreshToken);
+            currentLegacyDirectBinding?.NyxRefreshToken);
 
         // Always dispatch to the actor — it is the authority on current state.
         var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
@@ -382,11 +383,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var cmd = new ChannelBotUpdateTokenCommand
         {
             RegistrationId = registrationId,
-            LegacyDirectBinding = MergeLegacyDirectBinding(
-                runtimeRegistration.LegacyDirectBinding,
-                token,
-                refreshToken),
         };
+        cmd.ApplyLegacyDirectBinding(MergeLegacyDirectBinding(
+            currentLegacyDirectBinding,
+            token,
+            refreshToken));
 
         var envelope = new EventEnvelope
         {

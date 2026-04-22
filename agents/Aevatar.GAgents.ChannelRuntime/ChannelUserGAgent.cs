@@ -422,11 +422,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             Platform = session.Platform,
             NyxProviderSlug = session.NyxProviderSlug,
             ScopeId = session.RegistrationScopeId,
-            LegacyDirectBinding = new ChannelBotLegacyDirectBinding
-            {
-                NyxUserToken = session.OrgToken,
-            },
         };
+        registration.ApplyLegacyDirectBinding(new ChannelBotLegacyDirectBinding
+        {
+            NyxUserToken = session.OrgToken,
+        });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         if (replyService is not null)
@@ -523,11 +523,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             Platform = evt.Platform,
             NyxProviderSlug = evt.NyxProviderSlug,
             ScopeId = evt.RegistrationScopeId,
-            LegacyDirectBinding = new ChannelBotLegacyDirectBinding
-            {
-                NyxUserToken = evt.RegistrationToken,
-            },
         };
+        registration.ApplyLegacyDirectBinding(new ChannelBotLegacyDirectBinding
+        {
+            NyxUserToken = evt.RegistrationToken,
+        });
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));

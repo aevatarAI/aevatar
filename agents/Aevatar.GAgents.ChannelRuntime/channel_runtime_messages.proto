@@ -10,19 +10,26 @@ message ChannelBotRegistrationEntry {
   string id = 1;
   string platform = 2;
   string nyx_provider_slug = 3;
-  string scope_id = 4;
-  google.protobuf.Timestamp created_at = 5;
-  string webhook_url = 6;  // Full callback URL configured via setWebhook
+  // Legacy direct-binding fields kept on their original field numbers so
+  // existing actor state can still deserialize correctly.
+  string nyx_user_token = 4;
+  string verification_token = 5;
+  string scope_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  string webhook_url = 8;  // Full callback URL configured via setWebhook
+  string encrypt_key = 9;
+  string credential_ref = 10;
   // Soft-delete marker retained for projector watermark coordination
   // (Channel RFC §7.1.1): the registration stays in state after unregister so
   // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
   // .DeleteAsync. Housekeeping cleans watermark-passed entries.
-  bool tombstoned = 7;
-  int64 tombstone_state_version = 8;
-  string nyx_channel_bot_id = 9;
-  string nyx_agent_api_key_id = 10;
-  string nyx_conversation_route_id = 11;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 12;
+  bool tombstoned = 11;
+  int64 tombstone_state_version = 12;
+  string nyx_refresh_token = 13;
+  string nyx_channel_bot_id = 14;
+  string nyx_agent_api_key_id = 15;
+  string nyx_conversation_route_id = 16;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 17;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -165,13 +172,18 @@ message ChannelBotLegacyDirectBinding {
 message ChannelBotRegisterCommand {
   string platform = 1;
   string nyx_provider_slug = 2;
-  string scope_id = 3;
-  string webhook_url = 4;
-  string requested_id = 5;  // Caller-provided ID; actor uses if non-empty, else generates
-  string nyx_channel_bot_id = 6;
-  string nyx_agent_api_key_id = 7;
-  string nyx_conversation_route_id = 8;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 9;
+  string nyx_user_token = 3;
+  string verification_token = 4;
+  string scope_id = 5;
+  string webhook_url = 6;
+  string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
+  string encrypt_key = 8;
+  string credential_ref = 9;
+  string nyx_refresh_token = 10;
+  string nyx_channel_bot_id = 11;
+  string nyx_agent_api_key_id = 12;
+  string nyx_conversation_route_id = 13;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 14;
 }
 
 message ChannelBotUnregisterCommand {
@@ -180,7 +192,9 @@ message ChannelBotUnregisterCommand {
 
 message ChannelBotUpdateTokenCommand {
   string registration_id = 1;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 2;
+  string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 4;
 }
 
 message ChannelBotCompactTombstonesCommand {
@@ -195,7 +209,9 @@ message ChannelBotTombstonesCompactedEvent {
 // Domain event: token updated on an existing registration
 message ChannelBotTokenUpdatedEvent {
   string registration_id = 1;
-  ChannelBotLegacyDirectBinding legacy_direct_binding = 2;
+  string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
+  ChannelBotLegacyDirectBinding legacy_direct_binding = 4;
 }
 
 // Projection read model for channel bot registrations
@@ -210,9 +226,13 @@ message ChannelBotRegistrationDocument {
   string last_event_id = 8;
   google.protobuf.Timestamp updated_at_utc = 9;
   string actor_id = 10;                     // Source actor ID
-  string nyx_channel_bot_id = 11;
-  string nyx_agent_api_key_id = 12;
-  string nyx_conversation_route_id = 13;
+  string nyx_user_token = 11;
+  string encrypt_key = 12;
+  string credential_ref = 13;
+  string nyx_refresh_token = 14;
+  string nyx_channel_bot_id = 15;
+  string nyx_agent_api_key_id = 16;
+  string nyx_conversation_route_id = 17;
 }
 
 // Runtime-only legacy direct binding read model. This is intentionally separate

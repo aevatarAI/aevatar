@@ -30,7 +30,7 @@ public sealed class ChannelBotLegacyDirectBindingProjector
     protected override string EntryKey(ChannelBotRegistrationEntry entry) => entry.Id ?? string.Empty;
 
     protected override ProjectionVerdict Evaluate(ChannelBotRegistrationEntry entry) =>
-        entry.Tombstoned || entry.LegacyDirectBinding is null
+        entry.Tombstoned || entry.ResolveLegacyDirectBinding() is null
             ? ProjectionVerdict.Tombstone
             : ProjectionVerdict.Project;
 
@@ -40,7 +40,7 @@ public sealed class ChannelBotLegacyDirectBindingProjector
         StateEvent stateEvent,
         DateTimeOffset updatedAt)
     {
-        var binding = entry.LegacyDirectBinding ?? new ChannelBotLegacyDirectBinding();
+        var binding = entry.ResolveLegacyDirectBinding() ?? new ChannelBotLegacyDirectBinding();
         return new ChannelBotLegacyDirectBindingDocument
         {
             Id = entry.Id,

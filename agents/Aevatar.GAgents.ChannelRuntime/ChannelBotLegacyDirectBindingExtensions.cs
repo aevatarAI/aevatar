@@ -3,17 +3,17 @@ namespace Aevatar.GAgents.ChannelRuntime;
 internal static class ChannelBotLegacyDirectBindingExtensions
 {
     public static string GetNyxUserToken(this ChannelBotRegistrationEntry registration) =>
-        registration.LegacyDirectBinding?.NyxUserToken ?? string.Empty;
+        registration.ResolveLegacyDirectBinding()?.NyxUserToken ?? string.Empty;
 
     public static string GetNyxRefreshToken(this ChannelBotRegistrationEntry registration) =>
-        registration.LegacyDirectBinding?.NyxRefreshToken ?? string.Empty;
+        registration.ResolveLegacyDirectBinding()?.NyxRefreshToken ?? string.Empty;
 
     public static string GetVerificationToken(this ChannelBotRegistrationEntry registration) =>
-        registration.LegacyDirectBinding?.VerificationToken ?? string.Empty;
+        registration.ResolveLegacyDirectBinding()?.VerificationToken ?? string.Empty;
 
     public static string GetCredentialRef(this ChannelBotRegistrationEntry registration) =>
-        registration.LegacyDirectBinding?.CredentialRef ?? string.Empty;
+        registration.ResolveLegacyDirectBinding()?.CredentialRef ?? string.Empty;
 
     public static string GetEncryptKey(this ChannelBotRegistrationEntry registration) =>
-        registration.LegacyDirectBinding?.EncryptKey ?? string.Empty;
+        registration.ResolveLegacyDirectBinding()?.EncryptKey ?? string.Empty;
 }
