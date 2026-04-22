@@ -131,33 +131,56 @@ Telegram registrations store the current NyxID access token for outbound API cal
 **To fix Telegram:** refresh the token with `channel_registrations action=update_token registration_id=<id>`.
 **For Lark:** do not rely on `update_token`; the supported path is Nyx relay provisioning via `register_lark_via_nyx`.
 
-### Step 1: Ensure NyxID has the bot's outbound service
+### Lark Stage 1: Basic relay setup
 
-The user needs an `api-lark-bot` (or `api-telegram-bot`) service in NyxID for outbound replies:
-`nyxid_services action=list` → check if the service exists
-If not: `nyxid_catalog action=list` → find the slug → guide user to add it
+Use this stage when the user wants the bot connected for inbound Lark messages and basic relay replies.
+Do not block this stage on typed Lark tools, delivery target bindings, or proactive outbound setup.
 
-### Step 2: Register channel bot in Aevatar
+Register channel bot in Aevatar:
 
 `channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> webhook_base_url=https://<your-aevatar-host>`
 
-For **Telegram**:
-`channel_registrations action=register platform=telegram nyx_provider_slug=api-telegram-bot`
-
 → Lark returns the registration ID, the Nyx relay callback URL, and the Nyx webhook URL that must be configured in the Lark developer console.
-→ Telegram returns the registration ID and the direct callback URL.
 
-**After Telegram registration, inform the user:** The bot's outbound replies depend on your NyxID session token. If the bot ever stops replying after re-auth, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
-
-### Step 3: Configure platform webhook
-
-Tell the user to set the webhook URL in their platform's developer console:
+Configure the platform webhook:
 
 **Lark/Feishu:** 开发者后台 → 事件与回调 → 事件配置 → 请求地址:
 `<webhook_url returned by register_lark_via_nyx>`
 
 Add event: `im.message.receive_v1`
 Do not rely on `card.action.trigger` for the Nyx relay path.
+
+### Lark Stage 2: Advanced Lark capabilities
+
+Only use this stage when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup.
+
+Ensure NyxID has a usable Lark outbound provider slug, typically `api-lark-bot`:
+`nyxid_services action=list` → check if the service exists
+If not: `nyxid_catalog action=list` → find the slug → guide user to add it
+
+For advanced Lark API operations, prefer typed tools such as:
+- `lark_chats_lookup`
+- `lark_messages_send`
+- `lark_sheets_append_rows`
+- `lark_approvals_list`
+- `lark_approvals_act`
+
+Use generic `nyxid_proxy_execute` only when typed tools do not cover the operation.
+
+When binding workflow delivery or proactive agent delivery, use a Lark outbound provider slug such as `api-lark-bot`.
+
+### Telegram setup
+
+For **Telegram**:
+`channel_registrations action=register platform=telegram nyx_provider_slug=api-telegram-bot`
+
+→ Telegram returns the registration ID and the direct callback URL.
+
+**After Telegram registration, inform the user:** The bot's outbound replies depend on your NyxID session token. If the bot ever stops replying after re-auth, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
+
+Configure the platform webhook:
+
+Tell the user to set the webhook URL in their platform's developer console:
 
 **Telegram:** User must call Telegram's setWebhook API manually or via BotFather, pointing to:
 `https://<your-aevatar-host>/api/channels/telegram/callback/<registration_id>`
@@ -178,7 +201,7 @@ For the Nyx relay path, these are text-driven instructions, not submit cards:
 
 Use `agent_delivery_targets` to bind that `agent_id` to the real outbound route:
 - List: `agent_delivery_targets action=list`
-- Upsert: `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=api-lark-bot nyx_api_key=<api_key>`
+- Upsert: `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=<lark_provider_slug such as api-lark-bot> nyx_api_key=<api_key>`
 - Delete: `agent_delivery_targets action=delete agent_id=<agent_id> confirm=true`
 
 Notes:

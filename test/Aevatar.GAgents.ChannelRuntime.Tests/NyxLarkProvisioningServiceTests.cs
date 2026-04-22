@@ -162,10 +162,7 @@ public class NyxLarkProvisioningServiceTests
         command.RequestedId == registrationId &&
         command.Platform == "lark" &&
         command.NyxProviderSlug == "api-lark-bot" &&
-        command.NyxUserToken == string.Empty &&
-        command.NyxRefreshToken == string.Empty &&
-        command.VerificationToken == string.Empty &&
-        command.CredentialRef == string.Empty &&
+        command.ScopeId == "scope-1" &&
         command.NyxAgentApiKeyId == "key-123" &&
         command.NyxChannelBotId == "bot-456" &&
         command.NyxConversationRouteId == "route-789" &&
