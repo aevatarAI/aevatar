@@ -547,36 +547,38 @@ internal static class AgentBuilderCardFlow
                 },
                 template = "blue",
             },
-            elements = new object[]
+            body = new
             {
-                new
+                elements = new object[]
                 {
-                    tag = "markdown",
-                    content =
-                        "**Day One template:** Daily GitHub report\nFill in the fields below. The agent will run once now and then repeat every day at your chosen local time.",
-                },
-                BuildForm(
-                    "daily_report_form",
-                    BuildInput("github_username", "GitHub Username", "alice"),
-                    BuildInput("repositories", "Repositories (Optional)", "owner/repo, owner/repo"),
-                    BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
-                    BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                    BuildAction(
+                    new
+                    {
+                        tag = "markdown",
+                        content =
+                            "**Day One template:** Daily GitHub report\nFill in the fields below. The agent will run once now and then repeat every day at your chosen local time.",
+                    },
+                    BuildForm(
+                        "daily_report_form",
+                        BuildInput("github_username", "GitHub Username", "alice"),
+                        BuildInput("repositories", "Repositories (Optional)", "owner/repo, owner/repo"),
+                        BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
+                        BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
                         BuildSubmitButton("Create Agent", "primary", "submit_daily_report", new
                         {
                             agent_builder_action = DailyReportAction,
                             run_immediately = true,
-                        }))),
-                new
-                {
-                    tag = "action",
-                    actions = new object[]
+                        })),
+                    new
                     {
-                        BuildButton("List Agents", "default", new
+                        tag = "action",
+                        actions = new object[]
                         {
-                            agent_builder_action = ListAgentsAction,
-                        }),
-                    },
+                            BuildButton("List Agents", "default", new
+                            {
+                                agent_builder_action = ListAgentsAction,
+                            }),
+                        },
+                    }
                 }
             },
         });
@@ -600,37 +602,39 @@ internal static class AgentBuilderCardFlow
                 },
                 template = "orange",
             },
-            elements = new object[]
+            body = new
             {
-                new
+                elements = new object[]
                 {
-                    tag = "markdown",
-                    content =
-                        "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send an approval card into this Feishu private chat.",
-                },
-                BuildForm(
-                    "social_media_form",
-                    BuildInput("topic", "Topic", "Launch update for the new workflow feature"),
-                    BuildInput("audience", "Audience (Optional)", "Developers and technical founders"),
-                    BuildInput("style", "Style (Optional)", "Confident, concise, product-focused"),
-                    BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
-                    BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                    BuildAction(
+                    new
+                    {
+                        tag = "markdown",
+                        content =
+                            "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send an approval card into this Feishu private chat.",
+                    },
+                    BuildForm(
+                        "social_media_form",
+                        BuildInput("topic", "Topic", "Launch update for the new workflow feature"),
+                        BuildInput("audience", "Audience (Optional)", "Developers and technical founders"),
+                        BuildInput("style", "Style (Optional)", "Confident, concise, product-focused"),
+                        BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
+                        BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
                         BuildSubmitButton("Create Agent", "primary", "submit_social_media", new
                         {
                             agent_builder_action = SocialMediaAction,
                             run_immediately = true,
-                        }))),
-                new
-                {
-                    tag = "action",
-                    actions = new object[]
+                        })),
+                    new
                     {
-                        BuildButton("List Agents", "default", new
+                        tag = "action",
+                        actions = new object[]
                         {
-                            agent_builder_action = ListAgentsAction,
-                        }),
-                    },
+                            BuildButton("List Agents", "default", new
+                            {
+                                agent_builder_action = ListAgentsAction,
+                            }),
+                        },
+                    }
                 }
             },
         });
@@ -642,13 +646,6 @@ internal static class AgentBuilderCardFlow
             tag = "form",
             name,
             elements,
-        };
-
-    private static object BuildAction(params object[] actions) =>
-        new
-        {
-            tag = "action",
-            actions,
         };
 
     private static object BuildInput(string name, string label, string placeholder)

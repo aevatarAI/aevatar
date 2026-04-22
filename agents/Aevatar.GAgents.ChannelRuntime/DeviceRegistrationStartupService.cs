@@ -3,17 +3,17 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
-public sealed class AgentRegistryStartupService : IHostedService
+public sealed class DeviceRegistrationStartupService : IHostedService
 {
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
 
-    private readonly AgentRegistryProjectionPort _projectionPort;
-    private readonly ILogger<AgentRegistryStartupService> _logger;
+    private readonly DeviceRegistrationProjectionPort _projectionPort;
+    private readonly ILogger<DeviceRegistrationStartupService> _logger;
 
-    public AgentRegistryStartupService(
-        AgentRegistryProjectionPort projectionPort,
-        ILogger<AgentRegistryStartupService> logger)
+    public DeviceRegistrationStartupService(
+        DeviceRegistrationProjectionPort projectionPort,
+        ILogger<DeviceRegistrationStartupService> logger)
     {
         _projectionPort = projectionPort;
         _logger = logger;
@@ -26,10 +26,10 @@ public sealed class AgentRegistryStartupService : IHostedService
         {
             try
             {
-                await _projectionPort.EnsureProjectionForActorAsync(AgentRegistryGAgent.WellKnownId, ct);
+                await _projectionPort.EnsureProjectionForActorAsync(DeviceRegistrationGAgent.WellKnownId, ct);
                 _logger.LogInformation(
-                    "Agent registry projection scope activated for {ActorId} (attempt {Attempt})",
-                    AgentRegistryGAgent.WellKnownId,
+                    "Device registration projection scope activated for {ActorId} (attempt {Attempt})",
+                    DeviceRegistrationGAgent.WellKnownId,
                     attempt);
                 return;
             }
@@ -41,7 +41,7 @@ public sealed class AgentRegistryStartupService : IHostedService
             {
                 _logger.LogWarning(
                     ex,
-                    "Failed to activate agent registry projection scope (attempt {Attempt}/{MaxRetries})",
+                    "Failed to activate device registration projection scope (attempt {Attempt}/{MaxRetries})",
                     attempt,
                     MaxRetries);
 
@@ -53,7 +53,7 @@ public sealed class AgentRegistryStartupService : IHostedService
         }
 
         _logger.LogError(
-            "Agent registry projection scope activation failed after {MaxRetries} attempts",
+            "Device registration projection scope activation failed after {MaxRetries} attempts",
             MaxRetries);
     }
 

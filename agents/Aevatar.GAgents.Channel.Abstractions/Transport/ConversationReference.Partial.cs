@@ -29,6 +29,7 @@ public sealed partial class ConversationReference
     /// <summary>
     /// Builds one deterministic canonical key by prefixing the normalized channel id and joining each segment with <c>:</c>.
     /// </summary>
+    [CanonicalKeyGenerator]
     public static string BuildCanonicalKey(ChannelId channel, params string[] segments)
     {
         ArgumentNullException.ThrowIfNull(channel);
