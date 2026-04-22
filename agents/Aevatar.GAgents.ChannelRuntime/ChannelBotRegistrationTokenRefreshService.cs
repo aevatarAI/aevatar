@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
@@ -18,25 +17,19 @@ internal readonly record struct ChannelBotRegistrationTokenRefreshResult(
 internal sealed class ChannelBotRegistrationTokenRefreshService
 {
     private static readonly TimeSpan RefreshTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan ProjectionPollInterval = TimeSpan.FromMilliseconds(50);
 
     private readonly IChannelBotRegistrationRuntimeQueryPort _runtimeQueryPort;
-    private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly NyxIdApiClient _nyxClient;
     private readonly ILogger<ChannelBotRegistrationTokenRefreshService> _logger;
-    private readonly ConcurrentDictionary<string, Lazy<Task<ChannelBotRegistrationTokenRefreshResult>>> _inflight =
-        new(StringComparer.Ordinal);
 
     public ChannelBotRegistrationTokenRefreshService(
         IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
-        IChannelBotRegistrationQueryPort queryPort,
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         ILogger<ChannelBotRegistrationTokenRefreshService> logger)
     {
         _runtimeQueryPort = runtimeQueryPort ?? throw new ArgumentNullException(nameof(runtimeQueryPort));
-        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -49,32 +42,13 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
         if (string.IsNullOrWhiteSpace(registrationId))
             return new ChannelBotRegistrationTokenRefreshResult(false, Detail: "registration_id_required");
 
-        var lazy = _inflight.GetOrAdd(
-            registrationId,
-            static (id, self) => new Lazy<Task<ChannelBotRegistrationTokenRefreshResult>>(
-                () => self.RefreshCoreAndCleanupAsync(id),
-                LazyThreadSafetyMode.ExecutionAndPublication),
-            this);
-
-        return await lazy.Value.WaitAsync(ct);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(RefreshTimeout);
+        return await RefreshCoreAsync(registrationId, timeoutCts.Token);
     }
 
-    private async Task<ChannelBotRegistrationTokenRefreshResult> RefreshCoreAndCleanupAsync(string registrationId)
+    private async Task<ChannelBotRegistrationTokenRefreshResult> RefreshCoreAsync(string registrationId, CancellationToken ct)
     {
-        try
-        {
-            return await RefreshCoreAsync(registrationId);
-        }
-        finally
-        {
-            _inflight.TryRemove(registrationId, out _);
-        }
-    }
-
-    private async Task<ChannelBotRegistrationTokenRefreshResult> RefreshCoreAsync(string registrationId)
-    {
-        using var timeoutCts = new CancellationTokenSource(RefreshTimeout);
-        var ct = timeoutCts.Token;
 
         var registration = await _runtimeQueryPort.GetAsync(registrationId, ct);
         if (registration is null)
@@ -105,8 +79,7 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
             : refresh.RefreshToken;
 
         var persisted = await PersistRefreshedTokensAsync(
-            registrationId,
-            registration.LegacyDirectBinding,
+            registration,
             refresh.AccessToken,
             rotatedRefreshToken,
             ct);
@@ -121,14 +94,11 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
     }
 
     private async Task<ChannelBotRegistrationTokenRefreshResult> PersistRefreshedTokensAsync(
-        string registrationId,
-        ChannelBotLegacyDirectBinding? existingBinding,
+        ChannelBotRegistrationEntry registration,
         string accessToken,
         string refreshToken,
         CancellationToken ct)
     {
-        var versionBefore = await _queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
-
         var actor = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId,
@@ -136,14 +106,14 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
 
         var command = new ChannelBotUpdateTokenCommand
         {
-            RegistrationId = registrationId,
+            RegistrationId = registration.Id,
             LegacyDirectBinding = new ChannelBotLegacyDirectBinding
             {
                 NyxUserToken = accessToken,
                 NyxRefreshToken = refreshToken,
-                VerificationToken = existingBinding?.VerificationToken ?? string.Empty,
-                CredentialRef = existingBinding?.CredentialRef ?? string.Empty,
-                EncryptKey = existingBinding?.EncryptKey ?? string.Empty,
+                VerificationToken = registration.LegacyDirectBinding?.VerificationToken ?? string.Empty,
+                CredentialRef = registration.LegacyDirectBinding?.CredentialRef ?? string.Empty,
+                EncryptKey = registration.LegacyDirectBinding?.EncryptKey ?? string.Empty,
             },
         };
 
@@ -160,27 +130,8 @@ internal sealed class ChannelBotRegistrationTokenRefreshService
 
         await actor.HandleEventAsync(envelope, ct);
 
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            await Task.Delay(ProjectionPollInterval, ct);
-
-            var versionAfter = await _queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-
-            var registration = await _runtimeQueryPort.GetAsync(registrationId, ct);
-            if (registration is null)
-                continue;
-
-            if (string.Equals(registration.GetNyxUserToken(), accessToken, StringComparison.Ordinal) &&
-                string.Equals(registration.GetNyxRefreshToken(), refreshToken, StringComparison.Ordinal))
-            {
-                return new ChannelBotRegistrationTokenRefreshResult(true, registration);
-            }
-        }
-
-        return new ChannelBotRegistrationTokenRefreshResult(
-            false,
-            Detail: "refresh_writeback_unconfirmed");
+        var updatedRegistration = registration.Clone();
+        updatedRegistration.LegacyDirectBinding = command.LegacyDirectBinding?.Clone();
+        return new ChannelBotRegistrationTokenRefreshResult(true, updatedRegistration);
     }
 }

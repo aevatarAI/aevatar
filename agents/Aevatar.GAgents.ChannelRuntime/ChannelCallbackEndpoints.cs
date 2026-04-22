@@ -8,9 +8,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -133,27 +132,6 @@ public static class ChannelCallbackEndpoints
             return Results.Ok(new { status = "ignored" });
         }
 
-        // Dedup: Lark retries up to 5x for unacknowledged webhooks.
-        // Two-phase TTL: set short TTL (10s) immediately to block concurrent duplicates,
-        // then extend to 5 minutes after successful dispatch. If dispatch fails, the
-        // short TTL expires naturally so Lark's next retry (~30s later) gets processed.
-        // Note: volatile — dedup state lost on restart. Phase 2 migrates to durable dedup.
-        var cache = http.RequestServices.GetService<IMemoryCache>();
-        string? dedupeKey = null;
-        if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
-        {
-            dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
-            if (cache.TryGetValue(dedupeKey, out _))
-            {
-                logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
-                RecordDiagnostic(diagnostics, "Callback:deduplicated", inbound.Platform, registration.Id, "webhook_duplicate");
-                return Results.Ok(new { status = "deduplicated" });
-            }
-
-            // Short TTL blocks concurrent duplicates; extended after successful dispatch.
-            cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
-        }
-
         if (ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand) ||
             ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out resumeCommand))
         {
@@ -177,7 +155,6 @@ public static class ChannelCallbackEndpoints
                 return failure;
             }
 
-            ExtendDedupeTtl(cache, inbound, registration.Id);
             RecordDiagnostic(diagnostics, "Callback:workflow_resume", inbound.Platform, registration.Id,
                 $"actorId={dispatch.Receipt.ActorId} runId={dispatch.Receipt.RunId}");
             return Results.Ok(new
@@ -196,7 +173,7 @@ public static class ChannelCallbackEndpoints
         // response collection → reply. Each stage is a separate grain turn — no deadlock.
         try
         {
-            await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache);
+            await DispatchToUserActorAsync(inbound, registration, actorRuntime);
             RecordDiagnostic(diagnostics, "Callback:accepted", inbound.Platform, registration.Id, "dispatch_enqueued");
             // Lark requires exactly HTTP 200 — any other status is treated as failure.
             return Results.Ok(new { status = "accepted" });
@@ -224,8 +201,7 @@ public static class ChannelCallbackEndpoints
     private static async Task DispatchToUserActorAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IActorRuntime actorRuntime,
-        IMemoryCache? cache)
+        IActorRuntime actorRuntime)
     {
         var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
         var userActor = await actorRuntime.GetAsync(userActorId)
@@ -260,17 +236,6 @@ public static class ChannelCallbackEndpoints
         };
 
         await userActor.HandleEventAsync(envelope);
-
-        ExtendDedupeTtl(cache, inbound, registration.Id);
-    }
-
-    private static void ExtendDedupeTtl(IMemoryCache? cache, InboundMessage inbound, string registrationId)
-    {
-        if (cache == null || string.IsNullOrEmpty(inbound.MessageId))
-            return;
-
-        var dedupeKey = $"channel-dedup:{inbound.Platform}:{registrationId}:{inbound.MessageId}";
-        cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
     }
 
     private static IResult MapWorkflowResumeDispatchFailure(

@@ -336,7 +336,7 @@ public sealed class LarkConversationHostCutoverTests
         services.AddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
         services.AddSingleton<LarkMessageComposer>();
         services.AddSingleton<LarkPayloadRedactor>();
-        services.AddSingleton<LarkConversationAdapterRegistry>();
+        services.AddSingleton<LarkConversationAdapterFactory>();
         services.AddSingleton<ConversationDispatchMiddleware>();
         services.AddSingleton<ConversationResolverMiddleware>();
         services.AddSingleton<LoggingMiddleware>();

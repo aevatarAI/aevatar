@@ -29,8 +29,6 @@ public static class ServiceCollectionExtensions
     {
         Aevatar.GAgents.Channel.Runtime.ChannelRuntimeServiceCollectionExtensions.AddChannelRuntime(services);
 
-        // Memory cache for webhook dedup
-        services.AddMemoryCache();
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
         services.AddOptions<LarkDirectWebhookCutoverOptions>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
@@ -206,7 +204,7 @@ public static class ServiceCollectionExtensions
         });
         services.TryAddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<LarkPayloadRedactor>();
-        services.TryAddSingleton<LarkConversationAdapterRegistry>();
+        services.TryAddSingleton<LarkConversationAdapterFactory>();
         services.TryAddSingleton<ConversationDispatchMiddleware>();
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, LarkConversationTurnRunner>());
         services.Replace(ServiceDescriptor.Singleton(_ => new MiddlewarePipelineBuilder()

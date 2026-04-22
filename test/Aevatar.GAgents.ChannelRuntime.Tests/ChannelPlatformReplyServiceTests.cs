@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -45,7 +44,6 @@ public sealed class ChannelPlatformReplyServiceTests
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
             store,
-            store,
             actorRuntime,
             nyxClient,
             NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
@@ -88,7 +86,6 @@ public sealed class ChannelPlatformReplyServiceTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
-            store,
             store,
             actorRuntime,
             nyxClient,
@@ -133,7 +130,6 @@ public sealed class ChannelPlatformReplyServiceTests
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
             store,
-            store,
             actorRuntime,
             nyxClient,
             NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
@@ -159,7 +155,7 @@ public sealed class ChannelPlatformReplyServiceTests
     }
 
     [Fact]
-    public async Task DeliverAsync_single_flights_refresh_for_same_registration()
+    public async Task DeliverAsync_concurrent_refreshes_remain_stateless_and_eventually_persist_latest_tokens()
     {
         var store = new FakeChannelBotRegistrationStore(MakeRegistration("old-access", "old-refresh"));
         var actorRuntime = BuildActorRuntime(store, out var actor);
@@ -200,7 +196,6 @@ public sealed class ChannelPlatformReplyServiceTests
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var refreshService = new ChannelBotRegistrationTokenRefreshService(
             store,
-            store,
             actorRuntime,
             nyxClient,
             NullLogger<ChannelBotRegistrationTokenRefreshService>.Instance);
@@ -218,12 +213,14 @@ public sealed class ChannelPlatformReplyServiceTests
         var results = await Task.WhenAll(first, second);
 
         results.Should().OnlyContain(static result => result.Succeeded);
-        handler.RefreshCalls.Should().Be(1);
-        await actor.Received(1).HandleEventAsync(
+        handler.RefreshCalls.Should().BeGreaterThanOrEqualTo(1);
+        await actor.Received().HandleEventAsync(
             Arg.Is<EventEnvelope>(envelope =>
                 envelope.Payload != null &&
                 envelope.Payload.Is(ChannelBotUpdateTokenCommand.Descriptor)),
             Arg.Any<CancellationToken>());
+        store.Current.NyxUserToken.Should().Be("fresh-access");
+        store.Current.NyxRefreshToken.Should().Be("fresh-refresh");
     }
 
     private static ChannelBotRegistrationEntry MakeRegistration(string accessToken, string refreshToken) =>
