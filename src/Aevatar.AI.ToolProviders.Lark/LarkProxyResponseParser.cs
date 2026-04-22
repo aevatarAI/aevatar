@@ -120,22 +120,88 @@ internal static class LarkProxyResponseParser
             PageToken: TryReadString(data, "page_token"));
     }
 
+    public static LarkSheetAppendResult ParseSheetAppendSuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        var updates = data.TryGetProperty("updates", out var updatesProp) &&
+                      updatesProp.ValueKind == JsonValueKind.Object
+            ? updatesProp
+            : default;
+
+        return new LarkSheetAppendResult(
+            UpdatedRange: TryReadString(updates, "updatedRange") ?? TryReadString(updates, "updated_range"),
+            TableRange: TryReadString(data, "tableRange") ?? TryReadString(data, "table_range"),
+            UpdatedRows: TryReadInt(updates, "updatedRows") ?? TryReadInt(updates, "updated_rows"),
+            UpdatedColumns: TryReadInt(updates, "updatedColumns") ?? TryReadInt(updates, "updated_columns"),
+            UpdatedCells: TryReadInt(updates, "updatedCells") ?? TryReadInt(updates, "updated_cells"));
+    }
+
+    public static LarkApprovalTaskQueryResult ParseApprovalTaskQuerySuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        var tasks = new List<LarkApprovalTaskSummary>();
+
+        if (data.TryGetProperty("tasks", out var tasksProp) && tasksProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var task in tasksProp.EnumerateArray())
+            {
+                var summaries = new List<LarkApprovalTaskField>();
+                if (task.TryGetProperty("summaries", out var summariesProp) && summariesProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var summary in summariesProp.EnumerateArray())
+                    {
+                        summaries.Add(new LarkApprovalTaskField(
+                            Key: TryReadString(summary, "key"),
+                            Value: TryReadString(summary, "value")));
+                    }
+                }
+
+                tasks.Add(new LarkApprovalTaskSummary(
+                    TaskId: TryReadString(task, "task_id"),
+                    InstanceCode: TryReadString(task, "instance_code"),
+                    Title: TryReadString(task, "title"),
+                    Status: TryReadString(task, "status"),
+                    Topic: TryReadString(task, "topic"),
+                    SupportApiOperate: TryReadBool(task, "support_api_operate"),
+                    DefinitionCode: TryReadString(task, "definition_code"),
+                    DefinitionName: TryReadString(task, "definition_name"),
+                    Initiator: TryReadString(task, "initiator"),
+                    InitiatorName: TryReadString(task, "initiator_name"),
+                    UserId: TryReadString(task, "user_id"),
+                    InstanceStatus: TryReadString(task, "instance_status"),
+                    Link: TryReadString(task, "link"),
+                    Summaries: summaries));
+            }
+        }
+
+        return new LarkApprovalTaskQueryResult(
+            Tasks: tasks,
+            Count: TryReadInt(data, "count") ?? tasks.Count,
+            HasMore: TryReadBool(data, "has_more") ?? false,
+            PageToken: TryReadString(data, "page_token"));
+    }
+
     private static JsonElement ResolveDataRoot(JsonElement root) =>
         root.TryGetProperty("data", out var dataProp) && dataProp.ValueKind == JsonValueKind.Object
             ? dataProp
             : root;
 
     private static string? TryReadString(JsonElement element, string propertyName) =>
+        element.ValueKind == JsonValueKind.Object &&
         element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString()
             : null;
 
     private static int? TryReadInt(JsonElement element, string propertyName) =>
+        element.ValueKind == JsonValueKind.Object &&
         element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Number
             ? property.GetInt32()
             : null;
 
     private static bool? TryReadBool(JsonElement element, string propertyName) =>
+        element.ValueKind == JsonValueKind.Object &&
         element.TryGetProperty(propertyName, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? property.GetBoolean()
             : null;
@@ -159,5 +225,38 @@ internal sealed record LarkChatCandidate(
 internal sealed record LarkChatLookupResult(
     IReadOnlyList<LarkChatCandidate> Chats,
     int Total,
+    bool HasMore,
+    string? PageToken);
+
+internal sealed record LarkSheetAppendResult(
+    string? UpdatedRange,
+    string? TableRange,
+    int? UpdatedRows,
+    int? UpdatedColumns,
+    int? UpdatedCells);
+
+internal sealed record LarkApprovalTaskField(
+    string? Key,
+    string? Value);
+
+internal sealed record LarkApprovalTaskSummary(
+    string? TaskId,
+    string? InstanceCode,
+    string? Title,
+    string? Status,
+    string? Topic,
+    bool? SupportApiOperate,
+    string? DefinitionCode,
+    string? DefinitionName,
+    string? Initiator,
+    string? InitiatorName,
+    string? UserId,
+    string? InstanceStatus,
+    string? Link,
+    IReadOnlyList<LarkApprovalTaskField> Summaries);
+
+internal sealed record LarkApprovalTaskQueryResult(
+    IReadOnlyList<LarkApprovalTaskSummary> Tasks,
+    int Count,
     bool HasMore,
     string? PageToken);

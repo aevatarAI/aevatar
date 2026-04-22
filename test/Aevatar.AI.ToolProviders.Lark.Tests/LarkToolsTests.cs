@@ -128,6 +128,183 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkSheetsAppendRowsTool_NormalizesRangeAndReturnsSummary()
+    {
+        var client = new StubLarkNyxClient
+        {
+            AppendSheetResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "tableRange": "sheet_1!A1:B2",
+                    "updates": {
+                      "updatedRange": "sheet_1!C2:D3",
+                      "updatedRows": 2,
+                      "updatedColumns": 2,
+                      "updatedCells": 4
+                    }
+                  }
+                }
+                """,
+        };
+        var tool = new LarkSheetsAppendRowsTool(client);
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """{"spreadsheet_url":"https://example.feishu.cn/sheets/shtcn_123","sheet_id":"sheet_1","range":"C2","rows":[["Alice","100"],["Bob","95"]]}""");
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+            document.RootElement.GetProperty("updated_range").GetString().Should().Be("sheet_1!C2:D3");
+            client.LastSheetAppendRequest.Should().NotBeNull();
+            client.LastSheetAppendRequest!.SpreadsheetToken.Should().Be("shtcn_123");
+            client.LastSheetAppendRequest.Range.Should().Be("sheet_1!C2:C2");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task LarkSheetsAppendRowsTool_RequiresSheetContextForRelativeRange()
+    {
+        var tool = new LarkSheetsAppendRowsTool(new StubLarkNyxClient());
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """{"spreadsheet_token":"shtcn_123","range":"A1","rows":[["Alice"]]}""");
+
+            result.Should().Contain("range without a sheet prefix requires sheet_id");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsListTool_NormalizesTopicAndResponse()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ApprovalListResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "count": 1,
+                    "has_more": false,
+                    "tasks": [
+                      {
+                        "task_id": "task_1",
+                        "instance_code": "inst_1",
+                        "title": "Expense Approval",
+                        "status": "1",
+                        "topic": "1",
+                        "support_api_operate": true,
+                        "definition_code": "def_1",
+                        "definition_name": "Expense",
+                        "initiator": "ou_init",
+                        "initiator_name": "Alice",
+                        "user_id": "ou_owner",
+                        "instance_status": "1",
+                        "summaries": [
+                          { "key": "amount", "value": "100" }
+                        ]
+                      }
+                    ]
+                  }
+                }
+                """,
+        };
+        var tool = new LarkApprovalsListTool(client);
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"topic":"todo"}""");
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+            var tasks = document.RootElement.GetProperty("tasks");
+            tasks.GetArrayLength().Should().Be(1);
+            tasks[0].GetProperty("topic").GetString().Should().Be("todo");
+            tasks[0].GetProperty("status").GetString().Should().Be("todo");
+            client.LastApprovalQueryRequest.Should().NotBeNull();
+            client.LastApprovalQueryRequest!.Topic.Should().Be("1");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsActTool_ValidatesTransferTarget()
+    {
+        var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"transfer","instance_code":"inst_1","task_id":"task_1"}""");
+            result.Should().Contain("transfer_user_id is required");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsActTool_SendsApproveAction()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ApprovalActionResponse = """{"code":0,"data":{}}""",
+        };
+        var tool = new LarkApprovalsActTool(client);
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """{"action":"approve","instance_code":"inst_1","task_id":"task_1","comment":"LGTM","form_json":"[{\"id\":\"field_1\",\"type\":\"input\",\"value\":\"ok\"}]"}""");
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+            client.LastApprovalActionRequest.Should().NotBeNull();
+            client.LastApprovalActionRequest!.Action.Should().Be("approve");
+            client.LastApprovalActionRequest.FormJson.Should().Contain("\"field_1\"");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task LarkAgentToolSource_RegistersTools_WhenNyxConfigured()
     {
         var source = new LarkAgentToolSource(
@@ -137,9 +314,12 @@ public class LarkToolsTests
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(2);
+        tools.Should().HaveCount(5);
         tools.Should().Contain(tool => tool is LarkMessagesSendTool);
         tools.Should().Contain(tool => tool is LarkChatsLookupTool);
+        tools.Should().Contain(tool => tool is LarkSheetsAppendRowsTool);
+        tools.Should().Contain(tool => tool is LarkApprovalsListTool);
+        tools.Should().Contain(tool => tool is LarkApprovalsActTool);
     }
 
     [Fact]
@@ -213,13 +393,100 @@ public class LarkToolsTests
         body.Should().Contain("search_types");
     }
 
+    [Fact]
+    public async Task LarkNyxClient_AppendSheetRows_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"updates":{"updatedRange":"sheet_1!A1:B1"}}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.AppendSheetRowsAsync(
+            "token-123",
+            new LarkSheetAppendRowsRequest(
+                "shtcn_123",
+                "sheet_1!A1:A1",
+                [["Alice", "100"]]),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/sheets/v2/spreadsheets/shtcn_123/values_append");
+
+        var body = handler.LastBody;
+        body.Should().Contain("valueRange");
+        body.Should().Contain("sheet_1!A1:A1");
+        body.Should().Contain("Alice");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_ListApprovalTasks_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"tasks":[],"count":0}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.ListApprovalTasksAsync(
+            "token-123",
+            new LarkApprovalTaskQueryRequest("1", "def_1", "zh-CN", 10, "page-1", "open_id"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks?topic=1&page_size=10&definition_code=def_1&locale=zh-CN&page_token=page-1&user_id_type=open_id");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_ActOnApprovalTask_ShapesTransferRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.ActOnApprovalTaskAsync(
+            "token-123",
+            new LarkApprovalTaskActionRequest("transfer", "inst_1", "task_1", "reassign", null, "ou_target", "open_id"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/forward?user_id_type=open_id");
+        handler.LastBody.Should().Contain("\"transfer_user_id\":\"ou_target\"");
+    }
+
     private sealed class StubLarkNyxClient : ILarkNyxClient
     {
         public string SendResponse { get; set; } = """{"code":0,"data":{}}""";
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
+        public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
+        public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
+        public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
 
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkChatSearchRequest? LastSearchRequest { get; private set; }
+        public LarkSheetAppendRowsRequest? LastSheetAppendRequest { get; private set; }
+        public LarkApprovalTaskQueryRequest? LastApprovalQueryRequest { get; private set; }
+        public LarkApprovalTaskActionRequest? LastApprovalActionRequest { get; private set; }
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
@@ -231,6 +498,24 @@ public class LarkToolsTests
         {
             LastSearchRequest = request;
             return Task.FromResult(SearchResponse);
+        }
+
+        public Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct)
+        {
+            LastSheetAppendRequest = request;
+            return Task.FromResult(AppendSheetResponse);
+        }
+
+        public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct)
+        {
+            LastApprovalQueryRequest = request;
+            return Task.FromResult(ApprovalListResponse);
+        }
+
+        public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
+        {
+            LastApprovalActionRequest = request;
+            return Task.FromResult(ApprovalActionResponse);
         }
     }
 

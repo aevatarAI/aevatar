@@ -44,6 +44,12 @@ public sealed class LarkAgentToolSource : IAgentToolSource
             tools.Add(new LarkMessagesSendTool(_client));
         if (_options.EnableChatLookup)
             tools.Add(new LarkChatsLookupTool(_client));
+        if (_options.EnableSheetsAppendRows)
+            tools.Add(new LarkSheetsAppendRowsTool(_client));
+        if (_options.EnableApprovalsList)
+            tools.Add(new LarkApprovalsListTool(_client));
+        if (_options.EnableApprovalsAct)
+            tools.Add(new LarkApprovalsActTool(_client));
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }

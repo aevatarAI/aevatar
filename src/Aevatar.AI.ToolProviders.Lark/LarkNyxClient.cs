@@ -76,6 +76,93 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["valueRange"] = new Dictionary<string, object?>
+            {
+                ["range"] = request.Range,
+                ["values"] = request.Rows,
+            },
+        };
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/sheets/v2/spreadsheets/{Uri.EscapeDataString(request.SpreadsheetToken)}/values_append",
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct)
+    {
+        var queryParts = new List<string>
+        {
+            $"topic={Uri.EscapeDataString(request.Topic)}",
+            $"page_size={request.PageSize}",
+        };
+        if (!string.IsNullOrWhiteSpace(request.DefinitionCode))
+            queryParts.Add($"definition_code={Uri.EscapeDataString(request.DefinitionCode.Trim())}");
+        if (!string.IsNullOrWhiteSpace(request.Locale))
+            queryParts.Add($"locale={Uri.EscapeDataString(request.Locale.Trim())}");
+        if (!string.IsNullOrWhiteSpace(request.PageToken))
+            queryParts.Add($"page_token={Uri.EscapeDataString(request.PageToken.Trim())}");
+        if (!string.IsNullOrWhiteSpace(request.UserIdType))
+            queryParts.Add($"user_id_type={Uri.EscapeDataString(request.UserIdType.Trim())}");
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/approval/v4/tasks?{string.Join("&", queryParts)}",
+            "GET",
+            body: null,
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
+    {
+        var path = request.Action switch
+        {
+            "approve" => "open-apis/approval/v4/tasks/pass",
+            "reject" => "open-apis/approval/v4/tasks/refuse",
+            "transfer" => BuildTransferPath(request.UserIdType),
+            _ => throw new InvalidOperationException($"Unsupported approval action: {request.Action}"),
+        };
+
+        var body = new Dictionary<string, object?>
+        {
+            ["instance_code"] = request.InstanceCode,
+            ["task_id"] = request.TaskId,
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.Comment))
+            body["comment"] = request.Comment.Trim();
+        if (!string.IsNullOrWhiteSpace(request.FormJson))
+            body["form"] = request.FormJson.Trim();
+        if (!string.IsNullOrWhiteSpace(request.TransferUserId))
+            body["transfer_user_id"] = request.TransferUserId.Trim();
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            path,
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    private static string BuildTransferPath(string? userIdType)
+    {
+        if (string.IsNullOrWhiteSpace(userIdType))
+            return "open-apis/approval/v4/tasks/forward";
+        return $"open-apis/approval/v4/tasks/forward?user_id_type={Uri.EscapeDataString(userIdType.Trim())}";
+    }
+
     internal static string NormalizeChatSearchQuery(string query)
     {
         if (!query.Contains('-', StringComparison.Ordinal))
