@@ -185,6 +185,18 @@ const inlineInfoPopoverStyle: React.CSSProperties = {
   maxWidth: 240,
 };
 
+const visuallyHiddenStyle: React.CSSProperties = {
+  border: 0,
+  clip: 'rect(0 0 0 0)',
+  height: 1,
+  margin: -1,
+  overflow: 'hidden',
+  padding: 0,
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: 1,
+};
+
 const InlineInfoButton: React.FC<InlineInfoButtonProps> = ({
   ariaLabel,
   buttonStyle,
@@ -627,40 +639,6 @@ function formatStudioAssetMeta(input: {
 }
 
 type StudioContextBadgeTone = 'accent' | 'default' | 'success' | 'warning';
-
-function formatStudioMemberKindLabel(
-  kind: StudioShellMemberKind | '' | undefined,
-): string {
-  switch (kind) {
-    case 'workflow':
-      return 'Workflow';
-    case 'script':
-      return 'Script';
-    case 'gagent':
-      return 'GAgent';
-    case 'member':
-      return 'Member';
-    default:
-      return 'Focus';
-  }
-}
-
-function formatStudioLifecycleLabel(
-  step: StudioSurface | StudioStep | string,
-): string {
-  switch (trimOptional(step).toLowerCase()) {
-    case 'build':
-      return 'Build';
-    case 'bind':
-      return 'Bind';
-    case 'invoke':
-      return 'Invoke';
-    case 'observe':
-      return 'Observe';
-    default:
-      return 'Workbench';
-  }
-}
 
 function resolveStudioContextBadgeStyle(
   tone: StudioContextBadgeTone,
@@ -3211,33 +3189,10 @@ const StudioPage: React.FC = () => {
     trimOptional(routeState.memberId) ||
     trimOptional(scopeBindingQuery.data?.serviceId) ||
     'No bound service';
-  const studioBindingLabel =
-    trimOptional(currentScopeBindingRevision?.revisionId) ||
-    (resolvedStudioScopeId ? 'Awaiting binding revision' : 'Scope not resolved');
-  const studioBindingTone: StudioContextBadgeTone =
-    currentScopeBindingRevision?.isActiveServing
-      ? 'success'
-      : currentScopeBindingRevision?.revisionId
-        ? 'warning'
-        : 'default';
-  const studioHealthLabel =
-    trimOptional(scopeBindingQuery.data?.deploymentStatus) ||
-    trimOptional(currentScopeBindingRevision?.status) ||
-    'Draft only';
-  const studioHealthTone = resolveExecutionTone(
-    scopeBindingQuery.data?.deploymentStatus ||
-      currentScopeBindingRevision?.status,
-  );
-  const studioLastRunLabel = activeExecutionSummary?.startedAtUtc
-    ? formatCompactDateTime(activeExecutionSummary.startedAtUtc)
-    : 'No recent run';
   const studioObservationLabel =
     trimOptional(activeExecutionSummary?.status) || 'No active execution';
   const studioObservationTone = resolveExecutionTone(
     activeExecutionSummary?.status,
-  );
-  const studioRuntimeBadgeStyle = resolveStudioContextBadgeStyle(
-    studioObservationTone,
   );
   const studioObservationNote = activeExecutionSummary
     ? [
@@ -3267,71 +3222,6 @@ const StudioPage: React.FC = () => {
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
-  const studioRuntimeRunsHref = buildRuntimeRunsHref({
-    route:
-      trimOptional(activeWorkflowName) ||
-      trimOptional(currentScopeBindingRevision?.workflowName) ||
-      undefined,
-    scopeId: resolvedStudioScopeId || undefined,
-    serviceId: scopeBindingQuery.data?.serviceId || undefined,
-    prompt: trimOptional(runPrompt) || undefined,
-    returnTo: currentStudioReturnTo || undefined,
-  });
-  const studioContextBadges: readonly {
-    readonly label: string;
-    readonly value: string;
-    readonly tone: StudioContextBadgeTone;
-  }[] = [
-    {
-      label: 'Type',
-      value: formatStudioMemberKindLabel(currentMemberKind),
-      tone: 'default',
-    },
-    {
-      label: 'Binding',
-      value: studioBindingLabel,
-      tone: studioBindingTone,
-    },
-    {
-      label: 'Health',
-      value: studioHealthLabel,
-      tone: studioHealthTone,
-    },
-  ];
-  const studioPrimaryAction =
-    isObserveSurface
-      ? {
-          disabled: !canRunWorkflow || runPending,
-          label: '重新运行',
-          loading: runPending,
-          onClick: () => void handleStartExecution(),
-          type: 'primary' as const,
-        }
-      : isBindSurface
-        ? {
-            disabled: !resolvedStudioScopeId,
-            label: '进入调用',
-            loading: false,
-            onClick: () => applyStudioTarget('invoke'),
-            type: 'primary' as const,
-          }
-        : isInvokeSurface
-          ? {
-              disabled: !resolvedStudioScopeId,
-              label: '查看绑定',
-              loading: false,
-              onClick: () => applyStudioTarget('bind'),
-              type: 'default' as const,
-            }
-          : resolvedStudioScopeId
-            ? {
-                disabled: false,
-                label: '进入绑定',
-                loading: false,
-                onClick: () => applyStudioTarget('bind'),
-                type: 'default' as const,
-              }
-            : null;
   const studioRailCardStyle: React.CSSProperties = {
     background: 'rgba(255, 255, 255, 0.96)',
     border: '1px solid #ece3d5',
@@ -3388,191 +3278,55 @@ const StudioPage: React.FC = () => {
     <div
       data-testid="studio-context-bar"
       style={{
-        background: 'rgba(255, 252, 247, 0.98)',
-        borderBottom: '1px solid rgba(229, 220, 203, 0.88)',
+        alignItems: 'center',
         display: 'flex',
         flexWrap: 'wrap',
         gap: 12,
-        justifyContent: 'space-between',
-        padding: '10px 16px',
+        padding: '8px 16px 4px',
       }}
     >
-      <div
+      <button
+        aria-label={studioReturnLabel}
+        type="button"
+        onClick={() => history.push(studioReturnHref)}
         style={{
-          display: 'grid',
-          flex: '1 1 540px',
-          gap: 6,
+          alignItems: 'center',
+          background: 'transparent',
+          border: 'none',
+          color: '#2452b5',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          flexShrink: 0,
+          fontSize: 11,
+          fontWeight: 700,
+          gap: 4,
+          letterSpacing: '0.02em',
+          padding: 0,
+        }}
+      >
+        ← {studioReturnLabel}
+      </button>
+      <div
+        data-testid="studio-context-title"
+        style={{
+          color: '#1d2129',
+          fontSize: 16,
+          fontWeight: 700,
+          letterSpacing: '-0.02em',
+          lineHeight: '22px',
           minWidth: 0,
         }}
       >
-        <div
-          style={{
-            alignItems: 'center',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 10,
-          }}
-        >
-          <button
-            aria-label={studioReturnLabel}
-            type="button"
-            onClick={() => history.push(studioReturnHref)}
-            style={{
-              alignItems: 'center',
-              background: 'transparent',
-              border: 'none',
-              color: '#2452b5',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              flexShrink: 0,
-              fontSize: 11,
-              fontWeight: 700,
-              gap: 4,
-              letterSpacing: '0.02em',
-              padding: 0,
-            }}
-          >
-            ← {studioReturnLabel}
-          </button>
-          <div
-            style={{
-              color: '#8b7b63',
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            Aevatar Studio
-          </div>
-          <div
-            data-testid="studio-context-title"
-            style={{
-              color: '#1d2129',
-              fontSize: 17,
-              fontWeight: 700,
-              letterSpacing: '-0.02em',
-              lineHeight: '22px',
-              minWidth: 0,
-            }}
-          >
-            {studioContextPrimaryTitle}
-          </div>
-        </div>
-        <div
-          style={{
-            alignItems: 'center',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 6,
-            minWidth: 0,
-          }}
-        >
-          {studioContextMetaParts.length > 0 ? (
-            <div
-              data-testid="studio-context-meta"
-              style={{
-                color: '#6f6250',
-                fontSize: 11,
-                lineHeight: '17px',
-                minWidth: 0,
-              }}
-            >
-              {studioContextMetaParts.join(' · ')}
-            </div>
-          ) : null}
-          {studioContextBadges.map((badge) => {
-            const badgeStyle = resolveStudioContextBadgeStyle(badge.tone);
-
-            return (
-              <span
-                key={badge.label}
-                style={{
-                  alignItems: 'center',
-                  background: badgeStyle.background,
-                  border: `1px solid ${badgeStyle.borderColor}`,
-                  borderRadius: 999,
-                  color: badgeStyle.color,
-                  display: 'inline-flex',
-                  fontSize: 10,
-                  gap: 5,
-                  lineHeight: '15px',
-                  minHeight: 22,
-                  padding: '0 7px',
-                }}
-              >
-                <span
-                  style={{
-                    fontWeight: 700,
-                  }}
-                >
-                  {badge.label}
-                </span>
-                <span>{badge.value}</span>
-              </span>
-            );
-          })}
-        </div>
+        {studioContextPrimaryTitle}
       </div>
-      <div
-        style={{
-          alignItems: 'center',
-          display: 'flex',
-          flex: '0 1 auto',
-          flexWrap: 'wrap',
-          gap: 8,
-          justifyContent: 'flex-end',
-        }}
-      >
-        <span
-          style={{
-            alignItems: 'center',
-            background: studioRuntimeBadgeStyle.background,
-            border: `1px solid ${studioRuntimeBadgeStyle.borderColor}`,
-            borderRadius: 999,
-            color: studioRuntimeBadgeStyle.color,
-            display: 'inline-flex',
-            fontSize: 10.5,
-            gap: 5,
-            lineHeight: '16px',
-            minHeight: 24,
-            padding: '0 9px',
-          }}
+      {studioContextMetaParts.length > 0 ? (
+        <div
+          data-testid="studio-context-meta"
+          style={visuallyHiddenStyle}
         >
-          <span
-            style={{
-              fontWeight: 700,
-            }}
-          >
-            Runtime
-          </span>
-          <span>{studioObservationLabel}</span>
-        </span>
-        {activeExecutionSummary?.startedAtUtc ? (
-          <span
-            style={{
-              color: '#8b7b63',
-              fontSize: 10.5,
-              lineHeight: '16px',
-            }}
-          >
-            {studioLastRunLabel}
-          </span>
-        ) : null}
-        <Button onClick={() => history.push(studioRuntimeRunsHref)}>
-          Runtime Runs
-        </Button>
-        {studioPrimaryAction ? (
-          <Button
-            disabled={studioPrimaryAction.disabled}
-            loading={studioPrimaryAction.loading}
-            onClick={studioPrimaryAction.onClick}
-            type={studioPrimaryAction.type}
-          >
-            {studioPrimaryAction.label}
-          </Button>
-        ) : null}
-      </div>
+          {studioContextMetaParts.join(' · ')}
+        </div>
+      ) : null}
     </div>
   );
 

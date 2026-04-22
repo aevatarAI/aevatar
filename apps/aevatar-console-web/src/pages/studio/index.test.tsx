@@ -2196,7 +2196,7 @@ describe("StudioPage", () => {
     );
     expect(screen.getByTestId("studio-context-bar")).toHaveStyle({
       gap: "12px",
-      padding: "10px 16px",
+      padding: "8px 16px 4px",
     });
     expect(screen.getByTestId("studio-build-mode-switcher")).toHaveStyle({
       gap: "4px",
