@@ -90,7 +90,15 @@ public static class NyxIdChatEndpoints
         // NyxId chat depends on the registry being available; there is no
         // degraded mode where a conversation can run without being registered.
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
-        await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        try
+        {
+            await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return CreateConversationRegistryUnavailableResult(exception);
+        }
+
         return Results.Ok(new { actorId });
     }
 
@@ -109,9 +117,9 @@ public static class NyxIdChatEndpoints
                 ?? [];
             return Results.Ok(actorIds.Select(actorId => new { actorId }));
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception)
         {
-            return Results.Ok(Array.Empty<object>());
+            return CreateConversationRegistryUnavailableResult(exception);
         }
     }
 
@@ -339,9 +347,25 @@ public static class NyxIdChatEndpoints
         CancellationToken ct)
     {
         await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
-        await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        try
+        {
+            await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return CreateConversationRegistryUnavailableResult(exception);
+        }
+
         return Results.Ok();
     }
+
+    private static IResult CreateConversationRegistryUnavailableResult(InvalidOperationException exception) =>
+        Results.Json(new
+        {
+            code = "CHAT_CONVERSATION_REGISTRY_UNAVAILABLE",
+            message = "NyxId chat conversation registry is unavailable because the actor store is unavailable.",
+            detail = exception.Message,
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
     /// <summary>
     /// Handles tool approval decisions from the frontend.

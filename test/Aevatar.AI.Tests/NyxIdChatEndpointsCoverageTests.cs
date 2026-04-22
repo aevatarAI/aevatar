@@ -89,15 +89,17 @@ public class NyxIdChatEndpointsCoverageTests
             AddActorException = new InvalidOperationException("actor store unavailable"),
         };
 
-        var act = async () => await InvokeResultAsync(
+        var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
             actorStore,
             CancellationToken.None);
 
-        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
-        assertion.Which.Message.Should().Be("actor store unavailable");
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        response.Body.Should().Contain("CHAT_CONVERSATION_REGISTRY_UNAVAILABLE");
+        response.Body.Should().Contain("actor store unavailable");
     }
 
     [Fact]
@@ -161,7 +163,7 @@ public class NyxIdChatEndpointsCoverageTests
         };
         var historyStore = new StubChatHistoryStore();
 
-        var act = async () => await InvokeResultAsync(
+        var result = await InvokeResultAsync(
             "HandleDeleteConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
@@ -170,11 +172,34 @@ public class NyxIdChatEndpointsCoverageTests
             historyStore,
             CancellationToken.None);
 
-        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
-        assertion.Which.Message.Should().Be("actor store unavailable");
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        response.Body.Should().Contain("CHAT_CONVERSATION_REGISTRY_UNAVAILABLE");
+        response.Body.Should().Contain("actor store unavailable");
         historyStore.DeletedConversations.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.ConversationId == "actor-1");
+    }
+
+    [Fact]
+    public async Task HandleListConversationsAsync_ShouldReturnServiceUnavailable_WhenRegistryQueryFails()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            GetActorException = new InvalidOperationException("actor store unavailable"),
+        };
+
+        var result = await InvokeResultAsync(
+            "HandleListConversationsAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        response.Body.Should().Contain("CHAT_CONVERSATION_REGISTRY_UNAVAILABLE");
+        response.Body.Should().Contain("actor store unavailable");
     }
 
     [Fact]
@@ -1345,6 +1370,7 @@ public class NyxIdChatEndpointsCoverageTests
     private sealed class StubGAgentActorStore : IGAgentActorStore
     {
         public IReadOnlyList<GAgentActorGroup> GroupsToReturn { get; init; } = [];
+        public Exception? GetActorException { get; init; }
         public Exception? AddActorException { get; init; }
         public Exception? RemoveActorException { get; init; }
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
@@ -1352,14 +1378,18 @@ public class NyxIdChatEndpointsCoverageTests
         public string? LastRequestedScopeId { get; private set; }
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(GroupsToReturn);
+            GetActorException is null
+                ? Task.FromResult(GroupsToReturn)
+                : Task.FromException<IReadOnlyList<GAgentActorGroup>>(GetActorException);
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
             string scopeId,
             CancellationToken cancellationToken = default)
         {
             LastRequestedScopeId = scopeId;
-            return Task.FromResult(GroupsToReturn);
+            return GetActorException is null
+                ? Task.FromResult(GroupsToReturn)
+                : Task.FromException<IReadOnlyList<GAgentActorGroup>>(GetActorException);
         }
 
         public Task AddActorAsync(

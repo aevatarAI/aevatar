@@ -36,7 +36,7 @@ public sealed class WorkspaceController : ControllerBase
         CancellationToken cancellationToken)
     {
         var settings = await _workspaceService.GetSettingsAsync(cancellationToken);
-        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        var scopeResolution = ResolveScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -60,7 +60,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        var scopeResolution = ResolveScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -83,7 +83,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        var scopeResolution = ResolveScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -98,7 +98,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        var scopeResolution = ResolveScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -171,7 +171,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        var scopeResolution = ResolveScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -234,7 +234,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        var scopeResolution = ResolveScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -323,7 +323,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = await ResolveScopeContextAsync(scopeId);
+        var scopeResolution = ResolveScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -359,7 +359,7 @@ public sealed class WorkspaceController : ControllerBase
         }
     }
 
-    private async Task<(AppScopeContext? Context, ActionResult? Failure)> ResolveScopeContextAsync(string? requestedScopeId)
+    private (AppScopeContext? Context, ActionResult? Failure) ResolveScopeContext(string? requestedScopeId)
     {
         var ambientScopeContext = _scopeResolver.Resolve(HttpContext);
         var normalizedRequestedScopeId = requestedScopeId?.Trim();
@@ -390,6 +390,8 @@ public sealed class WorkspaceController : ControllerBase
             }));
         }
 
+        // This fallback is only for local debugging when auth is intentionally disabled.
+        // Once enabled it applies to the full scoped draft surface, including mutations.
         return (new AppScopeContext(normalizedRequestedScopeId, "query:scopeId"), null);
     }
 
@@ -401,7 +403,7 @@ public sealed class WorkspaceController : ControllerBase
     {
         try
         {
-            var scopeResolution = await ResolveScopeContextAsync(scopeId);
+            var scopeResolution = ResolveScopeContext(scopeId);
             if (scopeResolution.Failure != null)
                 return scopeResolution.Failure;
 
