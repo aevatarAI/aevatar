@@ -221,7 +221,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
             NyxAgentApiKeyId = apiKeyId,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
-            DirectCallbackBinding = null,
         };
 
         var envelope = new EventEnvelope

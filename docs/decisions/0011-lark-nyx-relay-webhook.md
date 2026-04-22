@@ -48,7 +48,8 @@ Concretely:
 - Aevatar validates Nyx relay JWTs via OIDC discovery + JWKS
 - inbound-triggered turn replies use `POST /api/v1/channel-relay/reply`
 
-This ADR is **Lark only**. Telegram migration is a separate follow-up.
+This ADR is **Lark only**. The broader ChannelRuntime credential-boundary cleanup
+is tracked separately in ADR-0012 / issue `#308`.
 
 ## Contract Notes
 
@@ -89,3 +90,5 @@ The required order is:
 - HMAC callback signature remains defense-in-depth only under the current zero-secret constraint
 - Lark approval and `social_media` relay UX are text-driven; card-action callbacks are no longer part of the supported approval path
 - no rollback-window contract remains for direct `Lark -> Aevatar` ingress
+- ADR-0012 extends the same ownership rule to the remaining ChannelRuntime surface:
+  no local channel credential ownership, no `update_token`, and no direct-callback production contract

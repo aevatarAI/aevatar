@@ -5,9 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Sends outbound platform replies.
-/// Direct Lark replies fail fast with manual re-auth when the persisted
-/// Nyx session token has expired.
+/// Sends outbound platform replies using the latest public registration view.
 /// </summary>
 internal sealed class ChannelPlatformReplyService
 {
@@ -43,16 +41,17 @@ internal sealed class ChannelPlatformReplyService
             currentRegistration,
             _nyxClient,
             ct);
+        if (!firstAttempt.Succeeded)
+        {
+            _logger.LogWarning(
+                "Channel platform reply failed: platform={Platform}, registration={RegistrationId}, detail={Detail}, kind={Kind}",
+                adapter.Platform,
+                currentRegistration.Id,
+                firstAttempt.Detail,
+                firstAttempt.FailureKind);
+        }
 
-        var manualReauthFailure = BuildManualReauthFailure(adapter, currentRegistration, firstAttempt);
-        if (manualReauthFailure is null)
-            return firstAttempt;
-
-        _logger.LogWarning(
-            "Lark outbound reply requires manual re-auth: registration={RegistrationId}, detail={Detail}",
-            currentRegistration.Id,
-            manualReauthFailure.Value.Detail);
-        return manualReauthFailure.Value;
+        return firstAttempt;
     }
 
     private async Task<ChannelBotRegistrationEntry> ResolveCurrentRegistrationAsync(
@@ -64,30 +63,5 @@ internal sealed class ChannelPlatformReplyService
 
         var current = await _runtimeQueryPort.GetAsync(registration.Id, ct);
         return current ?? registration;
-    }
-
-    private static PlatformReplyDeliveryResult? BuildManualReauthFailure(
-        IPlatformAdapter adapter,
-        ChannelBotRegistrationEntry registration,
-        PlatformReplyDeliveryResult result)
-    {
-        if (!string.Equals(adapter.Platform, "lark", StringComparison.OrdinalIgnoreCase))
-            return null;
-        if (!LarkPlatformAdapter.IsRefreshableAuthFailure(result))
-            return null;
-
-        var detail = string.IsNullOrWhiteSpace(registration.GetNyxRefreshToken())
-            ? CombineDetails(result.Detail, "manual_reauth_required missing_nyx_refresh_token")
-            : CombineDetails(result.Detail, "manual_reauth_required reply_path_token_refresh_disabled");
-        return new PlatformReplyDeliveryResult(false, detail, PlatformReplyFailureKind.Permanent);
-    }
-
-    private static string CombineDetails(string? primary, string? secondary)
-    {
-        if (string.IsNullOrWhiteSpace(primary))
-            return secondary ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(secondary))
-            return primary;
-        return $"{primary}; {secondary}";
     }
 }

@@ -218,7 +218,6 @@ public sealed class LarkConversationTurnRunnerTests
             Id = "reg-1",
             Platform = "lark",
             NyxProviderSlug = "api-lark-bot",
-            NyxUserToken = "org-token",
             ScopeId = "scope-1",
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
