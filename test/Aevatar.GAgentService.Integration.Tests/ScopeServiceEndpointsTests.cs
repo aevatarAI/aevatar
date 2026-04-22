@@ -429,6 +429,86 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldPreferServingRevisionThatContainsRequestedEndpoint()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            "scope-a",
+            "default",
+            "default",
+            "default",
+            "Orders App",
+            "rev-default",
+            "rev-active",
+            "dep-chat",
+            "static-actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "Chat",
+                    "chat",
+                    Any.Pack(new ChatRequestEvent()).TypeUrl,
+                    Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    "Chat entrypoint"),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-default",
+                    ServiceImplementationKind.Workflow.ToString(),
+                    "Published",
+                    "hash-default",
+                    string.Empty,
+                    [
+                        new ServiceEndpointSnapshot(
+                            "legacy",
+                            "Legacy",
+                            "chat",
+                            Any.Pack(new ChatRequestEvent()).TypeUrl,
+                            Any.Pack(new ChatResponseEvent()).TypeUrl,
+                            "Legacy endpoint"),
+                    ],
+                    DateTimeOffset.UtcNow.AddMinutes(-12),
+                    DateTimeOffset.UtcNow.AddMinutes(-11),
+                    DateTimeOffset.UtcNow.AddMinutes(-10),
+                    null),
+                new ServiceRevisionSnapshot(
+                    "rev-active",
+                    ServiceImplementationKind.Static.ToString(),
+                    "Published",
+                    "hash-active",
+                    string.Empty,
+                    [
+                        new ServiceEndpointSnapshot(
+                            "chat",
+                            "Chat",
+                            "chat",
+                            Any.Pack(new ChatRequestEvent()).TypeUrl,
+                            Any.Pack(new ChatResponseEvent()).TypeUrl,
+                            "Chat entrypoint"),
+                    ],
+                    DateTimeOffset.UtcNow.AddMinutes(-9),
+                    DateTimeOffset.UtcNow.AddMinutes(-8),
+                    DateTimeOffset.UtcNow.AddMinutes(-7),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceEndpointContractHttpResponse>(
+            "/api/scopes/scope-a/services/default/endpoints/chat/contract");
+
+        response.Should().NotBeNull();
+        response!.RevisionId.Should().Be("rev-active");
+        response.SupportsAguiFrames.Should().BeTrue();
+        response.StreamFrameFormat.Should().Be("agui");
+    }
+
+    [Fact]
     public async Task GetEndpointContractEndpoint_ShouldReturnAguiStreamContractForStaticChatEndpoint()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -571,6 +651,110 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_ENDPOINT_ID");
         body["message"].Should().Be("endpointId is required.");
+    }
+
+    [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldForwardAppIdToLifecycleQueries()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:custom-app:default:orders",
+            "scope-a",
+            "custom-app",
+            "default",
+            "orders",
+            "Orders App",
+            "rev-run",
+            "rev-run",
+            "dep-run",
+            "actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "run",
+                    "Run",
+                    "command",
+                    Any.Pack(new StringValue()).TypeUrl,
+                    string.Empty,
+                    "Run command"),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:custom-app:default:orders",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-run",
+                    ServiceImplementationKind.Static.ToString(),
+                    "Published",
+                    "hash-run",
+                    string.Empty,
+                    [
+                        new ServiceEndpointSnapshot(
+                            "run",
+                            "Run",
+                            "command",
+                            Any.Pack(new StringValue()).TypeUrl,
+                            string.Empty,
+                            "Run command"),
+                    ],
+                    DateTimeOffset.UtcNow.AddMinutes(-10),
+                    DateTimeOffset.UtcNow.AddMinutes(-9),
+                    DateTimeOffset.UtcNow.AddMinutes(-8),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceEndpointContractHttpResponse>(
+            "/api/scopes/scope-a/services/orders/endpoints/run/contract?appId=custom-app");
+
+        response.Should().NotBeNull();
+        host.LifecycleQueryPort.LastServiceIdentity.Should().NotBeNull();
+        host.LifecycleQueryPort.LastServiceIdentity!.AppId.Should().Be("custom-app");
+        host.LifecycleQueryPort.LastRevisionsIdentity.Should().NotBeNull();
+        host.LifecycleQueryPort.LastRevisionsIdentity!.AppId.Should().Be("custom-app");
+    }
+
+    [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldReturnNotFound_WhenEndpointDoesNotExist()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            "scope-a",
+            "default",
+            "default",
+            "default",
+            "Orders App",
+            "rev-chat",
+            "rev-chat",
+            "dep-chat",
+            "workflow-actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "Chat",
+                    "chat",
+                    Any.Pack(new ChatRequestEvent()).TypeUrl,
+                    Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    "Chat entrypoint"),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetAsync(
+            "/api/scopes/scope-a/services/default/endpoints/nonexistent/contract");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_SERVICE_ENDPOINT_CONTRACT_NOT_FOUND");
+        body["message"].Should().Contain("nonexistent");
     }
 
     [Fact]
@@ -3623,8 +3807,17 @@ public sealed class ScopeServiceEndpointsTests
 
         public ServiceDeploymentCatalogSnapshot? Deployments { get; set; }
 
-        public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(Service);
+        public ServiceIdentity? LastServiceIdentity { get; private set; }
+
+        public ServiceIdentity? LastRevisionsIdentity { get; private set; }
+
+        public ServiceIdentity? LastDeploymentsIdentity { get; private set; }
+
+        public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastServiceIdentity = identity;
+            return Task.FromResult(Service);
+        }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
             string tenantId,
@@ -3634,11 +3827,17 @@ public sealed class ScopeServiceEndpointsTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(Revisions);
+        public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastRevisionsIdentity = identity;
+            return Task.FromResult(Revisions);
+        }
 
-        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(Deployments);
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastDeploymentsIdentity = identity;
+            return Task.FromResult(Deployments);
+        }
     }
 
     private sealed class RecordingServiceServingQueryPort : IServiceServingQueryPort

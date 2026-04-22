@@ -34,6 +34,8 @@ namespace Aevatar.GAgentService.Hosting.Endpoints;
 public static class ScopeServiceEndpoints
 {
     private const string DefaultScopeServiceSmokePrompt = "Hello from Studio Bind.";
+    private const string StreamFrameFormatWorkflow = "workflow-run-event";
+    private const string StreamFrameFormatAgui = "agui";
     private static readonly JsonSerializerOptions PrettyJsonSerializerOptions = new()
     {
         WriteIndented = true,
@@ -1479,6 +1481,7 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         string endpointId,
+        string? appId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -1498,7 +1501,8 @@ public static class ScopeServiceEndpoints
             serviceId,
             lifecycleQueryPort,
             options.Value,
-            ct);
+            ct,
+            appId);
         if (resolution.Failure != null)
             return resolution.Failure;
 
@@ -1512,7 +1516,7 @@ public static class ScopeServiceEndpoints
         if (contract != null)
             return Results.Ok(contract);
 
-        var normalizedEndpointId = NormalizeOptional(endpointId) ?? endpointId?.Trim() ?? string.Empty;
+        var normalizedEndpointId = NormalizeOptional(endpointId) ?? endpointId.Trim();
         return Results.NotFound(new
         {
             code = "SCOPE_SERVICE_ENDPOINT_CONTRACT_NOT_FOUND",
@@ -1677,7 +1681,7 @@ public static class ScopeServiceEndpoints
         var implementationKind = NormalizeOptional(currentRevision?.ImplementationKind);
         var supportsSse = IsChatEndpoint(endpoint.Kind);
         var streamFrameFormat = ResolveScopeServiceStreamFrameFormat(supportsSse, implementationKind);
-        var supportsAguiFrames = string.Equals(streamFrameFormat, "agui", StringComparison.Ordinal);
+        var supportsAguiFrames = string.Equals(streamFrameFormat, StreamFrameFormatAgui, StringComparison.Ordinal);
         var invokePath = supportsSse
             ? BuildScopeServiceStreamInvokePath(scopeId, serviceId, normalizedEndpointId)
             : BuildScopeServiceInvokePath(scopeId, serviceId, normalizedEndpointId);
@@ -1733,12 +1737,12 @@ public static class ScopeServiceEndpoints
             return null;
 
         if (string.Equals(implementationKind, ServiceImplementationKind.Workflow.ToString(), StringComparison.OrdinalIgnoreCase))
-            return "workflow-run-event";
+            return StreamFrameFormatWorkflow;
 
         if (string.Equals(implementationKind, ServiceImplementationKind.Static.ToString(), StringComparison.OrdinalIgnoreCase) ||
             string.Equals(implementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
         {
-            return "agui";
+            return StreamFrameFormatAgui;
         }
 
         return null;
@@ -1752,20 +1756,36 @@ public static class ScopeServiceEndpoints
         if (revisions == null || revisions.Revisions.Count == 0)
             return null;
 
-        var preferredRevisionId = NormalizeOptional(service.DefaultServingRevisionId)
-            ?? NormalizeOptional(service.ActiveServingRevisionId);
-        if (!string.IsNullOrWhiteSpace(preferredRevisionId))
+        foreach (var preferredRevisionId in EnumeratePreferredContractRevisionIds(service))
         {
             var preferredRevision = revisions.Revisions.FirstOrDefault(x =>
-                string.Equals(x.RevisionId, preferredRevisionId, StringComparison.Ordinal));
+                string.Equals(x.RevisionId, preferredRevisionId, StringComparison.Ordinal) &&
+                RevisionContainsEndpoint(x, endpointId));
             if (preferredRevision != null)
                 return preferredRevision;
         }
 
         return revisions.Revisions.FirstOrDefault(x =>
-                   x.Endpoints.Any(endpoint => string.Equals(endpoint.EndpointId, endpointId, StringComparison.Ordinal)))
+                   RevisionContainsEndpoint(x, endpointId))
                ?? revisions.Revisions[0];
     }
+
+    private static IEnumerable<string> EnumeratePreferredContractRevisionIds(ServiceCatalogSnapshot service)
+    {
+        var defaultRevisionId = NormalizeOptional(service.DefaultServingRevisionId);
+        if (!string.IsNullOrWhiteSpace(defaultRevisionId))
+            yield return defaultRevisionId;
+
+        var activeRevisionId = NormalizeOptional(service.ActiveServingRevisionId);
+        if (!string.IsNullOrWhiteSpace(activeRevisionId) &&
+            !string.Equals(activeRevisionId, defaultRevisionId, StringComparison.Ordinal))
+        {
+            yield return activeRevisionId;
+        }
+    }
+
+    private static bool RevisionContainsEndpoint(ServiceRevisionSnapshot revision, string endpointId) =>
+        revision.Endpoints.Any(endpoint => string.Equals(endpoint.EndpointId, endpointId, StringComparison.Ordinal));
 
     private static bool IsChatEndpoint(string? endpointKind) =>
         string.Equals(endpointKind?.Trim(), "chat", StringComparison.OrdinalIgnoreCase);
