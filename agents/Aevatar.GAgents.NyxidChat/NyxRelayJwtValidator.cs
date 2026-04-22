@@ -72,6 +72,11 @@ internal sealed class NyxRelayJwtValidator
             RequireSignedTokens = true,
             ValidateIssuerSigningKey = true,
             IssuerSigningKeys = configuration.SigningKeys,
+            ValidAlgorithms =
+            [
+                SecurityAlgorithms.RsaSha256,
+                SecurityAlgorithms.EcdsaSha256,
+            ],
             ValidateIssuer = true,
             ValidIssuer = configuration.Issuer,
             ValidateAudience = true,

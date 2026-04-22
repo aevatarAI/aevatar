@@ -139,6 +139,29 @@ public sealed class NyxRelayJwtValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_ShouldRejectUnexpectedSigningAlgorithm()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(
+            key,
+            "https://nyx.example.com",
+            "https://nyx.example.com",
+            "scope-123",
+            "api-key-123",
+            signingAlgorithm: SecurityAlgorithms.RsaSha512);
+
+        var result = await validator.ValidateAsync(token, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(nameof(SecurityTokenInvalidSignatureException));
+    }
+
+    [Fact]
     public async Task ValidateAsync_ShouldRejectTokenWithoutSubject()
     {
         using var rsa = RSA.Create(2048);
@@ -257,9 +280,10 @@ public sealed class NyxRelayJwtValidatorTests
         bool includeSubject = true,
         bool includeRelayApiKeyId = true,
         DateTime? notBeforeUtc = null,
-        DateTime? expiresAtUtc = null)
+        DateTime? expiresAtUtc = null,
+        string signingAlgorithm = SecurityAlgorithms.RsaSha256)
     {
-        var credentials = new SigningCredentials(key, SecurityAlgorithms.RsaSha256);
+        var credentials = new SigningCredentials(key, signingAlgorithm);
         var claims = new List<Claim>
         {
             new("relay", "true"),

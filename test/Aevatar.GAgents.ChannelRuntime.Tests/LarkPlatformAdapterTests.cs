@@ -101,7 +101,7 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
-    public async Task TryHandleVerification_allows_when_no_verification_token_configured()
+    public async Task TryHandleVerification_rejects_when_no_encrypt_key_or_verification_token_configured()
     {
         var payload = new
         {
@@ -125,7 +125,7 @@ public class LarkPlatformAdapterTests
         var result = await _adapter.TryHandleVerificationAsync(http, reg);
 
         result.Should().NotBeNull();
-        result.Should().NotBeOfType(typeof(Microsoft.AspNetCore.Http.HttpResults.UnauthorizedHttpResult));
+        result.Should().BeOfType(typeof(Microsoft.AspNetCore.Http.HttpResults.UnauthorizedHttpResult));
     }
 
     [Fact]
@@ -492,7 +492,7 @@ public class LarkPlatformAdapterTests
     {
         var encryptKey = "test-encrypt-key-123";
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
-        const string timestamp = "1234567890";
+        var timestamp = CurrentSignatureTimestamp();
         const string nonce = "test-nonce";
 
         var payload = BuildLarkV2Payload("im.message.receive_v1", timestamp, nonce);
@@ -513,7 +513,7 @@ public class LarkPlatformAdapterTests
         var encryptKey = "test-encrypt-key-123";
         var credentialRef = "vault://channels/lark/reg-1";
         var reg = MakeRegistrationWithCredentialRef(credentialRef);
-        const string timestamp = "1234567890";
+        var timestamp = CurrentSignatureTimestamp();
         const string nonce = "test-nonce";
 
         var payload = BuildLarkV2Payload("im.message.receive_v1", timestamp, nonce);
@@ -540,7 +540,7 @@ public class LarkPlatformAdapterTests
     {
         var encryptKey = "test-encrypt-key-123";
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
-        const string timestamp = "1234567890";
+        var timestamp = CurrentSignatureTimestamp();
         const string nonce = "test-nonce";
 
         var payload = BuildLarkV2Payload("im.message.receive_v1", timestamp, nonce);
@@ -559,7 +559,7 @@ public class LarkPlatformAdapterTests
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
         const string jsonTimestamp = "json-ts";
         const string jsonNonce = "json-nonce";
-        const string requestTimestamp = "request-ts";
+        var requestTimestamp = CurrentSignatureTimestamp();
         const string requestNonce = "request-nonce";
 
         var payload = BuildLarkV2Payload("im.message.receive_v1", jsonTimestamp, jsonNonce);
@@ -581,7 +581,7 @@ public class LarkPlatformAdapterTests
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
 
         // Valid payload but NO X-Lark-Signature header → must be rejected
-        var payload = BuildLarkV2Payload("im.message.receive_v1", "1234567890", "test-nonce");
+        var payload = BuildLarkV2Payload("im.message.receive_v1", CurrentSignatureTimestamp(), "test-nonce");
         var bodyString = JsonSerializer.Serialize(payload);
         var http = CreateHttpContext(payload); // no signature header
         var inbound = await _adapter.ParseInboundAsync(http, reg);
@@ -621,6 +621,66 @@ public class LarkPlatformAdapterTests
         var inbound = await _adapter.ParseInboundAsync(http, reg);
 
         inbound.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ParseInbound_rejects_callbacks_when_encrypt_key_and_verification_token_are_both_missing()
+    {
+        var registration = new ChannelBotRegistrationEntry
+        {
+            Id = "test-reg-open",
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxUserToken = "test-token",
+            ScopeId = "test-scope",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        var payload = new
+        {
+            schema = "2.0",
+            header = new
+            {
+                event_type = "im.message.receive_v1",
+                token = "any-token",
+            },
+            @event = new
+            {
+                sender = new { sender_id = new { open_id = "ou_abc" }, sender_type = "user" },
+                message = new
+                {
+                    chat_id = "oc_chat1",
+                    message_id = "om_msg1",
+                    message_type = "text",
+                    chat_type = "p2p",
+                    content = JsonSerializer.Serialize(new { text = "hello" }),
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var inbound = await _adapter.ParseInboundAsync(http, registration);
+
+        inbound.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ParseInbound_rejects_expired_signature_when_encrypt_key_configured()
+    {
+        var encryptKey = "test-encrypt-key-123";
+        var reg = MakeRegistrationWithEncryptKey(encryptKey);
+        var expiredTimestamp = DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeSeconds().ToString();
+        const string nonce = "test-nonce";
+
+        var payload = BuildLarkV2Payload("im.message.receive_v1", expiredTimestamp, nonce);
+        var bodyString = JsonSerializer.Serialize(payload);
+        var expectedSignature = LarkPlatformAdapter.ComputeLarkSignature(
+            expiredTimestamp, nonce, encryptKey, bodyString);
+
+        var http = CreateHttpContextWithSignature(bodyString, expectedSignature, expiredTimestamp, nonce);
+        var inbound = await _adapter.ParseInboundAsync(http, reg);
+
+        inbound.Should().BeNull();
     }
 
     // ─── Encryption Tests ───
@@ -671,6 +731,7 @@ public class LarkPlatformAdapterTests
     {
         var encryptKey = "event-encrypt-key";
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
+        var timestamp = CurrentSignatureTimestamp();
 
         var innerPayload = JsonSerializer.Serialize(new
         {
@@ -679,7 +740,7 @@ public class LarkPlatformAdapterTests
             {
                 event_type = "im.message.receive_v1",
                 token = "verify-token",
-                create_time = "1234567890",
+                create_time = timestamp,
                 nonce = "test-nonce",
             },
             @event = new
@@ -699,7 +760,6 @@ public class LarkPlatformAdapterTests
         var outerPayloadJson = JsonSerializer.Serialize(new { encrypt = encrypted });
 
         // Signature is computed on the ORIGINAL (encrypted) body
-        const string timestamp = "1234567890";
         const string nonce = "test-nonce";
         var signature = LarkPlatformAdapter.ComputeLarkSignature(
             timestamp, nonce, encryptKey, outerPayloadJson);
@@ -757,6 +817,7 @@ public class LarkPlatformAdapterTests
         // If the adapter used decrypted body for signature, this test would fail.
         var encryptKey = "sig-body-test-key";
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
+        var timestamp = CurrentSignatureTimestamp();
 
         var innerPayload = JsonSerializer.Serialize(new
         {
@@ -765,7 +826,7 @@ public class LarkPlatformAdapterTests
             {
                 event_type = "im.message.receive_v1",
                 token = "verify-token",
-                create_time = "9999999999",
+                create_time = timestamp,
                 nonce = "unique-nonce-42",
             },
             @event = new
@@ -783,7 +844,6 @@ public class LarkPlatformAdapterTests
 
         var encrypted = EncryptLarkPayload(innerPayload, encryptKey);
         var outerPayloadJson = JsonSerializer.Serialize(new { encrypt = encrypted });
-        const string timestamp = "9999999999";
         const string nonce = "unique-nonce-42";
 
         // Correct: signature on outer (encrypted) body
@@ -1177,6 +1237,8 @@ public class LarkPlatformAdapterTests
             context.Request.Headers["X-Lark-Request-Nonce"] = nonce;
         return context;
     }
+
+    private static string CurrentSignatureTimestamp() => DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
 
     /// <summary>
     /// Encrypt plaintext using Lark's protocol: AES-256-CBC, key = SHA256(encrypt_key),

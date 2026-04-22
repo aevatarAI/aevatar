@@ -15,6 +15,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Adapters;
 /// </summary>
 public sealed class LarkPlatformAdapter : IPlatformAdapter
 {
+    private static readonly TimeSpan SignatureValidityWindow = TimeSpan.FromMinutes(5);
     private readonly ILogger<LarkPlatformAdapter> _logger;
 
     public LarkPlatformAdapter(ILogger<LarkPlatformAdapter> logger) => _logger = logger;
@@ -37,6 +38,16 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         using var doc = JsonDocument.Parse(bodyString);
         var root = doc.RootElement;
         var encryptKey = await ResolveEncryptKeyAsync(http, registration, http.RequestAborted);
+        var verificationToken = registration.GetVerificationToken();
+
+        if (string.IsNullOrWhiteSpace(encryptKey) &&
+            string.IsNullOrWhiteSpace(verificationToken))
+        {
+            _logger.LogWarning(
+                "Lark callback rejected because registration has neither encrypt key nor verification token: registrationId={RegistrationId}",
+                registration.Id);
+            return Results.Unauthorized();
+        }
 
         // Lark sends encrypted payloads when encrypt_key is configured:
         // { "encrypt": "<base64-encrypted-string>" }
@@ -76,7 +87,6 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                 ? tokenProp.GetString()
                 : null;
 
-            var verificationToken = registration.GetVerificationToken();
             if (!string.IsNullOrWhiteSpace(verificationToken) &&
                 !string.Equals(incomingToken, verificationToken, StringComparison.Ordinal))
             {
@@ -107,6 +117,16 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         using var doc = JsonDocument.Parse(bodyString);
         var root = doc.RootElement;
         var encryptKey = await ResolveEncryptKeyAsync(http, registration, http.RequestAborted);
+        var verificationToken = registration.GetVerificationToken();
+
+        if (string.IsNullOrWhiteSpace(encryptKey) &&
+            string.IsNullOrWhiteSpace(verificationToken))
+        {
+            _logger.LogWarning(
+                "Lark event callback rejected because registration has neither encrypt key nor verification token: registrationId={RegistrationId}",
+                registration.Id);
+            return null;
+        }
 
         // Handle encrypted event payloads: { "encrypt": "<base64>" }
         JsonDocument? decryptedDoc = null;
@@ -159,6 +179,18 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
                 var timestamp = http.Request.Headers.TryGetValue("X-Lark-Request-Timestamp", out var tsHeader)
                     ? tsHeader.ToString() : "";
+                if (!TryParseSignatureTimestamp(timestamp, out var requestTime))
+                {
+                    _logger.LogWarning("Lark event callback missing or invalid X-Lark-Request-Timestamp header");
+                    return null;
+                }
+
+                if ((DateTimeOffset.UtcNow - requestTime).Duration() > SignatureValidityWindow)
+                {
+                    _logger.LogWarning("Lark event callback timestamp outside allowed replay window");
+                    return null;
+                }
+
                 var nonce = http.Request.Headers.TryGetValue("X-Lark-Request-Nonce", out var nonceHeader)
                     ? nonceHeader.ToString() : "";
                 var expectedSignature = ComputeLarkSignature(timestamp, nonce, encryptKey,
@@ -166,7 +198,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
                 if (!CryptographicOperations.FixedTimeEquals(
                         Encoding.UTF8.GetBytes(expectedSignature),
-                        Encoding.UTF8.GetBytes(sigHeader.ToString())))
+                        Encoding.UTF8.GetBytes(sigHeader.ToString().Trim().ToLowerInvariant())))
                 {
                     _logger.LogWarning("Lark event callback signature verification failed");
                     return null;
@@ -177,10 +209,10 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
             // Verify token on v2 event callbacks (header.token) — fallback when no encrypt_key.
             if (string.IsNullOrEmpty(encryptKey) &&
-                !string.IsNullOrWhiteSpace(registration.GetVerificationToken()))
+                !string.IsNullOrWhiteSpace(verificationToken))
             {
                 var headerToken = header.TryGetProperty("token", out var ht) ? ht.GetString() : null;
-                if (!string.Equals(headerToken, registration.GetVerificationToken(), StringComparison.Ordinal))
+                if (!string.Equals(headerToken, verificationToken, StringComparison.Ordinal))
                 {
                     _logger.LogWarning("Lark event callback token mismatch — ignoring");
                     return null;
@@ -673,6 +705,18 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         var message = timestamp + nonce + encryptKey + body;
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(message));
         return Convert.ToHexStringLower(hash);
+    }
+
+    private static bool TryParseSignatureTimestamp(string? timestamp, out DateTimeOffset requestTime)
+    {
+        requestTime = default;
+        if (!long.TryParse(timestamp, out var raw))
+            return false;
+
+        requestTime = timestamp!.Length > 10
+            ? DateTimeOffset.FromUnixTimeMilliseconds(raw)
+            : DateTimeOffset.FromUnixTimeSeconds(raw);
+        return true;
     }
 
     /// <summary>

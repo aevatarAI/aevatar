@@ -207,6 +207,65 @@ public sealed class LarkChannelAdapterWebhookTests
     }
 
     [Fact]
+    public async Task HandleWebhookAsync_PlaintextCallbackWithoutEncryptKeyOrVerificationToken_Returns401()
+    {
+        var credentialProvider = new TestCredentialProvider();
+        credentialProvider.Set("vault://bots/test", JsonSerializer.Serialize(new
+        {
+            access_token = "bot-token",
+        }));
+        var adapter = new LarkChannelAdapter(
+            credentialProvider,
+            new LarkMessageComposer(),
+            new LarkPayloadRedactor(),
+            NullLogger<LarkChannelAdapter>.Instance,
+            new HttpClient(new RecordingLarkHttpHandler())
+            {
+                BaseAddress = LarkChannelDefaults.DefaultBaseAddress,
+            });
+        var binding = ChannelTransportBinding.Create(
+            ChannelBotDescriptor.Create("reg-1", ChannelId.From("lark"), BotInstanceId.From("bot-1")),
+            "vault://bots/test",
+            verificationToken: string.Empty);
+        await adapter.InitializeAsync(binding, CancellationToken.None);
+        await adapter.StartReceivingAsync(CancellationToken.None);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema = "2.0",
+            header = new
+            {
+                event_type = "im.message.receive_v1",
+                token = "any-token",
+            },
+            @event = new
+            {
+                sender = new
+                {
+                    sender_id = new
+                    {
+                        open_id = "user-open-1",
+                    },
+                    sender_type = "user",
+                },
+                message = new
+                {
+                    chat_id = "group-1",
+                    message_id = "msg-1",
+                    message_type = "text",
+                    chat_type = "group",
+                    content = JsonSerializer.Serialize(new { text = "hello" }),
+                },
+            },
+        });
+
+        var response = await adapter.HandleWebhookAsync(new LarkWebhookRequest(Encoding.UTF8.GetBytes(payload)));
+
+        response.StatusCode.ShouldBe(401);
+        response.Activity.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task HandleWebhookAsync_CardAction_UsesTypedPayloadAndDirectMessageScope()
     {
         var harness = new LarkAdapterHarness();
