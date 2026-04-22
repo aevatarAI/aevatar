@@ -42,7 +42,51 @@ function createBaseProps(overrides = {}) {
         completedAtUtc: null,
         actorId: 'actor-1',
         error: null,
-        frames: [],
+        frames: [
+          {
+            receivedAtUtc: '2026-03-18T00:00:01Z',
+            payload: JSON.stringify({
+              custom: {
+                name: 'aevatar.step.request',
+                payload: {
+                  stepId: 'triage',
+                  stepType: 'llm_call',
+                  targetRole: 'support',
+                  input: 'Route the ticket.',
+                },
+              },
+            }),
+          },
+          {
+            receivedAtUtc: '2026-03-18T00:00:02Z',
+            payload: JSON.stringify({
+              custom: {
+                name: 'aevatar.human_input.request',
+                payload: {
+                  runId: 'execution-1',
+                  stepId: 'triage',
+                  suspensionType: 'human_approval',
+                  prompt: 'Need L2 approval before refund.',
+                  timeoutSeconds: 120,
+                },
+              },
+            }),
+          },
+          {
+            receivedAtUtc: '2026-03-18T00:00:03Z',
+            payload: JSON.stringify({
+              custom: {
+                name: 'studio.human.resume',
+                payload: {
+                  stepId: 'triage',
+                  suspensionType: 'human_approval',
+                  approved: true,
+                  userInput: 'Approved by operator.',
+                },
+              },
+            }),
+          },
+        ],
       },
     },
     workflowGraph: {
@@ -64,7 +108,6 @@ function createBaseProps(overrides = {}) {
     executionStopPending: false,
     runPrompt: '',
     executionNotice: null,
-    onSwitchStudioView: jest.fn(),
     onOpenExecution: jest.fn(),
     onSaveDraft: jest.fn(),
     onExportDraft: jest.fn(),
@@ -84,6 +127,10 @@ describe('StudioExecutionPage', () => {
       React.createElement(StudioExecutionPage, createBaseProps() as any),
     );
 
+    expect(screen.getByText('Run Compare')).toBeInTheDocument();
+    expect(screen.getByText('Health & Trust')).toBeInTheDocument();
+    expect(screen.getByText('Governance Snapshot')).toBeInTheDocument();
+    expect(screen.getByText('Human Escalation Playback')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重新运行' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /停\s*止/ })).toBeInTheDocument();
@@ -110,5 +157,15 @@ describe('StudioExecutionPage', () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('actor-1');
     });
+  });
+
+  it('surfaces approval playback details from the selected execution trace', () => {
+    render(
+      React.createElement(StudioExecutionPage, createBaseProps() as any),
+    );
+
+    expect(screen.getAllByText('triage waiting for approval').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('triage approved').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Need L2 approval before refund.').length).toBeGreaterThan(0);
   });
 });

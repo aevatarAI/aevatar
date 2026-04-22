@@ -25,7 +25,10 @@ public static class DeviceEventEndpoints
     {
         var group = app.MapGroup("/api/device-events").WithTags("DeviceEvents");
 
-        group.MapPost("/{registrationId}", HandleDeviceCallbackAsync);
+        // Device callback from NyxID relay. Authentication is HMAC-based (X-NyxID-Signature),
+        // not JWT — the endpoint must stay anonymous so the fallback policy does not reject
+        // legitimate device events before we can verify them.
+        group.MapPost("/{registrationId}", HandleDeviceCallbackAsync).AllowAnonymous();
         group.MapPost("/registrations", HandleRegisterDeviceAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListDeviceRegistrationsAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteDeviceRegistrationAsync).RequireAuthorization();

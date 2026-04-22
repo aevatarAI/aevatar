@@ -57,7 +57,7 @@ describe('TeamCreatePage', () => {
     expect(screen.queryByText('数据源')).toBeNull();
   });
 
-  it('opens Studio in create-team mode and carries the entered names into the route', async () => {
+  it('opens Studio in member-first build mode without persisting create-team draft params', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
     const openStudioButtons = await screen.findAllByRole('button', {
@@ -78,14 +78,15 @@ describe('TeamCreatePage', () => {
 
     expect(window.location.pathname).toBe('/studio');
     const params = new URLSearchParams(window.location.search);
-    expect(params.get('teamMode')).toBe('create');
-    expect(params.get('teamName')).toBe('订单助手团队');
-    expect(params.get('entryName')).toBe('订单入口');
     expect(params.get('tab')).toBe('studio');
-    expect(params.get('draft')).toBe('new');
+    expect(params.get('focus')).toBeNull();
+    expect(params.get('teamMode')).toBeNull();
+    expect(params.get('teamName')).toBeNull();
+    expect(params.get('entryName')).toBeNull();
+    expect(params.get('draft')).toBeNull();
   });
 
-  it('shows the saved draft summary and resumes that draft in Studio', async () => {
+  it('shows the saved draft summary and resumes that draft in Studio without legacy draft route params', async () => {
     window.history.replaceState(
       {},
       '',
@@ -107,12 +108,14 @@ describe('TeamCreatePage', () => {
 
     expect(window.location.pathname).toBe('/studio');
     const params = new URLSearchParams(window.location.search);
-    expect(params.get('teamMode')).toBe('create');
-    expect(params.get('teamName')).toBe('订单助手团队');
-    expect(params.get('entryName')).toBe('订单入口');
-    expect(params.get('teamDraftWorkflowId')).toBe('workflow-7');
-    expect(params.get('teamDraftWorkflowName')).toBe('order-entry-draft');
-    expect(params.get('workflow')).toBe('workflow-7');
+    expect(params.get('tab')).toBe('studio');
+    expect(params.get('focus')).toBe('workflow:workflow-7');
+    expect(params.get('teamMode')).toBeNull();
+    expect(params.get('teamName')).toBeNull();
+    expect(params.get('entryName')).toBeNull();
+    expect(params.get('teamDraftWorkflowId')).toBeNull();
+    expect(params.get('teamDraftWorkflowName')).toBeNull();
+    expect(params.get('workflow')).toBeNull();
     expect(params.get('draft')).toBeNull();
   });
 

@@ -31,6 +31,30 @@ public sealed class AppScopeResolverTests
     }
 
     [Fact]
+    public void Resolve_ShouldReturnNull_WhenOnlyLegacyClaimsPresentAndAuthEnabled()
+    {
+        // Prior behaviour cascaded to sub/uid/NameIdentifier/*_id. That responsibility now lives
+        // in the auth provider's claims transformer; this resolver reads scope_id only. If a
+        // principal reaches this point without scope_id, the provider mapping is missing and we
+        // should refuse to guess rather than leak an ambiguous scope.
+        var httpContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("sub", "oidc-sub-1"),
+                    new Claim("uid", "oidc-uid-1"),
+                    new Claim("order_id", "order-7"),
+                ],
+                authenticationType: "test")),
+        };
+        var resolver = CreateResolver();
+
+        var scope = resolver.Resolve(httpContext);
+
+        scope.Should().BeNull();
+    }
+
+    [Fact]
     public void Resolve_ShouldFallBackToConfiguredScope()
     {
         var resolver = CreateResolver(new Dictionary<string, string?>
@@ -72,6 +96,43 @@ public sealed class AppScopeResolverTests
         scope.Should().NotBeNull();
         scope!.ScopeId.Should().Be("header-scope");
         scope.Source.Should().Be("header:X-Aevatar-Scope-Id");
+    }
+
+    [Fact]
+    public void HasAuthenticatedRequestWithoutScope_ShouldBeTrue_WhenAuthenticatedButNoScopeIdClaim()
+    {
+        var httpContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "oidc-sub-1")],
+                authenticationType: "test")),
+        };
+        var resolver = CreateResolver();
+
+        resolver.HasAuthenticatedRequestWithoutScope(httpContext).Should().BeTrue();
+    }
+
+    [Fact]
+    public void HasAuthenticatedRequestWithoutScope_ShouldBeFalse_WhenScopeIdClaimPresent()
+    {
+        var httpContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("scope_id", "nyx-scope-1")],
+                authenticationType: "test")),
+        };
+        var resolver = CreateResolver();
+
+        resolver.HasAuthenticatedRequestWithoutScope(httpContext).Should().BeFalse();
+    }
+
+    [Fact]
+    public void HasAuthenticatedRequestWithoutScope_ShouldBeFalse_WhenUnauthenticated()
+    {
+        var httpContext = new DefaultHttpContext();
+        var resolver = CreateResolver();
+
+        resolver.HasAuthenticatedRequestWithoutScope(httpContext).Should().BeFalse();
     }
 
     private static DefaultAppScopeResolver CreateResolver(

@@ -17,6 +17,7 @@ export type RuntimeEventType =
   | 'TOOL_CALL_END'
   | 'TOOL_APPROVAL_REQUEST'
   | 'HUMAN_INPUT_REQUEST'
+  | 'HUMAN_INPUT_RESPONSE'
   | 'MEDIA_CONTENT'
   | 'CUSTOM'
   | 'STATE_SNAPSHOT';
@@ -60,6 +61,7 @@ const ONEOF_KEY_MAP: Record<string, RuntimeEventType> = {
   toolCallEnd: 'TOOL_CALL_END',
   toolApprovalRequest: 'TOOL_APPROVAL_REQUEST',
   humanInputRequest: 'HUMAN_INPUT_REQUEST',
+  humanInputResponse: 'HUMAN_INPUT_RESPONSE',
   mediaContent: 'MEDIA_CONTENT',
   custom: 'CUSTOM',
   stateSnapshot: 'STATE_SNAPSHOT',
@@ -195,6 +197,22 @@ export function normalizeBackendSseFrame(raw: unknown): RuntimeEvent | null {
           runId: d ? str(d, 'runId') : '',
           prompt: d ? str(d, 'prompt') : '',
           ...(options && options.length > 0 ? { options } : {}),
+        };
+      }
+      case 'HUMAN_INPUT_RESPONSE': {
+        const d = nested;
+        const rawUserInput = d?.userInput;
+        const wrappedUserInput = asRecord(rawUserInput);
+        return {
+          type: 'HUMAN_INPUT_RESPONSE', timestamp,
+          stepId: d ? str(d, 'stepId') : '',
+          runId: d ? str(d, 'runId') : '',
+          approved: d ? !!d.approved : false,
+          userInput: typeof rawUserInput === 'string'
+            ? rawUserInput
+            : typeof wrappedUserInput?.value === 'string'
+              ? wrappedUserInput.value
+              : '',
         };
       }
       case 'MEDIA_CONTENT': {

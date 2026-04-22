@@ -51,10 +51,16 @@ import {
 type ScopeServiceRuntimeWorkbenchProps = {
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
-  readonly selectedServiceId: string;
-  readonly selectedEndpointId: string;
-  readonly onSelectService: (serviceId: string) => void;
+  readonly selectedServiceId?: string;
+  readonly selectedEndpointId?: string;
+  readonly onSelectService?: (serviceId: string) => void;
   readonly onUseEndpoint: (serviceId: string, endpointId: string) => void;
+  readonly initialServiceId?: string;
+  readonly preferredServiceId?: string;
+  readonly onSelectionChange?: (selection: {
+    serviceId: string;
+    endpointId: string;
+  }) => void;
 };
 
 type ServiceRuntimeTab = "overview" | "bindings" | "revisions" | "runs";
@@ -201,6 +207,9 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
   selectedEndpointId,
   onSelectService,
   onUseEndpoint,
+  initialServiceId,
+  preferredServiceId,
+  onSelectionChange,
 }) => {
   const [messageApi, messageContextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -214,9 +223,124 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
   const [selectedRunAuditTarget, setSelectedRunAuditTarget] =
     useState<RunAuditTarget>(null);
   const [retiringBindingId, setRetiringBindingId] = useState("");
+  const [internalSelectedServiceId, setInternalSelectedServiceId] = useState(
+    () => initialServiceId?.trim() || preferredServiceId?.trim() || "",
+  );
+  const [internalSelectedEndpointId, setInternalSelectedEndpointId] =
+    useState("");
+  const isControlledSelection =
+    typeof selectedServiceId === "string" &&
+    typeof selectedEndpointId === "string" &&
+    typeof onSelectService === "function";
+  const resolvedSelectedServiceId = isControlledSelection
+    ? selectedServiceId || ""
+    : internalSelectedServiceId;
+  const resolvedSelectedEndpointId = isControlledSelection
+    ? selectedEndpointId || ""
+    : internalSelectedEndpointId;
 
   const selectedService =
-    services.find((service) => service.serviceId === selectedServiceId) ?? null;
+    services.find((service) => service.serviceId === resolvedSelectedServiceId) ??
+    null;
+
+  useEffect(() => {
+    if (isControlledSelection) {
+      return;
+    }
+
+    if (!services.length) {
+      setInternalSelectedServiceId("");
+      return;
+    }
+
+    if (
+      resolvedSelectedServiceId &&
+      services.some((service) => service.serviceId === resolvedSelectedServiceId)
+    ) {
+      return;
+    }
+
+    const normalizedInitialServiceId = initialServiceId?.trim() || "";
+    if (
+      normalizedInitialServiceId &&
+      services.some((service) => service.serviceId === normalizedInitialServiceId)
+    ) {
+      setInternalSelectedServiceId(normalizedInitialServiceId);
+      return;
+    }
+
+    const normalizedPreferredServiceId = preferredServiceId?.trim() || "";
+    setInternalSelectedServiceId(
+      normalizedPreferredServiceId || services[0]?.serviceId || "",
+    );
+  }, [
+    initialServiceId,
+    isControlledSelection,
+    preferredServiceId,
+    resolvedSelectedServiceId,
+    services,
+  ]);
+
+  useEffect(() => {
+    if (isControlledSelection) {
+      return;
+    }
+
+    if (!selectedService) {
+      setInternalSelectedEndpointId("");
+      return;
+    }
+
+    if (
+      resolvedSelectedEndpointId &&
+      selectedService.endpoints.some(
+        (endpoint) => endpoint.endpointId === resolvedSelectedEndpointId,
+      )
+    ) {
+      return;
+    }
+
+    setInternalSelectedEndpointId(selectedService.endpoints[0]?.endpointId || "");
+  }, [
+    isControlledSelection,
+    resolvedSelectedEndpointId,
+    selectedService,
+  ]);
+
+  useEffect(() => {
+    if (isControlledSelection) {
+      return;
+    }
+
+    onSelectionChange?.({
+      serviceId: resolvedSelectedServiceId,
+      endpointId: resolvedSelectedEndpointId,
+    });
+  }, [
+    isControlledSelection,
+    onSelectionChange,
+    resolvedSelectedEndpointId,
+    resolvedSelectedServiceId,
+  ]);
+
+  const handleSelectService = (serviceId: string) => {
+    if (isControlledSelection) {
+      onSelectService?.(serviceId);
+      return;
+    }
+
+    setInternalSelectedServiceId(serviceId);
+    setInternalSelectedEndpointId("");
+  };
+
+  const handleUseEndpoint = (serviceId: string, endpointId: string) => {
+    if (!isControlledSelection) {
+      setInternalSelectedServiceId(serviceId);
+      setInternalSelectedEndpointId(endpointId);
+    }
+
+    onUseEndpoint(serviceId, endpointId);
+  };
 
   const bindingsQuery = useQuery({
     enabled: Boolean(scopeId && selectedService?.serviceId),
@@ -659,7 +783,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                         domain="observation"
                         label={endpoint.kind || "endpoint"}
                         status={
-                          endpoint.endpointId === selectedEndpointId
+                          endpoint.endpointId === resolvedSelectedEndpointId
                             ? "streaming"
                             : "snapshot_available"
                         }
@@ -674,15 +798,18 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     <Space wrap>
                       <Button
                         onClick={() =>
-                          onUseEndpoint(selectedService.serviceId, endpoint.endpointId)
+                          handleUseEndpoint(
+                            selectedService.serviceId,
+                            endpoint.endpointId,
+                          )
                         }
                         type={
-                          endpoint.endpointId === selectedEndpointId
+                          endpoint.endpointId === resolvedSelectedEndpointId
                             ? "primary"
                             : "default"
                         }
                       >
-                        {endpoint.endpointId === selectedEndpointId
+                        {endpoint.endpointId === resolvedSelectedEndpointId
                           ? "Selected"
                           : "Use endpoint"}
                       </Button>
@@ -1018,7 +1145,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   key={service.serviceKey}
                   style={{
                     border:
-                      service.serviceId === selectedServiceId
+                      service.serviceId === resolvedSelectedServiceId
                         ? "1px solid var(--ant-color-primary)"
                         : "1px solid var(--ant-color-border-secondary)",
                     borderRadius: 12,
@@ -1045,14 +1172,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   </Typography.Text>
                   <Space wrap>
                     <Button
-                      onClick={() => onSelectService(service.serviceId)}
+                      onClick={() => handleSelectService(service.serviceId)}
                       type={
-                        service.serviceId === selectedServiceId
+                        service.serviceId === resolvedSelectedServiceId
                           ? "primary"
                           : "default"
                       }
                     >
-                      {service.serviceId === selectedServiceId
+                      {service.serviceId === resolvedSelectedServiceId
                         ? "Selected"
                         : "Inspect service"}
                     </Button>
