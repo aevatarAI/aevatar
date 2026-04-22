@@ -300,12 +300,33 @@ public sealed class ServiceEndpointsTests
         var rollbackResponse = await host.Client.PostAsJsonAsync(
             "/api/services/orders/rollouts/rollout-2:rollback",
             new ServiceEndpoints.RolloutActionHttpRequest("tenant", "app", "ns", "rollback-now"));
+        var pauseReceipt = await pauseResponse.Content.ReadFromJsonAsync<ServiceRolloutCommandAcceptedReceipt>();
+        var resumeReceipt = await resumeResponse.Content.ReadFromJsonAsync<ServiceRolloutCommandAcceptedReceipt>();
+        var rollbackReceipt = await rollbackResponse.Content.ReadFromJsonAsync<ServiceRolloutCommandAcceptedReceipt>();
 
         deactivateResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         advanceResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         pauseResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         resumeResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         rollbackResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        pauseReceipt.Should().BeEquivalentTo(new ServiceRolloutCommandAcceptedReceipt(
+            "rollout-actor",
+            "cmd-pause-rollout",
+            "corr-pause-rollout",
+            true,
+            ServiceRolloutStatus.Paused.ToString()));
+        resumeReceipt.Should().BeEquivalentTo(new ServiceRolloutCommandAcceptedReceipt(
+            "rollout-actor",
+            "cmd-resume-rollout",
+            "corr-resume-rollout",
+            false,
+            ServiceRolloutStatus.InProgress.ToString()));
+        rollbackReceipt.Should().BeEquivalentTo(new ServiceRolloutCommandAcceptedReceipt(
+            "rollout-actor",
+            "cmd-rollback-rollout",
+            "corr-rollback-rollout",
+            false,
+            ServiceRolloutStatus.RolledBack.ToString()));
 
         host.CommandPort.DeactivateServiceDeploymentCommand.Should().NotBeNull();
         host.CommandPort.DeactivateServiceDeploymentCommand!.DeploymentId.Should().Be("dep-2");
@@ -910,22 +931,22 @@ public sealed class ServiceEndpointsTests
             return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-advance-rollout", "corr-advance-rollout"));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceRolloutCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
         {
             PauseServiceRolloutCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-pause-rollout", "corr-pause-rollout"));
+            return Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("rollout-actor", "cmd-pause-rollout", "corr-pause-rollout", true, ServiceRolloutStatus.Paused.ToString()));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceRolloutCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
         {
             ResumeServiceRolloutCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-resume-rollout", "corr-resume-rollout"));
+            return Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("rollout-actor", "cmd-resume-rollout", "corr-resume-rollout", false, ServiceRolloutStatus.InProgress.ToString()));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
+        public Task<ServiceRolloutCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
         {
             RollbackServiceRolloutCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-rollback-rollout", "corr-rollback-rollout"));
+            return Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("rollout-actor", "cmd-rollback-rollout", "corr-rollback-rollout", false, ServiceRolloutStatus.RolledBack.ToString()));
         }
     }
 

@@ -1153,14 +1153,14 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         public Task<ServiceCommandAcceptedReceipt> AdvanceServiceRolloutAsync(AdvanceServiceRolloutCommand command, CancellationToken ct = default) =>
             Task.FromResult(DefaultReceipt);
 
-        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+        public Task<ServiceRolloutCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default) =>
+            Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1", false, ServiceRolloutStatus.Paused.ToString()));
 
-        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+        public Task<ServiceRolloutCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default) =>
+            Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1", false, ServiceRolloutStatus.InProgress.ToString()));
 
-        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+        public Task<ServiceRolloutCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default) =>
+            Task.FromResult(new ServiceRolloutCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1", false, ServiceRolloutStatus.RolledBack.ToString()));
     }
 
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
