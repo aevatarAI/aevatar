@@ -179,6 +179,8 @@ public sealed class AppStudioAuthEndpointTests
             string.IsNullOrWhiteSpace(_scopeId)
                 ? null
                 : new AppScopeContext(_scopeId, "claim:scope_id");
+
+        public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
     }
 
     private sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
