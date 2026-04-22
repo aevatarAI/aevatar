@@ -229,13 +229,6 @@ internal static class StudioEndpoints
             return "NyxID";
         }
 
-        var configuredAuthority = configuration?[$"{AuthenticationSectionName}:Authority"];
-        if (!string.IsNullOrWhiteSpace(configuredAuthority) &&
-            configuredAuthority.Contains("nyx", StringComparison.OrdinalIgnoreCase))
-        {
-            return "NyxID";
-        }
-
         if (schemeProvider == null)
             return null;
 

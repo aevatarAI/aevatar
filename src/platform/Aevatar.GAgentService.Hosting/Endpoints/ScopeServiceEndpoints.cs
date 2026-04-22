@@ -1697,6 +1697,7 @@ public static class ScopeServiceEndpoints
             RequestTypeUrl: endpoint.RequestTypeUrl,
             ResponseTypeUrl: endpoint.ResponseTypeUrl,
             SupportsSse: supportsSse,
+            // This contract currently exposes HTTP POST plus optional SSE streaming only.
             SupportsWebSocket: false,
             SupportsAguiFrames: supportsAguiFrames,
             StreamFrameFormat: supportsSse
