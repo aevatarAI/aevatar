@@ -124,7 +124,8 @@ public static class WebApplicationBuilderExtensions
                 .WithTags("Host")
                 .WithName("GetHostStatus")
                 .WithSummary("Get host process status.")
-                .Produces<AevatarHostStatusResponse>(StatusCodes.Status200OK);
+                .Produces<AevatarHostStatusResponse>(StatusCodes.Status200OK)
+                .AllowAnonymous();
         }
 
         if (options.EnableHealthEndpoints)
@@ -136,7 +137,8 @@ public static class WebApplicationBuilderExtensions
                 .WithTags("Health")
                 .WithName("GetHostLiveness")
                 .WithSummary("Get liveness status for the current host process.")
-                .Produces<AevatarHealthResponse>(StatusCodes.Status200OK);
+                .Produces<AevatarHealthResponse>(StatusCodes.Status200OK)
+                .AllowAnonymous();
 
             app.MapGet(options.ReadinessEndpointRoute, async (
                     AevatarHostHealthService healthService,
@@ -146,11 +148,12 @@ public static class WebApplicationBuilderExtensions
                 .WithName("GetHostReadiness")
                 .WithSummary("Get readiness status for the current host and its registered API capabilities.")
                 .Produces<AevatarHealthResponse>(StatusCodes.Status200OK)
-                .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable);
+                .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable)
+                .AllowAnonymous();
         }
 
         if (options.EnableOpenApiDocument)
-            app.MapOpenApi(options.OpenApiDocumentRoute);
+            app.MapOpenApi(options.OpenApiDocumentRoute).AllowAnonymous();
 
         if (options.AutoMapCapabilities)
             app.MapAevatarCapabilities();
