@@ -8,12 +8,12 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 {
-    private readonly IUserAgentCatalogQueryPort _agentRegistryQueryPort;
+    private readonly IUserAgentCatalogRuntimeQueryPort _agentRegistryQueryPort;
     private readonly NyxIdApiClient _nyxIdApiClient;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
 
     public FeishuCardHumanInteractionPort(
-        IUserAgentCatalogQueryPort agentRegistryQueryPort,
+        IUserAgentCatalogRuntimeQueryPort agentRegistryQueryPort,
         NyxIdApiClient nyxIdApiClient,
         ILogger<FeishuCardHumanInteractionPort> logger)
     {

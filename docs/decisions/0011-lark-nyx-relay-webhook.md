@@ -86,6 +86,7 @@ The required order is:
 ## Consequences
 
 - Aevatar steady state for Lark carries only non-secret Nyx identifiers and status fields
+- public read models do not persist `NyxApiKey`; runtime-only Nyx credential material lives in a separate runtime projection used only by host-side delivery ports
 - callback-edge cryptographic verification shifts to JWT-via-JWKS
 - HMAC callback signature remains defense-in-depth only under the current zero-secret constraint
 - card-action-dependent Lark UX must be redesigned before final cutover

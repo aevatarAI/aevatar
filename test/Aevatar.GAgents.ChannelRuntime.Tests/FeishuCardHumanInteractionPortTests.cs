@@ -15,7 +15,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldSendTextInstructionsThroughNyxProxy()
     {
-        var registry = Substitute.For<IUserAgentCatalogQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
@@ -54,7 +54,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrow_WhenTargetMissing()
     {
-        var registry = Substitute.For<IUserAgentCatalogQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("missing-agent", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(null));
 
@@ -72,7 +72,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrow_WhenPlatformUnsupported()
     {
-        var registry = Substitute.For<IUserAgentCatalogQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-2", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
@@ -94,7 +94,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverApprovalResolutionAsync_ShouldSendResolutionTextThenApprovedContent()
     {
-        var registry = Substitute.For<IUserAgentCatalogQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
@@ -144,7 +144,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverApprovalResolutionAsync_ShouldIncludeTextRerunInstructions_ForRejectedSocialMedia()
     {
-        var registry = Substitute.For<IUserAgentCatalogQueryPort>();
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {

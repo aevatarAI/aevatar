@@ -60,6 +60,8 @@ Operationally:
 - `channel_registrations action=register` no longer accepts `platform=lark`.
 - With rollback disabled, `POST /api/channels/lark/callback/{registrationId}` returns `410 Gone`.
 - Nyx-backed Lark registrations must not use `update_token` or direct test-reply diagnostics.
+- public `UserAgentCatalog` queries no longer expose `NyxApiKey`.
+- host-side delivery paths that still need Nyx credentials must read them from the runtime-only `UserAgentCatalogNyxCredentialDocument` projection, not from public registration or catalog read models.
 
 ## Rollback
 

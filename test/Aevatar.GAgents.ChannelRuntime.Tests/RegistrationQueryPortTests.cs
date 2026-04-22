@@ -389,7 +389,6 @@ public sealed class RegistrationQueryPortTests
                 Platform = "lark",
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
-                NyxApiKey = "nyx-key-1",
                 OwnerNyxUserId = "user-1",
                 AgentType = "skill_runner",
                 TemplateName = "daily_report",
@@ -414,7 +413,7 @@ public sealed class RegistrationQueryPortTests
         result.Platform.Should().Be("lark");
         result.ConversationId.Should().Be("oc_chat_1");
         result.NyxProviderSlug.Should().Be("api-lark-bot");
-        result.NyxApiKey.Should().Be("nyx-key-1");
+        result.NyxApiKey.Should().BeEmpty();
         result.OwnerNyxUserId.Should().Be("user-1");
         result.AgentType.Should().Be("skill_runner");
         result.TemplateName.Should().Be("daily_report");
@@ -461,7 +460,6 @@ public sealed class RegistrationQueryPortTests
                         Id = "agent-a",
                         Platform = "lark",
                         ConversationId = "oc_a",
-                        NyxApiKey = "key-a",
                         AgentType = "skill_runner",
                         TemplateName = "daily_report",
                         StateVersion = 1,
@@ -471,7 +469,6 @@ public sealed class RegistrationQueryPortTests
                         Id = "agent-b",
                         Platform = "lark",
                         ConversationId = "oc_b",
-                        NyxApiKey = "key-b",
                         Tombstoned = true,
                         StateVersion = 2,
                     },
@@ -483,7 +480,7 @@ public sealed class RegistrationQueryPortTests
 
         result.Should().ContainSingle();
         result[0].AgentId.Should().Be("agent-a");
-        result[0].NyxApiKey.Should().Be("key-a");
+        result[0].NyxApiKey.Should().BeEmpty();
         result[0].AgentType.Should().Be("skill_runner");
         result[0].TemplateName.Should().Be("daily_report");
     }
@@ -503,5 +500,83 @@ public sealed class RegistrationQueryPortTests
         var result = await queryPort.GetStateVersionAsync("agent-3");
 
         result.Should().Be(11);
+    }
+
+    [Fact]
+    public async Task UserAgentCatalogRuntimeQueryPort_GetAsync_ComposesNyxCredential()
+    {
+        var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        documentReader.GetAsync("agent-runtime", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogDocument?>(new UserAgentCatalogDocument
+            {
+                Id = "agent-runtime",
+                Platform = "lark",
+                ConversationId = "oc_runtime",
+                NyxProviderSlug = "api-lark-bot",
+                OwnerNyxUserId = "user-runtime",
+                AgentType = "skill_runner",
+            }));
+
+        var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+        credentialReader.GetAsync("agent-runtime", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogNyxCredentialDocument?>(new UserAgentCatalogNyxCredentialDocument
+            {
+                Id = "agent-runtime",
+                NyxApiKey = "nyx-key-runtime",
+            }));
+
+        var queryPort = new UserAgentCatalogRuntimeQueryPort(documentReader, credentialReader);
+        var result = await queryPort.GetAsync("agent-runtime");
+
+        result.Should().NotBeNull();
+        result!.AgentId.Should().Be("agent-runtime");
+        result.NyxApiKey.Should().Be("nyx-key-runtime");
+        result.NyxProviderSlug.Should().Be("api-lark-bot");
+    }
+
+    [Fact]
+    public async Task UserAgentCatalogRuntimeQueryPort_QueryAllAsync_ComposesNyxCredentials()
+    {
+        var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        documentReader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
+            {
+                Items =
+                [
+                    new UserAgentCatalogDocument
+                    {
+                        Id = "agent-a",
+                        Platform = "lark",
+                        ConversationId = "oc_a",
+                        StateVersion = 1,
+                    },
+                    new UserAgentCatalogDocument
+                    {
+                        Id = "agent-b",
+                        Platform = "lark",
+                        ConversationId = "oc_b",
+                        Tombstoned = true,
+                        StateVersion = 2,
+                    },
+                ],
+            }));
+
+        var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+        credentialReader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogNyxCredentialDocument>
+            {
+                Items =
+                [
+                    new UserAgentCatalogNyxCredentialDocument { Id = "agent-a", NyxApiKey = "key-a" },
+                    new UserAgentCatalogNyxCredentialDocument { Id = "agent-b", NyxApiKey = "key-b" },
+                ],
+            }));
+
+        var queryPort = new UserAgentCatalogRuntimeQueryPort(documentReader, credentialReader);
+        var result = await queryPort.QueryAllAsync();
+
+        result.Should().ContainSingle();
+        result[0].AgentId.Should().Be("agent-a");
+        result[0].NyxApiKey.Should().Be("key-a");
     }
 }

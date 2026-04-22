@@ -322,7 +322,8 @@ message UserAgentCatalogDocument {
   string platform = 2;
   string conversation_id = 3;
   string nyx_provider_slug = 4;
-  string nyx_api_key = 5;
+  reserved 5;
+  reserved "nyx_api_key";
   string owner_nyx_user_id = 6;
   bool tombstoned = 7;
   int64 state_version = 8;
@@ -341,6 +342,16 @@ message UserAgentCatalogDocument {
   google.protobuf.Timestamp next_run_at_utc = 21;
   int32 error_count = 22;
   string last_error = 23;
+}
+
+// Runtime-only Nyx credential read model for delivery-target execution paths.
+message UserAgentCatalogNyxCredentialDocument {
+  string id = 1;
+  string nyx_api_key = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  string actor_id = 6;
 }
 
 // ─── Skill Runner (persistent scheduled agent) ───

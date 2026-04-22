@@ -151,9 +151,15 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
             UserAgentCatalogProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogNyxCredentialProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
             UserAgentCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
+            UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
+        services.TryAddSingleton<IUserAgentCatalogRuntimeQueryPort, UserAgentCatalogRuntimeQueryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
         services.AddHostedService<UserAgentCatalogStartupService>();
 
@@ -164,10 +170,17 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
         }
         else
         {
             services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 
