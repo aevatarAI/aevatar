@@ -105,6 +105,33 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRegisterAsync_ReturnsBadGateway_WhenNyxProvisioningFails()
+    {
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Error: "channel_bot_id_request_failed nyx_status=401 body=invalid app secret")));
+
+        var http = CreateJsonHttpContext(
+            """{"platform":"lark","app_id":"cli_123","app_secret":"bad-secret","webhook_base_url":"https://aevatar.example.com"}""");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            provisioningService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        response.Body.Should().Contain("\"status\":\"error\"");
+        response.Body.Should().Contain("invalid app secret");
+    }
+
+    [Fact]
     public async Task HandleListRegistrationsAsync_ReturnsRelayModeOnly()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();

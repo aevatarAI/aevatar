@@ -142,7 +142,7 @@ public static class ChannelCallbackEndpoints
                 NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty),
             ct);
 
-        return Results.Accepted(value: new
+        var payload = new
         {
             status = result.Status,
             registration_id = result.RegistrationId ?? string.Empty,
@@ -157,7 +157,17 @@ public static class ChannelCallbackEndpoints
             webhook_url = result.WebhookUrl ?? string.Empty,
             error = result.Error ?? string.Empty,
             note = result.Note ?? string.Empty,
-        });
+        };
+
+        if (result.Succeeded)
+            return Results.Accepted(value: payload);
+
+        var statusCode = ResolveProvisioningFailureStatusCode(result.Error);
+        logger.LogWarning(
+            "Nyx-backed Lark provisioning rejected: statusCode={StatusCode}, error={Error}",
+            statusCode,
+            result.Error);
+        return Results.Json(payload, statusCode: statusCode);
     }
 
     private static async Task<IResult> HandleListRegistrationsAsync(
@@ -264,6 +274,17 @@ public static class ChannelCallbackEndpoints
         string? detail = null)
     {
         diagnostics?.Record(stage, platform, registrationId, detail);
+    }
+
+    private static int ResolveProvisioningFailureStatusCode(string? error)
+    {
+        return error switch
+        {
+            "missing_access_token" => StatusCodes.Status401Unauthorized,
+            "missing_app_id" or "missing_app_secret" or "missing_webhook_base_url" => StatusCodes.Status400BadRequest,
+            "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
+            _ => StatusCodes.Status502BadGateway,
+        };
     }
 
     private sealed record RegistrationRequest(
