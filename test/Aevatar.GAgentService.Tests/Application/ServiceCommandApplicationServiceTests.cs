@@ -1,14 +1,12 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -135,27 +133,25 @@ public sealed class ServiceCommandApplicationServiceTests
     public async Task DeploymentAndRolloutLifecycleCommands_ShouldUseExpectedTargetsAndProjections()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
         var deploymentProjectionPort = new RecordingProjectionPort();
         var servingProjectionPort = new RecordingProjectionPort();
         var rolloutProjectionPort = new RecordingProjectionPort();
         var trafficProjectionPort = new RecordingProjectionPort();
-        await SeedRolloutEventsAsync(
-            eventStore,
-            identity,
-            new ServiceRolloutStartedEvent(),
-            new ServiceRolloutStageAdvancedEvent());
+        var rolloutQueryReader = new RecordingRolloutQueryReader
+        {
+            Snapshot = CreateRolloutSnapshot(identity, ServiceRolloutStatus.InProgress),
+        };
         var service = CreateService(
             provisioner,
             dispatchPort,
             new RecordingCatalogProjectionPort(),
             new RecordingRevisionProjectionPort(),
-            eventStore: eventStore,
             deploymentProjectionPort: deploymentProjectionPort,
             servingProjectionPort: servingProjectionPort,
             rolloutProjectionPort: rolloutProjectionPort,
+            rolloutQueryReader: rolloutQueryReader,
             trafficProjectionPort: trafficProjectionPort);
 
         var deactivateReceipt = await service.DeactivateServiceDeploymentAsync(new DeactivateServiceDeploymentCommand
@@ -199,19 +195,16 @@ public sealed class ServiceCommandApplicationServiceTests
     public async Task PauseServiceRolloutAsync_ShouldReportNoOpForPausedRollout()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
-        await SeedRolloutEventsAsync(
-            eventStore,
-            identity,
-            new ServiceRolloutStartedEvent(),
-            new ServiceRolloutStageAdvancedEvent(),
-            new ServiceRolloutPausedEvent());
+        var rolloutQueryReader = new RecordingRolloutQueryReader
+        {
+            Snapshot = CreateRolloutSnapshot(identity, ServiceRolloutStatus.Paused),
+        };
         var service = CreateService(
             new RecordingCommandTargetProvisioner(),
             new RecordingActorDispatchPort(),
             new RecordingCatalogProjectionPort(),
             new RecordingRevisionProjectionPort(),
-            eventStore: eventStore);
+            rolloutQueryReader: rolloutQueryReader);
 
         var receipt = await service.PauseServiceRolloutAsync(new PauseServiceRolloutCommand
         {
@@ -228,26 +221,23 @@ public sealed class ServiceCommandApplicationServiceTests
     public async Task ResumeServiceRolloutAsync_ShouldReportAppliedStatusForPausedRollout()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
         var servingProjectionPort = new RecordingProjectionPort();
         var rolloutProjectionPort = new RecordingProjectionPort();
         var trafficProjectionPort = new RecordingProjectionPort();
-        await SeedRolloutEventsAsync(
-            eventStore,
-            identity,
-            new ServiceRolloutStartedEvent(),
-            new ServiceRolloutStageAdvancedEvent(),
-            new ServiceRolloutPausedEvent());
+        var rolloutQueryReader = new RecordingRolloutQueryReader
+        {
+            Snapshot = CreateRolloutSnapshot(identity, ServiceRolloutStatus.Paused),
+        };
         var service = CreateService(
             provisioner,
             dispatchPort,
             new RecordingCatalogProjectionPort(),
             new RecordingRevisionProjectionPort(),
-            eventStore: eventStore,
             servingProjectionPort: servingProjectionPort,
             rolloutProjectionPort: rolloutProjectionPort,
+            rolloutQueryReader: rolloutQueryReader,
             trafficProjectionPort: trafficProjectionPort);
 
         var receipt = await service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
@@ -270,19 +260,16 @@ public sealed class ServiceCommandApplicationServiceTests
     public async Task RollbackServiceRolloutAsync_ShouldReportNoOpForCompletedRollout()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
-        await SeedRolloutEventsAsync(
-            eventStore,
-            identity,
-            new ServiceRolloutStartedEvent(),
-            new ServiceRolloutStageAdvancedEvent(),
-            new ServiceRolloutCompletedEvent());
+        var rolloutQueryReader = new RecordingRolloutQueryReader
+        {
+            Snapshot = CreateRolloutSnapshot(identity, ServiceRolloutStatus.Completed),
+        };
         var service = CreateService(
             new RecordingCommandTargetProvisioner(),
             new RecordingActorDispatchPort(),
             new RecordingCatalogProjectionPort(),
             new RecordingRevisionProjectionPort(),
-            eventStore: eventStore);
+            rolloutQueryReader: rolloutQueryReader);
 
         var receipt = await service.RollbackServiceRolloutAsync(new RollbackServiceRolloutCommand
         {
@@ -293,6 +280,58 @@ public sealed class ServiceCommandApplicationServiceTests
 
         receipt.WasNoOp.Should().BeTrue();
         receipt.Status.Should().Be(ServiceRolloutStatus.Completed.ToString());
+    }
+
+    [Fact]
+    public async Task PauseServiceRolloutAsync_ShouldUseSnapshotBackedRolloutQuery_WhenEventStreamHistoryIsCompactedAway()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var rolloutQueryReader = new RecordingRolloutQueryReader
+        {
+            Snapshot = CreateRolloutSnapshot(identity, ServiceRolloutStatus.InProgress),
+        };
+        var service = CreateService(
+            new RecordingCommandTargetProvisioner(),
+            new RecordingActorDispatchPort(),
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort(),
+            rolloutQueryReader: rolloutQueryReader);
+
+        var receipt = await service.PauseServiceRolloutAsync(new PauseServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-1",
+            Reason = "pause",
+        });
+
+        receipt.WasNoOp.Should().BeFalse();
+        receipt.Status.Should().Be(ServiceRolloutStatus.Paused.ToString());
+        rolloutQueryReader.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ResumeServiceRolloutAsync_ShouldPropagateDispatchFailure_ForMismatchedRolloutId()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var rolloutQueryReader = new RecordingRolloutQueryReader
+        {
+            Snapshot = CreateRolloutSnapshot(identity, ServiceRolloutStatus.Paused, rolloutId: "rollout-1"),
+        };
+        var service = CreateService(
+            new RecordingCommandTargetProvisioner(),
+            new ThrowingActorDispatchPort(new InvalidOperationException("Rollout 'stale' does not match active rollout 'rollout-1'.")),
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort(),
+            rolloutQueryReader: rolloutQueryReader);
+
+        var act = () => service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "stale",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not match active rollout*");
     }
 
     [Fact]
@@ -412,44 +451,40 @@ public sealed class ServiceCommandApplicationServiceTests
 
     private static ServiceCommandApplicationService CreateService(
         RecordingCommandTargetProvisioner provisioner,
-        RecordingActorDispatchPort dispatchPort,
+        IActorDispatchPort dispatchPort,
         RecordingCatalogProjectionPort catalogProjectionPort,
         RecordingRevisionProjectionPort revisionProjectionPort,
-        InMemoryEventStore? eventStore = null,
         RecordingProjectionPort? deploymentProjectionPort = null,
         RecordingProjectionPort? servingProjectionPort = null,
         RecordingProjectionPort? rolloutProjectionPort = null,
+        RecordingRolloutQueryReader? rolloutQueryReader = null,
         RecordingProjectionPort? trafficProjectionPort = null) =>
         new(
             dispatchPort,
-            eventStore ?? new InMemoryEventStore(),
             provisioner,
             catalogProjectionPort,
             revisionProjectionPort,
             deploymentProjectionPort ?? new RecordingProjectionPort(),
             servingProjectionPort ?? new RecordingProjectionPort(),
             rolloutProjectionPort ?? new RecordingProjectionPort(),
+            rolloutQueryReader ?? new RecordingRolloutQueryReader(),
             trafficProjectionPort ?? new RecordingProjectionPort());
 
-    private static async Task SeedRolloutEventsAsync(
-        InMemoryEventStore eventStore,
+    private static ServiceRolloutSnapshot CreateRolloutSnapshot(
         ServiceIdentity identity,
-        params IMessage[] events)
-    {
-        var actorId = ServiceActorIds.Rollout(identity);
-        var committed = events
-            .Select((evt, index) => new StateEvent
-            {
-                AgentId = actorId,
-                EventId = Guid.NewGuid().ToString("N"),
-                EventType = evt.Descriptor.FullName,
-                EventData = Any.Pack(evt),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Version = index + 1,
-            })
-            .ToArray();
-        await eventStore.AppendAsync(actorId, committed, expectedVersion: 0);
-    }
+        ServiceRolloutStatus status,
+        string rolloutId = "rollout-1") =>
+        new(
+            ServiceKeys.Build(identity),
+            rolloutId,
+            "Rollout",
+            status.ToString(),
+            0,
+            [],
+            [],
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
 
     private sealed class RecordingCommandTargetProvisioner : IServiceCommandTargetProvisioner
     {
@@ -505,6 +540,19 @@ public sealed class ServiceCommandApplicationServiceTests
         }
     }
 
+    private sealed class ThrowingActorDispatchPort : IActorDispatchPort
+    {
+        private readonly Exception _exception;
+
+        public ThrowingActorDispatchPort(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromException(_exception);
+    }
+
     private sealed class RecordingCatalogProjectionPort : IServiceCatalogProjectionPort
     {
         public List<string> ActorIds { get; } = [];
@@ -539,6 +587,19 @@ public sealed class ServiceCommandApplicationServiceTests
         {
             ActorIds.Add(actorId);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingRolloutQueryReader : IServiceRolloutQueryReader
+    {
+        public List<ServiceIdentity> Requests { get; } = [];
+
+        public ServiceRolloutSnapshot? Snapshot { get; set; }
+
+        public Task<ServiceRolloutSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            Requests.Add(identity.Clone());
+            return Task.FromResult(Snapshot);
         }
     }
 }

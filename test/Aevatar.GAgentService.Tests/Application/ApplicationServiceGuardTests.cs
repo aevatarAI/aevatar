@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -21,49 +20,49 @@ public sealed class ApplicationServiceGuardTests
     {
         Action nullDispatch = () => new ServiceCommandApplicationService(
             null!,
-            new InMemoryEventStore(),
             new NoOpServiceCommandTargetProvisioner(),
             new NoOpCatalogProjectionPort(),
             new NoOpRevisionProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
+            new NoOpRolloutQueryReader(),
             new NoOpProjectionPort());
         Action nullProvisioner = () => new ServiceCommandApplicationService(
             new NoOpActorDispatchPort(),
-            new InMemoryEventStore(),
             null!,
             new NoOpCatalogProjectionPort(),
             new NoOpRevisionProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
+            new NoOpRolloutQueryReader(),
             new NoOpProjectionPort());
         Action nullCatalogProjection = () => new ServiceCommandApplicationService(
             new NoOpActorDispatchPort(),
-            new InMemoryEventStore(),
             new NoOpServiceCommandTargetProvisioner(),
             null!,
             new NoOpRevisionProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
+            new NoOpRolloutQueryReader(),
             new NoOpProjectionPort());
-        Action nullEventStore = () => new ServiceCommandApplicationService(
+        Action nullRolloutQueryReader = () => new ServiceCommandApplicationService(
             new NoOpActorDispatchPort(),
-            null!,
             new NoOpServiceCommandTargetProvisioner(),
             new NoOpCatalogProjectionPort(),
             new NoOpRevisionProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
+            null!,
             new NoOpProjectionPort());
 
         nullDispatch.Should().Throw<ArgumentNullException>();
         nullProvisioner.Should().Throw<ArgumentNullException>();
         nullCatalogProjection.Should().Throw<ArgumentNullException>();
-        nullEventStore.Should().Throw<ArgumentNullException>();
+        nullRolloutQueryReader.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
