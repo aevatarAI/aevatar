@@ -113,7 +113,7 @@ public class CqrsBoundaryTests
     }
 
     [Fact]
-    public void LegacyDirectQueryTypes_ShouldNot_Exist()
+    public void DirectActorQueryTypes_ShouldNot_Exist()
     {
         // Forbid generic actor query/reply and stream request-reply patterns
         IArchRule rule = Types().That()
@@ -125,7 +125,7 @@ public class CqrsBoundaryTests
     }
 
     [Fact]
-    public void LegacyDirectQueryExpansionTypes_ShouldNot_Exist()
+    public void DirectActorQueryExpansionTypes_ShouldNot_Exist()
     {
         // cqrs_eventsourcing_boundary_guard.sh: expanded legacy direct query patterns
         IArchRule rule = Types().That()
@@ -137,7 +137,7 @@ public class CqrsBoundaryTests
     }
 
     [Fact]
-    public void LegacyQueryRequestedEvents_ShouldNot_Exist()
+    public void DirectQueryRequestedEvents_ShouldNot_Exist()
     {
         // cqrs_eventsourcing_boundary_guard.sh: Query*RequestedEvent patterns
         IArchRule rule = Types().That()

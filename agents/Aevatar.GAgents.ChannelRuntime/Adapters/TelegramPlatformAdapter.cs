@@ -143,7 +143,7 @@ public sealed class TelegramPlatformAdapter : IPlatformAdapter
         var body = JsonSerializer.Serialize(payload);
 
         var result = await nyxClient.ProxyRequestAsync(
-            registration.NyxUserToken,
+            registration.GetNyxUserToken(),
             registration.NyxProviderSlug,
             "sendMessage",
             "POST",

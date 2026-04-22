@@ -10,25 +10,14 @@ message ChannelBotRegistrationEntry {
   string id = 1;
   string platform = 2;
   string nyx_provider_slug = 3;
+  // Legacy direct-binding fields kept on their original field numbers so
+  // existing actor state can still deserialize correctly.
   string nyx_user_token = 4;
   string verification_token = 5;
   string scope_id = 6;
   google.protobuf.Timestamp created_at = 7;
   string webhook_url = 8;  // Full callback URL configured via setWebhook
-  string encrypt_key = 9;  // Lark Encrypt Key — used for signature verification AND event decryption
-  // Late-bound credential reference (Channel RFC §17.3).
-  //
-  // Phase 0 status (this PR): the field is persisted end-to-end (command →
-  // entry → event → state → projector → document → query port). NO caller
-  // surface exposes it yet (ChannelCallbackEndpoints / ChannelRegistrationTool
-  // do not accept credential_ref), and NO consumer reads it yet
-  // (LarkPlatformAdapter still uses EncryptKey). Setting credential_ref by
-  // protobuf-level dispatch today persists through state but has no runtime
-  // effect.
-  //
-  // Phase 1 (main Channel RFC PR): host surfaces accept credential_ref,
-  // LarkPlatformAdapter resolves it via ICredentialProvider at callback time,
-  // raw encrypt_key becomes optional, then removed.
+  string encrypt_key = 9;
   string credential_ref = 10;
   // Soft-delete marker retained for projector watermark coordination
   // (Channel RFC §7.1.1): the registration stays in state after unregister so
@@ -36,6 +25,11 @@ message ChannelBotRegistrationEntry {
   // .DeleteAsync. Housekeeping cleans watermark-passed entries.
   bool tombstoned = 11;
   int64 tombstone_state_version = 12;
+  string nyx_refresh_token = 13;
+  string nyx_channel_bot_id = 14;
+  string nyx_agent_api_key_id = 15;
+  string nyx_conversation_route_id = 16;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 17;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -166,6 +160,15 @@ message ChannelBotUnregisteredEvent {
 }
 
 // Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
+message ChannelBotDirectCallbackBinding {
+  string nyx_user_token = 1;
+  string nyx_refresh_token = 2;
+  string verification_token = 3;
+  // Late-bound credential reference for direct platform/webhook secrets.
+  string credential_ref = 4;
+  string encrypt_key = 5;   // Deprecated raw field retained only for migration fallback.
+}
+
 message ChannelBotRegisterCommand {
   string platform = 1;
   string nyx_provider_slug = 2;
@@ -174,10 +177,13 @@ message ChannelBotRegisterCommand {
   string scope_id = 5;
   string webhook_url = 6;
   string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
-  string encrypt_key = 8;   // Lark Encrypt Key for signature verification + event decryption
-  // Late-bound credential reference (Channel RFC §17.3). See
-  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
+  string encrypt_key = 8;
   string credential_ref = 9;
+  string nyx_refresh_token = 10;
+  string nyx_channel_bot_id = 11;
+  string nyx_agent_api_key_id = 12;
+  string nyx_conversation_route_id = 13;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 14;
 }
 
 message ChannelBotUnregisterCommand {
@@ -187,6 +193,8 @@ message ChannelBotUnregisterCommand {
 message ChannelBotUpdateTokenCommand {
   string registration_id = 1;
   string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 4;
 }
 
 message ChannelBotCompactTombstonesCommand {
@@ -202,25 +210,43 @@ message ChannelBotTombstonesCompactedEvent {
 message ChannelBotTokenUpdatedEvent {
   string registration_id = 1;
   string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
+  ChannelBotDirectCallbackBinding direct_callback_binding = 4;
 }
 
 // Projection read model for channel bot registrations
 message ChannelBotRegistrationDocument {
+  reserved 5, 11, 12, 13, 14;
+  reserved "verification_token", "nyx_user_token", "encrypt_key", "credential_ref", "nyx_refresh_token";
   string id = 1;                            // Registration ID (= document key)
   string platform = 2;
   string nyx_provider_slug = 3;
   string scope_id = 4;
-  string verification_token = 5;
   string webhook_url = 6;
   int64 state_version = 7;
   string last_event_id = 8;
   google.protobuf.Timestamp updated_at_utc = 9;
   string actor_id = 10;                     // Source actor ID
-  string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
-  string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
-  // Late-bound credential reference (Channel RFC §17.3). See
-  // ChannelBotRegistrationEntry.credential_ref for lifecycle / migration contract.
-  string credential_ref = 13;
+  string nyx_channel_bot_id = 15;
+  string nyx_agent_api_key_id = 16;
+  string nyx_conversation_route_id = 17;
+}
+
+// Runtime-only direct callback binding read model. This is intentionally separate
+// from ChannelBotRegistrationDocument so the normal registration query surface
+// carries only non-secret identifiers. Lark registrations on the Nyx relay
+// path should never project into this document.
+message ChannelBotDirectCallbackBindingDocument {
+  string id = 1;                            // Registration ID (= document key)
+  string nyx_user_token = 2;
+  string nyx_refresh_token = 3;
+  string verification_token = 4;
+  string credential_ref = 5;
+  string encrypt_key = 6;
+  int64 state_version = 7;
+  string last_event_id = 8;
+  google.protobuf.Timestamp updated_at_utc = 9;
+  string actor_id = 10;                     // Source actor ID
 }
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───
@@ -314,7 +340,8 @@ message UserAgentCatalogDocument {
   string platform = 2;
   string conversation_id = 3;
   string nyx_provider_slug = 4;
-  string nyx_api_key = 5;
+  reserved 5;
+  reserved "nyx_api_key";
   string owner_nyx_user_id = 6;
   bool tombstoned = 7;
   int64 state_version = 8;
@@ -333,6 +360,16 @@ message UserAgentCatalogDocument {
   google.protobuf.Timestamp next_run_at_utc = 21;
   int32 error_count = 22;
   string last_error = 23;
+}
+
+// Runtime-only Nyx credential read model for delivery-target execution paths.
+message UserAgentCatalogNyxCredentialDocument {
+  string id = 1;
+  string nyx_api_key = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  string actor_id = 6;
 }
 
 // ─── Skill Runner (persistent scheduled agent) ───

@@ -8,9 +8,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -63,7 +62,7 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         string platform,
         string registrationId,
-        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] ILoggerFactory loggerFactory,
@@ -72,8 +71,26 @@ public static class ChannelCallbackEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
         var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
 
+        if (string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            RecordDiagnostic(
+                diagnostics,
+                "Callback:retired",
+                "lark",
+                registrationId,
+                "lark_direct_callback_retired");
+            return Results.Json(
+                new
+                {
+                    error = "Lark direct callback is retired. Point the Lark Developer Console callback URL to the NyxID webhook URL and use Nyx relay ingress instead.",
+                    registration_id = registrationId,
+                    platform = "lark",
+                },
+                statusCode: StatusCodes.Status410Gone);
+        }
+
         // Resolve registration from projection read model
-        var registration = await queryPort.GetAsync(registrationId, ct);
+        var registration = await runtimeQueryPort.GetAsync(registrationId, ct);
         if (registration is null)
         {
             logger.LogWarning("Channel callback for unknown registration: {RegistrationId}", registrationId);
@@ -112,35 +129,14 @@ public static class ChannelCallbackEndpoints
             return Results.Ok(new { status = "ignored" });
         }
 
-        // Dedup: Lark retries up to 5x for unacknowledged webhooks.
-        // Two-phase TTL: set short TTL (10s) immediately to block concurrent duplicates,
-        // then extend to 5 minutes after successful dispatch. If dispatch fails, the
-        // short TTL expires naturally so Lark's next retry (~30s later) gets processed.
-        // Note: volatile — dedup state lost on restart. Phase 2 migrates to durable dedup.
-        var cache = http.RequestServices.GetService<IMemoryCache>();
-        string? dedupeKey = null;
-        if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
-        {
-            dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
-            if (cache.TryGetValue(dedupeKey, out _))
-            {
-                logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
-                RecordDiagnostic(diagnostics, "Callback:deduplicated", inbound.Platform, registration.Id, "webhook_duplicate");
-                return Results.Ok(new { status = "deduplicated" });
-            }
-
-            // Short TTL blocks concurrent duplicates; extended after successful dispatch.
-            cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
-        }
-
-        if (ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand))
+        if (ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand))
         {
             var resumeService = http.RequestServices
                 .GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
             if (resumeService is null)
             {
                 logger.LogError(
-                    "Workflow resume service unavailable for card action: registrationId={RegistrationId}",
+                    "Workflow resume service unavailable for text workflow command: registrationId={RegistrationId}",
                     registration.Id);
                 RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registration.Id, "workflow_resume_service_unavailable");
                 return Results.Json(
@@ -155,7 +151,6 @@ public static class ChannelCallbackEndpoints
                 return failure;
             }
 
-            ExtendDedupeTtl(cache, inbound, registration.Id);
             RecordDiagnostic(diagnostics, "Callback:workflow_resume", inbound.Platform, registration.Id,
                 $"actorId={dispatch.Receipt.ActorId} runId={dispatch.Receipt.RunId}");
             return Results.Ok(new
@@ -174,7 +169,7 @@ public static class ChannelCallbackEndpoints
         // response collection → reply. Each stage is a separate grain turn — no deadlock.
         try
         {
-            await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache);
+            await DispatchToUserActorAsync(inbound, registration, actorRuntime);
             RecordDiagnostic(diagnostics, "Callback:accepted", inbound.Platform, registration.Id, "dispatch_enqueued");
             // Lark requires exactly HTTP 200 — any other status is treated as failure.
             return Results.Ok(new { status = "accepted" });
@@ -184,11 +179,11 @@ public static class ChannelCallbackEndpoints
             logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
                 inbound.Platform, registration.Id);
             RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registration.Id,
-                $"{ex.GetType().Name}: {ex.Message}");
+                ex.GetType().Name);
             // Return 500 so webhook providers (Lark/Telegram) retry the delivery
             // instead of treating the message as successfully processed.
             return Results.Json(
-                new { status = "dispatch_error", error = ex.Message },
+                new { status = "dispatch_error", error = "dispatch_failed" },
                 statusCode: 500);
         }
     }
@@ -202,8 +197,7 @@ public static class ChannelCallbackEndpoints
     private static async Task DispatchToUserActorAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IActorRuntime actorRuntime,
-        IMemoryCache? cache)
+        IActorRuntime actorRuntime)
     {
         var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
         var userActor = await actorRuntime.GetAsync(userActorId)
@@ -219,7 +213,7 @@ public static class ChannelCallbackEndpoints
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = registration.NyxUserToken,
+            RegistrationToken = registration.DirectCallbackBinding?.NyxUserToken ?? string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
@@ -238,17 +232,6 @@ public static class ChannelCallbackEndpoints
         };
 
         await userActor.HandleEventAsync(envelope);
-
-        ExtendDedupeTtl(cache, inbound, registration.Id);
-    }
-
-    private static void ExtendDedupeTtl(IMemoryCache? cache, InboundMessage inbound, string registrationId)
-    {
-        if (cache == null || string.IsNullOrEmpty(inbound.MessageId))
-            return;
-
-        var dedupeKey = $"channel-dedup:{inbound.Platform}:{registrationId}:{inbound.MessageId}";
-        cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
     }
 
     private static IResult MapWorkflowResumeDispatchFailure(
@@ -300,9 +283,7 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
-        [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -320,15 +301,27 @@ public static class ChannelCallbackEndpoints
         }
 
         if (request is null ||
-            string.IsNullOrWhiteSpace(request.Platform) ||
-            string.IsNullOrWhiteSpace(request.NyxProviderSlug) ||
+            string.IsNullOrWhiteSpace(request.Platform))
+        {
+            return Results.BadRequest(new { error = "platform is required" });
+        }
+
+        var platformNormalized = request.Platform.Trim().ToLowerInvariant();
+        if (string.Equals(platformNormalized, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Conflict(new
+            {
+                error = "Direct Lark registration is retired. Use the Nyx-backed provisioning flow so the webhook URL points to NyxID instead of Aevatar.",
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NyxProviderSlug) ||
             string.IsNullOrWhiteSpace(request.NyxUserToken))
         {
-            return Results.BadRequest(new { error = "platform, nyx_provider_slug, and nyx_user_token are required" });
+            return Results.BadRequest(new { error = "nyx_provider_slug and nyx_user_token are required for direct-callback registration" });
         }
 
         // Validate platform has a registered adapter
-        var platformNormalized = request.Platform.Trim().ToLowerInvariant();
         var hasAdapter = adapters.Any(a =>
             string.Equals(a.Platform, platformNormalized, StringComparison.OrdinalIgnoreCase));
         if (!hasAdapter)
@@ -346,12 +339,6 @@ public static class ChannelCallbackEndpoints
             webhookUrl = baseUrl + callbackPath;
         }
 
-        // Ensure projection scope is activated BEFORE dispatch — without this,
-        // the scope agent never subscribes and the projector never runs.
-        var projectionPort = http.RequestServices.GetService<ChannelBotRegistrationProjectionPort>();
-        if (projectionPort != null)
-            await projectionPort.EnsureProjectionForActorAsync(ChannelBotRegistrationGAgent.WellKnownId, ct);
-
         var registrationId = Guid.NewGuid().ToString("N");
 
         // Dispatch register command to actor
@@ -360,13 +347,15 @@ public static class ChannelCallbackEndpoints
         {
             Platform = platformNormalized,
             NyxProviderSlug = request.NyxProviderSlug.Trim(),
-            NyxUserToken = request.NyxUserToken.Trim(),
-            VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
-            EncryptKey = request.EncryptKey?.Trim() ?? string.Empty,
             RequestedId = registrationId,
         };
+        cmd.ApplyDirectCallbackBinding(BuildDirectCallbackBinding(
+            request.NyxUserToken,
+            request.NyxRefreshToken,
+            request.VerificationToken,
+            request.CredentialRef));
 
         var cmdEnvelope = new EventEnvelope
         {
@@ -381,39 +370,15 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Wait for projection to materialize the registration document.
-        // Without this, webhooks arriving immediately after registration
-        // (e.g. Lark URL verification) see 404 because the read model
-        // has not caught up. Mirrors the pattern in HandleUpdateTokenAsync.
-        var materialized = false;
-        for (var attempt = 0; attempt < 20; attempt++)
-        {
-            await Task.Delay(250, ct);
-            if (await queryPort.GetAsync(registrationId, ct) is not null)
-            {
-                materialized = true;
-                break;
-            }
-        }
-
-        if (!materialized)
-        {
-            logger.LogError(
-                "Registration {RegistrationId} dispatched but not materialized within 5s — projection pipeline may be unhealthy",
-                registrationId);
-        }
-
         return Results.Accepted(value: new
         {
-            status = "registered",
+            status = "accepted",
             registration_id = registrationId,
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
             callback_url = $"{callbackPath}/{registrationId}",
-            projection_ready = materialized,
-            projection_warning = materialized
-                ? null
-                : "Registration dispatched but projection did not materialize within timeout. Callbacks may 404 briefly; check projection pipeline health if this persists.",
+            refresh_token_present = !string.IsNullOrWhiteSpace(cmd.DirectCallbackBinding?.NyxRefreshToken),
+            note = "Registration accepted. Read model visibility is asynchronous; list/query results may lag briefly until the projection pipeline catches up.",
         });
     }
 
@@ -426,9 +391,15 @@ public static class ChannelCallbackEndpoints
         {
             id = e.Id,
             platform = e.Platform,
+            registration_mode = string.IsNullOrWhiteSpace(e.NyxAgentApiKeyId) ? "direct_callback" : "nyx_relay_webhook",
             nyx_provider_slug = e.NyxProviderSlug,
             scope_id = e.ScopeId,
-            callback_url = $"/api/channels/{e.Platform}/callback/{e.Id}",
+            callback_url = string.IsNullOrWhiteSpace(e.NyxAgentApiKeyId)
+                ? $"/api/channels/{e.Platform}/callback/{e.Id}"
+                : string.Empty,
+            nyx_channel_bot_id = e.NyxChannelBotId,
+            nyx_agent_api_key_id = e.NyxAgentApiKeyId,
+            nyx_conversation_route_id = e.NyxConversationRouteId,
         });
 
         return Results.Ok(result);
@@ -466,6 +437,7 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -474,6 +446,15 @@ public static class ChannelCallbackEndpoints
         var exists = await queryPort.GetAsync(registrationId, ct);
         if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
+
+        if (string.Equals(exists.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Conflict(new
+            {
+                error = "Lark registrations on the Nyx relay path do not use persisted Nyx session tokens. Re-provision through the Nyx-backed Lark flow instead of updating tokens here.",
+                registration_id = registrationId,
+            });
+        }
 
         UpdateTokenRequest? request;
         try
@@ -490,18 +471,22 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = "nyx_user_token is required" });
 
         var newToken = request.NyxUserToken.Trim();
-
-        // Snapshot projection version. Orphaned documents retain a stale version
-        // that never advances — this lets us detect the actor dropping the command.
-        var versionBefore = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
+        var runtimeRegistration = await runtimeQueryPort.GetAsync(registrationId, ct) ?? exists;
+        var currentDirectCallbackBinding = runtimeRegistration.ResolveDirectCallbackBinding();
+        var newRefreshToken = ResolveUpdatedRefreshToken(
+            request.NyxRefreshToken,
+            currentDirectCallbackBinding?.NyxRefreshToken);
 
         // Always dispatch to the actor — it is the authority on current state.
         var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
         var cmd = new ChannelBotUpdateTokenCommand
         {
             RegistrationId = registrationId,
-            NyxUserToken = newToken,
         };
+        cmd.ApplyDirectCallbackBinding(MergeDirectCallbackBinding(
+            currentDirectCallbackBinding,
+            newToken,
+            newRefreshToken));
 
         var cmdEnvelope = new EventEnvelope
         {
@@ -516,35 +501,62 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Poll: require BOTH version advance AND desired token visible.
-        var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
+        return Results.Accepted(value: new
         {
-            await Task.Delay(500, ct);
-            var versionAfter = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-            var after = await queryPort.GetAsync(registrationId, ct);
-            if (after is not null && string.Equals(after.NyxUserToken, newToken, StringComparison.Ordinal))
-            {
-                confirmed = true;
-                break;
-            }
-        }
-
-        if (!confirmed)
-        {
-            logger.LogWarning("Token update for {RegistrationId} dispatched but not confirmed by projection", registrationId);
-            return Results.Json(new
-            {
-                status = "error",
-                error = "Token update dispatched but not confirmed. The registration may not exist in the actor's state.",
-                registration_id = registrationId,
-            }, statusCode: 500);
-        }
-
-        return Results.Ok(new { status = "token_updated", registration_id = registrationId });
+            status = "accepted",
+            registration_id = registrationId,
+            note = "Token update accepted. Read model visibility is asynchronous; list/query results may lag briefly until the projection pipeline catches up.",
+        });
     }
+
+    internal static string ResolveUpdatedRefreshToken(string? requestedRefreshToken, string? existingRefreshToken)
+    {
+        if (requestedRefreshToken is null)
+            return existingRefreshToken?.Trim() ?? string.Empty;
+
+        return requestedRefreshToken.Trim();
+    }
+
+    private static ChannelBotDirectCallbackBinding? BuildDirectCallbackBinding(
+        string? nyxUserToken,
+        string? nyxRefreshToken,
+        string? verificationToken,
+        string? credentialRef)
+    {
+        var userToken = nyxUserToken?.Trim() ?? string.Empty;
+        var refreshToken = nyxRefreshToken?.Trim() ?? string.Empty;
+        var verifyToken = verificationToken?.Trim() ?? string.Empty;
+        var secretRef = credentialRef?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(userToken) &&
+            string.IsNullOrWhiteSpace(refreshToken) &&
+            string.IsNullOrWhiteSpace(verifyToken) &&
+            string.IsNullOrWhiteSpace(secretRef))
+        {
+            return null;
+        }
+
+        return new ChannelBotDirectCallbackBinding
+        {
+            NyxUserToken = userToken,
+            NyxRefreshToken = refreshToken,
+            VerificationToken = verifyToken,
+            CredentialRef = secretRef,
+            EncryptKey = string.Empty,
+        };
+    }
+
+    private static ChannelBotDirectCallbackBinding MergeDirectCallbackBinding(
+        ChannelBotDirectCallbackBinding? existing,
+        string userToken,
+        string refreshToken) =>
+        new()
+        {
+            NyxUserToken = userToken,
+            NyxRefreshToken = refreshToken,
+            VerificationToken = existing?.VerificationToken ?? string.Empty,
+            CredentialRef = existing?.CredentialRef ?? string.Empty,
+            EncryptKey = existing?.EncryptKey ?? string.Empty,
+        };
 
     /// <summary>
     /// Diagnostic: sends a test reply directly through the platform adapter,
@@ -554,7 +566,7 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleTestReplyAsync(
         HttpContext http,
         string registrationId,
-        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IChannelBotRegistrationRuntimeQueryPort runtimeQueryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
@@ -562,9 +574,18 @@ public static class ChannelCallbackEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Diagnostic");
 
-        var registration = await queryPort.GetAsync(registrationId, ct);
+        var registration = await runtimeQueryPort.GetAsync(registrationId, ct);
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
+
+        if (string.Equals(registration.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Conflict(new
+            {
+                error = "Direct Lark test replies are retired on the Nyx relay path. Validate the relay callback and channel-relay/reply flow instead.",
+                registration_id = registrationId,
+            });
+        }
 
         // Read optional test parameters from body
         TestReplyRequest? request;
@@ -594,8 +615,10 @@ public static class ChannelCallbackEndpoints
             registration_id = registration.Id,
             platform = registration.Platform,
             nyx_provider_slug = registration.NyxProviderSlug,
-            nyx_user_token_present = !string.IsNullOrWhiteSpace(registration.NyxUserToken),
-            nyx_user_token_length = registration.NyxUserToken?.Length ?? 0,
+            nyx_user_token_present = !string.IsNullOrWhiteSpace(registration.DirectCallbackBinding?.NyxUserToken),
+            nyx_user_token_length = registration.DirectCallbackBinding?.NyxUserToken?.Length ?? 0,
+            nyx_refresh_token_present = !string.IsNullOrWhiteSpace(registration.DirectCallbackBinding?.NyxRefreshToken),
+            nyx_refresh_token_length = registration.DirectCallbackBinding?.NyxRefreshToken?.Length ?? 0,
             scope_id = registration.ScopeId,
             target_chat_id = chatId,
         };
@@ -618,7 +641,10 @@ public static class ChannelCallbackEndpoints
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var delivery = await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
+            var replyService = http.RequestServices.GetService<ChannelPlatformReplyService>();
+            var delivery = replyService is not null
+                ? await replyService.DeliverAsync(adapter, message, inbound, registration, cts.Token)
+                : await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
             if (!delivery.Succeeded)
             {
                 return Results.Json(new
@@ -638,7 +664,7 @@ public static class ChannelCallbackEndpoints
             return Results.Json(new
             {
                 status = "error",
-                error = ex.Message,
+                error = "reply_delivery_failed",
                 error_type = ex.GetType().Name,
                 diagnostics,
             }, statusCode: 500);
@@ -684,12 +710,13 @@ public static class ChannelCallbackEndpoints
         string? Platform,
         string? NyxProviderSlug,
         string? NyxUserToken,
+        string? NyxRefreshToken,
         string? VerificationToken,
         string? ScopeId,
         string? WebhookBaseUrl,
-        string? EncryptKey);
+        string? CredentialRef);
 
     private sealed record TestReplyRequest(string? ChatId, string? Message);
 
-    private sealed record UpdateTokenRequest(string? NyxUserToken);
+    private sealed record UpdateTokenRequest(string? NyxUserToken, string? NyxRefreshToken);
 }

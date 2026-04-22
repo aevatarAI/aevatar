@@ -26,7 +26,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <see cref="GAgentBase{TState}.PersistDomainEventAsync{TEvent}"/>. No inline projection writes.
 /// </para>
 /// </remarks>
-public sealed class ConversationGAgent : GAgentBase<ConversationGAgentState>
+public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
 {
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still

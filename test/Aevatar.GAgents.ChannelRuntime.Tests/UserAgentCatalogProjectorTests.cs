@@ -66,7 +66,6 @@ public sealed class UserAgentCatalogProjectorTests
         document.Platform.Should().Be("lark");
         document.ConversationId.Should().Be("oc_chat_1");
         document.NyxProviderSlug.Should().Be("api-lark-bot");
-        document.NyxApiKey.Should().Be("nyx-key-1");
         document.OwnerNyxUserId.Should().Be("user-1");
         document.AgentType.Should().Be("skill_runner");
         document.TemplateName.Should().Be("daily_report");
@@ -84,6 +83,58 @@ public sealed class UserAgentCatalogProjectorTests
         document.ActorId.Should().Be("agent-registry-store");
         document.CreatedAt.Should().Be(createdAt.ToDateTimeOffset());
         document.UpdatedAt.Should().Be(_clock.UtcNow);
+    }
+
+    [Fact]
+    public async Task NyxCredentialProjector_WithValidCommittedEvent_UpsertsRuntimeCredentialDocument()
+    {
+        var dispatcher = new RecordingCredentialWriteDispatcher();
+        var projector = new UserAgentCatalogNyxCredentialProjector(dispatcher, _clock);
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-1",
+                    NyxApiKey = "nyx-key-1",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-agent-cred", 4, state), CancellationToken.None);
+
+        dispatcher.Upserts.Should().ContainSingle();
+        var document = dispatcher.Upserts[0];
+        document.Id.Should().Be("agent-1");
+        document.NyxApiKey.Should().Be("nyx-key-1");
+        document.StateVersion.Should().Be(4);
+        document.LastEventId.Should().Be("evt-agent-cred");
+        document.ActorId.Should().Be("agent-registry-store");
+        document.UpdatedAt.Should().Be(_clock.UtcNow);
+    }
+
+    [Fact]
+    public async Task NyxCredentialProjector_DeletesDocument_WhenCredentialMissing()
+    {
+        var dispatcher = new RecordingCredentialWriteDispatcher();
+        var projector = new UserAgentCatalogNyxCredentialProjector(dispatcher, _clock);
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-public",
+                    Platform = "lark",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-agent-public", 5, state), CancellationToken.None);
+
+        dispatcher.Upserts.Should().BeEmpty();
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-public");
     }
 
     [Fact]
@@ -177,6 +228,29 @@ public sealed class UserAgentCatalogProjectorTests
 
         public Task<ProjectionWriteResult> UpsertAsync(
             UserAgentCatalogDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.Add(readModel.Clone());
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class RecordingCredentialWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogNyxCredentialDocument>
+    {
+        public List<UserAgentCatalogNyxCredentialDocument> Upserts { get; } = [];
+
+        public List<string> Deletes { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            UserAgentCatalogNyxCredentialDocument readModel,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

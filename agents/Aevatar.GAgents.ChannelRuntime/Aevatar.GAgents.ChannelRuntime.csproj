@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
@@ -23,6 +24,8 @@
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
+    <ProjectReference Include="..\channels\Aevatar.GAgents.Channel.Lark\Aevatar.GAgents.Channel.Lark.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />

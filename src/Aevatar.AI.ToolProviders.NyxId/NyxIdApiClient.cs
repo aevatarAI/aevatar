@@ -1,9 +1,23 @@
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
+
+public sealed record NyxIdSessionRefreshResult(
+    bool Succeeded,
+    string? AccessToken = null,
+    string? RefreshToken = null,
+    int? ExpiresIn = null,
+    string? Detail = null);
+
+public sealed record NyxIdChannelRelayReplyResult(
+    bool Succeeded,
+    string? MessageId = null,
+    string? PlatformMessageId = null,
+    string? Detail = null);
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient
@@ -48,6 +62,54 @@ public sealed class NyxIdApiClient
 
     public Task<string> CreateServiceAsync(string token, string body, CancellationToken ct) =>
         PostAsync(token, "/api/v1/keys", body, ct);
+
+    // ─── Session Refresh ───
+
+    public async Task<NyxIdSessionRefreshResult> RefreshSessionAsync(string refreshToken, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+            return new NyxIdSessionRefreshResult(false, Detail: "missing_refresh_token");
+
+        var response = await PostWithoutAuthAsync(
+            "/api/v1/auth/refresh",
+            JsonSerializer.Serialize(new { refresh_token = refreshToken.Trim() }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+            return new NyxIdSessionRefreshResult(false, Detail: errorDetail);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+
+            if (!root.TryGetProperty("access_token", out var accessTokenProp) ||
+                accessTokenProp.ValueKind != JsonValueKind.String)
+            {
+                return new NyxIdSessionRefreshResult(false, Detail: "invalid_refresh_response missing_access_token");
+            }
+
+            var refreshTokenValue = root.TryGetProperty("refresh_token", out var refreshTokenProp) &&
+                                    refreshTokenProp.ValueKind == JsonValueKind.String
+                ? refreshTokenProp.GetString()
+                : null;
+            var expiresIn = root.TryGetProperty("expires_in", out var expiresInProp) &&
+                            expiresInProp.ValueKind == JsonValueKind.Number
+                ? expiresInProp.GetInt32()
+                : (int?)null;
+
+            return new NyxIdSessionRefreshResult(
+                true,
+                AccessToken: accessTokenProp.GetString(),
+                RefreshToken: refreshTokenValue,
+                ExpiresIn: expiresIn);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "NyxID session refresh returned invalid JSON");
+            return new NyxIdSessionRefreshResult(false, Detail: "invalid_refresh_response invalid_json");
+        }
+    }
 
     // ─── Proxy ───
 
@@ -357,6 +419,56 @@ public sealed class NyxIdApiClient
     public Task<string> PushChannelEventAsync(string token, string conversationId, string body, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/channel-events/{Uri.EscapeDataString(conversationId)}", body, ct);
 
+    public async Task<NyxIdChannelRelayReplyResult> SendChannelRelayTextReplyAsync(
+        string token,
+        string messageId,
+        string text,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+        if (string.IsNullOrWhiteSpace(messageId))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_message_id");
+        if (string.IsNullOrWhiteSpace(text))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text");
+
+        var response = await PostAsync(
+            token,
+            "/api/v1/channel-relay/reply",
+            JsonSerializer.Serialize(new
+            {
+                message_id = messageId,
+                reply = new
+                {
+                    text,
+                },
+            }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+            return new NyxIdChannelRelayReplyResult(false, Detail: errorDetail);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            return new NyxIdChannelRelayReplyResult(
+                true,
+                MessageId: root.TryGetProperty("message_id", out var replyMessageId) && replyMessageId.ValueKind == JsonValueKind.String
+                    ? replyMessageId.GetString()
+                    : null,
+                PlatformMessageId: root.TryGetProperty("platform_message_id", out var platformMessageId) &&
+                                   platformMessageId.ValueKind == JsonValueKind.String
+                    ? platformMessageId.GetString()
+                    : null);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Nyx channel relay reply returned invalid JSON");
+            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_response");
+        }
+    }
+
     // ─── Admin Invite Codes ───
 
     public Task<string> ListInviteCodesAsync(string token, CancellationToken ct) =>
@@ -391,6 +503,14 @@ public sealed class NyxIdApiClient
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await SendAsync(request, ct);
+    }
+
+    internal async Task<string> PostWithoutAuthAsync(string path, string body, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         return await SendAsync(request, ct);
     }
@@ -447,4 +567,48 @@ public sealed class NyxIdApiClient
 
     private static string EscapeJsonString(string value) =>
         System.Text.Json.JsonSerializer.Serialize(value);
+
+    private static bool TryParseErrorEnvelope(string response, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            detail = "empty_response";
+            return true;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProp) ||
+                errorProp.ValueKind != JsonValueKind.True)
+            {
+                return false;
+            }
+
+            var status = root.TryGetProperty("status", out var statusProp) &&
+                         statusProp.ValueKind == JsonValueKind.Number
+                ? statusProp.GetInt32()
+                : (int?)null;
+            var body = root.TryGetProperty("body", out var bodyProp) &&
+                       bodyProp.ValueKind == JsonValueKind.String
+                ? bodyProp.GetString()
+                : null;
+            var message = root.TryGetProperty("message", out var messageProp) &&
+                          messageProp.ValueKind == JsonValueKind.String
+                ? messageProp.GetString()
+                : null;
+
+            detail = $"nyx_status={status?.ToString() ?? "unknown"}" +
+                     (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
+                     (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+            return true;
+        }
+        catch (JsonException)
+        {
+            detail = $"invalid_error_envelope response_length={response.Length}";
+            return true;
+        }
+    }
 }

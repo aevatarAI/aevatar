@@ -1751,7 +1751,7 @@ Phase 0 落实步骤：部署 EventHubs → validation harness 过 → 配置 pa
 
 ## 9.6 Credentials / security boundary
 
-当前注册模型把 `nyx_provider_slug` / `nyx_user_token` / Lark `encrypt_key` 存在 `ChannelBotRegistrationEntry` proto 里，且 `ChannelBotRegistrationQueryPort` 能把完整记录（含 encrypt_key）查出来。新 channel 要加的 Slack `signing_secret` / `bot_token` / `user_token` / `app_token`、Discord `bot_token`、各类 webhook secret 体量更大敏感度更高，**绝对不能照抄同一路径**。
+当前注册模型把 `nyx_provider_slug` / `nyx_user_token` / Lark `encrypt_key` 存在 `ChannelBotRegistrationEntry` proto 里；公开 `ChannelBotRegistrationQueryPort` 已经对 `encrypt_key` 做脱敏，但 callback runtime 仍保留内部 `IChannelBotRegistrationRuntimeQueryPort` legacy fallback 来兼容旧 registration。新 channel 要加的 Slack `signing_secret` / `bot_token` / `user_token` / `app_token`、Discord `bot_token`、各类 webhook secret 体量更大敏感度更高，**绝对不能照抄同一路径**。
 
 新架构下的 credentials 处理：
 
@@ -2365,7 +2365,7 @@ v1 cutover step 2 细化为：
 
 - `SecretManager.cs` 是 **env/file 解析器 + `${VAR}` 替换器**，不是带 rotation / audit / late resolution 语义的 secret boundary：只有 `LoadFromFile` / `LoadFromEnvironment` / `Resolve(input)` / `Get(key)` / `Set(key, val)`，**无 vault 后端、无凭据 versioning、无"按 ref 懒解析"契约**。
 - Raw token 仍在 **proto / actor state / LLM metadata** 里活跃流动：
-  - `agents/Aevatar.GAgents.ChannelRuntime/channel_runtime_messages.proto:9-51` 持有 `nyx_user_token` / `encrypt_key` / `nyxid_access_token`（`credential_ref` 字段已加但**无 caller surface 暴露、无 consumer 读取**，当前只是 proto schema）
+  - `agents/Aevatar.GAgents.ChannelRuntime/channel_runtime_messages.proto:9-51` 仍持有 `nyx_user_token` / `encrypt_key` / `nyxid_access_token`；不过 `credential_ref` 已经接入 `ChannelCallbackEndpoints` / `ChannelRegistrationTool` caller surface，并由 `LarkConversationAdapterRegistry` + legacy `LarkPlatformAdapter` 在 Lark callback runtime 路径实际解析消费；公开 query 已脱敏 `encrypt_key`，同时 callback runtime 通过内部 read port 保留旧数据 fallback；新的 registration write path 也不再持久化 raw `encrypt_key`
   - `src/Aevatar.AI.Abstractions/LLMProviders/LLMRequestMetadataKeys.cs:7-8` 仍通过 metadata key 传 `nyxid.access_token` / `nyxid.org_token`
   - `ChannelBotRegistrationGAgent` / `ChannelCallbackEndpoints` 注册入口直接接收 raw token
 - `IAevatarSecretsStore` 是已有 interface 但**实现面极窄**——不是"插上就能用"的 secret boundary 抽象。
@@ -2376,7 +2376,7 @@ v1 cutover step 2 细化为：
 2. **`SecretManager` 升级或替代**：要么扩它加 vault 后端 + versioning + 懒 resolve 语义；要么定一个新 `ICredentialStore` 抽象，把 `SecretManager` 降级为 dev 实现。**这部分原 17.7 估值漏掉了**
 3. **Raw token 迁移**：proto 字段标记 deprecated → caller surface 改受 `credential_ref` → consumer（Lark adapter / NyxIdLLMProvider / connector）按 ref 走 provider 解析 → raw 字段最终删除。跨域调用点 10+ 处
 4. **LLM metadata key 迁移**：`LLMRequestMetadataKeys.NyxIdAccessToken/NyxIdOrgToken` 改成 `CredentialRef` 形态；LLM provider 在调用前 resolve，不让 caller 直接塞 token
-5. **Registration admin surface（tools / endpoints）**：`ChannelCallbackEndpoints.cs` / `ChannelRegistrationTool.cs` 的注册入口从 raw token 切到 `credential_ref`
+5. **Registration admin surface（tools / endpoints）**：Channel runtime 的 bot registration 入口已切到 `credential_ref`，剩余 raw token surface 主要集中在 Nyx / LLM metadata 相关路径
 
 **修订后的估值**：~400 行（原估值）**偏低**，实际预估 **~800-1000 行 + 跨 3-4 个 PR 渐进**：
 - PR-A：`ICredentialProvider` + `AuthContext` 契约 + `SecretManager` 升级或 `ICredentialStore` 抽象（~300 行）

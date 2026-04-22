@@ -24,6 +24,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private readonly SkillRegistry? _skillRegistry;
     private readonly IToolApprovalHandler? _remoteApprovalHandler;
+    private readonly NyxIdRelayOptions? _relayOptions;
 
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -33,12 +34,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         SkillRegistry? skillRegistry = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IToolApprovalHandler? approvalHandler = null,
+        NyxIdRelayOptions? relayOptions = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                approvalHandler: new YieldApprovalHandler())
     {
         _skillRegistry = skillRegistry;
         _remoteApprovalHandler = approvalHandler;
+        _relayOptions = relayOptions;
     }
 
     /// <summary>Provides the NyxID remote handler for approval timeout escalation.</summary>
@@ -61,18 +64,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     protected override string DecorateSystemPrompt(string basePrompt)
     {
         var prompt = basePrompt;
-
-        // Inject channel runtime callback base URL
-        prompt += """
-
-## Channel Runtime Configuration (Auto-Injected)
-
-Aevatar's channel callback base URL is: `https://aevatar-console-backend-api.aevatar.ai`
-
-When registering channel bots, use `channel_registrations` tool (NOT `nyxid_channel_bots`).
-The callback URL for Lark developer console is:
-`https://aevatar-console-backend-api.aevatar.ai/api/channels/lark/callback/<registration_id>`
-""";
+        prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
         if (_skillRegistry != null && _skillRegistry.Count > 0)
         {
