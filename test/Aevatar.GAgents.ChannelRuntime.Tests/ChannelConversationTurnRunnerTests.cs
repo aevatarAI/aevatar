@@ -88,6 +88,36 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldNotAwaitImmediateLarkReaction()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new BlockingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var runTask = runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxUserAccessToken = "user-token-1",
+                    NyxPlatformMessageId = "om_123",
+                }),
+            CancellationToken.None);
+
+        await nyxHandler.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        runTask.IsCompleted.Should().BeTrue();
+
+        var result = await runTask;
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+
+        nyxHandler.Release.TrySetResult();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldSkipImmediateLarkReaction_WhenPlatformMessageIdIsMissing()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -692,7 +722,7 @@ public sealed class ChannelConversationTurnRunnerTests
         }
     }
 
-    private sealed class RecordingJsonHandler(string body) : HttpMessageHandler
+    private class RecordingJsonHandler(string body) : HttpMessageHandler
     {
         public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
 
@@ -707,6 +737,19 @@ public sealed class ChannelConversationTurnRunnerTests
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
+        }
+    }
+
+    private sealed class BlockingJsonHandler(string body) : RecordingJsonHandler(body)
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return await base.SendAsync(request, cancellationToken);
         }
     }
 }

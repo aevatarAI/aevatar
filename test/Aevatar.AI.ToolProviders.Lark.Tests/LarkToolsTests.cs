@@ -315,8 +315,8 @@ public class LarkToolsTests
                 .Should().Contain("message_id is required");
             (await tool.ExecuteAsync("""{"message_id":"om_1","user_id_type":"email"}"""))
                 .Should().Contain("user_id_type must be one of");
-            (await tool.ExecuteAsync("""{"message_id":"om_1","page_size":101}"""))
-                .Should().Contain("page_size must be between 1 and 100");
+            (await tool.ExecuteAsync("""{"message_id":"om_1","page_size":51}"""))
+                .Should().Contain("page_size must be between 1 and 50");
         }
 
         var errorTool = new LarkMessagesReactionsListTool(new StubLarkNyxClient

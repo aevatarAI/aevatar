@@ -106,10 +106,6 @@ public sealed class NyxIdRelayTransport
 
     private static string ResolvePlatformMessageId(NyxIdRelayCallbackPayload payload, string platform)
     {
-        var replyTarget = payload.ReplyToPlatformMessageId?.Trim();
-        if (!string.IsNullOrWhiteSpace(replyTarget))
-            return replyTarget;
-
         var directPlatformId = payload.PlatformMessageId?.Trim();
         if (!string.IsNullOrWhiteSpace(directPlatformId))
             return directPlatformId;

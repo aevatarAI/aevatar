@@ -43,8 +43,8 @@ public sealed class LarkMessagesReactionsListTool : AgentToolBase<LarkMessagesRe
             return LarkProxyResponseParser.Serialize(new { success = false, error = "user_id_type must be one of: user_id, union_id, open_id" });
 
         var pageSize = parameters.PageSize is > 0 ? parameters.PageSize.Value : 20;
-        if (pageSize is < 1 or > 100)
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "page_size must be between 1 and 100." });
+        if (pageSize is < 1 or > 50)
+            return LarkProxyResponseParser.Serialize(new { success = false, error = "page_size must be between 1 and 50." });
 
         var response = await _client.ListMessageReactionsAsync(
             token,

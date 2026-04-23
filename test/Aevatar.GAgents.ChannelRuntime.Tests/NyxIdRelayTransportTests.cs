@@ -100,7 +100,7 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
-    public void Parse_ShouldPreferReplyToPlatformMessageId_WhenPresent()
+    public void Parse_ShouldPreferCurrentPlatformMessageId_WhenReplyTargetAlsoPresent()
     {
         var body = """
             {
@@ -124,6 +124,6 @@ public sealed class NyxIdRelayTransportTests
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
         parsed.Success.Should().BeTrue();
-        parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_parent");
+        parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_raw");
     }
 }

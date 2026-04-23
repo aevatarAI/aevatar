@@ -53,7 +53,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
-        await TrySendImmediateLarkReactionAsync(activity, registration, ct);
+        _ = TrySendImmediateLarkReactionAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
@@ -737,6 +737,10 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     platformMessageId,
                     detail);
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
