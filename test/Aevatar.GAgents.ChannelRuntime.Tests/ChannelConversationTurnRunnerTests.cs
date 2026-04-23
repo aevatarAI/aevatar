@@ -61,6 +61,56 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldSendImmediateLarkReaction_WhenRelayTurnProvidesPlatformMessageId()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxUserAccessToken = "user-token-1",
+                    NyxPlatformMessageId = "om_123",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Path.Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions");
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
+        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"OK\"");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldSkipImmediateLarkReaction_WhenPlatformMessageIdIsMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxUserAccessToken = "user-token-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldResolveRegistrationByNyxAgentApiKeyId_WhenBotIdDoesNotMatch()
     {
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
@@ -454,10 +504,12 @@ public sealed class ChannelConversationTurnRunnerTests
         IServiceProvider? services = null,
         IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort = null,
         RecordingJsonHandler? relayHandler = null,
+        RecordingJsonHandler? nyxHandler = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
         services ??= new ServiceCollection().BuildServiceProvider();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
+        nyxHandler ??= new RecordingJsonHandler("""{"code":0,"data":{}}""");
         var relayClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://example.com" },
             new HttpClient(relayHandler)
@@ -475,7 +527,12 @@ public sealed class ChannelConversationTurnRunnerTests
             registrationQueryPort,
             registrationQueryByNyxIdentityPort,
             [adapter],
-            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://example.com" }),
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://example.com" },
+                new HttpClient(nyxHandler)
+                {
+                    BaseAddress = new Uri("https://example.com"),
+                }),
             relayOutboundPort,
             interactiveReplyDispatcher,
             NullLogger<ChannelConversationTurnRunner>.Instance);
