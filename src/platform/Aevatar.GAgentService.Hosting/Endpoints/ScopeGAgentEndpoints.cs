@@ -271,113 +271,23 @@ public static class ScopeGAgentEndpoints
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints");
-        var writer = new AGUISseWriter(http.Response);
-        var responseStarted = false;
+        var session = new DraftRunSseSession(http.Response);
         GAgentDraftRunPreparedActor? preparedActor = null;
 
         try
         {
-            if (string.IsNullOrWhiteSpace(request.ActorTypeName))
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            if (!TryValidateDraftRunRequest(http.Response, request))
                 return;
-            }
 
-            if (string.IsNullOrWhiteSpace(request.Prompt))
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return;
-            }
-
-            var preparation = await actorPreparationPort.PrepareAsync(
-                new GAgentDraftRunPreparationRequest(
-                    scopeId,
-                    request.ActorTypeName,
-                    request.PreferredActorId),
+            preparedActor = await TryPrepareDraftRunActorAsync(
+                actorPreparationPort,
+                http.Response,
+                scopeId,
+                request,
                 ct);
-            if (!preparation.Succeeded)
-            {
-                if (preparation.Error == GAgentDraftRunStartError.UnknownActorType)
-                {
-                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                    await WriteJsonErrorAsync(
-                        http.Response,
-                        "UNKNOWN_GAGENT_TYPE",
-                        $"GAgent type '{request.ActorTypeName}' could not be resolved.",
-                        ct);
-                }
-
+            if (preparedActor is null)
                 return;
-            }
-
-            preparedActor = preparation.PreparedActor;
-
-            async Task EnsureSseStartedAsync(CancellationToken token)
-            {
-                if (responseStarted)
-                    return;
-
-                http.Response.StatusCode = StatusCodes.Status200OK;
-                http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-                http.Response.Headers.CacheControl = "no-store";
-                http.Response.Headers["X-Accel-Buffering"] = "no";
-                await http.Response.StartAsync(token);
-                responseStarted = true;
-            }
-
-            async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken token)
-            {
-                await EnsureSseStartedAsync(token);
-                await writer.WriteAsync(aguiEvent, token);
-            }
-
-            async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
-            {
-                http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
-                await EnsureSseStartedAsync(token);
-                await writer.WriteAsync(
-                    new AGUIEvent
-                    {
-                        RunStarted = new RunStartedEvent
-                        {
-                            ThreadId = receipt.ActorId,
-                            RunId = receipt.CommandId,
-                        },
-                    },
-                    token);
-            }
-
-            var bearerToken = ExtractBearerToken(http);
-            string? defaultModel = null;
-            string? preferredRoute = null;
-            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
-            if (userConfigStore != null)
-            {
-                try
-                {
-                    var userConfig = await userConfigStore.GetAsync(ct);
-                    defaultModel = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
-                        ? null
-                        : userConfig.DefaultModel.Trim();
-                    preferredRoute = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
-                        ? null
-                        : userConfig.PreferredLlmRoute.Trim();
-                }
-                catch
-                {
-                    // Best-effort.
-                }
-            }
-
-            var command = new GAgentDraftRunCommand(
-                ScopeId: scopeId,
-                ActorTypeName: preparedActor!.ActorTypeName,
-                Prompt: request.Prompt.Trim(),
-                PreferredActorId: preparedActor.ActorId,
-                SessionId: string.IsNullOrWhiteSpace(request.SessionId) ? null : request.SessionId.Trim(),
-                NyxIdAccessToken: bearerToken,
-                ModelOverride: defaultModel,
-                PreferredLlmRoute: preferredRoute);
+            var command = await BuildDraftRunCommandAsync(http, scopeId, request, preparedActor, ct);
 
             var timeoutMs = request.TimeoutMs > 0 ? request.TimeoutMs : 120_000;
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -385,49 +295,27 @@ public static class ScopeGAgentEndpoints
 
             var interaction = await interactionService.ExecuteAsync(
                 command,
-                EmitAsync,
-                OnAcceptedAsync,
+                session.EmitAsync,
+                session.WriteAcceptedAsync,
                 timeoutCts.Token);
 
             if (!interaction.Succeeded)
             {
-                if (preparedActor.RequiresRollbackOnFailure)
-                    await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
-
-                if (interaction.Error == GAgentDraftRunStartError.UnknownActorType)
-                {
-                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                    await WriteJsonErrorAsync(
-                        http.Response,
-                        "UNKNOWN_GAGENT_TYPE",
-                        $"GAgent type '{request.ActorTypeName}' could not be resolved.",
-                        ct);
-                }
-                else if (interaction.Error == GAgentDraftRunStartError.ActorTypeMismatch)
-                {
-                    http.Response.StatusCode = StatusCodes.Status409Conflict;
-                    await WriteJsonErrorAsync(
-                        http.Response,
-                        "GAGENT_ACTOR_TYPE_MISMATCH",
-                        $"Actor '{preparedActor.ActorId}' is not compatible with requested type '{preparedActor.ActorTypeName}'.",
-                        ct);
-                }
-
+                await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
+                await WriteDraftRunStartErrorAsync(http.Response, preparedActor, request.ActorTypeName, interaction.Error, ct);
                 return;
             }
 
-            if (!responseStarted && interaction.Receipt != null)
-                await OnAcceptedAsync(interaction.Receipt, ct);
+            if (!session.ResponseStarted && interaction.Receipt != null)
+                await session.WriteAcceptedAsync(interaction.Receipt, ct);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            if (preparedActor?.RequiresRollbackOnFailure == true && !responseStarted)
-                await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
+            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
 
             try
             {
-                await EnsureTimeoutErrorAsync(writer, http.Response, responseStarted, ct: CancellationToken.None);
-                responseStarted = true;
+                await session.WriteTimeoutAsync(CancellationToken.None);
             }
             catch
             {
@@ -440,38 +328,22 @@ public static class ScopeGAgentEndpoints
         }
         catch (Exception ex)
         {
-            if (preparedActor?.RequiresRollbackOnFailure == true && !responseStarted)
-                await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
+            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
 
             logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
             var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
 
-            if (!responseStarted)
+            if (!session.ResponseStarted)
             {
-                http.Response.StatusCode = isAuthRequired
-                    ? StatusCodes.Status401Unauthorized
-                    : StatusCodes.Status500InternalServerError;
-                await WriteJsonErrorAsync(
-                    http.Response,
-                    isAuthRequired ? "authentication_required" : "GAGENT_DRAFT_RUN_FAILED",
-                    isAuthRequired ? "NyxID authentication required. Please sign in." : ex.Message,
-                    ct);
+                await WriteDraftRunExceptionJsonAsync(http.Response, ex, isAuthRequired, ct);
                 return;
             }
 
             try
             {
-                await writer.WriteAsync(
-                    new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = isAuthRequired
-                                ? "NyxID authentication required. Please sign in."
-                                : ex.Message,
-                            Code = isAuthRequired ? "authentication_required" : null,
-                        },
-                    },
+                await session.WriteRunErrorAsync(
+                    isAuthRequired ? "NyxID authentication required. Please sign in." : ex.Message,
+                    isAuthRequired ? "authentication_required" : null,
                     CancellationToken.None);
             }
             catch
@@ -481,32 +353,150 @@ public static class ScopeGAgentEndpoints
         }
     }
 
-    private static async Task EnsureTimeoutErrorAsync(
-        AGUISseWriter writer,
+    private static bool TryValidateDraftRunRequest(
         HttpResponse response,
-        bool responseStarted,
-        CancellationToken ct)
+        GAgentDraftRunHttpRequest request)
     {
-        ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(request);
 
-        if (!responseStarted)
+        if (string.IsNullOrWhiteSpace(request.ActorTypeName))
         {
-            response.StatusCode = StatusCodes.Status200OK;
-            response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            response.Headers.CacheControl = "no-store";
-            response.Headers["X-Accel-Buffering"] = "no";
-            await response.StartAsync(ct);
+            response.StatusCode = StatusCodes.Status400BadRequest;
+            return false;
         }
 
-        await writer.WriteAsync(
-            new AGUIEvent
-            {
-                RunError = new RunErrorEvent
-                {
-                    Message = "GAgent draft-run timed out.",
-                }
-            },
+        if (string.IsNullOrWhiteSpace(request.Prompt))
+        {
+            response.StatusCode = StatusCodes.Status400BadRequest;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<GAgentDraftRunPreparedActor?> TryPrepareDraftRunActorAsync(
+        IGAgentDraftRunActorPreparationPort actorPreparationPort,
+        HttpResponse response,
+        string scopeId,
+        GAgentDraftRunHttpRequest request,
+        CancellationToken ct)
+    {
+        var preparation = await actorPreparationPort.PrepareAsync(
+            new GAgentDraftRunPreparationRequest(
+                scopeId,
+                request.ActorTypeName,
+                request.PreferredActorId),
+            ct);
+        if (!preparation.Succeeded)
+        {
+            await WriteDraftRunStartErrorAsync(response, preparedActor: null, request.ActorTypeName, preparation.Error, ct);
+            return null;
+        }
+
+        return preparation.PreparedActor;
+    }
+
+    private static async Task<GAgentDraftRunCommand> BuildDraftRunCommandAsync(
+        HttpContext http,
+        string scopeId,
+        GAgentDraftRunHttpRequest request,
+        GAgentDraftRunPreparedActor preparedActor,
+        CancellationToken ct)
+    {
+        var (defaultModel, preferredRoute) = await TryGetUserLlmDefaultsAsync(http, ct);
+        return new GAgentDraftRunCommand(
+            ScopeId: scopeId,
+            ActorTypeName: preparedActor.ActorTypeName,
+            Prompt: request.Prompt.Trim(),
+            PreferredActorId: preparedActor.ActorId,
+            SessionId: string.IsNullOrWhiteSpace(request.SessionId) ? null : request.SessionId.Trim(),
+            NyxIdAccessToken: ExtractBearerToken(http),
+            ModelOverride: defaultModel,
+            PreferredLlmRoute: preferredRoute);
+    }
+
+    private static async Task<(string? DefaultModel, string? PreferredRoute)> TryGetUserLlmDefaultsAsync(
+        HttpContext http,
+        CancellationToken ct)
+    {
+        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
+        if (userConfigStore is null)
+            return (null, null);
+
+        try
+        {
+            var userConfig = await userConfigStore.GetAsync(ct);
+            return (
+                string.IsNullOrWhiteSpace(userConfig.DefaultModel) ? null : userConfig.DefaultModel.Trim(),
+                string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute) ? null : userConfig.PreferredLlmRoute.Trim());
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
+    private static async Task WriteDraftRunStartErrorAsync(
+        HttpResponse response,
+        GAgentDraftRunPreparedActor? preparedActor,
+        string requestedActorTypeName,
+        GAgentDraftRunStartError error,
+        CancellationToken ct)
+    {
+        switch (error)
+        {
+            case GAgentDraftRunStartError.UnknownActorType:
+                response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonErrorAsync(
+                    response,
+                    "UNKNOWN_GAGENT_TYPE",
+                    $"GAgent type '{requestedActorTypeName}' could not be resolved.",
+                    ct);
+                break;
+            case GAgentDraftRunStartError.ActorTypeMismatch when preparedActor is not null:
+                response.StatusCode = StatusCodes.Status409Conflict;
+                await WriteJsonErrorAsync(
+                    response,
+                    "GAGENT_ACTOR_TYPE_MISMATCH",
+                    $"Actor '{preparedActor.ActorId}' is not compatible with requested type '{preparedActor.ActorTypeName}'.",
+                    ct);
+                break;
+        }
+    }
+
+    private static async Task RollbackPreparedActorAsync(
+        IGAgentDraftRunActorPreparationPort actorPreparationPort,
+        GAgentDraftRunPreparedActor? preparedActor)
+    {
+        if (preparedActor?.RequiresRollbackOnFailure == true)
+            await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
+    }
+
+    private static async Task RollbackPreparedActorIfPendingAsync(
+        IGAgentDraftRunActorPreparationPort actorPreparationPort,
+        GAgentDraftRunPreparedActor? preparedActor,
+        bool responseStarted)
+    {
+        if (responseStarted)
+            return;
+
+        await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
+    }
+
+    private static async Task WriteDraftRunExceptionJsonAsync(
+        HttpResponse response,
+        Exception ex,
+        bool isAuthRequired,
+        CancellationToken ct)
+    {
+        response.StatusCode = isAuthRequired
+            ? StatusCodes.Status401Unauthorized
+            : StatusCodes.Status500InternalServerError;
+        await WriteJsonErrorAsync(
+            response,
+            isAuthRequired ? "authentication_required" : "GAGENT_DRAFT_RUN_FAILED",
+            isAuthRequired ? "NyxID authentication required. Please sign in." : ex.Message,
             ct);
     }
 
@@ -627,6 +617,67 @@ public static class ScopeGAgentEndpoints
         ex is NyxIdAuthenticationRequiredException
         || ex.InnerException is NyxIdAuthenticationRequiredException
         || (ex is AggregateException agg && agg.InnerExceptions.Any(e => e is NyxIdAuthenticationRequiredException));
+
+    private sealed class DraftRunSseSession(HttpResponse response)
+    {
+        private readonly HttpResponse _response = response ?? throw new ArgumentNullException(nameof(response));
+        private readonly AGUISseWriter _writer = new(response);
+
+        public bool ResponseStarted { get; private set; }
+
+        public async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken ct)
+        {
+            await EnsureStartedAsync(ct);
+            await _writer.WriteAsync(aguiEvent, ct);
+        }
+
+        public async ValueTask WriteAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken ct)
+        {
+            _response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+            await EnsureStartedAsync(ct);
+            await _writer.WriteAsync(
+                new AGUIEvent
+                {
+                    RunStarted = new RunStartedEvent
+                    {
+                        ThreadId = receipt.ActorId,
+                        RunId = receipt.CommandId,
+                    },
+                },
+                ct);
+        }
+
+        public Task WriteTimeoutAsync(CancellationToken ct) =>
+            WriteRunErrorAsync("GAgent draft-run timed out.", code: null, ct);
+
+        public async Task WriteRunErrorAsync(string message, string? code, CancellationToken ct)
+        {
+            await EnsureStartedAsync(ct);
+            await _writer.WriteAsync(
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = message,
+                        Code = code,
+                    },
+                },
+                ct);
+        }
+
+        private async Task EnsureStartedAsync(CancellationToken ct)
+        {
+            if (ResponseStarted)
+                return;
+
+            _response.StatusCode = StatusCodes.Status200OK;
+            _response.Headers.ContentType = "text/event-stream; charset=utf-8";
+            _response.Headers.CacheControl = "no-store";
+            _response.Headers["X-Accel-Buffering"] = "no";
+            await _response.StartAsync(ct);
+            ResponseStarted = true;
+        }
+    }
 
     // ─── Request models ───
 
