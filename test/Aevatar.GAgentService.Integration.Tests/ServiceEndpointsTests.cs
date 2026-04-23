@@ -570,6 +570,31 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task CreateRevisionAsync_WhenAuthenticatedIdentityMissingClaims_ShouldReturnForbiddenBeforeParsingKind()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant",
+                "app",
+                "ns",
+                "rev-1",
+                "unknown",
+                null,
+                null,
+                null)),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CreateRevisionAsync_ShouldAllowMissingImplementationPayloads_AndFallbackToEmptySpecs()
     {
         await using var host = await EndpointTestHost.StartAsync();

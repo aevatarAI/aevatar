@@ -76,14 +76,24 @@ public static partial class ServiceEndpoints
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var spec = new ServiceRevisionSpec
         {
-            Identity = ResolveServiceIdentity(http, identityResolver, request.TenantId, request.AppId, request.Namespace, serviceId, out var denied),
+            Identity = identity,
             RevisionId = request.RevisionId ?? string.Empty,
             ImplementationKind = ParseImplementationKind(request.ImplementationKind),
         };
-        if (denied is not null)
-            return denied;
 
         switch (spec.ImplementationKind)
         {
@@ -379,32 +389,6 @@ public static partial class ServiceEndpoints
             },
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}", receipt);
-    }
-
-    private static ServiceIdentity ResolveServiceIdentity(
-        HttpContext http,
-        IServiceIdentityContextResolver identityResolver,
-        string? fallbackTenantId,
-        string? fallbackAppId,
-        string? fallbackNamespace,
-        string serviceId,
-        out IResult? denied)
-    {
-        if (ServiceIdentityEndpointAccess.TryResolveIdentity(
-                identityResolver,
-                fallbackTenantId,
-                fallbackAppId,
-                fallbackNamespace,
-                serviceId,
-                out var identity,
-                out var deniedResult))
-        {
-            denied = null;
-            return identity;
-        }
-
-        denied = deniedResult;
-        return new ServiceIdentity();
     }
 
     private static IResult JsonOrNull<T>(T? value) =>
