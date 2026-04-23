@@ -242,6 +242,96 @@ public sealed class ChannelRegistrationToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RepairLarkMirror_StillRepairsWhenQuerySideIsUnavailable()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(new InvalidOperationException("projection reader unavailable")));
+
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.RepairLocalMirrorAsync(Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
+                Succeeded: true,
+                Status: "accepted",
+                RegistrationId: "reg-restore-1",
+                NyxChannelBotId: "bot-1",
+                NyxAgentApiKeyId: "key-1",
+                NyxConversationRouteId: "route-1",
+                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(provisioningService)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync(
+            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","credential_ref":"vault://channels/lark/registrations/reg-restore-1/relay-hmac","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        await provisioningService.Received(1).RepairLocalMirrorAsync(
+            Arg.Is<NyxLarkMirrorRepairRequest>(request =>
+                request.RequestedRegistrationId == "reg-restore-1" &&
+                request.NyxChannelBotId == "bot-1" &&
+                request.NyxAgentApiKeyId == "key-1" &&
+                request.NyxConversationRouteId == "route-1"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RepairLarkMirror_DoesNotShortCircuitOnPartialNyxIdentityMatch()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-stale",
+                    Platform = "lark",
+                    NyxProviderSlug = "api-lark-bot",
+                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
+                    NyxChannelBotId = "bot-1",
+                    NyxAgentApiKeyId = "key-stale",
+                    NyxConversationRouteId = "route-stale",
+                },
+            ]));
+
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.RepairLocalMirrorAsync(Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
+                Succeeded: true,
+                Status: "accepted",
+                RegistrationId: "reg-restore-1",
+                NyxChannelBotId: "bot-1",
+                NyxAgentApiKeyId: "key-1",
+                NyxConversationRouteId: "route-1",
+                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(provisioningService)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync(
+            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","credential_ref":"vault://channels/lark/registrations/reg-restore-1/relay-hmac","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-restore-1");
+        await provisioningService.Received(1).RepairLocalMirrorAsync(
+            Arg.Is<NyxLarkMirrorRepairRequest>(request =>
+                request.NyxChannelBotId == "bot-1" &&
+                request.NyxAgentApiKeyId == "key-1" &&
+                request.NyxConversationRouteId == "route-1"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_UpdateToken_ReturnsRetiredError()
     {
         var tool = new ChannelRegistrationTool(new ServiceCollection().BuildServiceProvider());

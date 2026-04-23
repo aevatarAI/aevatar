@@ -263,25 +263,32 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
         if (queryPort is not null)
         {
-            var registrations = await queryPort.QueryAllAsync(ct);
-            var existing = registrations.FirstOrDefault(entry =>
-                string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
-                MatchesNyxIdentity(entry, nyxChannelBotId, nyxAgentApiKeyId, nyxConversationRouteId));
-            if (existing is not null)
+            try
             {
-                return SerializeLarkRegistrationPayload(
-                    status: "already_registered",
-                    registrationId: existing.Id,
-                    nyxProviderSlug: string.IsNullOrWhiteSpace(existing.NyxProviderSlug)
-                        ? DefaultNyxProviderSlug
-                        : existing.NyxProviderSlug,
-                    nyxChannelBotId: existing.NyxChannelBotId,
-                    nyxAgentApiKeyId: existing.NyxAgentApiKeyId,
-                    nyxConversationRouteId: existing.NyxConversationRouteId,
-                    relayCallbackUrl: string.Empty,
-                    webhookUrl: existing.WebhookUrl,
-                    error: string.Empty,
-                    note: "Matching local Aevatar mirror already exists.");
+                var registrations = await queryPort.QueryAllAsync(ct);
+                var existing = registrations.FirstOrDefault(entry =>
+                    string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+                    MatchesNyxIdentity(entry, nyxChannelBotId, nyxAgentApiKeyId, nyxConversationRouteId));
+                if (existing is not null)
+                {
+                    return SerializeLarkRegistrationPayload(
+                        status: "already_registered",
+                        registrationId: existing.Id,
+                        nyxProviderSlug: string.IsNullOrWhiteSpace(existing.NyxProviderSlug)
+                            ? DefaultNyxProviderSlug
+                            : existing.NyxProviderSlug,
+                        nyxChannelBotId: existing.NyxChannelBotId,
+                        nyxAgentApiKeyId: existing.NyxAgentApiKeyId,
+                        nyxConversationRouteId: existing.NyxConversationRouteId,
+                        relayCallbackUrl: string.Empty,
+                        webhookUrl: existing.WebhookUrl,
+                        error: string.Empty,
+                        note: "Matching local Aevatar mirror already exists.");
+                }
+            }
+            catch
+            {
+                // Repair must remain usable even when the query-side projection is degraded.
             }
         }
 
@@ -350,14 +357,26 @@ public sealed class ChannelRegistrationTool : IAgentTool
         string nyxAgentApiKeyId,
         string nyxConversationRouteId)
     {
-        static bool Match(string left, string right) =>
-            !string.IsNullOrWhiteSpace(left) &&
-            !string.IsNullOrWhiteSpace(right) &&
-            string.Equals(left, right, StringComparison.Ordinal);
+        var hasConstraint = false;
 
-        return Match(entry.NyxAgentApiKeyId, nyxAgentApiKeyId) ||
-               Match(entry.NyxChannelBotId, nyxChannelBotId) ||
-               Match(entry.NyxConversationRouteId, nyxConversationRouteId);
+        if (!MatchesIfProvided(entry.NyxChannelBotId, nyxChannelBotId, ref hasConstraint))
+            return false;
+        if (!MatchesIfProvided(entry.NyxAgentApiKeyId, nyxAgentApiKeyId, ref hasConstraint))
+            return false;
+        if (!MatchesIfProvided(entry.NyxConversationRouteId, nyxConversationRouteId, ref hasConstraint))
+            return false;
+
+        return hasConstraint;
+    }
+
+    private static bool MatchesIfProvided(string actual, string expected, ref bool hasConstraint)
+    {
+        if (string.IsNullOrWhiteSpace(expected))
+            return true;
+
+        hasConstraint = true;
+        return !string.IsNullOrWhiteSpace(actual) &&
+               string.Equals(actual, expected, StringComparison.Ordinal);
     }
 
     private async Task<string> DeleteAsync(
