@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Telegram;
 using Aevatar.GAgents.Channel.Testing;
@@ -30,28 +31,32 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
 
     protected override void AssertSimpleTextPayload(object payload, MessageContent intent, ComposeContext context)
     {
-        var native = payload.ShouldBeOfType<TelegramNativePayload>();
+        var native = payload.ShouldBeOfType<TelegramOutboundMessage>();
         native.Text.ShouldBe(intent.Text);
         native.Attachment.ShouldBeNull();
     }
 
     protected override void AssertActionsPayload(object payload, MessageContent intent, ComposeContext context, ComposeCapability capability)
     {
-        var native = payload.ShouldBeOfType<TelegramNativePayload>();
+        var native = payload.ShouldBeOfType<TelegramOutboundMessage>();
         if (capability == ComposeCapability.Exact)
-            native.ReplyMarkup.ShouldNotBeNull();
+        {
+            native.ReplyMarkupJson.ShouldNotBeNull();
+            using var document = JsonDocument.Parse(native.ReplyMarkupJson);
+            document.RootElement.GetProperty("inline_keyboard").GetArrayLength().ShouldBe(2);
+        }
     }
 
     protected override void AssertCardPayload(object payload, MessageContent intent, ComposeContext context, ComposeCapability capability)
     {
-        var native = payload.ShouldBeOfType<TelegramNativePayload>();
+        var native = payload.ShouldBeOfType<TelegramOutboundMessage>();
         native.Text.ShouldContain("Hero");
         capability.ShouldBe(ComposeCapability.Degraded);
     }
 
     protected override void AssertOverflowTruncation(object payload, int maxLength)
     {
-        payload.ShouldBeOfType<TelegramNativePayload>().Text.Length.ShouldBeLessThanOrEqualTo(maxLength);
+        payload.ShouldBeOfType<TelegramOutboundMessage>().Text.Length.ShouldBeLessThanOrEqualTo(maxLength);
     }
 
     [Fact]

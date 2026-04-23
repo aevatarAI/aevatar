@@ -1,156 +1,99 @@
+using System.Globalization;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
+using System.Text.Json.Nodes;
 using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using Telegram.Bot;
-using Telegram.Bot.Exceptions;
-using Telegram.Bot.Types;
-using Telegram.Bot.Types.Enums;
-using ICredentialProvider = Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider;
+using FoundationCredentialProvider = Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider;
 
 namespace Aevatar.GAgents.Channel.Telegram;
 
-/// <summary>
-/// Full Telegram channel adapter backed by the official <c>Telegram.Bot</c> SDK.
-/// </summary>
 public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutboundPort
 {
-    private readonly Channel<ChatActivity> _inbound = System.Threading.Channels.Channel.CreateBounded<ChatActivity>(
-        new BoundedChannelOptions(256)
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            FullMode = BoundedChannelFullMode.Wait,
-        });
-    private readonly ICredentialProvider _credentialProvider;
-    private readonly ITelegramApiClient _apiClient;
-    private readonly ITelegramAttachmentContentResolver? _attachmentResolver;
-    private readonly TelegramMessageComposer _composer;
+    private static readonly ChannelId TelegramChannel = ChannelId.From("telegram");
+
+    private readonly HttpClient _httpClient;
+    private readonly FoundationCredentialProvider _credentialProvider;
+    private readonly IMessageComposer<TelegramOutboundMessage> _composer;
+    private readonly IPayloadRedactor _payloadRedactor;
     private readonly ILogger<TelegramChannelAdapter> _logger;
+    private readonly System.Threading.Channels.Channel<ChatActivity> _inboundBuffer;
+    private readonly ChannelCapabilities _capabilities;
+    private readonly ITelegramAttachmentContentResolver? _attachmentResolver;
     private readonly TelegramChannelAdapterOptions _options;
+    private readonly bool _captureInboundActivities;
+
     private ChannelTransportBinding? _binding;
+    private TelegramCredentialSnapshot _botCredential = new(string.Empty);
     private bool _initialized;
     private bool _receiving;
     private bool _stopped;
     private CancellationTokenSource? _receiveLoopCts;
     private Task? _receiveLoop;
 
-    /// <summary>
-    /// Creates one Telegram channel adapter.
-    /// </summary>
     public TelegramChannelAdapter(
-        ICredentialProvider credentialProvider,
-        ITelegramApiClient apiClient,
+        FoundationCredentialProvider credentialProvider,
+        TelegramMessageComposer composer,
+        IPayloadRedactor payloadRedactor,
+        ILogger<TelegramChannelAdapter> logger,
+        HttpClient? httpClient = null,
         ITelegramAttachmentContentResolver? attachmentResolver = null,
-        TelegramMessageComposer? composer = null,
-        ILogger<TelegramChannelAdapter>? logger = null,
-        TelegramChannelAdapterOptions? options = null)
+        TelegramChannelAdapterOptions? options = null,
+        bool captureInboundActivities = true)
     {
         _credentialProvider = credentialProvider ?? throw new ArgumentNullException(nameof(credentialProvider));
-        _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
+        _composer = composer ?? throw new ArgumentNullException(nameof(composer));
+        _payloadRedactor = payloadRedactor ?? throw new ArgumentNullException(nameof(payloadRedactor));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _attachmentResolver = attachmentResolver;
-        _composer = composer ?? new TelegramMessageComposer();
-        _logger = logger ?? NullLogger<TelegramChannelAdapter>.Instance;
         _options = options ?? new TelegramChannelAdapterOptions();
-        Capabilities = new ChannelCapabilities
+        _captureInboundActivities = captureInboundActivities;
+        _httpClient = httpClient ?? new HttpClient
         {
-            SupportsEphemeral = false,
-            SupportsEdit = true,
-            SupportsDelete = true,
-            SupportsThread = false,
-            Streaming = StreamingSupport.EditLoopRateLimited,
-            SupportsFiles = true,
-            MaxMessageLength = 4096,
-            SupportsActionButtons = true,
-            SupportsConfirmDialog = false,
-            SupportsModal = false,
-            SupportsMention = false,
-            SupportsTyping = false,
-            SupportsReactions = false,
-            RecommendedStreamDebounceMs = _options.RecommendedStreamDebounceMs,
-            Transport = _options.TransportMode,
+            BaseAddress = TelegramChannelDefaults.DefaultBaseAddress,
         };
+        _capabilities = TelegramMessageComposer.DefaultCapabilities.Clone();
+        _capabilities.RecommendedStreamDebounceMs = _options.RecommendedStreamDebounceMs;
+        _capabilities.Transport = _options.TransportMode;
+        _inboundBuffer = System.Threading.Channels.Channel.CreateBounded<ChatActivity>(
+            new System.Threading.Channels.BoundedChannelOptions(256)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait,
+            });
     }
 
-    /// <inheritdoc />
-    public ChannelId Channel { get; } = ChannelId.From("telegram");
+    public ChannelId Channel => TelegramChannel;
 
-    /// <inheritdoc />
     public TransportMode TransportMode => _options.TransportMode;
 
-    /// <inheritdoc />
-    public ChannelCapabilities Capabilities { get; }
+    public ChannelCapabilities Capabilities => _capabilities.Clone();
 
-    /// <inheritdoc />
-    public ChannelReader<ChatActivity> InboundStream => _inbound.Reader;
+    public System.Threading.Channels.ChannelReader<ChatActivity> InboundStream => _inboundBuffer.Reader;
 
-    /// <summary>
-    /// Accepts one webhook payload, normalizes it into <see cref="ChatActivity"/>, and enqueues it on <see cref="InboundStream"/>.
-    /// </summary>
-    public async Task<ChatActivity?> AcceptWebhookAsync(
-        Stream payload,
-        string? secretToken = null,
-        ChannelTransportBinding? binding = null,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-        var activeBinding = binding ?? _binding ?? throw new InvalidOperationException("Adapter has not been initialized.");
-        if (!ValidateWebhookSecret(secretToken, activeBinding))
-            return null;
-
-        using var document = await JsonDocument.ParseAsync(payload, cancellationToken: ct);
-        var update = document.Deserialize<Update>(JsonBotAPI.Options);
-        if (update is null)
-            return null;
-
-        return await ProcessUpdateAsync(update, activeBinding, enqueue: true, ct);
-    }
-
-    /// <summary>
-    /// Starts one streaming reply against the supplied Telegram conversation reference.
-    /// </summary>
-    public async Task<StreamingHandle> BeginStreamingReplyAsync(
-        ConversationReference reference,
-        MessageContent initial,
-        CancellationToken ct)
-    {
-        var initialEmit = await SendAsync(reference, initial, ct);
-        if (!initialEmit.Success)
-            throw new InvalidOperationException($"Unable to start Telegram streaming reply: {initialEmit.ErrorCode}");
-
-        return new TelegramStreamingHandle(
-            this,
-            reference,
-            initialEmit.SentActivityId,
-            initial.Text,
-            _options.TimeProvider,
-            TimeSpan.FromMilliseconds(Math.Max(_options.RecommendedStreamDebounceMs, 0)));
-    }
-
-    /// <inheritdoc />
-    public Task InitializeAsync(ChannelTransportBinding binding, CancellationToken ct)
+    public async Task InitializeAsync(ChannelTransportBinding binding, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(binding);
-        if (_initialized)
-            throw new InvalidOperationException("Adapter has already been initialized.");
-        if (_receiving)
-            throw new InvalidOperationException("Adapter cannot initialize after receive startup.");
 
+        if (_initialized || _receiving)
+            throw new InvalidOperationException("TelegramChannelAdapter is already initialized.");
+
+        var secret = await _credentialProvider.ResolveBotCredentialAsync(binding, ct);
         _binding = binding.Clone();
+        _botCredential = TelegramCredentialSnapshot.Parse(secret);
         _initialized = true;
-        return Task.CompletedTask;
+        _stopped = false;
     }
 
-    /// <inheritdoc />
     public Task StartReceivingAsync(CancellationToken ct)
     {
         EnsureInitialized();
         if (_receiving)
-            throw new InvalidOperationException("Adapter has already started receiving.");
+            throw new InvalidOperationException("TelegramChannelAdapter has already started receiving.");
 
         _receiving = true;
         if (_options.TransportMode == TransportMode.LongPolling)
@@ -162,7 +105,6 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
         return Task.CompletedTask;
     }
 
-    /// <inheritdoc />
     public async Task StopReceivingAsync(CancellationToken ct)
     {
         if (_stopped)
@@ -190,158 +132,42 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
             _receiveLoop = null;
         }
 
-        _inbound.Writer.TryComplete();
+        _inboundBuffer.Writer.TryComplete();
     }
 
-    /// <inheritdoc />
-    public async Task<EmitResult> SendAsync(ConversationReference to, MessageContent content, CancellationToken ct)
-    {
-        try
-        {
-            EnsureReady();
-            var target = TelegramConversationTarget.Parse(to);
-            var context = new ComposeContext
-            {
-                Conversation = to.Clone(),
-                Capabilities = Capabilities,
-            };
-            var payload = _composer.Compose(content, context);
-            if (payload.Attachment is null && string.IsNullOrWhiteSpace(payload.Text))
-            {
-                return EmitResult.Failed(
-                    "telegram_empty_message",
-                    "Telegram text sends require non-empty message content.",
-                    capability: payload.Capability);
-            }
+    public async Task<EmitResult> SendAsync(ConversationReference to, MessageContent content, CancellationToken ct) =>
+        await SendCoreAsync(to, content, activityId: null, await RefreshBotCredentialAsync(ct), ct);
 
-            var botToken = await ResolveBotTokenAsync(ct);
-
-            TelegramSentActivity sent;
-            if (payload.Attachment is null)
-            {
-                sent = await _apiClient.SendMessageAsync(
-                    botToken,
-                    target.ChatId,
-                    payload.Text,
-                    payload.ReplyMarkup,
-                    replyToMessageId: null,
-                    ct);
-            }
-            else
-            {
-                var attachment = await ResolveAttachmentAsync(payload.Attachment, ct);
-                if (attachment is null)
-                {
-                    return EmitResult.Failed(
-                        "attachment_unavailable",
-                        "Telegram attachment content could not be resolved.",
-                        capability: payload.Capability);
-                }
-
-                try
-                {
-                    sent = payload.Attachment.Kind == AttachmentKind.Image
-                        ? await _apiClient.SendPhotoAsync(
-                            botToken,
-                            target.ChatId,
-                            attachment,
-                            payload.Text,
-                            payload.ReplyMarkup,
-                            replyToMessageId: null,
-                            ct)
-                        : await _apiClient.SendDocumentAsync(
-                            botToken,
-                            target.ChatId,
-                            attachment,
-                            payload.Text,
-                            payload.ReplyMarkup,
-                            replyToMessageId: null,
-                            ct);
-                }
-                finally
-                {
-                    attachment.Content?.Dispose();
-                }
-            }
-
-            return EmitResult.Sent(TelegramConversationTarget.BuildActivityId(sent.ChatId, sent.MessageId), payload.Capability);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("credential", StringComparison.OrdinalIgnoreCase))
-        {
-            return EmitResult.Failed("credential_resolution_failed", ex.Message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Telegram send failed.");
-            return EmitResult.Failed("telegram_send_failed", SanitizeError(ex.Message));
-        }
-    }
-
-    /// <inheritdoc />
     public async Task<EmitResult> UpdateAsync(
         ConversationReference to,
         string activityId,
         MessageContent content,
-        CancellationToken ct)
-    {
-        try
-        {
-            EnsureReady();
-            var target = TelegramConversationTarget.Parse(to);
-            var adapterActivity = TelegramConversationTarget.ParseActivityId(activityId);
-            var payload = _composer.Compose(content, new ComposeContext
-            {
-                Conversation = to.Clone(),
-                Capabilities = Capabilities,
-            });
-            if (string.IsNullOrWhiteSpace(payload.Text))
-            {
-                return EmitResult.Failed(
-                    "telegram_empty_message",
-                    "Telegram text updates require non-empty message content.",
-                    capability: payload.Capability);
-            }
+        CancellationToken ct) =>
+        await SendCoreAsync(to, content, activityId, await RefreshBotCredentialAsync(ct), ct);
 
-            if (payload.Attachment is not null)
-            {
-                return EmitResult.Failed(
-                    "telegram_edit_text_only",
-                    "Telegram edits are limited to text payloads in this adapter.",
-                    capability: ComposeCapability.Degraded);
-            }
-
-            var botToken = await ResolveBotTokenAsync(ct);
-            await _apiClient.EditMessageTextAsync(
-                botToken,
-                target.ChatId,
-                adapterActivity.MessageId,
-                payload.Text,
-                payload.ReplyMarkup,
-                ct);
-            return EmitResult.Sent(TelegramConversationTarget.BuildActivityId(target.ChatId, adapterActivity.MessageId), payload.Capability);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Telegram update failed.");
-            return EmitResult.Failed("telegram_update_failed", SanitizeError(ex.Message));
-        }
-    }
-
-    /// <inheritdoc />
     public async Task DeleteAsync(ConversationReference to, string activityId, CancellationToken ct)
     {
         EnsureReady();
-        var target = TelegramConversationTarget.Parse(to);
-        var adapterActivity = TelegramConversationTarget.ParseActivityId(activityId);
-        var botToken = await ResolveBotTokenAsync(ct);
-        await _apiClient.DeleteMessageAsync(botToken, target.ChatId, adapterActivity.MessageId, ct);
+        ArgumentNullException.ThrowIfNull(to);
+        if (string.IsNullOrWhiteSpace(activityId))
+            throw new ArgumentException("Activity id cannot be empty.", nameof(activityId));
+
+        var target = TelegramConversationTarget.ParseConversation(to);
+        var outboundActivity = TelegramConversationTarget.ParseOutboundActivityId(activityId);
+        if (target.ChatId != outboundActivity.ChatId)
+            throw new InvalidOperationException("Telegram activity id does not belong to the supplied conversation.");
+
+        var credential = await RefreshBotCredentialAsync(ct);
+        if (string.IsNullOrWhiteSpace(credential.BotToken))
+            throw new InvalidOperationException("Telegram bot credential could not be resolved.");
+
+        await DeleteMessageAsync(credential.BotToken, outboundActivity.ChatId, outboundActivity.MessageId, ct);
     }
 
-    /// <inheritdoc />
     public async Task<EmitResult> ContinueConversationAsync(
         ConversationReference reference,
         MessageContent content,
-        Aevatar.GAgents.Channel.Abstractions.AuthContext auth,
+        AuthContext auth,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(reference);
@@ -356,58 +182,240 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
                 capability: ComposeCapability.Unsupported);
         }
 
-        return await SendAsync(reference, content, ct);
+        return await SendCoreAsync(reference, content, activityId: null, await RefreshBotCredentialAsync(ct), ct);
+    }
+
+    public async Task<StreamingHandle> BeginStreamingReplyAsync(
+        ConversationReference to,
+        MessageContent initial,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(to);
+        ArgumentNullException.ThrowIfNull(initial);
+
+        var sent = await SendAsync(to, initial, ct);
+        if (!sent.Success)
+            throw new InvalidOperationException(sent.ErrorMessage);
+
+        return new TelegramStreamingHandle(
+            this,
+            to.Clone(),
+            sent.SentActivityId,
+            initial.Clone(),
+            _options.TimeProvider,
+            TimeSpan.FromMilliseconds(Math.Max(_options.RecommendedStreamDebounceMs, 0)));
+    }
+
+    public async Task<TelegramWebhookResponse> HandleWebhookAsync(TelegramWebhookRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureReady();
+
+        if (!ValidateWebhookSecret(request.Headers))
+            return new TelegramWebhookResponse(401, null, null, null);
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(request.Body ?? Array.Empty<byte>());
+        }
+        catch (JsonException)
+        {
+            return new TelegramWebhookResponse(400, null, null, null);
+        }
+
+        using (document)
+        {
+            var activity = NormalizeUpdate(document.RootElement, _binding!);
+            if (activity is null)
+                return new TelegramWebhookResponse(200, null, null, null);
+
+            byte[] sanitizedPayload;
+            try
+            {
+                sanitizedPayload = (await _payloadRedactor.RedactAsync(Channel, request.Body ?? Array.Empty<byte>(), ct)).SanitizedPayload;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Telegram payload redaction failed closed.");
+                return new TelegramWebhookResponse(503, null, null, null);
+            }
+
+            activity.RawPayloadBlobRef = BuildBlobRef(sanitizedPayload);
+            if (_captureInboundActivities)
+                await _inboundBuffer.Writer.WriteAsync(activity, ct);
+
+            return new TelegramWebhookResponse(200, null, activity, sanitizedPayload);
+        }
+    }
+
+    private async Task<EmitResult> SendCoreAsync(
+        ConversationReference to,
+        MessageContent content,
+        string? activityId,
+        TelegramCredentialSnapshot credential,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(to);
+        ArgumentNullException.ThrowIfNull(content);
+        EnsureReady();
+
+        var capability = _composer.Evaluate(content, ComposeContextFor(to));
+        if (capability == ComposeCapability.Unsupported)
+            return EmitResult.Failed("unsupported_content", "Telegram composer rejected the message.", capability: capability);
+
+        if (string.IsNullOrWhiteSpace(credential.BotToken))
+            return EmitResult.Failed("credential_resolution_failed", "Telegram bot credential could not be resolved.", capability: capability);
+
+        try
+        {
+            var effectiveContent = content.Clone();
+            if (effectiveContent.Disposition == MessageDisposition.Ephemeral)
+                effectiveContent.Disposition = MessageDisposition.Normal;
+
+            var payload = _composer.Compose(effectiveContent, ComposeContextFor(to));
+            TelegramConversationTarget target;
+            try
+            {
+                target = TelegramConversationTarget.ParseConversation(to);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Telegram conversation reference is invalid.");
+                return EmitResult.Failed("telegram_invalid_conversation", ex.Message, capability: capability);
+            }
+
+            var reportedCapability = capability == ComposeCapability.Exact ? payload.Capability : capability;
+
+            if (activityId is null)
+            {
+                if (payload.Attachment is null && string.IsNullOrWhiteSpace(payload.Text))
+                {
+                    return EmitResult.Failed(
+                        "telegram_empty_message",
+                        "Telegram text sends require non-empty message content.",
+                        capability: payload.Capability);
+                }
+
+                TelegramSentActivity sent;
+                if (payload.Attachment is null)
+                {
+                    sent = await SendMessageAsync(credential.BotToken, target.ChatId, payload.Text, payload.ReplyMarkupJson, ct);
+                }
+                else
+                {
+                    var attachment = await ResolveAttachmentAsync(payload.Attachment, ct);
+                    if (attachment is null)
+                    {
+                        return EmitResult.Failed(
+                            "attachment_unavailable",
+                            "Telegram attachment content could not be resolved.",
+                            capability: payload.Capability);
+                    }
+
+                    try
+                    {
+                        sent = payload.Attachment.Kind == AttachmentKind.Image
+                            ? await SendMediaAsync("sendPhoto", "photo", credential.BotToken, target.ChatId, attachment, payload.Text, payload.ReplyMarkupJson, ct)
+                            : await SendMediaAsync("sendDocument", "document", credential.BotToken, target.ChatId, attachment, payload.Text, payload.ReplyMarkupJson, ct);
+                    }
+                    finally
+                    {
+                        attachment.Content?.Dispose();
+                    }
+                }
+
+                return EmitResult.Sent(
+                    TelegramConversationTarget.BuildOutboundActivityId(sent.ChatId, sent.MessageId),
+                    reportedCapability);
+            }
+
+            if (string.IsNullOrWhiteSpace(payload.Text))
+            {
+                return EmitResult.Failed(
+                    "telegram_empty_message",
+                    "Telegram text updates require non-empty message content.",
+                    capability: reportedCapability);
+            }
+
+            if (payload.Attachment is not null)
+            {
+                return EmitResult.Failed(
+                    "telegram_edit_text_only",
+                    "Telegram edits are limited to text payloads in this adapter.",
+                    capability: ComposeCapability.Degraded);
+            }
+
+            var outboundActivity = TelegramConversationTarget.ParseOutboundActivityId(activityId);
+            if (target.ChatId != outboundActivity.ChatId)
+            {
+                return EmitResult.Failed(
+                    "telegram_activity_mismatch",
+                    "Telegram activity id does not belong to the supplied conversation.",
+                    capability: payload.Capability);
+            }
+
+            await EditMessageTextAsync(
+                credential.BotToken,
+                outboundActivity.ChatId,
+                outboundActivity.MessageId,
+                payload.Text,
+                payload.ReplyMarkupJson,
+                ct);
+
+            return EmitResult.Sent(
+                TelegramConversationTarget.BuildOutboundActivityId(outboundActivity.ChatId, outboundActivity.MessageId),
+                reportedCapability);
+        }
+        catch (TelegramApiException ex)
+        {
+            _logger.LogWarning(ex, "Telegram request failed.");
+            return EmitResult.Failed(ex.FailureCode, ex.Message, capability: capability);
+        }
     }
 
     private async Task RunLongPollingLoopAsync(CancellationToken ct)
     {
-        var offset = 0;
+        long? offset = null;
         while (!ct.IsCancellationRequested)
         {
-            string botToken;
+            TelegramCredentialSnapshot credential;
             try
             {
-                botToken = await ResolveBotTokenAsync(ct);
+                credential = await RefreshBotCredentialAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
             }
-            catch (TaskCanceledException) when (ct.IsCancellationRequested)
+
+            if (string.IsNullOrWhiteSpace(credential.BotToken))
             {
-                break;
-            }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogError(ex, "Telegram long polling stopped because bot credentials could not be resolved.");
+                _logger.LogError("Telegram long polling stopped because bot credentials could not be resolved.");
                 break;
             }
 
             try
             {
-                var updates = await _apiClient.GetUpdatesAsync(
-                    botToken,
-                    offset <= 0 ? null : offset,
-                    _options.LongPollingTimeoutSeconds,
-                    ct);
-
-                foreach (var update in updates.OrderBy(static update => update.Id))
+                var updates = await FetchUpdatesAsync(credential.BotToken, offset, ct);
+                foreach (var update in updates.OrderBy(GetUpdateId))
                 {
-                    offset = Math.Max(offset, update.Id + 1);
-                    if (_binding is null)
+                    var updateId = GetUpdateId(update);
+                    if (updateId.HasValue)
+                        offset = updateId.Value + 1;
+
+                    var activity = NormalizeUpdate(update, _binding!);
+                    if (activity is null || !_captureInboundActivities)
                         continue;
-                    await ProcessUpdateAsync(update, _binding, enqueue: true, ct);
+
+                    await _inboundBuffer.Writer.WriteAsync(activity, ct);
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
             }
-            catch (TaskCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (ApiRequestException ex) when (IsTerminalAuthFailure(ex))
+            catch (TelegramApiException ex) when (IsTerminalAuthFailure(ex))
             {
                 _logger.LogError(ex, "Telegram long polling stopped because bot authorization failed.");
                 break;
@@ -420,167 +428,232 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
         }
     }
 
-    private async Task<ChatActivity?> ProcessUpdateAsync(
-        Update update,
-        ChannelTransportBinding binding,
-        bool enqueue,
-        CancellationToken ct)
+    private ChatActivity? NormalizeUpdate(JsonElement update, ChannelTransportBinding binding)
     {
-        var activity = NormalizeUpdate(update, binding);
-        if (activity is null)
-            return null;
-
-        if (enqueue && _receiving)
-            await _inbound.Writer.WriteAsync(activity, ct);
-
-        return activity;
-    }
-
-    private ChatActivity? NormalizeUpdate(Update update, ChannelTransportBinding binding)
-    {
-        if (TryNormalizeMessage(update.Id, update.Message, binding, out var messageActivity))
-            return messageActivity;
-        if (TryNormalizeMessage(update.Id, update.ChannelPost, binding, out var channelActivity))
-            return channelActivity;
-        if (TryNormalizeMessage(update.Id, update.EditedMessage, binding, out var editedActivity))
-            return editedActivity;
-        if (TryNormalizeMessage(update.Id, update.EditedChannelPost, binding, out var editedChannelActivity))
-            return editedChannelActivity;
-        if (TryNormalizeCallback(update.Id, update.CallbackQuery, binding, out var callbackActivity))
-            return callbackActivity;
+        var updateId = GetUpdateId(update);
+        if (update.TryGetProperty("message", out var message))
+            return ParseMessage(updateId, message, binding);
+        if (update.TryGetProperty("edited_message", out var editedMessage))
+            return ParseMessage(updateId, editedMessage, binding);
+        if (update.TryGetProperty("channel_post", out var channelPost))
+            return ParseMessage(updateId, channelPost, binding);
+        if (update.TryGetProperty("edited_channel_post", out var editedChannelPost))
+            return ParseMessage(updateId, editedChannelPost, binding);
+        if (update.TryGetProperty("callback_query", out var callback))
+            return ParseCallback(updateId, callback, binding);
 
         return null;
     }
 
-    private bool TryNormalizeMessage(
-        int updateId,
-        Message? message,
-        ChannelTransportBinding binding,
-        out ChatActivity? activity)
+    private ChatActivity? ParseMessage(long? updateId, JsonElement message, ChannelTransportBinding binding)
     {
-        activity = null;
-        if (message is null)
-            return false;
-        if (message.From?.IsBot == true)
-            return false;
+        if (TryReadNestedBoolean(message, "from", "is_bot") == true)
+            return null;
 
-        var text = !string.IsNullOrWhiteSpace(message.Text)
-            ? message.Text
-            : message.Caption;
-        if (string.IsNullOrWhiteSpace(text))
-            return false;
+        var chatId = TryReadNestedInt64(message, "chat", "id");
+        if (!chatId.HasValue)
+            return null;
 
-        var conversation = CreateConversation(binding.Bot.Bot, message.Chat);
-        var senderId = message.From is not null
-            ? message.From.Id.ToString()
-            : message.SenderChat?.Id.ToString() ?? message.Chat.Id.ToString();
-        var senderName = message.From?.Username
-                         ?? message.From?.FirstName
-                         ?? message.SenderChat?.Title
-                         ?? message.Chat.Title
-                         ?? senderId;
-        activity = new ChatActivity
+        var text = TryReadString(message, "text") ?? TryReadString(message, "caption") ?? string.Empty;
+        var attachments = ExtractAttachments(message);
+        if (string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
+            return null;
+
+        var senderId = TryReadNestedInt64(message, "from", "id")?.ToString(CultureInfo.InvariantCulture)
+            ?? TryReadNestedInt64(message, "sender_chat", "id")?.ToString(CultureInfo.InvariantCulture)
+            ?? chatId.Value.ToString(CultureInfo.InvariantCulture);
+        var senderName = TryReadNestedString(message, "from", "username")
+            ?? TryReadNestedString(message, "from", "first_name")
+            ?? TryReadNestedString(message, "sender_chat", "title")
+            ?? TryReadNestedString(message, "chat", "title")
+            ?? senderId;
+
+        var content = new MessageContent
         {
-            Id = $"telegram:update:{updateId}",
+            Text = text,
+            Disposition = MessageDisposition.Normal,
+        };
+        content.Attachments.AddRange(attachments);
+
+        return new ChatActivity
+        {
+            Id = ChatActivity.BuildActivityId(Channel, BuildDeliveryKey(updateId, $"message:{chatId}:{TryReadInt32(message, "message_id")}")),
             Type = ActivityType.Message,
             ChannelId = Channel.Clone(),
             Bot = binding.Bot.Bot.Clone(),
-            Conversation = conversation,
+            Conversation = CreateConversation(binding.Bot.Bot, message),
             From = new ParticipantRef
             {
                 CanonicalId = senderId,
                 DisplayName = senderName,
             },
-            Timestamp = Timestamp.FromDateTime(message.Date.ToUniversalTime()),
-            Content = new MessageContent
-            {
-                Text = text,
-                Disposition = MessageDisposition.Normal,
-            },
-            ReplyToActivityId = message.ReplyToMessage is not null
-                ? TelegramConversationTarget.BuildActivityId(message.Chat.Id, message.ReplyToMessage.MessageId)
-                : string.Empty,
-            RawPayloadBlobRef = string.Empty,
+            Timestamp = Timestamp.FromDateTimeOffset(ParseTimestamp(message)),
+            Content = content,
+            ReplyToActivityId = BuildReplyToActivityId(message, chatId.Value),
         };
-        return true;
     }
 
-    private bool TryNormalizeCallback(
-        int updateId,
-        CallbackQuery? callback,
-        ChannelTransportBinding binding,
-        out ChatActivity? activity)
+    private ChatActivity? ParseCallback(long? updateId, JsonElement callback, ChannelTransportBinding binding)
     {
-        activity = null;
-        if (callback?.Message is null)
-            return false;
+        if (!callback.TryGetProperty("message", out var message))
+            return null;
 
-        var data = string.IsNullOrWhiteSpace(callback.Data) ? callback.GameShortName : callback.Data;
+        var chatId = TryReadNestedInt64(message, "chat", "id");
+        var messageId = TryReadInt32(message, "message_id");
+        if (!chatId.HasValue || !messageId.HasValue)
+            return null;
+
+        var data = TryReadString(callback, "data") ?? TryReadString(callback, "game_short_name");
         if (string.IsNullOrWhiteSpace(data))
-            return false;
+            return null;
 
-        var conversation = CreateConversation(binding.Bot.Bot, callback.Message.Chat);
-        activity = new ChatActivity
+        var sourceMessageId = TelegramConversationTarget.BuildOutboundActivityId(chatId.Value, messageId.Value);
+        return new ChatActivity
         {
-            Id = $"telegram:update:{updateId}",
+            Id = ChatActivity.BuildActivityId(Channel, BuildDeliveryKey(updateId, $"callback:{TryReadString(callback, "id") ?? sourceMessageId}")),
             Type = ActivityType.CardAction,
             ChannelId = Channel.Clone(),
             Bot = binding.Bot.Bot.Clone(),
-            Conversation = conversation,
+            Conversation = CreateConversation(binding.Bot.Bot, message),
             From = new ParticipantRef
             {
-                CanonicalId = callback.From.Id.ToString(),
-                DisplayName = callback.From.Username ?? callback.From.FirstName ?? callback.From.Id.ToString(),
+                CanonicalId = TryReadNestedInt64(callback, "from", "id")?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                DisplayName = TryReadNestedString(callback, "from", "username")
+                    ?? TryReadNestedString(callback, "from", "first_name")
+                    ?? TryReadNestedInt64(callback, "from", "id")?.ToString(CultureInfo.InvariantCulture)
+                    ?? string.Empty,
             },
-            Timestamp = Timestamp.FromDateTime(callback.Message.Date.ToUniversalTime()),
+            Timestamp = Timestamp.FromDateTimeOffset(ParseTimestamp(message)),
             Content = new MessageContent
             {
-                Text = data,
                 Disposition = MessageDisposition.Normal,
+                CardAction = new CardActionSubmission
+                {
+                    ActionId = data,
+                    SubmittedValue = data,
+                    SourceMessageId = sourceMessageId,
+                },
             },
-            ReplyToActivityId = TelegramConversationTarget.BuildActivityId(callback.Message.Chat.Id, callback.Message.MessageId),
-            RawPayloadBlobRef = string.Empty,
+            ReplyToActivityId = sourceMessageId,
         };
-        return true;
     }
 
-    private static ConversationReference CreateConversation(BotInstanceId bot, Chat chat) =>
-        chat.Type switch
-        {
-            ChatType.Private => ConversationReference.TelegramPrivate(bot, chat.Id.ToString()),
-            ChatType.Group => ConversationReference.TelegramGroup(bot, chat.Id.ToString()),
-            ChatType.Supergroup => ConversationReference.TelegramGroup(bot, chat.Id.ToString(), isSupergroup: true),
-            ChatType.Channel => ConversationReference.TelegramChannel(bot, chat.Id.ToString()),
-            _ => ConversationReference.TelegramPrivate(bot, chat.Id.ToString()),
-        };
-
-    private bool ValidateWebhookSecret(string? secretToken, ChannelTransportBinding binding)
+    private static List<AttachmentRef> ExtractAttachments(JsonElement message)
     {
-        if (string.IsNullOrWhiteSpace(binding.VerificationToken))
+        var attachments = new List<AttachmentRef>();
+
+        if (message.TryGetProperty("photo", out var photos) && photos.ValueKind == JsonValueKind.Array)
+        {
+            var lastPhoto = photos.EnumerateArray().LastOrDefault();
+            if (lastPhoto.ValueKind != JsonValueKind.Undefined && TryReadString(lastPhoto, "file_id") is { Length: > 0 } photoId)
+            {
+                attachments.Add(new AttachmentRef
+                {
+                    AttachmentId = photoId,
+                    Kind = AttachmentKind.Image,
+                    Name = "photo.jpg",
+                    ContentType = "image/jpeg",
+                    SizeBytes = TryReadInt64(lastPhoto, "file_size") ?? 0,
+                });
+            }
+        }
+
+        if (message.TryGetProperty("document", out var document) && TryReadString(document, "file_id") is { Length: > 0 } documentId)
+        {
+            attachments.Add(new AttachmentRef
+            {
+                AttachmentId = documentId,
+                Kind = AttachmentKind.File,
+                Name = TryReadString(document, "file_name") ?? "document.bin",
+                ContentType = TryReadString(document, "mime_type") ?? "application/octet-stream",
+                SizeBytes = TryReadInt64(document, "file_size") ?? 0,
+            });
+        }
+
+        if (message.TryGetProperty("audio", out var audio) && TryReadString(audio, "file_id") is { Length: > 0 } audioId)
+        {
+            attachments.Add(new AttachmentRef
+            {
+                AttachmentId = audioId,
+                Kind = AttachmentKind.Audio,
+                Name = TryReadString(audio, "file_name") ?? "audio.bin",
+                ContentType = TryReadString(audio, "mime_type") ?? "audio/mpeg",
+                SizeBytes = TryReadInt64(audio, "file_size") ?? 0,
+            });
+        }
+
+        if (message.TryGetProperty("video", out var video) && TryReadString(video, "file_id") is { Length: > 0 } videoId)
+        {
+            attachments.Add(new AttachmentRef
+            {
+                AttachmentId = videoId,
+                Kind = AttachmentKind.Video,
+                Name = TryReadString(video, "file_name") ?? "video.mp4",
+                ContentType = TryReadString(video, "mime_type") ?? "video/mp4",
+                SizeBytes = TryReadInt64(video, "file_size") ?? 0,
+            });
+        }
+
+        if (message.TryGetProperty("voice", out var voice) && TryReadString(voice, "file_id") is { Length: > 0 } voiceId)
+        {
+            attachments.Add(new AttachmentRef
+            {
+                AttachmentId = voiceId,
+                Kind = AttachmentKind.Audio,
+                Name = "voice.ogg",
+                ContentType = TryReadString(voice, "mime_type") ?? "audio/ogg",
+                SizeBytes = TryReadInt64(voice, "file_size") ?? 0,
+            });
+        }
+
+        return attachments;
+    }
+
+    private static ConversationReference CreateConversation(BotInstanceId bot, JsonElement message)
+    {
+        var chatType = TryReadNestedString(message, "chat", "type");
+        var chatId = TryReadNestedInt64(message, "chat", "id")?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+
+        return chatType switch
+        {
+            "group" => ConversationReference.TelegramGroup(bot, chatId),
+            "supergroup" => ConversationReference.TelegramGroup(bot, chatId, isSupergroup: true),
+            "channel" => ConversationReference.TelegramChannel(bot, chatId),
+            _ => ConversationReference.TelegramPrivate(bot, chatId),
+        };
+    }
+
+    private bool ValidateWebhookSecret(IReadOnlyDictionary<string, string>? headers)
+    {
+        if (_binding is null || string.IsNullOrWhiteSpace(_binding.VerificationToken))
             return true;
 
-        if (string.IsNullOrEmpty(secretToken))
+        if (!TryGetHeader(headers, TelegramChannelDefaults.SecretHeaderName, out var providedSecret) ||
+            string.IsNullOrWhiteSpace(providedSecret))
         {
             _logger.LogWarning("Telegram webhook secret token mismatch.");
             return false;
         }
 
-        var expected = Encoding.UTF8.GetBytes(binding.VerificationToken);
-        var actual = Encoding.UTF8.GetBytes(secretToken);
-        if (expected.Length == actual.Length && CryptographicOperations.FixedTimeEquals(expected, actual))
+        var expectedHash = SHA256.HashData(Encoding.UTF8.GetBytes(_binding.VerificationToken));
+        var providedHash = SHA256.HashData(Encoding.UTF8.GetBytes(providedSecret.Trim()));
+        if (CryptographicOperations.FixedTimeEquals(expectedHash, providedHash))
             return true;
 
         _logger.LogWarning("Telegram webhook secret token mismatch.");
         return false;
     }
 
-    private async Task<string> ResolveBotTokenAsync(CancellationToken ct)
+    private async Task<TelegramCredentialSnapshot> RefreshBotCredentialAsync(CancellationToken ct)
     {
-        if (_binding is null)
-            throw new InvalidOperationException("Adapter binding is unavailable.");
+        EnsureInitialized();
+        var secret = await _credentialProvider.ResolveBotCredentialAsync(_binding!, ct);
+        var refreshed = TelegramCredentialSnapshot.Parse(secret);
+        if (string.IsNullOrWhiteSpace(refreshed.BotToken))
+            return _botCredential;
 
-        return await _credentialProvider.ResolveBotCredentialAsync(_binding, ct)
-            ?? throw new InvalidOperationException("Telegram bot credential could not be resolved.");
+        _botCredential = refreshed;
+        return refreshed;
     }
 
     private async Task<TelegramAttachmentContent?> ResolveAttachmentAsync(AttachmentRef attachment, CancellationToken ct)
@@ -591,39 +664,391 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
         return await _attachmentResolver.ResolveAsync(attachment, ct);
     }
 
+    private async Task<IReadOnlyList<JsonElement>> FetchUpdatesAsync(
+        string botToken,
+        long? offset,
+        CancellationToken ct)
+    {
+        var body = new JsonObject
+        {
+            ["timeout"] = _options.LongPollingTimeoutSeconds,
+        };
+        if (offset.HasValue)
+            body["offset"] = offset.Value;
+
+        body["allowed_updates"] = new JsonArray(TelegramChannelDefaults.AllowedUpdateTypes.Select(static updateType => (JsonNode?)updateType).ToArray());
+
+        var response = await SendTelegramRequestAsync(botToken, "getUpdates", BuildJsonContent(body), ct);
+        if (!response.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array)
+            return Array.Empty<JsonElement>();
+
+        return result.EnumerateArray().Select(static item => item.Clone()).ToArray();
+    }
+
+    private async Task<TelegramSentActivity> SendMessageAsync(
+        string botToken,
+        long chatId,
+        string text,
+        string? replyMarkupJson,
+        CancellationToken ct)
+    {
+        var body = new JsonObject
+        {
+            ["chat_id"] = chatId,
+            ["text"] = text,
+        };
+        AppendReplyMarkup(body, replyMarkupJson);
+
+        var response = await SendTelegramRequestAsync(botToken, "sendMessage", BuildJsonContent(body), ct);
+        return ParseSentActivity(response, chatId);
+    }
+
+    private async Task<TelegramSentActivity> SendMediaAsync(
+        string methodName,
+        string mediaFieldName,
+        string botToken,
+        long chatId,
+        TelegramAttachmentContent attachment,
+        string? caption,
+        string? replyMarkupJson,
+        CancellationToken ct)
+    {
+        HttpContent content;
+        if (!string.IsNullOrWhiteSpace(attachment.ExternalUrl) || !string.IsNullOrWhiteSpace(attachment.TelegramFileId))
+        {
+            var body = new JsonObject
+            {
+                ["chat_id"] = chatId,
+                [mediaFieldName] = !string.IsNullOrWhiteSpace(attachment.TelegramFileId)
+                    ? attachment.TelegramFileId
+                    : attachment.ExternalUrl,
+            };
+            if (!string.IsNullOrWhiteSpace(caption))
+                body["caption"] = caption;
+            AppendReplyMarkup(body, replyMarkupJson);
+            content = BuildJsonContent(body);
+        }
+        else
+        {
+            if (attachment.Content is null)
+                throw new InvalidOperationException("Telegram attachment must provide content, external URL, or file id.");
+
+            var multipart = new MultipartFormDataContent();
+            multipart.Add(new StringContent(chatId.ToString(CultureInfo.InvariantCulture)), "chat_id");
+            if (!string.IsNullOrWhiteSpace(caption))
+                multipart.Add(new StringContent(caption), "caption");
+            if (!string.IsNullOrWhiteSpace(replyMarkupJson))
+                multipart.Add(new StringContent(replyMarkupJson), "reply_markup");
+
+            var fileContent = new StreamContent(attachment.Content);
+            if (!string.IsNullOrWhiteSpace(attachment.ContentType))
+                fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse(attachment.ContentType);
+            multipart.Add(fileContent, mediaFieldName, string.IsNullOrWhiteSpace(attachment.FileName) ? "attachment.bin" : attachment.FileName);
+            content = multipart;
+        }
+
+        var response = await SendTelegramRequestAsync(botToken, methodName, content, ct);
+        return ParseSentActivity(response, chatId);
+    }
+
+    private async Task EditMessageTextAsync(
+        string botToken,
+        long chatId,
+        int messageId,
+        string text,
+        string? replyMarkupJson,
+        CancellationToken ct)
+    {
+        var body = new JsonObject
+        {
+            ["chat_id"] = chatId,
+            ["message_id"] = messageId,
+            ["text"] = text,
+        };
+        AppendReplyMarkup(body, replyMarkupJson);
+
+        await SendTelegramRequestAsync(botToken, "editMessageText", BuildJsonContent(body), ct);
+    }
+
+    private async Task DeleteMessageAsync(
+        string botToken,
+        long chatId,
+        int messageId,
+        CancellationToken ct)
+    {
+        var body = new JsonObject
+        {
+            ["chat_id"] = chatId,
+            ["message_id"] = messageId,
+        };
+
+        await SendTelegramRequestAsync(botToken, "deleteMessage", BuildJsonContent(body), ct);
+    }
+
+    private async Task<JsonElement> SendTelegramRequestAsync(
+        string botToken,
+        string methodName,
+        HttpContent content,
+        CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/bot{botToken}/{methodName}")
+        {
+            Content = content,
+        };
+        using var response = await _httpClient.SendAsync(request, ct);
+        var responseText = response.Content is null ? string.Empty : await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+            throw CreateApiException((int)response.StatusCode, responseText);
+
+        if (string.IsNullOrWhiteSpace(responseText))
+            return default;
+
+        using var document = JsonDocument.Parse(responseText);
+        var root = document.RootElement.Clone();
+        if (root.TryGetProperty("ok", out var okProperty) &&
+            okProperty.ValueKind == JsonValueKind.False)
+        {
+            throw CreateApiException(null, responseText);
+        }
+
+        return root;
+    }
+
+    private ComposeContext ComposeContextFor(ConversationReference to) => new()
+    {
+        Conversation = to.Clone(),
+        Capabilities = Capabilities.Clone(),
+    };
+
     private void EnsureInitialized()
     {
         if (!_initialized || _binding is null)
-            throw new InvalidOperationException("Adapter must be initialized before startup.");
+            throw new InvalidOperationException("TelegramChannelAdapter.InitializeAsync must run first.");
     }
 
     private void EnsureReady()
     {
         EnsureInitialized();
-        if (!_receiving)
-            throw new InvalidOperationException("Adapter must start receiving before outbound operations.");
+        if (!_receiving || _stopped)
+            throw new InvalidOperationException("TelegramChannelAdapter must be started before use.");
     }
 
-    private static string SanitizeError(string message) =>
-        string.IsNullOrWhiteSpace(message) ? "telegram_error" : message.Replace(Environment.NewLine, " ", StringComparison.Ordinal).Trim();
+    private static void AppendReplyMarkup(JsonObject body, string? replyMarkupJson)
+    {
+        if (string.IsNullOrWhiteSpace(replyMarkupJson))
+            return;
 
-    private static bool IsTerminalAuthFailure(ApiRequestException ex) => ex.ErrorCode is 401 or 403;
+        body["reply_markup"] = JsonNode.Parse(replyMarkupJson);
+    }
+
+    private static HttpContent BuildJsonContent(JsonObject body) =>
+        new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+
+    private static TelegramSentActivity ParseSentActivity(JsonElement response, long fallbackChatId)
+    {
+        var chatId = TryReadNestedInt64(response, "result", "chat", "id") ?? fallbackChatId;
+        var messageId = TryReadNestedInt32(response, "result", "message_id")
+            ?? throw new TelegramApiException("telegram_missing_message_id", "Telegram response did not include a message id.", null);
+        return new TelegramSentActivity(chatId, messageId);
+    }
+
+    private static string BuildDeliveryKey(long? updateId, string fallback) =>
+        updateId.HasValue ? $"update:{updateId.Value}" : fallback;
+
+    private static string BuildReplyToActivityId(JsonElement message, long chatId)
+    {
+        var replyMessageId = TryReadNestedInt32(message, "reply_to_message", "message_id");
+        return replyMessageId.HasValue
+            ? TelegramConversationTarget.BuildOutboundActivityId(chatId, replyMessageId.Value)
+            : string.Empty;
+    }
+
+    private static DateTimeOffset ParseTimestamp(JsonElement message)
+    {
+        var unixSeconds = TryReadInt64(message, "date");
+        return unixSeconds.HasValue
+            ? DateTimeOffset.FromUnixTimeSeconds(unixSeconds.Value)
+            : DateTimeOffset.UnixEpoch;
+    }
+
+    private static long? GetUpdateId(JsonElement update) => TryReadInt64(update, "update_id");
+
+    private static bool IsTerminalAuthFailure(TelegramApiException ex) => ex.ErrorCode is 401 or 403;
+
+    private static string BuildBlobRef(byte[] sanitizedPayload)
+    {
+        var hash = SHA256.HashData(sanitizedPayload);
+        return $"telegram-raw:{Convert.ToHexString(hash).ToLowerInvariant()}";
+    }
+
+    private static TelegramApiException CreateApiException(int? statusCode, string body)
+    {
+        var errorCode = ParsePlatformErrorCode(body) ?? statusCode;
+        return new TelegramApiException(
+            MapErrorCode(statusCode, body),
+            BuildSanitizedError(statusCode, body),
+            errorCode);
+    }
+
+    private static int? ParsePlatformErrorCode(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return TryReadInt32(document.RootElement, "error_code");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string MapErrorCode(int? statusCode, string body)
+    {
+        var platformCode = ParsePlatformErrorCode(body);
+        if (platformCode.HasValue)
+            return $"telegram_{platformCode.Value}";
+
+        return statusCode.HasValue
+            ? $"http_{statusCode.Value}"
+            : "telegram_request_failed";
+    }
+
+    private static string BuildSanitizedError(int? statusCode, string body)
+    {
+        if (!string.IsNullOrWhiteSpace(body))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(body);
+                var description = TryReadString(document.RootElement, "description") ?? TryReadString(document.RootElement, "message");
+                if (!string.IsNullOrWhiteSpace(description))
+                    return statusCode.HasValue ? $"{statusCode.Value} {description}" : description;
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return statusCode.HasValue
+            ? $"{statusCode.Value} telegram request failed"
+            : "telegram request failed";
+    }
+
+    private static bool TryGetHeader(IReadOnlyDictionary<string, string>? headers, string headerName, out string value)
+    {
+        value = string.Empty;
+        if (headers is null)
+            return false;
+
+        if (headers.TryGetValue(headerName, out value!))
+            return true;
+
+        foreach (var header in headers)
+        {
+            if (string.Equals(header.Key, headerName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = header.Value;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? TryReadString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static int? TryReadInt32(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var value)
+            ? value
+            : null;
+
+    private static long? TryReadInt64(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var value)
+            ? value
+            : null;
+
+    private static bool? TryReadNestedBoolean(JsonElement element, params string[] segments)
+    {
+        var current = element;
+        foreach (var segment in segments)
+        {
+            if (!current.TryGetProperty(segment, out current))
+                return null;
+        }
+
+        return current.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
+
+    private static string? TryReadNestedString(JsonElement element, params string[] segments)
+    {
+        var current = element;
+        foreach (var segment in segments)
+        {
+            if (!current.TryGetProperty(segment, out current))
+                return null;
+        }
+
+        return current.ValueKind == JsonValueKind.String
+            ? current.GetString()
+            : null;
+    }
+
+    private static long? TryReadNestedInt64(JsonElement element, params string[] segments)
+    {
+        var current = element;
+        foreach (var segment in segments)
+        {
+            if (!current.TryGetProperty(segment, out current))
+                return null;
+        }
+
+        return current.ValueKind == JsonValueKind.Number && current.TryGetInt64(out var value)
+            ? value
+            : null;
+    }
+
+    private static int? TryReadNestedInt32(JsonElement element, params string[] segments)
+    {
+        var current = element;
+        foreach (var segment in segments)
+        {
+            if (!current.TryGetProperty(segment, out current))
+                return null;
+        }
+
+        return current.ValueKind == JsonValueKind.Number && current.TryGetInt32(out var value)
+            ? value
+            : null;
+    }
 
     private readonly record struct TelegramConversationTarget(long ChatId, int MessageId)
     {
-        public static TelegramConversationTarget Parse(ConversationReference reference)
+        public static TelegramConversationTarget ParseConversation(ConversationReference reference)
         {
             ArgumentNullException.ThrowIfNull(reference);
-            if (!string.Equals(reference.Channel.Value, "telegram", StringComparison.Ordinal))
+            if (!string.Equals(reference.Channel.Value, TelegramChannel.Value, StringComparison.Ordinal))
                 throw new InvalidOperationException("Conversation reference does not target Telegram.");
 
             var segments = reference.CanonicalKey.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (segments.Length < 3 || !long.TryParse(segments[^1], out var chatId))
                 throw new InvalidOperationException("Telegram canonical key must end with the numeric chat id.");
+
             return new TelegramConversationTarget(chatId, 0);
         }
 
-        public static TelegramConversationTarget ParseActivityId(string activityId)
+        public static TelegramConversationTarget ParseOutboundActivityId(string activityId)
         {
             ArgumentNullException.ThrowIfNull(activityId);
             var parts = activityId.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -639,157 +1064,22 @@ public sealed class TelegramChannelAdapter : IChannelTransport, IChannelOutbound
             throw new InvalidOperationException("Telegram activity id is invalid.");
         }
 
-        public static string BuildActivityId(long chatId, int messageId) => $"telegram:message:{chatId}:{messageId}";
+        public static string BuildOutboundActivityId(long chatId, int messageId) => $"telegram:message:{chatId}:{messageId}";
     }
 
-    private sealed class TelegramStreamingHandle : StreamingHandle
+    private readonly record struct TelegramSentActivity(long ChatId, int MessageId);
+
+    private sealed class TelegramApiException : Exception
     {
-        private readonly TelegramChannelAdapter _adapter;
-        private readonly ConversationReference _reference;
-        private readonly string _activityId;
-        private readonly TimeProvider _timeProvider;
-        private readonly TimeSpan _debounce;
-        private readonly SemaphoreSlim _writeGate = new(1, 1);
-        private readonly HashSet<long> _acceptedSequenceNumbers = [];
-        private readonly Dictionary<long, string> _chunks = new();
-        private string _currentText;
-        private bool _completed;
-        private CancellationTokenSource? _flushCts;
-        private long _flushGeneration;
-
-        public TelegramStreamingHandle(
-            TelegramChannelAdapter adapter,
-            ConversationReference reference,
-            string activityId,
-            string currentText,
-            TimeProvider timeProvider,
-            TimeSpan debounce)
+        public TelegramApiException(string failureCode, string message, int? errorCode)
+            : base(message)
         {
-            _adapter = adapter;
-            _reference = reference;
-            _activityId = activityId;
-            _currentText = currentText;
-            _timeProvider = timeProvider;
-            _debounce = debounce;
+            FailureCode = failureCode;
+            ErrorCode = errorCode;
         }
 
-        public override async Task AppendAsync(StreamChunk chunk)
-        {
-            ArgumentNullException.ThrowIfNull(chunk);
+        public string FailureCode { get; }
 
-            CancellationTokenSource? previousFlush = null;
-            await _writeGate.WaitAsync(CancellationToken.None);
-            try
-            {
-                if (_completed || !_acceptedSequenceNumbers.Add(chunk.SequenceNumber))
-                    return;
-
-                _chunks[chunk.SequenceNumber] = chunk.Delta;
-                previousFlush = _flushCts;
-                _flushCts = new CancellationTokenSource();
-                _ = FlushLaterAsync(++_flushGeneration, _flushCts.Token);
-            }
-            finally
-            {
-                _writeGate.Release();
-            }
-
-            CancelPendingFlush(previousFlush);
-        }
-
-        public override async Task CompleteAsync(MessageContent final)
-        {
-            ArgumentNullException.ThrowIfNull(final);
-
-            Task? finalWrite = null;
-            await _writeGate.WaitAsync(CancellationToken.None);
-            try
-            {
-                if (_completed)
-                    return;
-
-                _completed = true;
-                CancelPendingFlush(_flushCts);
-                _flushCts = null;
-                finalWrite = _adapter.UpdateAsync(_reference, _activityId, final, CancellationToken.None);
-                await finalWrite;
-            }
-            finally
-            {
-                _writeGate.Release();
-            }
-        }
-
-        public override async ValueTask DisposeAsync()
-        {
-            Task? interruptedWrite = null;
-            await _writeGate.WaitAsync(CancellationToken.None);
-            try
-            {
-                if (_completed)
-                    return;
-
-                _completed = true;
-                CancelPendingFlush(_flushCts);
-                _flushCts = null;
-                var interrupted = new MessageContent
-                {
-                    Text = string.IsNullOrWhiteSpace(_currentText) ? "(interrupted)" : $"{_currentText}\n\n(interrupted)",
-                    Disposition = MessageDisposition.Normal,
-                };
-                interruptedWrite = _adapter.UpdateAsync(_reference, _activityId, interrupted, CancellationToken.None);
-                await interruptedWrite;
-            }
-            catch
-            {
-            }
-            finally
-            {
-                _writeGate.Release();
-            }
-        }
-
-        private async Task FlushLaterAsync(long generation, CancellationToken ct)
-        {
-            try
-            {
-                if (_debounce > TimeSpan.Zero)
-                    await Task.Delay(_debounce, _timeProvider, ct);
-
-                await _writeGate.WaitAsync(ct);
-                try
-                {
-                    if (_completed || ct.IsCancellationRequested || generation != _flushGeneration || _chunks.Count == 0)
-                        return;
-
-                    _currentText += string.Concat(_chunks.OrderBy(static pair => pair.Key).Select(static pair => pair.Value));
-                    _chunks.Clear();
-                    await _adapter.UpdateAsync(_reference, _activityId, new MessageContent
-                    {
-                        Text = _currentText,
-                        Disposition = MessageDisposition.Normal,
-                    }, ct);
-                }
-                finally
-                {
-                    _writeGate.Release();
-                }
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch
-            {
-            }
-        }
-
-        private static void CancelPendingFlush(CancellationTokenSource? flushCts)
-        {
-            if (flushCts is null)
-                return;
-
-            flushCts.Cancel();
-            flushCts.Dispose();
-        }
+        public int? ErrorCode { get; }
     }
 }
