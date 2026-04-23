@@ -378,6 +378,20 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         lines.Add($"\nRun: `{request.RunId}`");
         lines.Add($"Step: `{request.StepId}`");
+        lines.Add($"Actor: `{request.ActorId}`");
+
+        lines.Add("\nFallback commands if card actions are unavailable:");
+        if (SupportsApproveReject(request))
+        {
+            lines.Add($"- Approve: `{BuildApproveCommand(request)}`");
+            lines.Add($"- Approve with edits: `{BuildApproveCommand(request, "edited_content=\\\"final approved content\\\"")}`");
+            lines.Add($"- Reject: `{BuildRejectCommand(request, "feedback=\\\"what should change\\\"")}`");
+        }
+        else
+        {
+            lines.Add($"- Submit: `{BuildSubmitCommand(request, "user_input=\\\"your response here\\\"")}`");
+        }
+
         return string.Concat(lines);
     }
 

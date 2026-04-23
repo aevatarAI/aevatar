@@ -241,9 +241,23 @@ public sealed class FeishuCardHumanInteractionPortTests
         var form = document.RootElement.GetProperty("body").GetProperty("elements")[1];
         form.GetProperty("tag").GetString().Should().Be("form");
         var formElements = form.GetProperty("elements");
+        document.RootElement.GetProperty("body").GetProperty("elements")[0].GetProperty("content").GetString()
+            .Should().Contain("/submit actor_id=workflow-actor-2 run_id=run-2 step_id=input-1");
         formElements[0].GetProperty("name").GetString().Should().Be("user_input");
         formElements[1].GetProperty("text").GetProperty("content").GetString().Should().Be("Submit");
         formElements[1].GetProperty("value").GetProperty("run_id").GetString().Should().Be("run-2");
+    }
+
+    [Fact]
+    public void BuildCardJson_ShouldRenderFallbackCommands_ForHumanApproval()
+    {
+        var cardJson = FeishuCardHumanInteractionPort.BuildCardJson(BuildApprovalRequest());
+
+        using var document = JsonDocument.Parse(cardJson);
+        var markdown = document.RootElement.GetProperty("body").GetProperty("elements")[0].GetProperty("content").GetString();
+        markdown.Should().Contain("Actor: `workflow-actor-1`");
+        markdown.Should().Contain("/approve actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1");
+        markdown.Should().Contain("/reject actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1");
     }
 
     [Fact]

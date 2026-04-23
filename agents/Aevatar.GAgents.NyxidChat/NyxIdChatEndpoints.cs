@@ -794,7 +794,7 @@ public static class NyxIdChatEndpoints
                 return Results.BadRequest(new { error = "missing_relay_payload" });
             if (string.IsNullOrWhiteSpace(message.MessageId))
                 return Results.BadRequest(new { error = "missing_message_id" });
-            var contentType = NormalizeRelayContentType(message.Content?.Type);
+            var contentType = GetRelayContentType(message.Content);
             var contentText = NormalizeOptional(message.Content?.Text);
             if (contentText is null)
                 return Results.Accepted(value: new { status = "ignored", reason = "empty_text" });
@@ -1247,7 +1247,7 @@ public static class NyxIdChatEndpoints
         command = null;
 
         if (!string.Equals(
-                NormalizeRelayContentType(message.Content?.Type),
+                GetRelayContentType(message.Content),
                 RelayCardActionContentType,
                 StringComparison.Ordinal))
         {
@@ -1428,6 +1428,15 @@ public static class NyxIdChatEndpoints
         return null;
     }
 
+    private static string GetRelayContentType(RelayContent? content)
+    {
+        var normalizedContentType = NormalizeRelayContentType(content?.ContentType);
+        if (!string.IsNullOrWhiteSpace(normalizedContentType))
+            return normalizedContentType;
+
+        return NormalizeRelayContentType(content?.Type);
+    }
+
     private static string NormalizeRelayContentType(string? contentType) =>
         NormalizeOptional(contentType)?.ToLowerInvariant() ?? string.Empty;
 
@@ -1480,6 +1489,7 @@ public static class NyxIdChatEndpoints
 
     private sealed class RelayContent
     {
+        public string? ContentType { get; set; }
         public string? Type { get; set; }
         public string? Text { get; set; }
     }
