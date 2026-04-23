@@ -1,8 +1,11 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.Configuration;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -14,21 +17,46 @@ public sealed class ServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
 
-        var act = () => services.AddChannelRuntime();
+        var result = services.AddChannelRuntime();
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
 
-        act.Should().NotThrow();
+        result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IAevatarSecretsStore));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) &&
+            descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IPlatformAdapter) &&
-            descriptor.ImplementationType == typeof(LarkPlatformAdapter));
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
+            .Should().Be(0);
+        services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
             .Should().Be(1);
+    }
+
+    [Fact]
+    public void AddChannelRuntime_RegistersLarkInteractiveReplyProducer_SoDispatcherCanFindIt()
+    {
+        var services = new ServiceCollection();
+
+        services.AddChannelRuntime();
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
+
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IInteractiveReplyDispatcher));
+        provider.GetRequiredService<IInteractiveReplyCollector>().Should().NotBeNull();
+        registry.GetNativeProducer(ChannelId.From("lark")).Should().BeOfType<LarkChannelNativeMessageProducer>();
+        registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
     }
 
     [Fact]
@@ -43,16 +71,26 @@ public sealed class ServiceCollectionExtensionsTests
             .Build();
         var services = new ServiceCollection();
 
-        var act = () => services.AddChannelRuntime(configuration);
+        var result = services.AddChannelRuntime(configuration);
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
 
-        act.Should().NotThrow();
+        result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IAevatarSecretsStore));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) &&
+            descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
     }

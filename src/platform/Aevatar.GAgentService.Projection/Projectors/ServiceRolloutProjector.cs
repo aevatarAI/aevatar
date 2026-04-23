@@ -109,6 +109,13 @@ public sealed class ServiceRolloutProjector
             return;
         }
 
+        if (payload.Is(ServiceRolloutCommandObservedEvent.Descriptor))
+        {
+            var evt = payload.Unpack<ServiceRolloutCommandObservedEvent>();
+            await StampVersionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, ct);
+            return;
+        }
+
         if (payload.Is(ServiceRolloutResumedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutResumedEvent>();
@@ -179,6 +186,27 @@ public sealed class ServiceRolloutProjector
         readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
         readModel.LastEventId = eventId;
         readModel.UpdatedAt = observedAt;
+        await _storeDispatcher.UpsertAsync(readModel, ct);
+    }
+
+    private async Task StampVersionAsync(
+        string actorId,
+        ServiceIdentity? identity,
+        string eventId,
+        long stateVersion,
+        CancellationToken ct)
+    {
+        var serviceKey = ServiceProjectionMapping.ServiceKey(identity);
+        if (string.IsNullOrWhiteSpace(serviceKey))
+            return;
+
+        var readModel = await _documentReader.GetAsync(serviceKey, ct);
+        if (readModel == null)
+            return;
+
+        readModel.ActorId = actorId;
+        readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
+        readModel.LastEventId = eventId;
         await _storeDispatcher.UpsertAsync(readModel, ct);
     }
 }

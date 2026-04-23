@@ -1,5 +1,5 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
@@ -160,9 +160,11 @@ function buildWorkflowYaml(document: typeof initialDocument): string {
 }
 
 function WorkflowBuildHarness({
+  onApplyStepDraftOverride,
   onContinueToBind,
   onSaveDraft,
 }: {
+  readonly onApplyStepDraftOverride?: (draft: any) => Promise<void>;
   readonly onContinueToBind: jest.Mock;
   readonly onSaveDraft: jest.Mock;
 }) {
@@ -204,13 +206,17 @@ function WorkflowBuildHarness({
       draftYaml={draftYaml}
       dryRunModelLabel="gpt-5.4-mini"
       dryRunRouteLabel="OpenAI"
-      onApplyStepDraft={async (draft) => {
-        const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
-        const result = applyStepInspectorDraft(document, currentStepId, draft);
-        await commitDocument(result.document as typeof initialDocument, {
-          nextSelectedNodeId: result.nodeId,
-        });
-      }}
+      onApplyStepDraft={
+        onApplyStepDraftOverride
+          ? onApplyStepDraftOverride
+          : async (draft) => {
+              const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
+              const result = applyStepInspectorDraft(document, currentStepId, draft);
+              await commitDocument(result.document as typeof initialDocument, {
+                nextSelectedNodeId: result.nodeId,
+              });
+            }
+      }
       onAutoLayout={() => setLayout(null)}
       onConnectNodes={(sourceNodeId: string, targetNodeId: string) => {
         const sourceStepId = sourceNodeId.replace(/^step:/, '');
@@ -490,6 +496,42 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(screen.getByText(/actorId: actor-1/i)).toBeInTheDocument();
   });
 
+  it('prefers the final workflow output over earlier streamed node text', async () => {
+    mockedParseBackendSSEStream.mockImplementationOnce(async function* () {
+      yield {
+        type: AGUIEventType.RUN_STARTED,
+        runId: 'run-2',
+        threadId: 'actor-2',
+      };
+      yield {
+        type: AGUIEventType.TEXT_MESSAGE_CONTENT,
+        delta: 'first node answer',
+      };
+      yield {
+        type: AGUIEventType.RUN_FINISHED,
+        result: {
+          output: 'second node final answer',
+        },
+      };
+    });
+
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(await screen.findByText('second node final answer')).toBeInTheDocument();
+    const outputSection = screen.getByText('Output');
+    const outputPanel = outputSection.parentElement;
+    expect(outputPanel).not.toBeNull();
+    expect(within(outputPanel as HTMLElement).queryByText('first node answer')).toBeNull();
+    expect(within(outputPanel as HTMLElement).getByText('second node final answer')).toBeInTheDocument();
+  });
+
   it('shows a friendly provider guidance message when draft run backend rejects the route', async () => {
     mockedRuntimeRunsApi.streamDraftRun.mockRejectedValueOnce(
       new Error(
@@ -509,5 +551,40 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(
       await screen.findByText(/provider 还没有连好/i),
     ).toBeInTheDocument();
+  });
+
+  it('locks apply changes while the step mutation is pending', async () => {
+    let resolveApply: (() => void) | null = null;
+    const handleApplyStepDraft = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveApply = resolve;
+        }),
+    );
+
+    render(
+      <WorkflowBuildHarness
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    const applyButton = screen.getByRole('button', { name: 'Apply changes' });
+    fireEvent.click(applyButton);
+    fireEvent.click(applyButton);
+
+    await waitFor(() => {
+      expect(handleApplyStepDraft).toHaveBeenCalledTimes(1);
+      expect(applyButton).toBeDisabled();
+    });
+
+    act(() => {
+      resolveApply?.();
+    });
+
+    await waitFor(() => {
+      expect(applyButton).not.toBeDisabled();
+    });
   });
 });

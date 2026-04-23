@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -164,46 +165,131 @@ public sealed class ServiceCommandApplicationServiceTests
             RolloutId = "rollout-1",
             Reason = "pause",
         });
-        var resumeReceipt = await service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-1",
-        });
-        var rollbackReceipt = await service.RollbackServiceRolloutAsync(new RollbackServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-1",
-            Reason = "rollback",
-        });
 
         deactivateReceipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
         advanceReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
         pauseReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        resumeReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        rollbackReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
         deactivateReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:dep-1");
         advanceReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
         pauseReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
-        resumeReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
-        rollbackReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
         provisioner.DeploymentRequests.Should().ContainSingle();
-        provisioner.RolloutRequests.Should().HaveCount(4);
-        provisioner.ServingSetRequests.Should().HaveCount(3);
+        provisioner.RolloutRequests.Should().HaveCount(2);
+        provisioner.ServingSetRequests.Should().ContainSingle();
         deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
         rolloutProjectionPort.ActorIds.Should().Equal(
             ServiceActorIds.Rollout(identity),
-            ServiceActorIds.Rollout(identity),
-            ServiceActorIds.Rollout(identity),
             ServiceActorIds.Rollout(identity));
-        servingProjectionPort.ActorIds.Should().Equal(
-            ServiceActorIds.ServingSet(identity),
-            ServiceActorIds.ServingSet(identity),
-            ServiceActorIds.ServingSet(identity));
-        trafficProjectionPort.ActorIds.Should().Equal(
-            ServiceActorIds.ServingSet(identity),
-            ServiceActorIds.ServingSet(identity),
-            ServiceActorIds.ServingSet(identity));
-        dispatchPort.Calls.Should().HaveCount(5);
+        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        dispatchPort.Calls.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task PauseServiceRolloutAsync_ShouldReturnAcceptedReceipt()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var service = CreateService(
+            new RecordingCommandTargetProvisioner(),
+            new RecordingActorDispatchPort(),
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort());
+
+        var receipt = await service.PauseServiceRolloutAsync(new PauseServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-1",
+            Reason = "pause-again",
+        });
+
+        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
+        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
+    }
+
+    [Fact]
+    public async Task ResumeServiceRolloutAsync_ShouldEnsureServingProjectionAndReturnAcceptedReceipt()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var servingProjectionPort = new RecordingProjectionPort();
+        var rolloutProjectionPort = new RecordingProjectionPort();
+        var trafficProjectionPort = new RecordingProjectionPort();
+        var service = CreateService(
+            provisioner,
+            dispatchPort,
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort(),
+            servingProjectionPort: servingProjectionPort,
+            rolloutProjectionPort: rolloutProjectionPort,
+            trafficProjectionPort: trafficProjectionPort);
+
+        var receipt = await service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-1",
+        });
+
+        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
+        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
+        provisioner.RolloutRequests.Should().ContainSingle();
+        provisioner.ServingSetRequests.Should().ContainSingle();
+        rolloutProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Rollout(identity));
+        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        dispatchPort.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RollbackServiceRolloutAsync_ShouldEnsureServingProjectionAndReturnAcceptedReceipt()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var servingProjectionPort = new RecordingProjectionPort();
+        var rolloutProjectionPort = new RecordingProjectionPort();
+        var trafficProjectionPort = new RecordingProjectionPort();
+        var service = CreateService(
+            provisioner,
+            new RecordingActorDispatchPort(),
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort(),
+            servingProjectionPort: servingProjectionPort,
+            rolloutProjectionPort: rolloutProjectionPort,
+            trafficProjectionPort: trafficProjectionPort);
+
+        var receipt = await service.RollbackServiceRolloutAsync(new RollbackServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-1",
+            Reason = "rollback-after-complete",
+        });
+
+        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
+        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
+        provisioner.RolloutRequests.Should().ContainSingle();
+        provisioner.ServingSetRequests.Should().ContainSingle();
+        rolloutProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Rollout(identity));
+        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+    }
+
+    [Fact]
+    public async Task ResumeServiceRolloutAsync_ShouldPropagateDispatchFailure_ForMismatchedRolloutId()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var service = CreateService(
+            new RecordingCommandTargetProvisioner(),
+            new ThrowingActorDispatchPort(new InvalidOperationException("Rollout 'stale' does not match active rollout 'rollout-1'.")),
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort());
+
+        var act = () => service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "stale",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not match active rollout*");
     }
 
     [Fact]
@@ -323,7 +409,7 @@ public sealed class ServiceCommandApplicationServiceTests
 
     private static ServiceCommandApplicationService CreateService(
         RecordingCommandTargetProvisioner provisioner,
-        RecordingActorDispatchPort dispatchPort,
+        IActorDispatchPort dispatchPort,
         RecordingCatalogProjectionPort catalogProjectionPort,
         RecordingRevisionProjectionPort revisionProjectionPort,
         RecordingProjectionPort? deploymentProjectionPort = null,
@@ -392,6 +478,19 @@ public sealed class ServiceCommandApplicationServiceTests
             Calls.Add((actorId, envelope));
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class ThrowingActorDispatchPort : IActorDispatchPort
+    {
+        private readonly Exception _exception;
+
+        public ThrowingActorDispatchPort(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromException(_exception);
     }
 
     private sealed class RecordingCatalogProjectionPort : IServiceCatalogProjectionPort

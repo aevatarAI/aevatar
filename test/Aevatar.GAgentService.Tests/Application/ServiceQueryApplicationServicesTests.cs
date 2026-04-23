@@ -33,15 +33,18 @@ public sealed class ServiceQueryApplicationServicesTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var servingReader = new RecordingServingReader();
         var rolloutReader = new RecordingRolloutReader();
+        var observationReader = new RecordingRolloutCommandObservationReader();
         var trafficReader = new RecordingTrafficReader();
-        var service = new ServiceServingQueryApplicationService(servingReader, rolloutReader, trafficReader);
+        var service = new ServiceServingQueryApplicationService(servingReader, rolloutReader, observationReader, trafficReader);
 
         _ = await service.GetServiceServingSetAsync(identity);
         _ = await service.GetServiceRolloutAsync(identity);
+        _ = await service.GetServiceRolloutCommandObservationAsync(identity, "cmd-1");
         _ = await service.GetServiceTrafficViewAsync(identity);
 
         servingReader.Identities.Should().ContainSingle(x => x.ServiceId == "svc");
         rolloutReader.Identities.Should().ContainSingle(x => x.ServiceId == "svc");
+        observationReader.CommandIds.Should().ContainSingle().Which.Should().Be("cmd-1");
         trafficReader.Identities.Should().ContainSingle(x => x.ServiceId == "svc");
     }
 
@@ -148,15 +151,45 @@ public sealed class ServiceQueryApplicationServicesTests
         var service = new ServiceServingQueryApplicationService(
             new RecordingServingReader(),
             new RecordingRolloutReader(),
+            new RecordingRolloutCommandObservationReader(),
             new RecordingTrafficReader());
 
         var servingSet = await service.GetServiceServingSetAsync(identity);
         var rollout = await service.GetServiceRolloutAsync(identity);
+        var observation = await service.GetServiceRolloutCommandObservationAsync(identity, "cmd-1");
         var trafficView = await service.GetServiceTrafficViewAsync(identity);
 
         servingSet.Should().BeNull();
         rollout.Should().BeNull();
+        observation.Should().BeNull();
         trafficView.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ServingQueryService_ShouldFilterObservationByServiceKey()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var observationReader = new RecordingRolloutCommandObservationReader
+        {
+            Snapshot = new ServiceRolloutCommandObservationSnapshot(
+                "cmd-1",
+                "corr-1",
+                "other/app/ns/service",
+                "rollout-1",
+                ServiceRolloutStatus.Paused,
+                true,
+                42,
+                DateTimeOffset.UtcNow),
+        };
+        var service = new ServiceServingQueryApplicationService(
+            new RecordingServingReader(),
+            new RecordingRolloutReader(),
+            observationReader,
+            new RecordingTrafficReader());
+
+        var observation = await service.GetServiceRolloutCommandObservationAsync(identity, "cmd-1");
+
+        observation.Should().BeNull();
     }
 
     private sealed class ConfiguredRevisionReader : IServiceRevisionCatalogQueryReader
@@ -253,6 +286,19 @@ public sealed class ServiceQueryApplicationServicesTests
         {
             Identities.Add(identity.Clone());
             return Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+        }
+    }
+
+    private sealed class RecordingRolloutCommandObservationReader : IServiceRolloutCommandObservationQueryReader
+    {
+        public List<string> CommandIds { get; } = [];
+
+        public ServiceRolloutCommandObservationSnapshot? Snapshot { get; init; }
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetAsync(string commandId, CancellationToken ct = default)
+        {
+            CommandIds.Add(commandId);
+            return Task.FromResult(Snapshot);
         }
     }
 }

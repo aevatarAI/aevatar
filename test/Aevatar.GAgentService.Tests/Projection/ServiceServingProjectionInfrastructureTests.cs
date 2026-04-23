@@ -84,6 +84,7 @@ public sealed class ServiceServingProjectionInfrastructureTests
         new ServiceDeploymentCatalogReadModelMetadataProvider().Metadata.IndexName.Should().Be("gagent-service-deployments");
         new ServiceServingSetReadModelMetadataProvider().Metadata.IndexName.Should().Be("gagent-service-serving");
         new ServiceRolloutReadModelMetadataProvider().Metadata.IndexName.Should().Be("gagent-service-rollouts");
+        new ServiceRolloutCommandObservationReadModelMetadataProvider().Metadata.IndexName.Should().Be("gagent-service-rollout-command-observations");
         new ServiceTrafficViewReadModelMetadataProvider().Metadata.IndexName.Should().Be("gagent-service-traffic");
     }
 
@@ -104,6 +105,9 @@ public sealed class ServiceServingProjectionInfrastructureTests
             x.ServiceType == typeof(IProjectionDocumentMetadataProvider<ServiceRolloutReadModel>) &&
             x.ImplementationType == typeof(ServiceRolloutReadModelMetadataProvider));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionDocumentMetadataProvider<ServiceRolloutCommandObservationReadModel>) &&
+            x.ImplementationType == typeof(ServiceRolloutCommandObservationReadModelMetadataProvider));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>) &&
             x.ImplementationType == typeof(ServiceTrafficViewReadModelMetadataProvider));
         services.Should().Contain(x =>
@@ -115,6 +119,9 @@ public sealed class ServiceServingProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceRolloutQueryReader) &&
             x.ImplementationType == typeof(ServiceRolloutQueryReader));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IServiceRolloutCommandObservationQueryReader) &&
+            x.ImplementationType == typeof(ServiceRolloutCommandObservationQueryReader));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceTrafficViewQueryReader) &&
             x.ImplementationType == typeof(ServiceTrafficViewQueryReader));
@@ -142,6 +149,9 @@ public sealed class ServiceServingProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>) &&
             x.ImplementationType == typeof(ServiceRolloutProjector));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceRolloutCommandObservationProjector));
     }
 
     [Fact]

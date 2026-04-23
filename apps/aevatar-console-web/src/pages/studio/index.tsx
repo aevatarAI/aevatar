@@ -1,6 +1,6 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { DeleteOutlined, InfoCircleOutlined } from '@ant-design/icons';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Node } from '@xyflow/react';
 import {
   getLocationSnapshot,
@@ -26,6 +26,7 @@ import {
 } from '../chat/chatConversationConfig';
 import { servicesApi } from '@/shared/api/servicesApi';
 import {
+  Button,
   Modal,
   Popover,
   Typography,
@@ -82,10 +83,12 @@ import type {
 } from '@/shared/models/runtime/catalog';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
+import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import {
   buildRuntimeGAgentAssemblyQualifiedName,
   matchesRuntimeGAgentTypeDescriptor,
 } from '@/shared/models/runtime/gagents';
+import { getScopeServiceCurrentRevision } from '@/shared/models/runtime/scopeServices';
 import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
@@ -96,6 +99,10 @@ import type {
 } from '@/shared/studio/models';
 import { getStudioScopeBindingCurrentRevision } from '@/shared/studio/models';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+} from '@/shared/ui/interactionStandards';
 import StudioBootstrapGate from './components/StudioBootstrapGate';
 import StudioMemberInvokePanel from './components/StudioMemberInvokePanel';
 import {
@@ -142,6 +149,8 @@ type DraftSaveNotice = {
   readonly message: string;
 };
 
+type InventoryBusyAction = '' | 'create' | 'rename' | 'delete';
+
 type DraftRunNotice = {
   readonly type: 'success' | 'error';
   readonly message: string;
@@ -150,6 +159,10 @@ type DraftRunNotice = {
 type StudioNotice = {
   readonly type: 'success' | 'info' | 'warning' | 'error';
   readonly message: string;
+};
+
+type OrderedStudioShellMemberItem = StudioShellMemberItem & {
+  readonly insertionOrder: number;
 };
 
 type InlineInfoButtonProps = {
@@ -343,12 +356,6 @@ const inventoryCreateTypeChipActiveStyle: React.CSSProperties = {
   color: '#2f54eb',
 };
 
-const inventoryCreateTypeChipDisabledStyle: React.CSSProperties = {
-  ...inventoryCreateTypeChipStyle,
-  cursor: 'not-allowed',
-  opacity: 0.56,
-};
-
 const inventoryCreateFieldStackStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
@@ -393,6 +400,7 @@ const InlineInfoButton: React.FC<InlineInfoButtonProps> = ({
   >
     <button
       aria-label={ariaLabel}
+      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
       onClick={(event) => event.stopPropagation()}
       style={{ ...inlineInfoButtonStyle, ...buttonStyle }}
       type="button"
@@ -414,6 +422,32 @@ function trimOptional(value: string | null | undefined): string {
 
 function normalizeComparableText(value: string | null | undefined): string {
   return trimOptional(value).toLowerCase();
+}
+
+function findWorkflowSummaryByLookupValue(
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  lookupValue: string | null | undefined,
+) {
+  const normalizedLookupValue = normalizeComparableText(lookupValue);
+  if (!normalizedLookupValue) {
+    return null;
+  }
+
+  return (
+    workflows.find((workflow) => {
+      const fileStem = workflow.fileName.replace(/\.(ya?ml)$/i, '');
+      return (
+        normalizeComparableText(workflow.workflowId) === normalizedLookupValue ||
+        normalizeComparableText(workflow.name) === normalizedLookupValue ||
+        normalizeComparableText(fileStem) === normalizedLookupValue
+      );
+    }) ?? null
+  );
 }
 
 function describeSavedWorkflowLocation(
@@ -955,7 +989,10 @@ const StudioPage: React.FC = () => {
   const [savePending, setSavePending] = useState(false);
   const [saveNotice, setSaveNotice] = useState<DraftSaveNotice | null>(null);
   const [inventoryBusyKey, setInventoryBusyKey] = useState('');
+  const [inventoryBusyAction, setInventoryBusyAction] = useState<InventoryBusyAction>('');
+  const [memberRecencyOrder, setMemberRecencyOrder] = useState<string[]>([]);
   const [createMemberModalOpen, setCreateMemberModalOpen] = useState(false);
+  const [createMemberKind, setCreateMemberKind] = useState<BuildMode>('workflow');
   const [createMemberName, setCreateMemberName] = useState('');
   const [createMemberDirectoryId, setCreateMemberDirectoryId] = useState('');
   const [runPrompt, setRunPrompt] = useState(() => readStudioRouteState().prompt);
@@ -1256,25 +1293,157 @@ const StudioPage: React.FC = () => {
     gAgentTypesQuery.data,
   ]);
   const preferredScopeWorkflow = useMemo(() => {
-    const normalizedLookupKey = normalizeComparableText(boundWorkflowLookupKey);
-    if (!normalizedLookupKey) {
-      return null;
-    }
-
-    return (
-      visibleWorkflowSummaries.find((item) => {
-        const fileStem = item.fileName.replace(/\.(ya?ml)$/i, '');
-        return (
-          normalizeComparableText(item.workflowId) === normalizedLookupKey ||
-          normalizeComparableText(item.name) === normalizedLookupKey ||
-          normalizeComparableText(fileStem) === normalizedLookupKey
-        );
-      }) ?? null
+    return findWorkflowSummaryByLookupValue(
+      visibleWorkflowSummaries,
+      boundWorkflowLookupKey,
     );
   }, [boundWorkflowLookupKey, visibleWorkflowSummaries]);
   const publishedScopeServices = useMemo(
     () => scopeServicesQuery.data ?? [],
     [scopeServicesQuery.data],
+  );
+  const availableScopeScripts = useMemo(
+    () =>
+      (scopeScriptsQuery.data ?? []).filter(
+        (detail): detail is ScopedScriptDetail =>
+          Boolean(detail.available && detail.script),
+      ),
+    [scopeScriptsQuery.data],
+  );
+  const availableScopeScriptIds = useMemo(
+    () =>
+      new Set(
+        availableScopeScripts
+          .map((detail) => normalizeComparableText(detail.script?.scriptId))
+          .filter(Boolean),
+      ),
+    [availableScopeScripts],
+  );
+  const publishedScopeServiceRevisionQueries = useQueries({
+    queries: publishedScopeServices.map((service) => {
+      const serviceId = trimOptional(service.serviceId);
+      const isCurrentScopeBindingService =
+        scopeBindingQuery.data?.available &&
+        trimOptional(scopeBindingQuery.data.serviceId) === serviceId;
+      const serviceLookupValues = [
+        trimOptional(service.displayName),
+        serviceId,
+      ].filter(Boolean);
+      const hasKnownImplementationCollision = serviceLookupValues.some(
+        (lookupValue) =>
+          Boolean(findWorkflowSummaryByLookupValue(visibleWorkflowSummaries, lookupValue)) ||
+          availableScopeScriptIds.has(normalizeComparableText(lookupValue)),
+      );
+      const isRouteSelectedService =
+        trimOptional(routeState.memberId) === serviceId;
+
+      return {
+        queryKey: [
+          'studio-scope-service-revisions',
+          resolvedStudioScopeId,
+          serviceId,
+        ],
+        enabled:
+          studioHostReady &&
+          Boolean(resolvedStudioScopeId) &&
+          Boolean(serviceId) &&
+          !isCurrentScopeBindingService &&
+          (hasKnownImplementationCollision || isRouteSelectedService),
+        queryFn: () =>
+          scopeRuntimeApi.getServiceRevisions(resolvedStudioScopeId, serviceId),
+      };
+    }),
+  });
+  const currentServiceRevisionByServiceId = useMemo(() => {
+    const revisions = new Map<string, ReturnType<typeof getScopeServiceCurrentRevision>>();
+
+    publishedScopeServices.forEach((service, index) => {
+      const serviceId = trimOptional(service.serviceId);
+      if (!serviceId) {
+        return;
+      }
+
+      const isCurrentScopeBindingService =
+        scopeBindingQuery.data?.available &&
+        trimOptional(scopeBindingQuery.data.serviceId) === serviceId;
+      const revision = isCurrentScopeBindingService
+        ? currentScopeBindingRevision
+        : getScopeServiceCurrentRevision(
+            publishedScopeServiceRevisionQueries[index]?.data,
+          );
+
+      if (revision) {
+        revisions.set(serviceId, revision);
+      }
+    });
+
+    return revisions;
+  }, [
+    currentScopeBindingRevision,
+    publishedScopeServiceRevisionQueries,
+    publishedScopeServices,
+    scopeBindingQuery.data?.available,
+    scopeBindingQuery.data?.serviceId,
+  ]);
+  const publishedScopeMembers = useMemo(() => {
+    return publishedScopeServices.map((service) => {
+      const serviceId = trimOptional(service.serviceId);
+      const revision = serviceId
+        ? currentServiceRevisionByServiceId.get(serviceId) ?? null
+        : null;
+      const revisionWorkflowName = trimOptional(revision?.workflowName);
+      const matchedWorkflow =
+        revision?.implementationKind === 'workflow' && revisionWorkflowName
+          ? findWorkflowSummaryByLookupValue(
+              visibleWorkflowSummaries,
+              revisionWorkflowName,
+            )
+          : null;
+      const matchedScriptId =
+        revision?.implementationKind === 'script'
+          ? trimOptional(revision.scriptId)
+          : '';
+      const matchedScript =
+        matchedScriptId
+          ? availableScopeScripts.find(
+              (scriptDetail) =>
+                trimOptional(scriptDetail.script?.scriptId) === matchedScriptId,
+            ) ?? null
+          : null;
+
+      return {
+        service,
+        revision,
+        matchedWorkflow,
+        matchedScript,
+      };
+    });
+  }, [
+    availableScopeScripts,
+    currentServiceRevisionByServiceId,
+    publishedScopeServices,
+    visibleWorkflowSummaries,
+  ]);
+  const serviceBackedWorkflowIds = useMemo(
+    () =>
+      new Set(
+        publishedScopeMembers.flatMap((item) =>
+          item.matchedWorkflow?.workflowId
+            ? [trimOptional(item.matchedWorkflow.workflowId)]
+            : [],
+        ),
+      ),
+    [publishedScopeMembers],
+  );
+  const serviceBackedScriptIds = useMemo(
+    () =>
+      new Set(
+        publishedScopeMembers.flatMap((item) => {
+          const scriptId = trimOptional(item.matchedScript?.script?.scriptId);
+          return scriptId ? [scriptId] : [];
+        }),
+      ),
+    [publishedScopeMembers],
   );
   const runtimeConsoleServices = useMemo(
     () =>
@@ -1893,6 +2062,22 @@ const StudioPage: React.FC = () => {
     () => buildStudioGraphElements(activeWorkflowDocument, draftWorkflowLayout),
     [activeWorkflowDocument, draftWorkflowLayout],
   );
+  const effectiveSelectedGraphNodeId = useMemo(() => {
+    const currentNodeId = trimOptional(selectedGraphNodeId);
+    if (
+      currentNodeId &&
+      workflowGraph.nodes.some((node) => node.id === currentNodeId)
+    ) {
+      return currentNodeId;
+    }
+
+    const firstStepId = trimOptional(workflowGraph.steps[0]?.id);
+    if (firstStepId) {
+      return `step:${firstStepId}`;
+    }
+
+    return trimOptional(workflowGraph.nodes[0]?.id);
+  }, [selectedGraphNodeId, workflowGraph.nodes, workflowGraph.steps]);
   const workflowRoleOptions = useMemo(
     () =>
       Array.isArray(activeWorkflowDocument?.roles)
@@ -1911,6 +2096,14 @@ const StudioPage: React.FC = () => {
   useEffect(() => {
     setSelectedGraphNodeId('');
   }, [activeWorkflowSourceKey]);
+
+  useEffect(() => {
+    if (trimOptional(selectedGraphNodeId) === effectiveSelectedGraphNodeId) {
+      return;
+    }
+
+    setSelectedGraphNodeId(effectiveSelectedGraphNodeId);
+  }, [effectiveSelectedGraphNodeId, selectedGraphNodeId]);
 
   const isDraftDirty =
     Boolean(activeWorkflowSourceKey) &&
@@ -2175,8 +2368,8 @@ const StudioPage: React.FC = () => {
       kind: 'workflow' as const,
       displayName,
       description:
-        'Bind creates the first published member service for this workflow draft, then Studio can show its invoke URL and endpoint contract.',
-      actionLabel: 'Bind current workflow',
+        'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+      actionLabel: 'Bind current revision',
     };
   }, [
     activeBuildMode,
@@ -2191,7 +2384,9 @@ const StudioPage: React.FC = () => {
     }
 
     if (pendingBindCandidate.kind !== 'workflow') {
-      throw new Error('Studio can only bind workflow drafts from this surface right now.');
+      throw new Error(
+        'Studio can only publish workflow revisions from this surface right now.',
+      );
     }
 
     const result = await studioApi.bindScopeWorkflow({
@@ -2226,6 +2421,8 @@ const StudioPage: React.FC = () => {
         endpointId: defaultEndpointId,
       };
 
+      // Legacy route contract before member APIs land: route memberId still carries
+      // the currently focused published service identity.
       history.replace(
         buildStudioRoute({
           scopeId: resolvedStudioScopeId || undefined,
@@ -2464,20 +2661,16 @@ const StudioPage: React.FC = () => {
     }
   };
 
-  const openCreateWorkflowMemberFlow = useCallback(async () => {
+  const openCreateMemberFlow = useCallback(async () => {
     if (!(await confirmScriptsStudioLeave())) {
       return;
     }
 
-    const nextDirectoryId =
-      inventoryDirectoryId || inventoryDirectoryOptions[0]?.directoryId || '';
-    if (!nextDirectoryId) {
-      void message.error('Add a workflow directory in Config before creating a member.');
-      return;
-    }
-
     setCreateMemberName(suggestedCreateWorkflowName);
-    setCreateMemberDirectoryId(nextDirectoryId);
+    setCreateMemberKind('workflow');
+    setCreateMemberDirectoryId(
+      inventoryDirectoryId || inventoryDirectoryOptions[0]?.directoryId || '',
+    );
     setCreateMemberModalOpen(true);
   }, [
     confirmScriptsStudioLeave,
@@ -2486,7 +2679,7 @@ const StudioPage: React.FC = () => {
     suggestedCreateWorkflowName,
   ]);
 
-  const closeCreateWorkflowMemberFlow = useCallback(() => {
+  const closeCreateMemberFlow = useCallback(() => {
     if (inventoryBusyKey === 'create') {
       return;
     }
@@ -2494,16 +2687,27 @@ const StudioPage: React.FC = () => {
     setCreateMemberModalOpen(false);
   }, [inventoryBusyKey]);
 
-  const handleCreateWorkflowMember = useCallback(async () => {
+  const handleCreateMember = useCallback(async () => {
+    if (createMemberKind !== 'workflow') {
+      void message.info(
+        createMemberKind === 'script'
+          ? 'Script member creation will move into this modal after the member API lands. For now, continue in Build > Script.'
+          : 'GAgent member creation will move into this modal after the member API lands. For now, continue in Build > GAgent.',
+      );
+      return;
+    }
+
     const workflowName = trimOptional(createMemberName);
     const directoryId = trimOptional(createMemberDirectoryId) || inventoryDirectoryId;
     if (!workflowName) {
-      void message.warning('Workflow member name is required.');
+      void message.warning('Member name is required.');
       return;
     }
 
     if (!directoryId) {
-      void message.error('Add a workflow directory in Config before creating a member.');
+      void message.error(
+        'Add a workflow directory in Config before creating a workflow draft here.',
+      );
       return;
     }
 
@@ -2512,11 +2716,12 @@ const StudioPage: React.FC = () => {
         (workflow) => normalizeComparableText(workflow.name) === workflowName.toLowerCase(),
       )
     ) {
-      void message.warning('A workflow member with the same name already exists.');
+      void message.warning('A workflow draft with the same name already exists.');
       return;
     }
 
     setInventoryBusyKey('create');
+    setInventoryBusyAction('create');
 
     try {
       const savedWorkflow = await studioApi.saveWorkflow({
@@ -2530,16 +2735,20 @@ const StudioPage: React.FC = () => {
 
       await applySavedWorkflowSelection(savedWorkflow);
       setCreateMemberModalOpen(false);
-      void message.success(`Created workflow member ${workflowName}.`);
+      void message.success(`Created workflow draft for member ${workflowName}.`);
     } catch (error) {
       void message.error(
-        error instanceof Error ? error.message : 'Failed to create workflow member.',
+        error instanceof Error
+          ? error.message
+          : 'Failed to create a workflow draft for this member.',
       );
     } finally {
       setInventoryBusyKey('');
+      setInventoryBusyAction('');
     }
   }, [
     applySavedWorkflowSelection,
+    createMemberKind,
     createMemberDirectoryId,
     createMemberName,
     inventoryDirectoryId,
@@ -2583,6 +2792,7 @@ const StudioPage: React.FC = () => {
       }
 
       setInventoryBusyKey(memberKey);
+      setInventoryBusyAction('rename');
 
       try {
         const isSelectedWorkflow = selectedWorkflowId === workflowId;
@@ -2654,6 +2864,7 @@ const StudioPage: React.FC = () => {
         );
       } finally {
         setInventoryBusyKey('');
+        setInventoryBusyAction('');
       }
     },
     [
@@ -2743,6 +2954,7 @@ const StudioPage: React.FC = () => {
         width: 460,
         onOk: async () => {
           setInventoryBusyKey(memberKey);
+          setInventoryBusyAction('delete');
 
           try {
             await studioApi.deleteWorkflow(
@@ -2778,6 +2990,7 @@ const StudioPage: React.FC = () => {
             throw error;
           } finally {
             setInventoryBusyKey('');
+            setInventoryBusyAction('');
           }
         },
       });
@@ -3143,8 +3356,8 @@ const StudioPage: React.FC = () => {
         return;
       }
 
-      const afterStepId = selectedGraphNodeId.startsWith('step:')
-        ? selectedGraphNodeId.slice('step:'.length)
+      const afterStepId = effectiveSelectedGraphNodeId.startsWith('step:')
+        ? effectiveSelectedGraphNodeId.slice('step:'.length)
         : null;
       const result = insertStepByType(document, stepType, {
         afterStepId,
@@ -3157,8 +3370,8 @@ const StudioPage: React.FC = () => {
     },
     [
       applySerializedWorkflowDocument,
+      effectiveSelectedGraphNodeId,
       resolveEditableWorkflowDocument,
-      selectedGraphNodeId,
       workflowRoleOptions,
     ],
   );
@@ -3169,8 +3382,8 @@ const StudioPage: React.FC = () => {
         return;
       }
 
-      const currentStepId = selectedGraphNodeId.startsWith('step:')
-        ? selectedGraphNodeId.slice('step:'.length)
+      const currentStepId = effectiveSelectedGraphNodeId.startsWith('step:')
+        ? effectiveSelectedGraphNodeId.slice('step:'.length)
         : '';
       if (!currentStepId) {
         setSaveNotice({
@@ -3187,8 +3400,8 @@ const StudioPage: React.FC = () => {
     },
     [
       applySerializedWorkflowDocument,
+      effectiveSelectedGraphNodeId,
       resolveEditableWorkflowDocument,
-      selectedGraphNodeId,
     ],
   );
   const handleRemoveWorkflowStep = useCallback(async () => {
@@ -3197,8 +3410,8 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const currentStepId = selectedGraphNodeId.startsWith('step:')
-      ? selectedGraphNodeId.slice('step:'.length)
+    const currentStepId = effectiveSelectedGraphNodeId.startsWith('step:')
+      ? effectiveSelectedGraphNodeId.slice('step:'.length)
       : '';
     if (!currentStepId) {
       setSaveNotice({
@@ -3214,8 +3427,8 @@ const StudioPage: React.FC = () => {
     });
   }, [
     applySerializedWorkflowDocument,
+    effectiveSelectedGraphNodeId,
     resolveEditableWorkflowDocument,
-    selectedGraphNodeId,
   ]);
   const handleAutoLayoutWorkflow = useCallback(() => {
     setDraftWorkflowLayout(null);
@@ -3407,14 +3620,6 @@ const StudioPage: React.FC = () => {
       : isObserveSurface
         ? '测试运行'
         : '行为定义';
-  const availableScopeScripts = useMemo(
-    () =>
-      (scopeScriptsQuery.data ?? []).filter(
-        (detail): detail is ScopedScriptDetail =>
-          Boolean(detail.available && detail.script),
-      ),
-    [scopeScriptsQuery.data],
-  );
   const currentLifecycleStep =
     isBindSurface
       ? 'bind'
@@ -3462,22 +3667,60 @@ const StudioPage: React.FC = () => {
       ''
     );
   }, [focusedPublishedService]);
-  const focusedPublishedServiceRevision =
-    scopeBindingQuery.data?.available &&
-    focusedPublishedService?.serviceId === scopeBindingQuery.data.serviceId
-      ? currentScopeBindingRevision
+  const focusedPublishedServiceRevision = useMemo(() => {
+    const serviceId = trimOptional(focusedPublishedService?.serviceId);
+    return serviceId
+      ? currentServiceRevisionByServiceId.get(serviceId) ?? null
       : null;
+  }, [currentServiceRevisionByServiceId, focusedPublishedService?.serviceId]);
   const currentScopeBindingServiceId =
     scopeBindingQuery.data?.available
       ? trimOptional(scopeBindingQuery.data.serviceId)
       : '';
+  const selectedWorkflowSummary = useMemo(
+    () =>
+      visibleWorkflowSummaries.find(
+        (workflow) =>
+          trimOptional(workflow.workflowId) === trimOptional(selectedWorkflowId),
+      ) ?? null,
+    [selectedWorkflowId, visibleWorkflowSummaries],
+  );
   const selectedWorkflowRepresentsBoundMember =
     Boolean(currentScopeBindingServiceId) &&
     currentScopeBindingRevision?.implementationKind === 'workflow' &&
     Boolean(selectedWorkflowId) &&
-    (trimOptional(preferredScopeWorkflow?.workflowId) === trimOptional(selectedWorkflowId) ||
-      normalizeComparableText(activeWorkflowName) ===
-        normalizeComparableText(currentScopeBindingRevision.workflowName));
+    (() => {
+      if (
+        trimOptional(preferredScopeWorkflow?.workflowId) ===
+        trimOptional(selectedWorkflowId)
+      ) {
+        return true;
+      }
+
+      if (!selectedWorkflowSummary) {
+        return false;
+      }
+
+      const boundWorkflowLookupKey = normalizeComparableText(
+        currentScopeBindingRevision.workflowName,
+      );
+      if (!boundWorkflowLookupKey) {
+        return false;
+      }
+
+      const selectedWorkflowFileStem = selectedWorkflowSummary.fileName.replace(
+        /\.(ya?ml)$/i,
+        '',
+      );
+      return (
+        normalizeComparableText(selectedWorkflowSummary.workflowId) ===
+          boundWorkflowLookupKey ||
+        normalizeComparableText(selectedWorkflowSummary.name) ===
+          boundWorkflowLookupKey ||
+        normalizeComparableText(selectedWorkflowFileStem) ===
+          boundWorkflowLookupKey
+      );
+    })();
   const selectedScriptRepresentsBoundMember =
     Boolean(currentScopeBindingServiceId) &&
     currentScopeBindingRevision?.implementationKind === 'script' &&
@@ -3494,12 +3737,26 @@ const StudioPage: React.FC = () => {
     selectedWorkflowRepresentsBoundMember ||
     selectedScriptRepresentsBoundMember ||
     selectedGAgentRepresentsBoundMember;
-  const selectedRailMemberKey =
-    trimOptional(routeState.memberId)
-      ? `member:${trimOptional(routeState.memberId)}`
-      : selectedBuildRepresentsBoundMember && currentScopeBindingServiceId
+  const routeSelectedMemberKey = trimOptional(routeState.memberId)
+    ? `member:${trimOptional(routeState.memberId)}`
+    : '';
+  const buildSurfaceSelectedMemberKey =
+    studioSurface === 'build' &&
+    (currentFocusMemberKey.startsWith('workflow:') ||
+      currentFocusMemberKey.startsWith('script:'))
+      ? selectedBuildRepresentsBoundMember && currentScopeBindingServiceId
         ? `member:${currentScopeBindingServiceId}`
-        : currentFocusMemberKey;
+        : currentFocusMemberKey
+      : '';
+  const selectedRailMemberKey =
+    buildSurfaceSelectedMemberKey ||
+    routeSelectedMemberKey ||
+    (selectedBuildRepresentsBoundMember && currentScopeBindingServiceId
+      ? `member:${currentScopeBindingServiceId}`
+      : currentFocusMemberKey);
+  const effectiveSelectedMemberKey = trimOptional(
+    selectedRailMemberKey || currentFocusMemberKey,
+  );
   const hasSelectedMemberFocus =
     Boolean(currentFocusMemberKey) ||
     Boolean(trimOptional(currentScopeBindingRevision?.revisionId));
@@ -3520,7 +3777,7 @@ const StudioPage: React.FC = () => {
               (isBuildScriptsSurface ? trimOptional(selectedScriptId) : '') ||
               'Current member';
   const currentMemberDescription = !hasSelectedMemberFocus
-    ? 'Choose a member from Team members, or create a new workflow member to start building.'
+    ? 'Choose a member from Team members, or create a new member to start building.'
     : currentFocusMemberKey.startsWith('workflow:')
         ? activeWorkflowName
           ? `Workflow ${activeWorkflowName}`
@@ -3597,6 +3854,31 @@ const StudioPage: React.FC = () => {
         activeBuildFocusKey
       : '',
   });
+  const touchMemberRecency = useCallback((memberKey: string) => {
+    const normalizedMemberKey = trimOptional(memberKey);
+    if (!normalizedMemberKey) {
+      return;
+    }
+
+    setMemberRecencyOrder((current) => {
+      if (current[0] === normalizedMemberKey) {
+        return current;
+      }
+
+      const next = [
+        normalizedMemberKey,
+        ...current.filter((item) => item !== normalizedMemberKey),
+      ];
+      return next.slice(0, 32);
+    });
+  }, []);
+  useEffect(() => {
+    if (!effectiveSelectedMemberKey) {
+      return;
+    }
+
+    touchMemberRecency(effectiveSelectedMemberKey);
+  }, [effectiveSelectedMemberKey, touchMemberRecency]);
   useEffect(() => {
     const preferredServiceId =
       trimOptional(routeState.memberId) ||
@@ -3787,7 +4069,7 @@ const StudioPage: React.FC = () => {
     ],
   );
   const memberItems = useMemo(() => {
-    const items: StudioShellMemberItem[] = [];
+    const items: OrderedStudioShellMemberItem[] = [];
     const seen = new Set<string>();
     const currentMemberItem: StudioShellMemberItem = {
       key: selectedRailMemberKey || currentFocusMemberKey,
@@ -3814,20 +4096,29 @@ const StudioPage: React.FC = () => {
       seen.add(normalizedKey);
       items.push({
         ...item,
+        insertionOrder: items.length,
         key: normalizedKey,
       });
     };
 
-    for (const service of publishedScopeServices) {
-      const isBoundService =
-        scopeBindingQuery.data?.available &&
-        scopeBindingQuery.data.serviceId === service.serviceId;
-      const serviceRevision = isBoundService ? currentScopeBindingRevision : null;
-
+    for (const {
+      service,
+      revision: serviceRevision,
+      matchedWorkflow,
+      matchedScript,
+    } of publishedScopeMembers) {
       addItem({
         key: `member:${service.serviceId}`,
-        label: trimOptional(service.displayName) || trimOptional(service.serviceId) || 'Member',
+        label:
+          trimOptional(matchedWorkflow?.name) ||
+          trimOptional(matchedScript?.script?.scriptId) ||
+          trimOptional(service.displayName) ||
+          trimOptional(service.serviceId) ||
+          'Member',
         description:
+          trimOptional(matchedWorkflow?.description) ||
+          trimOptional(matchedWorkflow?.fileName) ||
+          trimOptional(matchedScript?.script?.definitionActorId) ||
           (serviceRevision
             ? formatStudioAssetMeta({
                 primary: trimOptional(serviceRevision.workflowName) ||
@@ -3857,6 +4148,10 @@ const StudioPage: React.FC = () => {
     }
 
     for (const workflow of visibleWorkflowSummaries) {
+      if (serviceBackedWorkflowIds.has(trimOptional(workflow.workflowId))) {
+        continue;
+      }
+
       addItem({
         key: `workflow:${workflow.workflowId}`,
         label: workflow.name,
@@ -3880,7 +4175,7 @@ const StudioPage: React.FC = () => {
 
     for (const scriptDetail of availableScopeScripts) {
       const scriptId = trimOptional(scriptDetail.script?.scriptId);
-      if (!scriptId) {
+      if (!scriptId || serviceBackedScriptIds.has(scriptId)) {
         continue;
       }
 
@@ -3904,28 +4199,54 @@ const StudioPage: React.FC = () => {
       addItem(currentMemberItem);
     }
 
-    return items;
+    const recencyIndexByKey = new Map(
+      memberRecencyOrder.map((memberKey, index) => [memberKey, index]),
+    );
+
+    return [...items]
+      .sort((left, right) => {
+        const leftKey = trimOptional(left.key);
+        const rightKey = trimOptional(right.key);
+        const leftIsSelected = leftKey === effectiveSelectedMemberKey;
+        const rightIsSelected = rightKey === effectiveSelectedMemberKey;
+        if (leftIsSelected !== rightIsSelected) {
+          return leftIsSelected ? -1 : 1;
+        }
+
+        const leftRecencyIndex = recencyIndexByKey.get(leftKey);
+        const rightRecencyIndex = recencyIndexByKey.get(rightKey);
+        const leftHasRecency = leftRecencyIndex !== undefined;
+        const rightHasRecency = rightRecencyIndex !== undefined;
+        if (leftHasRecency !== rightHasRecency) {
+          return leftHasRecency ? -1 : 1;
+        }
+
+        if (
+          leftRecencyIndex !== undefined &&
+          rightRecencyIndex !== undefined &&
+          leftRecencyIndex !== rightRecencyIndex
+        ) {
+          return leftRecencyIndex - rightRecencyIndex;
+        }
+
+        return left.insertionOrder - right.insertionOrder;
+      })
+      .map(({ insertionOrder: _insertionOrder, ...item }) => item);
   }, [
-    activeWorkflowName,
     availableScopeScripts,
     currentFocusMemberKey,
-    currentScopeBindingRevision?.isActiveServing,
-    currentScopeBindingRevision?.primaryActorId,
-    currentScopeBindingRevision?.revisionId,
-    currentScopeBindingRevision?.staticActorTypeName,
-    currentScopeBindingRevision?.workflowName,
     currentMemberDescription,
     currentMemberKind,
     currentMemberLabel,
     currentMemberMeta,
     currentMemberTone,
-    isBuildGAgentSurface,
-    publishedScopeServices,
+    effectiveSelectedMemberKey,
+    memberRecencyOrder,
+    publishedScopeMembers,
     selectedRailMemberKey,
-    scopeBindingQuery.data?.available,
-    scopeBindingQuery.data?.serviceId,
-    selectedGAgentTypeName,
-    templateWorkflow,
+    serviceBackedScriptIds,
+    serviceBackedWorkflowIds,
+    selectedWorkflowId,
     visibleWorkflowSummaries,
   ]);
   const selectedMemberCanBind =
@@ -4055,6 +4376,7 @@ const StudioPage: React.FC = () => {
               key={item.key}
               type="button"
               aria-pressed={active}
+              className={AEVATAR_INTERACTIVE_CHIP_CLASS}
               disabled={item.disabled}
               onClick={() => void handleSelectBuildMode(item.key)}
               style={{
@@ -4124,10 +4446,10 @@ const StudioPage: React.FC = () => {
   const studioContextDescriptor =
     showWorkflowEntryEmptyState
       ? hasSelectedMemberFocus
-        ? '当前 member 还没有可在 Studio 中继续编辑的 workflow build surface。你可以先去 Bind / Invoke，或显式创建新的 workflow member。'
+        ? '当前 member 还没有可继续编辑的 Build surface。你可以先去 Bind / Invoke，或显式创建新的 member。'
         : memberItems.length > 0
         ? '先从左侧选一个已有 member，再继续 Build；如果要新增，再显式点击 Create member。'
-        : '这个 team 还没有 member。显式点击 Create member，再进入新的 workflow draft。'
+        : '这个 team 还没有 member。显式点击 Create member，再进入新的实现草稿。'
       : isBuildEditorSurface
         ? '围绕当前 member 的 workflow canvas、step detail 和 dry-run 继续构建'
         : isBuildGAgentSurface
@@ -4135,9 +4457,9 @@ const StudioPage: React.FC = () => {
         : isBuildScriptsSurface
           ? '围绕 script source、diagnostics 和 dry-run 继续迭代当前 member'
         : isObserveSurface
-          ? '测试运行'
+          ? '围绕当前 member 的最近运行、回放和基线继续观察'
           : isBindSurface
-            ? '查看绑定版本、运行态入口与 serving 状态'
+            ? '确认当前 member 的 published contract，并继续去 Invoke'
             : isInvokeSurface
               ? '调用当前成员并保留运行观察上下文'
               : '成员工作台';
@@ -4167,30 +4489,35 @@ const StudioPage: React.FC = () => {
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
-  const createMemberButtonDisabled =
-    inventoryBusyKey === 'create' || inventoryDirectoryOptions.length === 0;
+  const createMemberButtonDisabled = inventoryBusyKey === 'create';
   const selectedInventoryMemberKey = renameableWorkflowMemberKey;
   const selectedInventoryMemberBusy =
     inventoryBusyKey === selectedInventoryMemberKey;
+  const selectedInventoryBusyAction = selectedInventoryMemberBusy
+    ? inventoryBusyAction
+    : '';
   const inventoryActions = (
     <div style={inventoryActionsStyle}>
       <div style={inventoryActionRowStyle}>
-        <button
+        <Button
           aria-label="Create member"
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           disabled={createMemberButtonDisabled}
-          onClick={() => void openCreateWorkflowMemberFlow()}
+          loading={inventoryBusyAction === 'create'}
+          onClick={() => void openCreateMemberFlow()}
           style={{
             ...inventoryActionPrimaryButtonStyle,
             cursor: createMemberButtonDisabled ? 'not-allowed' : 'pointer',
             opacity: createMemberButtonDisabled ? 0.56 : 1,
           }}
-          type="button"
         >
           Create member
-        </button>
-        <button
+        </Button>
+        <Button
           aria-label={`Rename ${renameableWorkflowLabel}`}
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           disabled={!selectedInventoryMemberKey || selectedInventoryMemberBusy}
+          loading={selectedInventoryBusyAction === 'rename'}
           onClick={() =>
             selectedInventoryMemberKey
               ? void handleRenameWorkflowMember(selectedInventoryMemberKey)
@@ -4205,13 +4532,14 @@ const StudioPage: React.FC = () => {
             opacity:
               !selectedInventoryMemberKey || selectedInventoryMemberBusy ? 0.56 : 1,
           }}
-          type="button"
         >
           Rename
-        </button>
-        <button
+        </Button>
+        <Button
           aria-label={`Delete ${renameableWorkflowLabel}`}
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           disabled={!selectedInventoryMemberKey || selectedInventoryMemberBusy}
+          loading={selectedInventoryBusyAction === 'delete'}
           onClick={() =>
             selectedInventoryMemberKey
               ? void handleDeleteWorkflowMember(selectedInventoryMemberKey)
@@ -4226,10 +4554,9 @@ const StudioPage: React.FC = () => {
             opacity:
               !selectedInventoryMemberKey || selectedInventoryMemberBusy ? 0.56 : 1,
           }}
-          type="button"
         >
           Delete
-        </button>
+        </Button>
       </div>
       {selectedInventoryMemberKey ? (
         <div style={inventorySelectionPillStyle}>
@@ -4238,8 +4565,8 @@ const StudioPage: React.FC = () => {
         </div>
       ) : (
         <div style={inventoryActionsHintStyle}>
-          Create a workflow member here. Rename and delete become available after
-          you select a workflow member from the inventory.
+          Create a member here. Workflow entry is available now, and Script / GAgent
+          creation will move into the same flow next.
         </div>
       )}
     </div>
@@ -4259,39 +4586,35 @@ const StudioPage: React.FC = () => {
         </h2>
         <p style={memberEmptyStateBodyStyle}>
           {hasSelectedMemberFocus
-            ? 'This selected member does not currently expose an editable workflow canvas in Studio. Continue in Bind or Invoke, or create a new workflow member to start from Build.'
+            ? 'This selected member does not currently expose an editable Build surface in Studio. Continue in Bind or Invoke, or create a new member to start from Build.'
             : memberItems.length > 0
-            ? 'Pick an existing member from Team members to continue in Studio, or explicitly create a new workflow member here.'
-            : 'Studio no longer creates an implicit draft on entry. Create a workflow member when you are ready to start building.'}
+            ? 'Pick an existing member from Team members to continue in Studio, or explicitly create a new member here.'
+            : 'Studio no longer creates an implicit draft on entry. Create a member when you are ready to start building.'}
         </p>
       </div>
       <div style={memberEmptyStateActionsStyle}>
-        <button
+        <Button
           aria-label="Create member from empty state"
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           disabled={createMemberButtonDisabled}
-          onClick={() => void openCreateWorkflowMemberFlow()}
+          loading={inventoryBusyAction === 'create'}
+          onClick={() => void openCreateMemberFlow()}
           style={{
             ...inventoryActionPrimaryButtonStyle,
             cursor: createMemberButtonDisabled ? 'not-allowed' : 'pointer',
             opacity: createMemberButtonDisabled ? 0.56 : 1,
           }}
-          type="button"
         >
           Create member
-        </button>
+        </Button>
         <span style={inventoryActionsHintStyle}>
           {hasSelectedMemberFocus
             ? 'Bind and Invoke stay available for this member even when Build is not.'
             : memberItems.length > 0
             ? 'You can also pick an existing member from the left rail.'
-            : 'Only explicit Create member should open a new draft now.'}
+            : 'Only explicit Create member should open a new implementation draft now.'}
         </span>
       </div>
-      {createMemberButtonDisabled ? (
-        <div style={inventoryActionsHintStyle}>
-          Add a workflow directory in Config before creating a member.
-        </div>
-      ) : null}
     </div>
   ) : null;
   const studioContextBar = (
@@ -4307,6 +4630,7 @@ const StudioPage: React.FC = () => {
     >
       <button
         aria-label={studioReturnLabel}
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         type="button"
         onClick={() => history.push(studioReturnHref)}
         style={{
@@ -4372,7 +4696,7 @@ const StudioPage: React.FC = () => {
       canSaveWorkflow={canSaveWorkflow}
       saveNotice={saveNotice}
       workflowGraph={workflowGraph}
-      selectedGraphNodeId={selectedGraphNodeId}
+      selectedGraphNodeId={effectiveSelectedGraphNodeId}
       onSelectGraphNode={setSelectedGraphNodeId}
       runtimePrimitives={runtimePrimitivesQuery.data ?? []}
       scopeId={resolvedStudioScopeId || undefined}
@@ -4467,7 +4791,6 @@ const StudioPage: React.FC = () => {
               flexDirection: 'column',
               minHeight: 0,
               minWidth: 0,
-              overflow: 'auto',
             }}
           >
             {activeBuildMode === 'workflow'
@@ -4518,35 +4841,31 @@ const StudioPage: React.FC = () => {
         onPopOutLogs={handlePopOutExecutionLogs}
       />
     ) : isBindSurface ? (
-      <div
-        style={{
-          display: 'flex',
-          flex: 1,
-          flexDirection: 'column',
-          height: '100%',
-          minHeight: 0,
-          overflow: 'hidden',
-        }}
-      >
-        <StudioMemberBindPanel
-          authSession={authSessionQuery.data}
-          initialEndpointId={bindingSelectionRef.current.endpointId}
-          initialServiceId={bindingSelectionRef.current.serviceId}
-          onBindPendingCandidate={handleBindPendingCandidate}
-          onContinueToInvoke={handleUseBindingEndpoint}
-          onSelectionChange={handleBindingSelectionChange}
-          pendingBindingCandidate={pendingBindCandidate}
-          preferredServiceId={
-            scopeBindingQuery.data?.available
-              ? scopeBindingQuery.data.serviceId
-              : ''
-          }
-          scopeBinding={scopeBindingQuery.data}
-          scopeId={resolvedStudioScopeId}
-          servicesLoading={scopeServicesQuery.isLoading || scopeServicesQuery.isFetching}
-          services={publishedScopeServices}
-        />
-      </div>
+      <StudioMemberBindPanel
+        authSession={authSessionQuery.data}
+        buildWorkflowYamls={
+          activeBuildMode === 'workflow' &&
+          selectedBuildRepresentsBoundMember &&
+          trimOptional(draftYaml)
+            ? buildWorkflowYamlBundle
+            : null
+        }
+        initialEndpointId={bindingSelectionRef.current.endpointId}
+        initialServiceId={bindingSelectionRef.current.serviceId}
+        onBindPendingCandidate={handleBindPendingCandidate}
+        onContinueToInvoke={handleUseBindingEndpoint}
+        onSelectionChange={handleBindingSelectionChange}
+        pendingBindingCandidate={pendingBindCandidate}
+        preferredServiceId={
+          scopeBindingQuery.data?.available
+            ? scopeBindingQuery.data.serviceId
+            : ''
+        }
+        scopeBinding={scopeBindingQuery.data}
+        scopeId={resolvedStudioScopeId}
+        servicesLoading={scopeServicesQuery.isLoading || scopeServicesQuery.isFetching}
+        services={publishedScopeServices}
+      />
     ) : isInvokeSurface ? (
       <StudioMemberInvokePanel
         onSelectionChange={handleInvokeSelectionChange}
@@ -4611,38 +4930,67 @@ const StudioPage: React.FC = () => {
             <Modal
               open={createMemberModalOpen}
               title="Create member"
-              onCancel={closeCreateWorkflowMemberFlow}
-              onOk={() => void handleCreateWorkflowMember()}
-              okText="Create workflow member"
+              onCancel={closeCreateMemberFlow}
+              onOk={() => void handleCreateMember()}
+              okText="Create member"
               okButtonProps={{
                 disabled:
-                  inventoryBusyKey === 'create' ||
+                  inventoryBusyAction === 'create' ||
                   !trimOptional(createMemberName) ||
-                  !trimOptional(createMemberDirectoryId),
-                loading: inventoryBusyKey === 'create',
+                  createMemberKind !== 'workflow' ||
+                  !trimOptional(
+                    trimOptional(createMemberDirectoryId) || inventoryDirectoryId,
+                  ),
+                loading: inventoryBusyAction === 'create',
               }}
               cancelButtonProps={{
-                disabled: inventoryBusyKey === 'create',
+                disabled: inventoryBusyAction === 'create',
               }}
             >
               <div style={inventoryCreateModalStackStyle}>
                 <div style={inventoryCreateFieldStackStyle}>
                   <div style={inventoryCreateFieldLabelStyle}>Member type</div>
                   <div style={inventoryCreateTypeRowStyle}>
-                    <span style={inventoryCreateTypeChipActiveStyle}>Workflow</span>
-                    <span style={inventoryCreateTypeChipDisabledStyle}>Script</span>
-                    <span style={inventoryCreateTypeChipDisabledStyle}>GAgent</span>
+                    {(
+                      [
+                        ['workflow', 'Workflow'],
+                        ['script', 'Script'],
+                        ['gagent', 'GAgent'],
+                      ] as const
+                    ).map(([kind, label]) => (
+                      <button
+                        key={kind}
+                        aria-label={`Create ${label} member`}
+                        aria-pressed={createMemberKind === kind}
+                        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                        type="button"
+                        style={
+                          createMemberKind === kind
+                            ? {
+                                ...inventoryCreateTypeChipActiveStyle,
+                                cursor: 'pointer',
+                              }
+                            : {
+                                ...inventoryCreateTypeChipStyle,
+                                cursor: 'pointer',
+                              }
+                        }
+                        onClick={() => setCreateMemberKind(kind)}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                   <div style={inventoryCreateHintStyle}>
-                    Member inventory currently creates workflow members. Script and
-                    GAgent creation still goes through their dedicated authoring
-                    surfaces.
+                    Choose the implementation kind first. Workflow entry is
+                    available now; Script and GAgent member creation will move into
+                    this modal when the member API lands.
                   </div>
                 </div>
                 <label style={inventoryCreateFieldStackStyle}>
-                  <span style={inventoryCreateFieldLabelStyle}>Workflow member name</span>
+                  <span style={inventoryCreateFieldLabelStyle}>Member name</span>
                   <input
-                    aria-label="Workflow member name"
+                    aria-label="Member name"
                     autoFocus
                     onChange={(event) => setCreateMemberName(event.target.value)}
                     placeholder={suggestedCreateWorkflowName}
@@ -4651,33 +4999,38 @@ const StudioPage: React.FC = () => {
                     value={createMemberName}
                   />
                 </label>
-                <label style={inventoryCreateFieldStackStyle}>
-                  <span style={inventoryCreateFieldLabelStyle}>Directory</span>
-                  <select
-                    aria-label="Workflow directory"
-                    onChange={(event) => setCreateMemberDirectoryId(event.target.value)}
-                    style={inventoryCreateInputStyle}
-                    value={createMemberDirectoryId}
-                  >
-                    <option value="" disabled>
-                      Select a workflow directory
-                    </option>
-                    {inventoryDirectoryOptions.map((directory) => (
-                      <option key={directory.directoryId} value={directory.directoryId}>
-                        {directory.label}
-                      </option>
-                    ))}
-                  </select>
-                  <div style={inventoryCreateHintStyle}>
-                    {selectedCreateDirectory?.path
-                      ? `${selectedCreateDirectory.label} · ${selectedCreateDirectory.path}`
-                      : 'The workflow YAML will be created in the selected Studio directory.'}
-                  </div>
-                </label>
                 <div style={inventoryCreateHintStyle}>
-                  New members start as a blank workflow draft with an empty canvas, so
-                  you can name it first and then continue editing inside Build.
+                  {createMemberKind === 'workflow'
+                    ? 'Workflow members currently start from a blank workflow draft with an empty canvas, so you can name it first and then continue editing inside Build.'
+                    : createMemberKind === 'script'
+                      ? 'Script member creation still relies on the upcoming member API. For now, continue in Build > Script to inspect or edit script implementations.'
+                      : 'GAgent member creation still relies on the upcoming member API. For now, continue in Build > GAgent to inspect or edit GAgent implementations.'}
                 </div>
+                {createMemberKind === 'workflow' ? (
+                  <label style={inventoryCreateFieldStackStyle}>
+                    <span style={inventoryCreateFieldLabelStyle}>Workflow directory</span>
+                    <select
+                      aria-label="Workflow directory"
+                      onChange={(event) => setCreateMemberDirectoryId(event.target.value)}
+                      style={inventoryCreateInputStyle}
+                      value={createMemberDirectoryId}
+                    >
+                      <option value="" disabled>
+                        Select a workflow directory
+                      </option>
+                      {inventoryDirectoryOptions.map((directory) => (
+                        <option key={directory.directoryId} value={directory.directoryId}>
+                          {directory.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div style={inventoryCreateHintStyle}>
+                      {selectedCreateDirectory?.path
+                        ? `${selectedCreateDirectory.label} · ${selectedCreateDirectory.path}`
+                        : 'Add a workflow directory in Config before creating a workflow draft from this entry.'}
+                    </div>
+                  </label>
+                ) : null}
               </div>
             </Modal>
           </>

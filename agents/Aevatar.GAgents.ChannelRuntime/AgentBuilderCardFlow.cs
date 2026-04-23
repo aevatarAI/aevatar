@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -59,7 +60,43 @@ internal static class AgentBuilderCardFlow
         "模板列表",
     };
 
-    public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision)
+    public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision) =>
+        TryResolve(evt, preferredGithubUsername: null, out decision);
+
+    public static async Task<AgentBuilderFlowDecision?> TryResolveAsync(
+        ChannelInboundEvent evt,
+        IUserConfigQueryPort? userConfigQueryPort,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        string? preferredGithubUsername = null;
+        if (ShouldLoadPreferredGithubUsername(evt) && userConfigQueryPort is not null)
+        {
+            try
+            {
+                preferredGithubUsername = (await userConfigQueryPort.GetAsync(
+                    NormalizeScopeId(evt.RegistrationScopeId),
+                    ct)).GithubUsername;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                preferredGithubUsername = null;
+            }
+        }
+
+        TryResolve(evt, preferredGithubUsername, out var decision);
+        return decision;
+    }
+
+    private static bool TryResolve(
+        ChannelInboundEvent evt,
+        string? preferredGithubUsername,
+        out AgentBuilderFlowDecision? decision)
     {
         ArgumentNullException.ThrowIfNull(evt);
         decision = null;
@@ -69,7 +106,7 @@ internal static class AgentBuilderCardFlow
             var normalized = NormalizeText(evt.Text);
             if (LaunchIntents.Contains(normalized))
             {
-                decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard());
+                decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard(preferredGithubUsername));
                 return true;
             }
 
@@ -106,7 +143,7 @@ internal static class AgentBuilderCardFlow
         switch ((action ?? string.Empty).Trim())
         {
             case OpenDailyReportFormAction:
-                decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard());
+                decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard(preferredGithubUsername));
                 return true;
 
             case OpenSocialMediaFormAction:
@@ -247,12 +284,9 @@ internal static class AgentBuilderCardFlow
     {
         argumentsJson = null;
         validationError = null;
-
-        if (!TryGetRequiredExtra(evt, "github_username", out var githubUsername))
-        {
-            validationError = "GitHub username is required. Send /daily and fill in the form again.";
-            return false;
-        }
+        var githubUsername = evt.Extra.TryGetValue("github_username", out var rawGithubUsername)
+            ? NormalizeOptional(rawGithubUsername)
+            : null;
 
         if (!TryBuildDailyCron(evt.Extra.TryGetValue("schedule_time", out var scheduleTime) ? scheduleTime : null, out var scheduleCron, out validationError))
             return false;
@@ -277,6 +311,7 @@ internal static class AgentBuilderCardFlow
             action = "create_agent",
             template = "daily_report",
             github_username = githubUsername,
+            save_github_username_preference = githubUsername is not null,
             repositories,
             schedule_cron = scheduleCron,
             schedule_timezone = scheduleTimezone,
@@ -520,6 +555,19 @@ internal static class AgentBuilderCardFlow
         string.Equals(evt.ChatType, PrivateChatType, StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(evt.Text);
 
+    private static bool ShouldLoadPreferredGithubUsername(ChannelInboundEvent evt)
+    {
+        if (IsPrivateChatText(evt))
+        {
+            var normalized = NormalizeText(evt.Text);
+            return LaunchIntents.Contains(normalized);
+        }
+
+        return string.Equals(evt.ChatType, CardActionChatType, StringComparison.Ordinal) &&
+               evt.Extra.TryGetValue("agent_builder_action", out var action) &&
+               string.Equals(action, OpenDailyReportFormAction, StringComparison.Ordinal);
+    }
+
     private static string NormalizeText(string? text) => (text ?? string.Empty).Trim();
 
     private static string? NormalizeOptional(string? value)
@@ -528,8 +576,16 @@ internal static class AgentBuilderCardFlow
         return normalized.Length == 0 ? null : normalized;
     }
 
-    private static string BuildDailyReportCard()
+    private static string NormalizeScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
+
+    private static string BuildDailyReportCard(string? preferredGithubUsername)
     {
+        var normalizedGithubUsername = NormalizeOptional(preferredGithubUsername);
+        var savedPreferenceNote = normalizedGithubUsername is null
+            ? string.Empty
+            : $"\nSaved GitHub username: `{EscapeMarkdown(normalizedGithubUsername)}`. Leave the field blank to reuse it.";
+
         return JsonSerializer.Serialize(new
         {
             schema = "2.0",
@@ -554,11 +610,12 @@ internal static class AgentBuilderCardFlow
                     {
                         tag = "markdown",
                         content =
-                            "**Day One template:** Daily GitHub report\nFill in the fields below. The agent will run once now and then repeat every day at your chosen local time.",
+                            "**Day One template:** Daily GitHub report\nFill in the fields below. The agent will run once now and then repeat every day at your chosen local time." +
+                            savedPreferenceNote,
                     },
                     BuildForm(
                         "daily_report_form",
-                        BuildInput("github_username", "GitHub Username", "alice"),
+                        BuildInput("github_username", "GitHub Username", normalizedGithubUsername ?? "alice"),
                         BuildInput("repositories", "Repositories (Optional)", "owner/repo, owner/repo"),
                         BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
                         BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),

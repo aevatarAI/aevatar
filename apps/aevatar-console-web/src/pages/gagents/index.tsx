@@ -26,6 +26,7 @@ import {
   Typography,
 } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 import { parseRunContextData } from '@/shared/agui/customEventData';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
@@ -1481,6 +1482,7 @@ const GAgentsPage: React.FC = () => {
 
               return (
                 <button
+                  className={AEVATAR_PRESSABLE_CARD_CLASS}
                   key={assemblyQualifiedName}
                   onClick={() => handleSelectType(assemblyQualifiedName)}
                   style={{

@@ -96,6 +96,8 @@ enum ActionElementKind {
   ACTION_ELEMENT_KIND_FORM_SUBMIT = 3;
   // A link-style action.
   ACTION_ELEMENT_KIND_LINK = 4;
+  // A text input control rendered inside a form block.
+  ACTION_ELEMENT_KIND_TEXT_INPUT = 5;
 }
 
 // Describes one card block shape.
@@ -196,6 +198,10 @@ message ActionElement {
   bool is_danger = 8;
   // Whether the element is disabled.
   bool is_disabled = 9;
+  // Additional scalar arguments forwarded verbatim to the adapter so they surface on callback.
+  // Used to carry correlation keys like workflow actor_id / run_id / step_id that the outbound
+  // side needs the inbound handler to echo back without reinterpretation.
+  map<string, string> arguments = 10;
 }
 
 // Declares one title-text pair rendered inside a card.
@@ -256,6 +262,28 @@ message MessageContent {
   CardActionSubmission card_action = 6;
 }
 
+// Carries the transport-issued facts required to deliver one async reply back through the same boundary.
+message OutboundDeliveryContext {
+  // The opaque reply target identifier that the transport expects when publishing the async reply.
+  string reply_message_id = 1;
+  // The opaque credential or access token that authorizes reply delivery on the current transport.
+  string reply_access_token = 2;
+}
+
+// Carries transport-specific ingress facts that must survive normalization without polluting core conversation semantics.
+message TransportExtras {
+  // The Nyx relay message id that identifies the original callback on async reply.
+  string nyx_message_id = 1;
+  // The Nyx agent API key id that owns the callback route and identifies the local registration.
+  string nyx_agent_api_key_id = 2;
+  // The source platform name reported by Nyx relay.
+  string nyx_platform = 3;
+  // The Nyx relay conversation id observed on ingress.
+  string nyx_conversation_id = 4;
+  // The short-lived Nyx user access token carried by the relay callback for downstream proxy calls.
+  string nyx_user_access_token = 5;
+}
+
 // Represents one normalized activity flowing through the channel pipeline.
 message ChatActivity {
   // The deterministic adapter-owned activity identifier.
@@ -280,4 +308,8 @@ message ChatActivity {
   string reply_to_activity_id = 10;
   // The stable blob reference for sanitized raw payload storage.
   string raw_payload_blob_ref = 11;
+  // The optional async reply delivery facts emitted by the ingress transport.
+  OutboundDeliveryContext outbound_delivery = 12;
+  // The optional transport-specific ingress facts preserved for adapter/runtime handoff.
+  TransportExtras transport_extras = 13;
 }

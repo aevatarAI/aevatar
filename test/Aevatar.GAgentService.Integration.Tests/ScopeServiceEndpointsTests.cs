@@ -3850,6 +3850,12 @@ public sealed class ScopeServiceEndpointsTests
         public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
@@ -4183,12 +4189,17 @@ public sealed class ScopeServiceEndpointsTests
         }
 
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
     }
 
     private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
             throw new InvalidOperationException("config unavailable");
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
+            GetAsync(ct);
     }
 
     private sealed class RecordingResumeDispatchService

@@ -15,6 +15,11 @@ import { Empty } from "antd";
 import { RuntimeEventPreviewPanel } from "@/shared/agui/runtimeConversationPresentation";
 import { AevatarHeaderSelect } from "@/shared/ui/AevatarHeaderSelect";
 import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  joinInteractiveClassNames,
+} from "@/shared/ui/interactionStandards";
+import {
   CONVERSATION_ROUTE_DEFAULT_VALUE,
   USER_LLM_ROUTE_GATEWAY,
   decodeConversationRouteSelectValue,
@@ -385,6 +390,7 @@ function ToolCallIndicator({ tool }: { tool: ToolCallInfo }): React.ReactElement
   return (
     <div style={{ padding: "4px 0" }}>
       <button
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         onClick={() => tool.result && setOpen((value) => !value)}
         style={{
           alignItems: "center",
@@ -484,6 +490,7 @@ function ThinkingBlock({
   return (
     <div style={{ marginBottom: 10 }}>
       <button
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         onClick={() => setOpen((value) => !value)}
         style={{
           alignItems: "center",
@@ -565,6 +572,7 @@ function ApprovalActionButton({
   const isApprove = tone === "approve";
   return (
     <button
+      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
       disabled={busy}
       onClick={onClick}
       style={{
@@ -1265,6 +1273,7 @@ export function ChatMessageBubble({
         {hasSteps || hasTools ? (
           <div style={{ marginBottom: 6 }}>
             <button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               onClick={() => setActionsOpen((value) => !value)}
               style={{
                 alignItems: "center",
@@ -1541,6 +1550,7 @@ export function ChatToolsMenu({
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Tools"
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         onClick={() => setOpen((current) => !current)}
         style={{
           alignItems: "center",
@@ -1667,6 +1677,7 @@ export function ChatToolsMenu({
                 </div>
                 <button
                   aria-label={item.label}
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   onClick={() => {
                     item.onClick();
                     setOpen(false);
@@ -1902,7 +1913,10 @@ export function ConversationLlmConfigBar({
           <div className="scope-chat-llm-panel-title">Conversation model</div>
           {hasOverride ? (
             <button
-              className="scope-chat-llm-reset"
+              className={joinInteractiveClassNames(
+                "scope-chat-llm-reset",
+                AEVATAR_INTERACTIVE_BUTTON_CLASS,
+              )}
               onClick={() => {
                 onReset();
                 setOpen(false);
@@ -1957,7 +1971,10 @@ export function ConversationLlmConfigBar({
         <div className="scope-chat-llm-options">
           {query.trim() && !exactModelMatch ? (
             <button
-              className="scope-chat-llm-option scope-chat-llm-option--manual"
+              className={joinInteractiveClassNames(
+                "scope-chat-llm-option scope-chat-llm-option--manual",
+                AEVATAR_INTERACTIVE_CHIP_CLASS,
+              )}
               onClick={() => handleModelSelect(query.trim())}
               type="button"
             >
@@ -1982,7 +1999,10 @@ export function ConversationLlmConfigBar({
                 const isActive = selectedModel === model;
                 return (
                   <button
-                    className={`scope-chat-llm-option${isActive ? " is-active" : ""}`}
+                    className={joinInteractiveClassNames(
+                      `scope-chat-llm-option${isActive ? " is-active" : ""}`,
+                      AEVATAR_INTERACTIVE_CHIP_CLASS,
+                    )}
                     key={model}
                     onClick={() => handleModelSelect(model)}
                     type="button"
@@ -2008,7 +2028,10 @@ export function ConversationLlmConfigBar({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label="Conversation model settings"
-        className="scope-chat-llm-trigger"
+        className={joinInteractiveClassNames(
+          "scope-chat-llm-trigger",
+          AEVATAR_INTERACTIVE_BUTTON_CLASS,
+        )}
         disabled={disabled}
         onClick={() => setOpen((value) => !value)}
         ref={triggerRef}
@@ -2128,6 +2151,7 @@ export function ChatInput({
             {isStreaming ? (
               <button
                 aria-label="Stop"
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 onClick={onStop}
                 style={{
                   alignItems: "center",
@@ -2150,6 +2174,7 @@ export function ChatInput({
             ) : (
               <button
                 aria-label="Send"
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 disabled={!value.trim() || disabled}
                 onClick={handleSend}
                 style={{
@@ -2249,6 +2274,7 @@ export function ConversationSidebar({
       >
         <button
           aria-label="Show conversations"
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           onClick={onToggle}
           style={{
             background: "transparent",
@@ -2313,6 +2339,7 @@ export function ConversationSidebar({
         <div style={{ display: "flex", gap: 4 }}>
           <button
             aria-label="New chat"
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={onNewChat}
             style={{
               background: "transparent",
@@ -2341,6 +2368,7 @@ export function ConversationSidebar({
           </button>
           <button
             aria-label="Hide conversations"
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={onToggle}
             style={{
               background: "transparent",
@@ -2444,6 +2472,7 @@ export function ConversationSidebar({
               </div>
               <button
                 aria-label={`Delete ${conversation.title || "conversation"}`}
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 onClick={(event) => {
                   event.stopPropagation();
                   onDelete(conversation.id);
@@ -2563,6 +2592,7 @@ export function ChatMetaStrip({
         {primaryItems.map((item) => renderChip(item))}
         {detailItems.length > 0 ? (
           <button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={() => setDetailsOpen((current) => !current)}
             style={{
               background: "transparent",
@@ -2730,6 +2760,7 @@ export function EmptyChatState({
         ) : null}
         {actionLabel && onAction ? (
           <button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={onAction}
             style={{
               background: "#111827",

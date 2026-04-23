@@ -27,6 +27,11 @@ import type {
 } from '@/shared/studio/models';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import { describeError } from '@/shared/ui/errorText';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  joinInteractiveClassNames,
+} from '@/shared/ui/interactionStandards';
 
 type QueryState<T> = {
   readonly isLoading: boolean;
@@ -883,6 +888,7 @@ function FilesDrawer(props: {
             <div style={editorHeaderTitleStyle}>{props.title}</div>
           </div>
           <button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             type="button"
             onClick={props.onClose}
             style={secondaryActionStyle}
@@ -1285,6 +1291,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <div style={editorHeaderTitleStyle}>Configuration</div>
           </div>
           <button
+            aria-disabled={!settingsDirty || settingsPending}
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             type="button"
             disabled={!settingsDirty || settingsPending}
             onClick={() => void handleSaveSettings()}
@@ -1346,6 +1354,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
               onClick={handleAddRole}
               style={secondaryActionStyle}
@@ -1354,6 +1363,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               Add Role
             </button>
             <button
+              aria-disabled={!roleCatalogDirty || rolePending}
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
               disabled={!roleCatalogDirty || rolePending}
               onClick={() => void handleSaveRoles()}
@@ -1411,6 +1422,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   </div>
                 </div>
                 <button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -1544,6 +1556,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     ).includes(name);
                     return (
                       <button
+                        aria-pressed={active}
+                        className={joinInteractiveClassNames(
+                          AEVATAR_INTERACTIVE_BUTTON_CLASS,
+                          AEVATAR_INTERACTIVE_CHIP_CLASS,
+                        )}
                         key={`${editingRole.key}:${name}`}
                         type="button"
                         onClick={() =>
@@ -1622,6 +1639,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ position: 'relative' }}>
               <button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 onClick={() => setConnectorAddMenuOpen((current) => !current)}
                 style={secondaryActionStyle}
@@ -1649,6 +1667,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 >
                   {(['http', 'cli', 'mcp'] as const).map((type) => (
                     <button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       key={type}
                       type="button"
                       onClick={() => handleAddConnector(type)}
@@ -1666,6 +1685,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               ) : null}
             </div>
             <button
+              aria-disabled={!connectorCatalogDirty || connectorPending}
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
               disabled={!connectorCatalogDirty || connectorPending}
               onClick={() => void handleSaveConnectors()}
@@ -1744,6 +1765,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     <div style={catalogMetaStyle}>{preview || 'No target configured'}</div>
                   </div>
                   <button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
@@ -1824,6 +1846,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               <div style={toggleRowStyle}>
                 <span style={fieldLabelStyle}>Enabled</span>
                 <button
+                  aria-pressed={editingConnector.enabled}
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   type="button"
                   onClick={() =>
                     setConnectorCatalogDraft((current) =>
@@ -2326,6 +2350,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
             </div>
             <button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
               onClick={() =>
                 onOpenWorkflowInStudio(selectedWorkflowSummary.workflowId)
@@ -2431,6 +2456,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
             </div>
             <button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
               onClick={() => void handleDeleteConversation()}
               style={{
@@ -2619,6 +2645,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
             </div>
             <button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
               onClick={() => onOpenScriptInStudio(scriptId)}
               style={primaryActionStyle}

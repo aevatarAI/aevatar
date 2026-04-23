@@ -2,23 +2,35 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
+/// <summary>
+/// Delivers workflow human-interaction suspensions and resolutions as Lark interactive cards
+/// via the NyxID proxy. Card construction runs through <see cref="LarkMessageComposer"/> so the
+/// outbound shape and Lark-native card schema stay owned by the composer; this port only knows
+/// the <see cref="MessageContent"/> intent and the NyxID proxy transport (a proactive outbound
+/// send to a user-scoped conversation, distinct from relay-reply traffic).
+/// </summary>
 public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 {
     private readonly IUserAgentCatalogRuntimeQueryPort _agentRegistryQueryPort;
     private readonly NyxIdApiClient _nyxIdApiClient;
+    private readonly LarkMessageComposer _composer;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
 
     public FeishuCardHumanInteractionPort(
         IUserAgentCatalogRuntimeQueryPort agentRegistryQueryPort,
         NyxIdApiClient nyxIdApiClient,
+        LarkMessageComposer composer,
         ILogger<FeishuCardHumanInteractionPort> logger)
     {
         _agentRegistryQueryPort = agentRegistryQueryPort ?? throw new ArgumentNullException(nameof(agentRegistryQueryPort));
         _nyxIdApiClient = nyxIdApiClient ?? throw new ArgumentNullException(nameof(nyxIdApiClient));
+        _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -30,15 +42,15 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         ArgumentNullException.ThrowIfNull(request);
 
         var target = await ResolveTargetAsync(deliveryTargetId, cancellationToken);
-        await SendTextMessageAsync(
+        await SendInteractiveCardMessageAsync(
             target,
-            BuildSuspensionText(request),
-            "Feishu human interaction delivery returned empty response.",
-            "Feishu human interaction delivery failed",
+            BuildCardJson(request, _composer),
+            "Feishu human interaction card delivery returned empty response.",
+            "Feishu human interaction card delivery failed",
             cancellationToken);
 
         _logger.LogInformation(
-            "Delivered human interaction instructions: target={DeliveryTargetId}, run={RunId}, step={StepId}",
+            "Delivered human interaction card: target={DeliveryTargetId}, run={RunId}, step={StepId}",
             deliveryTargetId,
             request.RunId,
             request.StepId);
@@ -141,49 +153,115 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         return string.Join('\n', lines);
     }
 
-    internal static string BuildCardJson(HumanInteractionRequest request)
+    /// <summary>
+    /// Builds the Lark interactive card JSON for the suspension request by projecting it onto a
+    /// <see cref="MessageContent"/> intent and delegating rendering to <see cref="LarkMessageComposer"/>.
+    /// </summary>
+    /// <remarks>
+    /// The outbound button-value payload must stay byte-compatible with the inbound card-action
+    /// parser in <c>NyxIdRelayWorkflowCards</c>: the parser flattens <c>action.value</c> and
+    /// <c>action.form_value</c>, so the correlation keys (<c>actor_id</c>, <c>run_id</c>,
+    /// <c>step_id</c>, <c>approved</c>) are carried via the new <c>ActionElement.Arguments</c> map
+    /// and form-input names (<c>edited_content</c>, <c>user_input</c>) are carried as action ids.
+    /// </remarks>
+    internal static string BuildCardJson(HumanInteractionRequest request) =>
+        BuildCardJson(request, new LarkMessageComposer());
+
+    internal static string BuildCardJson(HumanInteractionRequest request, LarkMessageComposer composer)
     {
-        var elements = new List<object>
+        var intent = BuildSuspensionIntent(request);
+        var payload = composer.Compose(intent, BuildComposeContext());
+        return payload.ContentJson;
+    }
+
+    internal static MessageContent BuildSuspensionIntent(HumanInteractionRequest request)
+    {
+        var intent = new MessageContent
         {
-            new
-            {
-                tag = "markdown",
-                content = BuildLegacyMarkdown(request),
-            },
+            Text = string.Empty,
+            Disposition = MessageDisposition.Normal,
         };
+
+        var headerCard = new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            Title = ResolveTitle(request),
+            Text = BuildLegacyMarkdown(request),
+        };
+        intent.Cards.Add(headerCard);
 
         if (SupportsApproveReject(request))
         {
-            elements.Add(new
-            {
-                tag = "form",
-                name = "human_interaction_form",
-                elements = new object[]
-                {
-                    BuildLegacyInput("edited_content", "Edited Draft (Optional)", "Paste the final draft here before approving"),
-                    BuildLegacyInput("user_input", "Rejection Feedback (Optional)", "Explain what should change if you reject"),
-                    BuildLegacyActionButton("Approve", "primary", request, approved: true),
-                    BuildLegacyActionButton("Reject", "default", request, approved: false),
-                },
-            });
+            intent.Actions.Add(BuildTextInput("edited_content", "Edited Draft (Optional)", "Paste the final draft here before approving"));
+            intent.Actions.Add(BuildTextInput("user_input", "Rejection Feedback (Optional)", "Explain what should change if you reject"));
+            intent.Actions.Add(BuildFormButton(
+                actionId: "approve",
+                label: "Approve",
+                isPrimary: true,
+                isDanger: false,
+                request,
+                approved: true));
+            intent.Actions.Add(BuildFormButton(
+                actionId: "reject",
+                label: "Reject",
+                isPrimary: false,
+                isDanger: true,
+                request,
+                approved: false));
+        }
+        else
+        {
+            intent.Actions.Add(BuildTextInput("user_input", "Response", "Enter your response"));
+            intent.Actions.Add(BuildFormButton(
+                actionId: "submit",
+                label: "Submit",
+                isPrimary: true,
+                isDanger: false,
+                request,
+                approved: null));
         }
 
-        return JsonSerializer.Serialize(new
-        {
-            schema = "2.0",
-            config = new { wide_screen_mode = true },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = ResolveTitle(request),
-                },
-                template = SupportsApproveReject(request) ? "orange" : "blue",
-            },
-            body = new { elements },
-        });
+        return intent;
     }
+
+    private static ActionElement BuildTextInput(string actionId, string label, string placeholder) =>
+        new()
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = actionId,
+            Label = label,
+            Placeholder = placeholder,
+        };
+
+    private static ActionElement BuildFormButton(
+        string actionId,
+        string label,
+        bool isPrimary,
+        bool isDanger,
+        HumanInteractionRequest request,
+        bool? approved)
+    {
+        var button = new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = actionId,
+            Label = label,
+            IsPrimary = isPrimary,
+            IsDanger = isDanger,
+        };
+        button.Arguments["action_id"] = actionId;
+        button.Arguments["actor_id"] = request.ActorId;
+        button.Arguments["run_id"] = request.RunId;
+        button.Arguments["step_id"] = request.StepId;
+        if (approved.HasValue)
+            button.Arguments["approved"] = approved.Value ? "true" : "false";
+        return button;
+    }
+
+    private static ComposeContext BuildComposeContext() => new()
+    {
+        Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+    };
 
     private async Task<UserAgentCatalogEntry> ResolveTargetAsync(
         string deliveryTargetId,
@@ -211,13 +289,42 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         string text,
         string emptyResponseMessage,
         string failurePrefix,
+        CancellationToken cancellationToken) =>
+        await SendMessageAsync(
+            target,
+            "text",
+            JsonSerializer.Serialize(new { text }),
+            emptyResponseMessage,
+            failurePrefix,
+            cancellationToken);
+
+    private async Task SendInteractiveCardMessageAsync(
+        UserAgentCatalogEntry target,
+        string cardJson,
+        string emptyResponseMessage,
+        string failurePrefix,
+        CancellationToken cancellationToken)
+        => await SendMessageAsync(
+            target,
+            "interactive",
+            cardJson,
+            emptyResponseMessage,
+            failurePrefix,
+            cancellationToken);
+
+    private async Task SendMessageAsync(
+        UserAgentCatalogEntry target,
+        string messageType,
+        string contentJson,
+        string emptyResponseMessage,
+        string failurePrefix,
         CancellationToken cancellationToken)
     {
         var body = JsonSerializer.Serialize(new
         {
             receive_id = target.ConversationId,
-            msg_type = "text",
-            content = JsonSerializer.Serialize(new { text }),
+            msg_type = messageType,
+            content = contentJson,
         });
 
         var result = await _nyxIdApiClient.ProxyRequestAsync(
@@ -270,44 +377,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         return builder.ToString();
     }
 
-    private static object BuildLegacyActionButton(string label, string style, HumanInteractionRequest request, bool approved) =>
-        new
-        {
-            tag = "button",
-            type = style,
-            name = approved ? "approve" : "reject",
-            form_action_type = "submit",
-            text = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            value = new
-            {
-                actor_id = request.ActorId,
-                run_id = request.RunId,
-                step_id = request.StepId,
-                approved,
-            },
-        };
-
-    private static object BuildLegacyInput(string name, string label, string placeholder) =>
-        new
-        {
-            tag = "input",
-            name,
-            label = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            placeholder = new
-            {
-                tag = "plain_text",
-                content = placeholder,
-            },
-        };
-
     private static string BuildLegacyMarkdown(HumanInteractionRequest request)
     {
         var lines = new List<string> { $"**{request.Prompt}**" };
@@ -316,6 +385,20 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         lines.Add($"\nRun: `{request.RunId}`");
         lines.Add($"Step: `{request.StepId}`");
+        lines.Add($"Actor: `{request.ActorId}`");
+
+        lines.Add("\nFallback commands if card actions are unavailable:");
+        if (SupportsApproveReject(request))
+        {
+            lines.Add($"- Approve: `{BuildApproveCommand(request)}`");
+            lines.Add($"- Approve with edits: `{BuildApproveCommand(request, "edited_content=\\\"final approved content\\\"")}`");
+            lines.Add($"- Reject: `{BuildRejectCommand(request, "feedback=\\\"what should change\\\"")}`");
+        }
+        else
+        {
+            lines.Add($"- Submit: `{BuildSubmitCommand(request, "user_input=\\\"your response here\\\"")}`");
+        }
+
         return string.Concat(lines);
     }
 

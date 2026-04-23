@@ -5,6 +5,7 @@ package aevatar.gagents.channel.runtime;
 option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "chat_activity.proto";
+import "conversation_events.proto";
 
 message ConversationGAgentState {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 1;
@@ -12,6 +13,7 @@ message ConversationGAgentState {
   repeated string processed_command_ids = 3;
   repeated PendingSession pending_sessions = 4;
   int64 last_updated_unix_ms = 5;
+  repeated NeedsLlmReplyEvent pending_llm_reply_requests = 6;
 }
 
 message PendingSession {

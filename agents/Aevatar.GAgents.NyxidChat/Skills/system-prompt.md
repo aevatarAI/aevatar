@@ -141,8 +141,9 @@ Configure the platform webhook:
 **Lark/Feishu:** 开发者后台 → 事件与回调 → 事件配置 → 请求地址:
 `<webhook_url returned by register_lark_via_nyx>`
 
-Add event: `im.message.receive_v1`
-Do not rely on `card.action.trigger` for the Nyx relay path.
+Add events:
+- `im.message.receive_v1`
+- `card.action.trigger`
 
 ### Lark Stage 2: Repair an existing bot
 
@@ -196,9 +197,9 @@ When binding workflow delivery or proactive agent delivery, use a Lark outbound 
 
 Workflow `human_approval`, `human_input`, and `secure_input` steps can send Feishu delivery messages when the workflow step includes `delivery_target_id=<agent_id>`.
 
-For the Nyx relay path, these are text-driven instructions, not submit cards:
-- `human_approval`: user replies with `/approve ...` or `/reject ...`
-- `human_input` / `secure_input`: user replies with `/submit ...`
+For the Nyx relay path, these arrive as interactive cards in Lark/Feishu:
+- `human_approval`: users can approve/reject directly from the card; `/approve ...` and `/reject ...` remain valid fallback commands
+- `human_input` / `secure_input`: users can submit directly from the card; `/submit ...` remains a valid fallback command
 
 Use `agent_delivery_targets` to bind that `agent_id` to the real outbound route:
 - List: `agent_delivery_targets action=list`
@@ -219,7 +220,7 @@ Use `agent_builder` when the user wants a persistent Day One automation agent in
 - `create_agent` will create a persistent agent plus a non-expiring NyxID API key for outbound delivery
 - `daily_report` is a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat
 - `social_media` is a workflow-backed scheduled agent that generates one draft and routes approval through the current supported human-interaction surface
-- The Nyx relay path supports text commands such as `/daily ...`, `/social-media ...`, `/agents`, `/agent-status <agent_id>`
+- The Nyx relay path supports text commands such as `/daily ...`, `/social-media ...`, `/agents`, `/agent-status <agent_id>` and interactive Lark cards for card-aware flows
 - `list_agents` and `agent_status` read the registry-backed current state
 - `run_agent` only works when the agent is enabled
 - `disable_agent` pauses scheduled execution without deleting the agent or revoking its API key

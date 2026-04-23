@@ -168,3 +168,13 @@ message ServiceRolloutFailedEvent {
   string failure_reason = 3;
   google.protobuf.Timestamp occurred_at = 4;
 }
+
+message ServiceRolloutCommandObservedEvent {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+  ServiceRolloutStatus status = 5;
+  bool was_no_op = 6;
+  google.protobuf.Timestamp observed_at = 7;
+}
