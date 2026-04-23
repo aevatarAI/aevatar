@@ -1,9 +1,8 @@
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Runtime-only registration read path used by callback ingress.
-/// Composes any runtime-only direct callback binding material that should stay
-/// off the public registration read model.
+/// Runtime registration read path used by legacy call sites that still expect a
+/// callback-facing query port. It now mirrors the public non-secret read model.
 /// </summary>
 public interface IChannelBotRegistrationRuntimeQueryPort
 {

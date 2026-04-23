@@ -93,13 +93,8 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ChannelBotRegistrationMaterializationContext,
             ChannelBotRegistrationProjector>();
-        services.AddCurrentStateProjectionMaterializer<
-            ChannelBotRegistrationMaterializationContext,
-            ChannelBotDirectCallbackBindingProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotDirectCallbackBindingDocument>,
-            ChannelBotDirectCallbackBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
@@ -114,17 +109,10 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
-            services.AddElasticsearchDocumentProjectionStore<ChannelBotDirectCallbackBindingDocument, string>(
-                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotDirectCallbackBindingDocument>>().Metadata,
-                keySelector: static doc => doc.Id,
-                keyFormatter: static key => key);
         }
         else
         {
             services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
-                static doc => doc.Id, static key => key);
-            services.AddInMemoryDocumentProjectionStore<ChannelBotDirectCallbackBindingDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 
@@ -177,7 +165,6 @@ public static class ServiceCollectionExtensions
 
         // Register platform adapters
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, TelegramPlatformAdapter>());
 
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
 
@@ -197,7 +184,6 @@ public static class ServiceCollectionExtensions
         });
         services.TryAddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<LarkPayloadRedactor>();
-        services.TryAddSingleton<LarkConversationAdapterFactory>();
         services.TryAddSingleton<ConversationDispatchMiddleware>();
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, LarkConversationTurnRunner>());
         services.Replace(ServiceDescriptor.Singleton(_ => new MiddlewarePipelineBuilder()
@@ -209,9 +195,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
         services.TryAddSingleton<LarkConversationInboxRuntime>();
         services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService>(sp =>
-            sp.GetRequiredService<LarkConversationInboxRuntime>()));
-        services.TryAddSingleton<ILarkConversationIngressRuntime, LarkConversationIngressRuntime>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, LarkConversationInboxHostedService>());
 
         return services;
     }
