@@ -6,6 +6,7 @@ import {
   AevatarInspectorEmpty,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_INTERACTIVE_CHIP_CLASS } from "@/shared/ui/interactionStandards";
 import {
   DetailPill,
   FactLine,
@@ -137,6 +138,7 @@ const TeamTopologyTab: React.FC<TeamTopologyTabProps> = ({
               return (
                 <button
                   aria-pressed={active}
+                  className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                   disabled={depthControlDisabled}
                   key={depth}
                   onClick={() => onSetGraphDepth(depth)}

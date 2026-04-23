@@ -10,10 +10,12 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.Relay;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -607,6 +609,126 @@ public class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("ignored");
         response.Body.Should().Contain("empty_text");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchWorkflowResume_ForRelayCardAction()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-card", relayApiKeyId: "scope-card");
+        var payload = """
+            {
+              "message_id":"msg-card-1",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-card"},
+              "conversation":{"id":"conv-card-1","platform_id":"oc_chat_1"},
+              "content":{
+                "type":"card_action",
+                "text":"{\"tag\":\"button\",\"value\":{\"actor_id\":\"workflow-actor-1\",\"run_id\":\"run-1\",\"step_id\":\"approval-1\",\"approved\":false},\"form_value\":{\"user_input\":\"Need stronger hook\"},\"open_message_id\":\"om_123\"}"
+              }
+            }
+            """;
+        var dispatchService = new RecordingWorkflowResumeDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("workflow-actor-1", "run-1", "cmd-card-1", "corr-card-1")),
+        };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(dispatchService)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var store = new StubGAgentActorStore();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            store,
+            new NyxIdRelayOptions(),
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("workflow_resume_accepted");
+        dispatchService.Commands.Should().ContainSingle();
+        dispatchService.Commands[0].ActorId.Should().Be("workflow-actor-1");
+        dispatchService.Commands[0].RunId.Should().Be("run-1");
+        dispatchService.Commands[0].StepId.Should().Be("approval-1");
+        dispatchService.Commands[0].Approved.Should().BeFalse();
+        dispatchService.Commands[0].Feedback.Should().Be("Need stronger hook");
+        runtime.Actors.Should().BeEmpty();
+        store.AddedActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchWorkflowResume_ForRelayCardActionContentTypeField()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-card", relayApiKeyId: "scope-card");
+        var payload = """
+            {
+              "message_id":"msg-card-2",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-card"},
+              "conversation":{"id":"conv-card-2","platform_id":"oc_chat_2"},
+              "content":{
+                "content_type":"card_action",
+                "text":"{\"tag\":\"button\",\"value\":{\"actor_id\":\"workflow-actor-2\",\"run_id\":\"run-2\",\"step_id\":\"approval-2\",\"approved\":true},\"form_value\":{\"edited_content\":\"Ship it\"},\"open_message_id\":\"om_456\"}"
+              }
+            }
+            """;
+        var dispatchService = new RecordingWorkflowResumeDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("workflow-actor-2", "run-2", "cmd-card-2", "corr-card-2")),
+        };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(dispatchService)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var store = new StubGAgentActorStore();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            store,
+            new NyxIdRelayOptions(),
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("workflow_resume_accepted");
+        dispatchService.Commands.Should().ContainSingle();
+        dispatchService.Commands[0].ActorId.Should().Be("workflow-actor-2");
+        dispatchService.Commands[0].RunId.Should().Be("run-2");
+        dispatchService.Commands[0].StepId.Should().Be("approval-2");
+        dispatchService.Commands[0].Approved.Should().BeTrue();
+        dispatchService.Commands[0].UserInput.Should().Be("Ship it");
+        dispatchService.Commands[0].EditedContent.Should().Be("Ship it");
+        dispatchService.Commands[0].Feedback.Should().BeNull();
+        runtime.Actors.Should().BeEmpty();
+        store.AddedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -1288,7 +1410,6 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public void BuildRelayDiagnostic_ShouldUseServerDefaultsAndTokenFlag()
     {
-        var method = EndpointsType.GetMethod("BuildRelayDiagnostic", BindingFlags.NonPublic | BindingFlags.Static)!;
         var metadata = new MapField<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdRoutePreference] = "direct",
@@ -1303,10 +1424,7 @@ public class NyxIdChatEndpointsCoverageTests
             })
             .Build();
 
-        var diag = method.Invoke(null, [metadata, configuration, "LLM request failed: timeout"])!.Should()
-            .NotBeNull()
-            .And.BeOfType<string>()
-            .Subject;
+        var diag = NyxIdRelayReplies.BuildDiagnostic(metadata, configuration, "LLM request failed: timeout");
 
         diag.Should().Contain("Model: deepseek-chat (from user config)");
         diag.Should().Contain("Route: direct");
@@ -1983,6 +2101,22 @@ public class NyxIdChatEndpointsCoverageTests
 
         public Task<string> BuildPromptSectionAsync(int maxChars = 2000, CancellationToken ct = default) =>
             Task.FromResult(promptSection);
+    }
+
+    private sealed class RecordingWorkflowResumeDispatchService
+        : ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+    {
+        public required CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> Result { get; init; }
+
+        public List<WorkflowResumeCommand> Commands { get; } = [];
+
+        public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowResumeCommand command,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            return Task.FromResult(Result);
+        }
     }
 
     private sealed class NoopDisposable : IAsyncDisposable

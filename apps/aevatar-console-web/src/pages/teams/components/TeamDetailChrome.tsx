@@ -6,6 +6,7 @@ import {
   AevatarPageShell,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_INTERACTIVE_CHIP_CLASS } from "@/shared/ui/interactionStandards";
 
 export type TeamTabOption = {
   readonly label: string;
@@ -116,6 +117,7 @@ export const TeamTabBar: React.FC<TeamTabBarProps> = ({
         return (
           <button
             aria-current={active ? "page" : undefined}
+            className={AEVATAR_INTERACTIVE_CHIP_CLASS}
             key={option.value}
             onClick={() => onSelectTab(option.value)}
             style={{
