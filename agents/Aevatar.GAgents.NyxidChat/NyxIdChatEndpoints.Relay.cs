@@ -91,6 +91,10 @@ public static partial class NyxIdChatEndpoints
             http.User = validation.Principal;
             var scopeId = validation.Subject!;
 
+            // Relay callbacks reuse the same user-config projection path as Studio and web chat.
+            // After JWT validation we attach the relay principal to HttpContext.User so
+            // IAppScopeResolver can resolve the same scope from the validated subject.
+
             if (string.Equals(contentType, RelayCardActionContentType, StringComparison.Ordinal))
             {
                 if (await TryHandleRelayWorkflowCardActionAsync(http, message, logger, ct) is { } workflowResult)
