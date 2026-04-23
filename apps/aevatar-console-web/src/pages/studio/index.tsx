@@ -4791,7 +4791,6 @@ const StudioPage: React.FC = () => {
               flexDirection: 'column',
               minHeight: 0,
               minWidth: 0,
-              overflow: 'auto',
             }}
           >
             {activeBuildMode === 'workflow'
@@ -4842,42 +4841,31 @@ const StudioPage: React.FC = () => {
         onPopOutLogs={handlePopOutExecutionLogs}
       />
     ) : isBindSurface ? (
-      <div
-        style={{
-          display: 'flex',
-          flex: 1,
-          flexDirection: 'column',
-          height: '100%',
-          minHeight: 0,
-          overflow: 'hidden',
-        }}
-      >
-        <StudioMemberBindPanel
-          authSession={authSessionQuery.data}
-          buildWorkflowYamls={
-            activeBuildMode === 'workflow' &&
-            selectedBuildRepresentsBoundMember &&
-            trimOptional(draftYaml)
-              ? buildWorkflowYamlBundle
-              : null
-          }
-          initialEndpointId={bindingSelectionRef.current.endpointId}
-          initialServiceId={bindingSelectionRef.current.serviceId}
-          onBindPendingCandidate={handleBindPendingCandidate}
-          onContinueToInvoke={handleUseBindingEndpoint}
-          onSelectionChange={handleBindingSelectionChange}
-          pendingBindingCandidate={pendingBindCandidate}
-          preferredServiceId={
-            scopeBindingQuery.data?.available
-              ? scopeBindingQuery.data.serviceId
-              : ''
-          }
-          scopeBinding={scopeBindingQuery.data}
-          scopeId={resolvedStudioScopeId}
-          servicesLoading={scopeServicesQuery.isLoading || scopeServicesQuery.isFetching}
-          services={publishedScopeServices}
-        />
-      </div>
+      <StudioMemberBindPanel
+        authSession={authSessionQuery.data}
+        buildWorkflowYamls={
+          activeBuildMode === 'workflow' &&
+          selectedBuildRepresentsBoundMember &&
+          trimOptional(draftYaml)
+            ? buildWorkflowYamlBundle
+            : null
+        }
+        initialEndpointId={bindingSelectionRef.current.endpointId}
+        initialServiceId={bindingSelectionRef.current.serviceId}
+        onBindPendingCandidate={handleBindPendingCandidate}
+        onContinueToInvoke={handleUseBindingEndpoint}
+        onSelectionChange={handleBindingSelectionChange}
+        pendingBindingCandidate={pendingBindCandidate}
+        preferredServiceId={
+          scopeBindingQuery.data?.available
+            ? scopeBindingQuery.data.serviceId
+            : ''
+        }
+        scopeBinding={scopeBindingQuery.data}
+        scopeId={resolvedStudioScopeId}
+        servicesLoading={scopeServicesQuery.isLoading || scopeServicesQuery.isFetching}
+        services={publishedScopeServices}
+      />
     ) : isInvokeSurface ? (
       <StudioMemberInvokePanel
         onSelectionChange={handleInvokeSelectionChange}
