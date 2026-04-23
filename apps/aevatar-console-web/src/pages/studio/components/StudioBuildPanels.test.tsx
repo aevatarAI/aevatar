@@ -1,5 +1,5 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
@@ -363,12 +363,21 @@ describe('StudioWorkflowBuildPanel', () => {
 
     expect(await screen.findByText('DAG Canvas')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-stage-actions')).toBeInTheDocument();
-    expect(screen.getByTestId('workflow-build-primary-column')).toHaveStyle({
-      alignSelf: 'start',
-    });
+    const workflowEditorWorkspace = screen.getByTestId('workflow-editor-workspace');
+    const workflowDryRunPanel = screen.getByTestId('workflow-dry-run-panel');
+    expect(workflowEditorWorkspace).toBeInTheDocument();
+    expect(workflowDryRunPanel).toBeInTheDocument();
+    expect(within(workflowEditorWorkspace).queryByText('Dry-run')).not.toBeInTheDocument();
+    expect(
+      workflowEditorWorkspace.compareDocumentPosition(workflowDryRunPanel) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
     expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-step-type-picker-grid')).toHaveStyle({
+      overflowY: 'auto',
+    });
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
@@ -437,6 +446,48 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(handleContinueToBind).toHaveBeenCalledWith(
       expect.stringContaining('review_step'),
     );
+  });
+
+  it('keeps runtime metadata out of output and only exposes it in debug details', async () => {
+    mockedParseBackendSSEStream.mockImplementationOnce(async function* () {
+      yield {
+        type: AGUIEventType.RUN_STARTED,
+        actorId: 'actor-1',
+        runId: 'run-1',
+      };
+      yield {
+        type: AGUIEventType.CUSTOM,
+        name: 'run_context',
+      } as any;
+      yield {
+        type: AGUIEventType.TEXT_MESSAGE_END,
+        message: 'final workflow answer',
+      };
+    });
+
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(await screen.findByText('final workflow answer')).toBeInTheDocument();
+
+    const outputSection = screen.getByText('Output');
+    const outputPanel = outputSection.parentElement;
+    expect(outputPanel).not.toBeNull();
+    expect(within(outputPanel as HTMLElement).getByText('final workflow answer')).toBeInTheDocument();
+    expect(within(outputPanel as HTMLElement).queryByText(/runId:/i)).not.toBeInTheDocument();
+    expect(within(outputPanel as HTMLElement).queryByText(/actorId:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Run summary')).not.toBeInTheDocument();
+
+    const debugDetailsToggle = await screen.findByText('Debug details');
+    fireEvent.click(debugDetailsToggle);
+    expect(await screen.findByText(/runId: run-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/actorId: actor-1/i)).toBeInTheDocument();
   });
 
   it('shows a friendly provider guidance message when draft run backend rejects the route', async () => {

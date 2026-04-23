@@ -692,6 +692,7 @@ jest.mock("@/shared/studio/api", () => ({
       workflowYamls: string[];
     }) => ({
       scopeId: input.scopeId,
+      serviceId: "default",
       displayName: input.displayName || "workspace-demo",
       targetKind: "workflow",
       targetName: input.displayName || "workspace-demo",
@@ -1551,6 +1552,13 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
         props.initialServiceId || props.preferredServiceId || "no-service"
       ),
       React.createElement(
+        "div",
+        { key: "candidate" },
+        props.pendingBindingCandidate
+          ? `candidate:${props.pendingBindingCandidate.displayName}`
+          : "candidate:none"
+      ),
+      React.createElement(
         "button",
         {
           key: "select-endpoint",
@@ -1562,6 +1570,15 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
             }),
         },
         "Select bind endpoint"
+      ),
+      React.createElement(
+        "button",
+        {
+          key: "bind-candidate",
+          type: "button",
+          onClick: () => void props.onBindPendingCandidate?.(),
+        },
+        "Bind current member"
       ),
       React.createElement(
         "button",
@@ -2843,6 +2860,55 @@ describe("StudioPage", () => {
     expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
   });
 
+  it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
+    mockServicesApi.listServices
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          serviceId: "default",
+          displayName: "workspace-demo",
+          deploymentStatus: "Active",
+          primaryActorId: "actor-default",
+          endpoints: [
+            {
+              endpointId: "chat",
+              displayName: "Chat",
+              kind: "chat",
+              description: "Chat with the published workflow.",
+              requestTypeUrl: "",
+              responseTypeUrl: "",
+            },
+          ],
+        },
+      ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    });
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          displayName: "workspace-demo",
+          workflowYamls: expect.arrayContaining([expect.stringContaining("name: workspace-demo")]),
+        }),
+      );
+    });
+  });
+
   it("does not resurrect a deleted workflow step when another node is selected afterwards", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
@@ -3231,7 +3297,7 @@ describe("StudioPage", () => {
     });
 
     expect(workspaceButtonBefore).toBeTruthy();
-    expect(workspaceButtonsBefore).toHaveLength(1);
+    expect(workspaceButtonsBefore).toHaveLength(2);
     expect(otherWorkflowButtonBefore).toBeTruthy();
     expect(
       workspaceButtonBefore!.compareDocumentPosition(otherWorkflowButtonBefore!) &
@@ -3243,7 +3309,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(
         within(rail).getAllByRole("button", { name: "workspace-demo" })
-      ).toHaveLength(1);
+      ).toHaveLength(2);
       expect(within(rail).getByRole("button", { name: "other-workflow" })).toBeTruthy();
     });
 
@@ -3256,12 +3322,41 @@ describe("StudioPage", () => {
     });
 
     expect(workspaceButtonAfter).toBeTruthy();
-    expect(workspaceButtonsAfter).toHaveLength(1);
+    expect(workspaceButtonsAfter).toHaveLength(2);
     expect(otherWorkflowButtonAfter).toBeTruthy();
     expect(
       workspaceButtonAfter!.compareDocumentPosition(otherWorkflowButtonAfter!) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it("does not truncate the team member rail when more than eight members are available", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce(
+      Array.from({ length: 9 }, (_, index) => ({
+        workflowId: `workflow-${index + 1}`,
+        name: `member-${index + 1}`,
+        description: `Workflow ${index + 1}`,
+        fileName: `member-${index + 1}.yaml`,
+        filePath: `/tmp/workflows/member-${index + 1}.yaml`,
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: index + 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      }))
+    );
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    const rail = await screen.findByLabelText("Team members");
+    expect(await within(rail).findByRole("button", { name: "member-1" })).toBeTruthy();
+    expect(within(rail).getByRole("button", { name: "member-8" })).toBeTruthy();
+    expect(within(rail).getByRole("button", { name: "member-9" })).toBeTruthy();
   });
 
   it("opens the scripts workspace when the route only carries a script id", async () => {
