@@ -2157,6 +2157,93 @@ const StudioPage: React.FC = () => {
       : buildSurface === 'gagent'
         ? 'gagent'
         : 'workflow';
+  const pendingBindCandidate = useMemo(() => {
+    if (
+      activeBuildMode !== 'workflow' ||
+      !resolvedStudioScopeId ||
+      !trimOptional(draftYaml)
+    ) {
+      return null;
+    }
+
+    const displayName =
+      trimOptional(activeWorkflowName) ||
+      trimOptional(draftWorkflowName) ||
+      'draft';
+
+    return {
+      kind: 'workflow' as const,
+      displayName,
+      description:
+        'Bind creates the first published member service for this workflow draft, then Studio can show its invoke URL and endpoint contract.',
+      actionLabel: 'Bind current workflow',
+    };
+  }, [
+    activeBuildMode,
+    activeWorkflowName,
+    draftWorkflowName,
+    draftYaml,
+    resolvedStudioScopeId,
+  ]);
+  const handleBindPendingCandidate = useCallback(async () => {
+    if (!pendingBindCandidate || !resolvedStudioScopeId) {
+      throw new Error('Resolve the current scope before binding this member.');
+    }
+
+    if (pendingBindCandidate.kind !== 'workflow') {
+      throw new Error('Studio can only bind workflow drafts from this surface right now.');
+    }
+
+    const result = await studioApi.bindScopeWorkflow({
+      scopeId: resolvedStudioScopeId,
+      displayName: pendingBindCandidate.displayName,
+      workflowYamls: await buildWorkflowYamlBundle(),
+    });
+    const [bindingStatusResult, servicesResult] = await Promise.all([
+      scopeBindingQuery.refetch(),
+      scopeServicesQuery.refetch(),
+    ]);
+    const boundServiceId =
+      trimOptional(result.serviceId) ||
+      trimOptional(bindingStatusResult.data?.serviceId);
+
+    if (boundServiceId) {
+      const selectedService = (servicesResult.data ?? []).find(
+        (service) => service.serviceId === boundServiceId,
+      );
+      const defaultEndpointId =
+        selectedService?.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
+          ?.endpointId ||
+        selectedService?.endpoints[0]?.endpointId ||
+        '';
+
+      bindingSelectionRef.current = {
+        serviceId: boundServiceId,
+        endpointId: defaultEndpointId,
+      };
+      invokeSelectionRef.current = {
+        serviceId: boundServiceId,
+        endpointId: defaultEndpointId,
+      };
+
+      history.replace(
+        buildStudioRoute({
+          scopeId: resolvedStudioScopeId || undefined,
+          memberId: boundServiceId,
+          focus: activeBuildFocusKey || undefined,
+          step: 'bind',
+          tab: 'bindings',
+        }),
+      );
+    }
+  }, [
+    activeBuildFocusKey,
+    buildWorkflowYamlBundle,
+    pendingBindCandidate,
+    resolvedStudioScopeId,
+    scopeBindingQuery,
+    scopeServicesQuery,
+  ]);
 
   const openWorkspaceWorkflow = (workflowId: string) => {
     const normalizedWorkflowId = trimOptional(workflowId);
@@ -3731,7 +3818,7 @@ const StudioPage: React.FC = () => {
       });
     };
 
-    for (const service of publishedScopeServices.slice(0, 8)) {
+    for (const service of publishedScopeServices) {
       const isBoundService =
         scopeBindingQuery.data?.available &&
         scopeBindingQuery.data.serviceId === service.serviceId;
@@ -3769,23 +3856,7 @@ const StudioPage: React.FC = () => {
       });
     }
 
-    const currentBoundWorkflowId =
-      currentScopeBindingRevision?.implementationKind === 'workflow'
-        ? trimOptional(preferredScopeWorkflow?.workflowId)
-        : '';
-    const currentBoundScriptId =
-      currentScopeBindingRevision?.implementationKind === 'script'
-        ? trimOptional(currentScopeBindingRevision.scriptId)
-        : '';
-
-    for (const workflow of visibleWorkflowSummaries.slice(0, 6)) {
-      if (
-        currentBoundWorkflowId &&
-        trimOptional(workflow.workflowId) === currentBoundWorkflowId
-      ) {
-        continue;
-      }
-
+    for (const workflow of visibleWorkflowSummaries) {
       addItem({
         key: `workflow:${workflow.workflowId}`,
         label: workflow.name,
@@ -3807,9 +3878,9 @@ const StudioPage: React.FC = () => {
       });
     }
 
-    for (const scriptDetail of availableScopeScripts.slice(0, 4)) {
+    for (const scriptDetail of availableScopeScripts) {
       const scriptId = trimOptional(scriptDetail.script?.scriptId);
-      if (!scriptId || scriptId === currentBoundScriptId) {
+      if (!scriptId) {
         continue;
       }
 
@@ -3833,7 +3904,7 @@ const StudioPage: React.FC = () => {
       addItem(currentMemberItem);
     }
 
-    return items.slice(0, 8);
+    return items;
   }, [
     activeWorkflowName,
     availableScopeScripts,
@@ -3841,7 +3912,6 @@ const StudioPage: React.FC = () => {
     currentScopeBindingRevision?.isActiveServing,
     currentScopeBindingRevision?.primaryActorId,
     currentScopeBindingRevision?.revisionId,
-    currentScopeBindingRevision?.scriptId,
     currentScopeBindingRevision?.staticActorTypeName,
     currentScopeBindingRevision?.workflowName,
     currentMemberDescription,
@@ -3851,13 +3921,10 @@ const StudioPage: React.FC = () => {
     currentMemberTone,
     isBuildGAgentSurface,
     publishedScopeServices,
-    preferredScopeWorkflow,
     selectedRailMemberKey,
     scopeBindingQuery.data?.available,
     scopeBindingQuery.data?.serviceId,
     selectedGAgentTypeName,
-    selectedScriptId,
-    selectedWorkflowId,
     templateWorkflow,
     visibleWorkflowSummaries,
   ]);
@@ -4465,8 +4532,10 @@ const StudioPage: React.FC = () => {
           authSession={authSessionQuery.data}
           initialEndpointId={bindingSelectionRef.current.endpointId}
           initialServiceId={bindingSelectionRef.current.serviceId}
+          onBindPendingCandidate={handleBindPendingCandidate}
           onContinueToInvoke={handleUseBindingEndpoint}
           onSelectionChange={handleBindingSelectionChange}
+          pendingBindingCandidate={pendingBindCandidate}
           preferredServiceId={
             scopeBindingQuery.data?.available
               ? scopeBindingQuery.data.serviceId
@@ -4474,6 +4543,7 @@ const StudioPage: React.FC = () => {
           }
           scopeBinding={scopeBindingQuery.data}
           scopeId={resolvedStudioScopeId}
+          servicesLoading={scopeServicesQuery.isLoading || scopeServicesQuery.isFetching}
           services={publishedScopeServices}
         />
       </div>

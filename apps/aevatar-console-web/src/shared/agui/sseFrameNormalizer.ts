@@ -162,6 +162,8 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
         });
       case AGUIEventType.TEXT_MESSAGE_END:
         return createTypedEvent(eventType, timestamp, {
+          delta: readString(nested, "delta"),
+          message: readString(nested, "message"),
           messageId: readString(nested, "messageId"),
         });
       case AGUIEventType.STEP_STARTED:

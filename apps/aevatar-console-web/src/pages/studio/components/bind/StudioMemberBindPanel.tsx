@@ -44,12 +44,20 @@ type StudioMemberBindPanelProps = {
   readonly initialEndpointId?: string;
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
+  readonly onBindPendingCandidate?: (() => Promise<void>) | null;
   readonly onSelectionChange?: (selection: {
     serviceId: string;
     endpointId: string;
   }) => void;
+  readonly pendingBindingCandidate?: {
+    readonly kind: 'workflow' | 'script' | 'gagent';
+    readonly displayName: string;
+    readonly description: string;
+    readonly actionLabel: string;
+  } | null;
   readonly preferredServiceId?: string;
   readonly authSession?: StudioAuthSession | null;
+  readonly servicesLoading?: boolean;
   readonly scopeBinding?: StudioScopeBindingStatus | null;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
@@ -230,7 +238,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   preferredServiceId,
   onSelectionChange,
   onContinueToInvoke,
+  onBindPendingCandidate,
+  pendingBindingCandidate,
   authSession,
+  servicesLoading,
 }) => {
   const [selectedServiceId, setSelectedServiceId] = useState(() =>
     trimOptional(initialServiceId),
@@ -243,6 +254,11 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const [smokeTestResult, setSmokeTestResult] = useState<SmokeTestResult>(
     createIdleSmokeTestResult(),
   );
+  const [pendingBindBusy, setPendingBindBusy] = useState(false);
+  const [pendingBindNotice, setPendingBindNotice] = useState<{
+    readonly message: string;
+    readonly type: 'success' | 'error';
+  } | null>(null);
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -465,6 +481,29 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const bindingCatalog: ScopeServiceBindingCatalogSnapshot | undefined = bindingsQuery.data;
   const bindingList = bindingCatalog?.bindings ?? [];
 
+  const handleBindPendingCandidate = useCallback(async () => {
+    if (!onBindPendingCandidate || !pendingBindingCandidate) {
+      return;
+    }
+
+    setPendingBindBusy(true);
+    setPendingBindNotice(null);
+    try {
+      await onBindPendingCandidate();
+      setPendingBindNotice({
+        message: `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
+        type: 'success',
+      });
+    } catch (error) {
+      setPendingBindNotice({
+        message: error instanceof Error ? error.message : String(error),
+        type: 'error',
+      });
+    } finally {
+      setPendingBindBusy(false);
+    }
+  }, [onBindPendingCandidate, pendingBindingCandidate]);
+
   if (!scopeId) {
     return (
       <Alert
@@ -476,6 +515,82 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   }
 
   if (!services.length) {
+    if (servicesLoading) {
+      return (
+        <div data-testid="studio-bind-surface" style={rootStyle}>
+          <Alert
+            showIcon
+            message="Loading published member services..."
+            description="Studio is checking whether this member already has a binding contract in the current scope."
+            type="info"
+          />
+        </div>
+      );
+    }
+
+    if (pendingBindingCandidate) {
+      return (
+        <div data-testid="studio-bind-surface" style={rootStyle}>
+          <Alert
+            showIcon
+            message={`No published service exists for ${pendingBindingCandidate.displayName} yet.`}
+            description={pendingBindingCandidate.description}
+            type="info"
+          />
+          <AevatarPanel
+            title="Create binding contract"
+            titleHelp="Bind creates the first published member service for the current draft, then Studio can show the invoke URL and endpoint contract."
+          >
+            <div style={{ display: 'grid', gap: 12 }}>
+              <div style={parameterGridStyle}>
+                <div style={valueCardStyle}>
+                  <Typography.Text type="secondary">Member type</Typography.Text>
+                  <Typography.Text strong>
+                    {pendingBindingCandidate.kind === 'workflow'
+                      ? 'Workflow'
+                      : pendingBindingCandidate.kind === 'script'
+                        ? 'Script'
+                        : 'GAgent'}
+                  </Typography.Text>
+                </div>
+                <div style={valueCardStyle}>
+                  <Typography.Text type="secondary">Selected member</Typography.Text>
+                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                    {pendingBindingCandidate.displayName}
+                  </Typography.Text>
+                </div>
+                <div style={valueCardStyle}>
+                  <Typography.Text type="secondary">Scope</Typography.Text>
+                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                    {scopeId}
+                  </Typography.Text>
+                </div>
+              </div>
+              <Typography.Text type="secondary">
+                {pendingBindingCandidate.description}
+              </Typography.Text>
+              {pendingBindNotice ? (
+                <Alert
+                  showIcon
+                  message={pendingBindNotice.message}
+                  type={pendingBindNotice.type}
+                />
+              ) : null}
+              <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                <Button
+                  loading={pendingBindBusy}
+                  type="primary"
+                  onClick={() => void handleBindPendingCandidate()}
+                >
+                  {pendingBindingCandidate.actionLabel}
+                </Button>
+              </div>
+            </div>
+          </AevatarPanel>
+        </div>
+      );
+    }
+
     return (
       <div data-testid="studio-bind-surface" style={rootStyle}>
         <Alert
