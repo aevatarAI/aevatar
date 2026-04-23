@@ -70,10 +70,9 @@ public sealed class ChannelRuntimeProtoTests
                 Disposition = MessageDisposition.Normal,
             },
             CompletedAtUnixMs = 123,
-            OutboundDelivery = new OutboundDeliveryContext
+            OutboundDelivery = new OutboundDeliveryReceipt
             {
                 ReplyMessageId = "relay-msg-1",
-                ReplyAccessToken = "relay-token-1",
             },
         };
         var registration = new ChannelBotRegistrationEntry
@@ -126,6 +125,8 @@ public sealed class ChannelRuntimeProtoTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("is_deleted")!.FieldNumber.ShouldBe(4);
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ConversationTurnCompletedEvent));
+        ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(OutboundDeliveryReceipt));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(NeedsLlmReplyEvent));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)

@@ -1,6 +1,8 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
 using NSubstitute;
@@ -17,6 +19,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
+        var secretsStore = new InMemorySecretsStore();
 
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -32,6 +35,7 @@ public class NyxLarkProvisioningServiceTests
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             actorRuntime,
+            secretsStore,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(
@@ -49,16 +53,18 @@ public class NyxLarkProvisioningServiceTests
         result.Status.Should().Be("accepted");
         result.RegistrationId.Should().NotBeNullOrWhiteSpace();
         result.NyxAgentApiKeyId.Should().Be("key-123");
+        result.CredentialRef.Should().Be($"vault://channels/lark/registrations/{result.RegistrationId}/relay-hmac");
         result.NyxChannelBotId.Should().Be("bot-456");
         result.NyxConversationRouteId.Should().Be("route-789");
         result.RelayCallbackUrl.Should().Be("https://aevatar.example.com/api/webhooks/nyxid-relay");
         result.WebhookUrl.Should().Be("https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456");
+        secretsStore.Get(result.CredentialRef!).Should().Be(ComputeHash("full-key"));
 
         await actor.Received(1).HandleEventAsync(
             Arg.Is<EventEnvelope>(envelope =>
                 envelope.Payload != null &&
                 envelope.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
-                MatchesLocalMirror(envelope.Payload.Unpack<ChannelBotRegisterCommand>(), result.RegistrationId!)),
+                MatchesLocalMirror(envelope.Payload.Unpack<ChannelBotRegisterCommand>(), result.RegistrationId!, result.CredentialRef!)),
             Arg.Any<CancellationToken>());
 
         handler.Requests.Should().HaveCount(3);
@@ -105,12 +111,14 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_ShouldReject_WhenNyxBaseUrlIsNotConfigured()
     {
         var handler = new RecordingHandler();
+        var secretsStore = new InMemorySecretsStore();
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions(), new HttpClient(handler));
         var actorRuntime = Substitute.For<IActorRuntime>();
         var service = new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions(),
             actorRuntime,
+            secretsStore,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
@@ -130,6 +138,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-conversations/route-789", """{"ok":true}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-bots/bot-456", """{"ok":true}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
+        var secretsStore = new InMemorySecretsStore();
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
@@ -146,6 +155,7 @@ public class NyxLarkProvisioningServiceTests
                 new HttpClient(handler)),
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             actorRuntime,
+            secretsStore,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
@@ -157,14 +167,16 @@ public class NyxLarkProvisioningServiceTests
         handler.Requests[3].Path.Should().Be("/api/v1/channel-conversations/route-789");
         handler.Requests[4].Path.Should().Be("/api/v1/channel-bots/bot-456");
         handler.Requests[5].Path.Should().Be("/api/v1/api-keys/key-123");
+        secretsStore.GetAll().Should().BeEmpty();
     }
 
-    private static bool MatchesLocalMirror(ChannelBotRegisterCommand command, string registrationId) =>
+    private static bool MatchesLocalMirror(ChannelBotRegisterCommand command, string registrationId, string credentialRef) =>
         command.RequestedId == registrationId &&
         command.Platform == "lark" &&
         command.NyxProviderSlug == "api-lark-bot" &&
         command.ScopeId == "scope-1" &&
         command.NyxAgentApiKeyId == "key-123" &&
+        command.CredentialRef == credentialRef &&
         command.NyxChannelBotId == "bot-456" &&
         command.NyxConversationRouteId == "route-789" &&
         command.WebhookUrl == "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456";
@@ -190,7 +202,26 @@ public class NyxLarkProvisioningServiceTests
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             actorRuntime,
+            new InMemorySecretsStore(),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+    }
+
+    private static string ComputeHash(string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private sealed class InMemorySecretsStore : IAevatarSecretsStore
+    {
+        private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
+
+        public string? Get(string key) => _values.GetValueOrDefault(key);
+        public string? GetApiKey(string providerName) => _values.GetValueOrDefault(providerName);
+        public string? GetDefaultProvider() => null;
+        public IReadOnlyDictionary<string, string> GetAll() => _values;
+        public void Set(string key, string value) => _values[key] = value;
+        public void Remove(string key) => _values.Remove(key);
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

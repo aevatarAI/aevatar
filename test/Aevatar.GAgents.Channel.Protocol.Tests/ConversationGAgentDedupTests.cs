@@ -126,7 +126,7 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleInboundActivityAsync_PersistsOutboundDeliveryContext_OnCompletedEvent()
+    public async Task HandleInboundActivityAsync_PersistsOutboundDeliveryReceipt_OnCompletedEvent()
     {
         var runner = new RecordingTurnRunner
         {
@@ -148,7 +148,6 @@ public sealed class ConversationGAgentDedupTests
         events.Count.ShouldBe(1);
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events[0].EventData.Value);
         completed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
-        completed.OutboundDelivery.ReplyAccessToken.ShouldBe("relay-token-1");
     }
 
     [Fact]

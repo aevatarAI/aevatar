@@ -105,7 +105,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Conversation = activity.Conversation?.Clone() ?? new ConversationReference(),
                 Outbound = result.Outbound?.Clone() ?? new MessageContent(),
                 CompletedAtUnixMs = nowMs,
-                OutboundDelivery = result.OutboundDelivery?.Clone(),
+                OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
             await PersistDomainEventAsync(completed);
             Logger.LogInformation(
@@ -206,7 +206,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Conversation = evt.Activity?.Conversation?.Clone() ?? State.Conversation?.Clone() ?? new ConversationReference(),
                 Outbound = result.Outbound?.Clone() ?? evt.Outbound?.Clone() ?? new MessageContent(),
                 CompletedAtUnixMs = nowMs,
-                OutboundDelivery = result.OutboundDelivery?.Clone(),
+                OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
             await PersistDomainEventAsync(completed);
             Logger.LogInformation(
@@ -287,7 +287,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Conversation = cmd.Conversation?.Clone() ?? new ConversationReference(),
                 Outbound = result.Outbound?.Clone() ?? (cmd.Payload?.Clone() ?? new MessageContent()),
                 CompletedAtUnixMs = nowMs,
-                OutboundDelivery = result.OutboundDelivery?.Clone(),
+                OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
             await PersistDomainEventAsync(completed);
             Logger.LogInformation(
@@ -384,6 +384,14 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private IConversationTurnRunner ResolveRunner() =>
         Services.GetService<IConversationTurnRunner>() ?? new NullConversationTurnRunner();
+
+    private static OutboundDeliveryReceipt? ToOutboundDeliveryReceipt(OutboundDeliveryContext? outboundDelivery)
+    {
+        var replyMessageId = outboundDelivery?.ReplyMessageId;
+        return string.IsNullOrWhiteSpace(replyMessageId)
+            ? null
+            : new OutboundDeliveryReceipt { ReplyMessageId = replyMessageId };
+    }
 
     // ─── State transitions ───
 

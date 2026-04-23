@@ -311,7 +311,7 @@ public record ChatActivity(
 
 **为什么没有 `ChannelData`**：早期草稿里有 `ChannelData : IReadOnlyDictionary<string, string>`，但 Slack event envelope / Discord interaction 带嵌套结构（user profile / guild member / team info），string→string 天然太窄；放宽到 `object` 又让调用方陷入动态类型。已有 `RawPayloadBlobRef` 作为 escape hatch（原始 payload 按需取），两套冗余的结构化索引反而让 adapter 作者"两边都想塞点东西"，抽象边界打糊。结论：**只留 `RawPayloadBlobRef`，不要 `ChannelData`**。
 
-**为什么新增 `OutboundDeliveryContext`**：Nyx relay 这类 async callback transport 的 reply 不只是 "往这个 conversation 发一条消息"，还需要把 ingress 提供的 **opaque reply target**（如 relay `message_id`）和 **opaque delivery credential**（如 relay access token）带回 outbound 边界。它们不是业务 metadata bag，也不是 `ConversationReference` 的稳定会话语义，而是**一次 inbound turn 派生出的 reply-delivery 事实**。因此单独建模成 `ChatActivity.OutboundDelivery`，并在 `ConversationTurnCompletedEvent` 上原样保留，避免后续 projection/outbound path 再退回字符串 key bag。
+**为什么新增 `OutboundDeliveryContext`**：Nyx relay 这类 async callback transport 的 reply 不只是 "往这个 conversation 发一条消息"，还需要把 ingress 提供的 **opaque reply target**（如 relay `message_id`）和 **opaque delivery credential**（如 relay access token）带回 outbound 边界。它们不是业务 metadata bag，也不是 `ConversationReference` 的稳定会话语义，而是**一次 inbound turn 派生出的 reply-delivery 事实**。因此单独建模成 `ChatActivity.OutboundDelivery`；但持久化到 `ConversationTurnCompletedEvent` 时只保留非敏感的 `OutboundDeliveryReceipt.reply_message_id`，避免把短期 reply token 扩散进 projection/audit/readmodel。
 
 **为什么新增 `TransportExtras`**：某些 transport ingress 会带来必须穿过 runtime 的结构化事实，例如 Nyx relay 的 `nyx_message_id`、`nyx_agent_api_key_id`、`nyx_platform`、`nyx_conversation_id`。这些值会影响 registration lookup、reply correlation 和 platform dispatch，但它们**不属于** `ConversationReference` 的稳定业务语义，也不应该退回到开放式 metadata bag。`TransportExtras` 的职责正是承载这类 typed ingress facts；`RawPayloadBlobRef` 继续只做 forensic hash/blob 引用，**不能**反向充当 reply credential 或 structured routing metadata 的回查通道。
 
@@ -1756,7 +1756,7 @@ Phase 0 落实步骤：部署 EventHubs → validation harness 过 → 配置 pa
 
 ## 9.6 Credentials / security boundary
 
-ADR-0012 / issue `#308` 之后，`ChannelBotRegistrationEntry` / registration query surface 已不再持久化 `nyx_user_token`、`encrypt_key` 或 direct-callback credential 字段；当前受支持生产契约只保留非敏感 Nyx routing handles。下面这节关于 `credential_ref` / transport binding 的内容应理解为**未来 channel-agnostic 抽象设计**，不是当前 `ChannelBotRegistration` 已上线的 runtime shape。新 channel 要加的 Slack `signing_secret` / `bot_token` / `user_token` / `app_token`、Discord `bot_token`、各类 webhook secret 体量更大敏感度更高，**绝对不能照抄旧 registration raw-secret 路径**。
+ADR-0012 / issue `#308` 之后，`ChannelBotRegistrationEntry` / registration query surface 已不再持久化 `nyx_user_token`、`encrypt_key` 或 direct-callback credential 字段。当前 Nyx relay Lark runtime 已进一步把 callback HMAC material 收紧到 `credential_ref + IAevatarSecretsStore`：registration state/readmodel 只保留非敏感 Nyx routing handles 和 `credential_ref`，真正 secret 不入 proto / projection / query payload。下面这节关于 `transport_binding` 的内容仍属于**未来 channel-agnostic 抽象设计**，不是当前 `ChannelBotRegistration` 已上线的完整 runtime shape。新 channel 要加的 Slack `signing_secret` / `bot_token` / `user_token` / `app_token`、Discord `bot_token`、各类 webhook secret 体量更大敏感度更高，**绝对不能照抄旧 registration raw-secret 路径**。
 
 新架构下的 credentials 处理：
 

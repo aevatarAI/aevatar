@@ -1,3 +1,4 @@
+using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 
 namespace Aevatar.GAgents.ChannelRuntime;
@@ -5,10 +6,14 @@ namespace Aevatar.GAgents.ChannelRuntime;
 internal sealed class NyxIdRelayRegistrationCredentialResolver : INyxIdRelayRegistrationCredentialResolver
 {
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort _queryPort;
+    private readonly IAevatarSecretsStore _secretsStore;
 
-    public NyxIdRelayRegistrationCredentialResolver(IChannelBotRegistrationQueryByNyxIdentityPort queryPort)
+    public NyxIdRelayRegistrationCredentialResolver(
+        IChannelBotRegistrationQueryByNyxIdentityPort queryPort,
+        IAevatarSecretsStore secretsStore)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _secretsStore = secretsStore ?? throw new ArgumentNullException(nameof(secretsStore));
     }
 
     public async Task<NyxIdRelayRegistrationCredential?> ResolveAsync(string relayApiKeyId, CancellationToken ct = default)
@@ -21,7 +26,11 @@ internal sealed class NyxIdRelayRegistrationCredentialResolver : INyxIdRelayRegi
         if (registration is null)
             return null;
 
-        var apiKeyHash = NormalizeOptional(registration.NyxAgentApiKeyHash);
+        var credentialRef = NormalizeOptional(registration.CredentialRef);
+        if (credentialRef is null)
+            return null;
+
+        var apiKeyHash = NormalizeOptional(_secretsStore.Get(credentialRef));
         if (apiKeyHash is null)
             return null;
 

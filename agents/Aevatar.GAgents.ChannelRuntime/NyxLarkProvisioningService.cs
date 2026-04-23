@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,7 +25,7 @@ public sealed record NyxLarkProvisioningResult(
     string? RegistrationId = null,
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
-    string? NyxAgentApiKeyHash = null,
+    string? CredentialRef = null,
     string? NyxConversationRouteId = null,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
@@ -45,6 +46,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly IActorRuntime _actorRuntime;
+    private readonly IAevatarSecretsStore _secretsStore;
     private readonly ILogger<NyxLarkProvisioningService> _logger;
 
     private sealed record RelayApiKeyCredentials(string Id, string Hash);
@@ -53,11 +55,13 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
         IActorRuntime actorRuntime,
+        IAevatarSecretsStore secretsStore,
         ILogger<NyxLarkProvisioningService> logger)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _secretsStore = secretsStore ?? throw new ArgumentNullException(nameof(secretsStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -88,15 +92,20 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
 
         string? apiKeyId = null;
         string? apiKeyHash = null;
+        string? credentialRef = null;
         string? channelBotId = null;
         string? routeId = null;
         var localMirrorAccepted = false;
+        var credentialStored = false;
 
         try
         {
             var relayApiKey = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
             apiKeyId = relayApiKey.Id;
             apiKeyHash = relayApiKey.Hash;
+            credentialRef = BuildRelayCredentialRef(registrationId);
+            _secretsStore.Set(credentialRef, apiKeyHash);
+            credentialStored = true;
             channelBotId = await RegisterChannelBotAsync(request.AccessToken, request.AppId, request.AppSecret, label, ct);
             routeId = await CreateDefaultRouteAsync(request.AccessToken, channelBotId, apiKeyId, ct);
 
@@ -107,7 +116,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
                 webhookUrl,
                 request.ScopeId?.Trim() ?? string.Empty,
                 apiKeyId,
-                apiKeyHash,
+                credentialRef,
                 channelBotId,
                 routeId,
                 ct);
@@ -119,7 +128,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
                 RegistrationId: registrationId,
                 NyxChannelBotId: channelBotId,
                 NyxAgentApiKeyId: apiKeyId,
-                NyxAgentApiKeyHash: apiKeyHash,
+                CredentialRef: credentialRef,
                 NyxConversationRouteId: routeId,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
@@ -141,6 +150,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
                 await TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId);
             if (!localMirrorAccepted && apiKeyId is not null)
                 await TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId);
+            if (!localMirrorAccepted && credentialStored && credentialRef is not null)
+                TryRemoveStoredCredential(credentialRef);
 
             return Failure(localMirrorAccepted
                 ? "local_mirror_accepted_remote_cleanup_skipped"
@@ -215,7 +226,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         string webhookUrl,
         string scopeId,
         string apiKeyId,
-        string apiKeyHash,
+        string credentialRef,
         string channelBotId,
         string routeId,
         CancellationToken ct)
@@ -231,7 +242,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
             ScopeId = scopeId,
             WebhookUrl = webhookUrl,
             NyxAgentApiKeyId = apiKeyId,
-            NyxAgentApiKeyHash = apiKeyHash,
+            CredentialRef = credentialRef,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
         };
@@ -331,6 +342,24 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
     {
         var bytes = Encoding.UTF8.GetBytes(fullKey);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private static string BuildRelayCredentialRef(string registrationId) =>
+        $"vault://channels/lark/registrations/{registrationId}/relay-hmac";
+
+    private void TryRemoveStoredCredential(string credentialRef)
+    {
+        try
+        {
+            _secretsStore.Remove(credentialRef);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to remove stored relay credential: credentialRef={CredentialRef}",
+                credentialRef);
+        }
     }
 
     private static bool LooksLikeErrorEnvelope(string response)
