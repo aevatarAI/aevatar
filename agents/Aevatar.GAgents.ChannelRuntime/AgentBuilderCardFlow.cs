@@ -29,8 +29,7 @@ internal static class AgentBuilderCardFlow
 
     private static readonly HashSet<string> LaunchIntents = new(StringComparer.OrdinalIgnoreCase)
     {
-        "/daily-report",
-        "/create-daily-report",
+        "/daily",
         "create daily report",
         "创建日报助手",
         "创建日报agent",
@@ -251,7 +250,7 @@ internal static class AgentBuilderCardFlow
 
         if (!TryGetRequiredExtra(evt, "github_username", out var githubUsername))
         {
-            validationError = "GitHub username is required. Send /daily-report and fill in the form again.";
+            validationError = "GitHub username is required. Send /daily and fill in the form again.";
             return false;
         }
 
@@ -1110,7 +1109,7 @@ internal static class AgentBuilderCardFlow
             new
             {
                 tag = "markdown",
-                content = "Quick commands: `/daily-report`, `/social-media`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
+                content = "Quick commands: `/daily`, `/social-media`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
             },
         };
 
@@ -1219,7 +1218,7 @@ internal static class AgentBuilderCardFlow
         elements.Add(new
         {
             tag = "markdown",
-            content = "Quick commands: `/templates`, `/daily-report`, `/social-media`, `/agent-status <agent_id>`",
+            content = "Quick commands: `/templates`, `/daily`, `/social-media`, `/agent-status <agent_id>`",
         });
         elements.Add(new
         {

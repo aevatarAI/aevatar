@@ -13,6 +13,7 @@ using Aevatar.Authentication.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.Relay;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -760,7 +761,7 @@ public class NyxIdChatEndpointsCoverageTests
         const string conversationId = "conv-daily";
         const string messageId = "msg-daily-1";
         const string dailyReportPrompt =
-            "/daily-report github_username=alice schedule_time=09:00 repositories=owner/repo";
+            "/daily github_username=alice schedule_time=09:00 repositories=owner/repo";
 
         var relay = CreateRelayInvocationDependencies(scopeId: scopeId, relayApiKeyId: scopeId);
         var payload = """
@@ -769,7 +770,7 @@ public class NyxIdChatEndpointsCoverageTests
               "platform":"lark",
               "agent":{"api_key_id":"scope-daily"},
               "conversation":{"id":"conv-daily","platform_id":"chat-daily"},
-              "content":{"text":"/daily-report github_username=alice schedule_time=09:00 repositories=owner/repo"}
+              "content":{"text":"/daily github_username=alice schedule_time=09:00 repositories=owner/repo"}
             }
             """;
 
@@ -839,6 +840,129 @@ public class NyxIdChatEndpointsCoverageTests
         requests.Should().HaveCount(2);
         requests.Select(request => request.Prompt).Should().OnlyContain(prompt => prompt == dailyReportPrompt);
         requests.Select(request => request.SessionId).Should().OnlyContain(sessionId => sessionId == $"{conversationId}-{messageId}");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldInterceptSlashCommand_WhenDayOneBridgeOwns()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-bridge", relayApiKeyId: "scope-bridge");
+        var payload = """
+            {
+              "message_id":"msg-slash",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-bridge"},
+              "conversation":{"id":"conv-1","platform_id":"chat-1","type":"private"},
+              "sender":{"platform_id":"sender-1","display_name":"Sender"},
+              "content":{"text":"/daily alice"}
+            }
+            """;
+        var bridge = new StubDayOneBridge { ShouldHandleResult = true, ReplyText = "stub reply" };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxRelayDayOneBridge>(bridge)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("day_one_command");
+        response.Body.Should().Contain("msg-slash");
+
+        bridge.ShouldHandleCalls.Should().ContainSingle();
+        bridge.ShouldHandleCalls[0].Text.Should().Be("/daily alice");
+        bridge.ShouldHandleCalls[0].ConversationType.Should().Be("private");
+        bridge.ShouldHandleCalls[0].ScopeId.Should().Be("scope-bridge");
+        bridge.ShouldHandleCalls[0].NyxIdAccessToken.Should().Be(relay.Token);
+
+        runtime.CreateCalls.Should().BeEmpty(
+            because: "bridge-owned slash commands must not allocate a chat actor");
+        runtime.Actors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchToActor_WhenDayOneBridgeDefers()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-defer", relayApiKeyId: "scope-defer");
+        var payload = """
+            {
+              "message_id":"msg-freetext",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-defer"},
+              "conversation":{"id":"conv-1","platform_id":"chat-1","type":"private"},
+              "content":{"text":"hello there"}
+            }
+            """;
+        var bridge = new StubDayOneBridge { ShouldHandleResult = false };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxRelayDayOneBridge>(bridge)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().NotContain("day_one_command");
+
+        bridge.ShouldHandleCalls.Should().ContainSingle();
+        bridge.HandleCalls.Should().BeEmpty(
+            because: "bridge defers free-text to the LLM path");
+        runtime.Actors.Should().ContainKey("nyxid-relay-conv-1");
+    }
+
+    private sealed class StubDayOneBridge : INyxRelayDayOneBridge
+    {
+        public bool ShouldHandleResult { get; set; } = true;
+        public string ReplyText { get; set; } = "stub reply";
+        public List<NyxRelayBridgeRequest> ShouldHandleCalls { get; } = new();
+        public List<NyxRelayBridgeRequest> HandleCalls { get; } = new();
+
+        public bool ShouldHandle(NyxRelayBridgeRequest request)
+        {
+            ShouldHandleCalls.Add(request);
+            return ShouldHandleResult;
+        }
+
+        public Task<string> HandleAsync(NyxRelayBridgeRequest request, CancellationToken ct)
+        {
+            HandleCalls.Add(request);
+            return Task.FromResult(ReplyText);
+        }
     }
 
     [Fact]
