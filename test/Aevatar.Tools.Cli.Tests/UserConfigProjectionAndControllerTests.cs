@@ -56,6 +56,7 @@ public sealed class UserConfigProjectionAndControllerTests
             RuntimeMode: "REMOTE",
             LocalRuntimeBaseUrl: "http://127.0.0.1:5080/",
             RemoteRuntimeBaseUrl: "https://runtime.example.com/",
+            GithubUsername: "octocat",
             MaxToolRounds: 9));
 
         dispatchPort.ActorId.Should().Be("user-config-scope-1");
@@ -66,7 +67,28 @@ public sealed class UserConfigProjectionAndControllerTests
         evt.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
         evt.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:5080");
         evt.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.com");
+        evt.GithubUsername.Should().Be("octocat");
         evt.MaxToolRounds.Should().Be(9);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenExplicitScopeProvided_ShouldDispatchToThatScope()
+    {
+        var provider = BuildCommandServiceProvider(
+            out _,
+            out var dispatchPort,
+            scopeId: null);
+        await using var serviceProvider = provider;
+        var commandService = provider.GetRequiredService<IUserConfigCommandService>();
+
+        await commandService.SaveAsync(
+            "scope-explicit",
+            new UserConfig(DefaultModel: "gpt-5.4", GithubUsername: "saved-user"),
+            CancellationToken.None);
+
+        dispatchPort.ActorId.Should().Be("user-config-scope-explicit");
+        dispatchPort.Envelope.Should().NotBeNull();
+        dispatchPort.Envelope!.Payload.Unpack<UserConfigUpdatedEvent>().GithubUsername.Should().Be("saved-user");
     }
 
     [Fact]
@@ -182,7 +204,32 @@ public sealed class UserConfigProjectionAndControllerTests
         result.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.LocalMode);
         result.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:6100");
         result.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.cn");
+        result.GithubUsername.Should().BeNull();
         result.MaxToolRounds.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ProjectionUserConfigQueryPort_GetAsync_ExplicitScope_UsesProvidedScope()
+    {
+        var reader = new StubUserConfigDocumentReader
+        {
+            Document = new UserConfigCurrentStateDocument
+            {
+                Id = "user-config-scope-explicit",
+                ActorId = "user-config-scope-explicit",
+                DefaultModel = "gpt-5.4",
+                GithubUsername = "explicit-user",
+            },
+        };
+        var port = new ProjectionUserConfigQueryPort(
+            reader,
+            new StubScopeResolver { ScopeIdToReturn = "ignored-scope" },
+            new StubUserConfigDefaults());
+
+        var result = await port.GetAsync("scope-explicit");
+
+        reader.LastKey.Should().Be("user-config-scope-explicit");
+        result.GithubUsername.Should().Be("explicit-user");
     }
 
     [Fact]
@@ -199,6 +246,7 @@ public sealed class UserConfigProjectionAndControllerTests
                 RuntimeMode = string.Empty,
                 LocalRuntimeBaseUrl = string.Empty,
                 RemoteRuntimeBaseUrl = string.Empty,
+                GithubUsername = "saved-user",
                 MaxToolRounds = 7,
             },
         };
@@ -220,6 +268,7 @@ public sealed class UserConfigProjectionAndControllerTests
         result.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.LocalMode);
         result.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:6200");
         result.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.net");
+        result.GithubUsername.Should().Be("saved-user");
         result.MaxToolRounds.Should().Be(7);
     }
 
@@ -249,6 +298,7 @@ public sealed class UserConfigProjectionAndControllerTests
                     RuntimeMode = UserConfigRuntimeDefaults.RemoteMode,
                     LocalRuntimeBaseUrl = "http://127.0.0.1:5080",
                     RemoteRuntimeBaseUrl = "https://runtime.example.com",
+                    GithubUsername = "projected-user",
                     MaxToolRounds = 6,
                 }));
 
@@ -260,6 +310,7 @@ public sealed class UserConfigProjectionAndControllerTests
         dispatcher.LastUpsert.DefaultModel.Should().Be("gpt-4.1");
         dispatcher.LastUpsert.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/custom");
         dispatcher.LastUpsert.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
+        dispatcher.LastUpsert.GithubUsername.Should().Be("projected-user");
         dispatcher.LastUpsert.MaxToolRounds.Should().Be(6);
     }
 
@@ -309,7 +360,7 @@ public sealed class UserConfigProjectionAndControllerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ConfigToReturn = new UserConfig("gpt-4.1", "/api/v1/proxy/s/custom", MaxToolRounds: 3),
+            ConfigToReturn = new UserConfig("gpt-4.1", "/api/v1/proxy/s/custom", GithubUsername: "saved-user", MaxToolRounds: 3),
         };
         var controller = CreateController(queryPort, new RecordingUserConfigCommandService());
 
@@ -318,6 +369,7 @@ public sealed class UserConfigProjectionAndControllerTests
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
         var payload = ok.Value.Should().BeOfType<UserConfig>().Subject;
         payload.DefaultModel.Should().Be("gpt-4.1");
+        payload.GithubUsername.Should().Be("saved-user");
         payload.MaxToolRounds.Should().Be(3);
     }
 
@@ -361,6 +413,7 @@ public sealed class UserConfigProjectionAndControllerTests
                 RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
                 LocalRuntimeBaseUrl: "http://127.0.0.1:5080",
                 RemoteRuntimeBaseUrl: "https://remote.example.com",
+                GithubUsername: "saved-user",
                 MaxToolRounds: 7),
         };
         var commandService = new RecordingUserConfigCommandService();
@@ -381,6 +434,7 @@ public sealed class UserConfigProjectionAndControllerTests
         payload.RuntimeMode.Should().Be("remote");
         payload.LocalRuntimeBaseUrl.Should().Be("http://localhost:5080/");
         payload.RemoteRuntimeBaseUrl.Should().Be("https://remote.example.com");
+        payload.GithubUsername.Should().Be("saved-user");
         payload.MaxToolRounds.Should().Be(7);
         commandService.SavedConfig.Should().BeEquivalentTo(payload);
     }
@@ -402,6 +456,25 @@ public sealed class UserConfigProjectionAndControllerTests
 
         commandService.SavedConfig.Should().NotBeNull();
         commandService.SavedConfig!.MaxToolRounds.Should().Be(12);
+    }
+
+    [Fact]
+    public async Task UserConfigController_Save_UsesRequestGithubUsername_WhenProvided()
+    {
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ConfigToReturn = new UserConfig(DefaultModel: "old-model", GithubUsername: "old-user"),
+        };
+        var commandService = new RecordingUserConfigCommandService();
+        var controller = CreateController(queryPort, commandService);
+
+        await controller.Save(
+            new UserConfigController.SaveUserConfigRequest(
+                GithubUsername: "  new-user  "),
+            CancellationToken.None);
+
+        commandService.SavedConfig.Should().NotBeNull();
+        commandService.SavedConfig!.GithubUsername.Should().Be("new-user");
     }
 
     [Fact]
@@ -595,6 +668,7 @@ public sealed class UserConfigProjectionAndControllerTests
     {
         public UserConfig ConfigToReturn { get; set; } = new(string.Empty);
         public Exception? ExceptionToThrow { get; set; }
+        public string? LastScopeId { get; private set; }
 
         public Task<UserConfig> GetAsync(CancellationToken ct = default)
         {
@@ -603,16 +677,29 @@ public sealed class UserConfigProjectionAndControllerTests
 
             return Task.FromResult(ConfigToReturn);
         }
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default)
+        {
+            LastScopeId = scopeId;
+            return GetAsync(ct);
+        }
     }
 
     private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
     {
         public UserConfig? SavedConfig { get; private set; }
+        public string? SavedScopeId { get; private set; }
 
         public Task SaveAsync(UserConfig config, CancellationToken ct = default)
         {
             SavedConfig = config;
             return Task.CompletedTask;
+        }
+
+        public Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
+        {
+            SavedScopeId = scopeId;
+            return SaveAsync(config, ct);
         }
     }
 

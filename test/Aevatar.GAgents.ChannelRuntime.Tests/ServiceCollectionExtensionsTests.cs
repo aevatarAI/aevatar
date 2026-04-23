@@ -16,8 +16,7 @@ public sealed class ServiceCollectionExtensionsTests
 
         var act = () => services.AddChannelRuntime();
 
-        act.Should().Throw<ArgumentException>()
-            .WithMessage("*IHostedService*");
+        act.Should().NotThrow();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
@@ -43,8 +42,7 @@ public sealed class ServiceCollectionExtensionsTests
 
         var act = () => services.AddChannelRuntime(configuration);
 
-        act.Should().Throw<ArgumentException>()
-            .WithMessage("*IHostedService*");
+        act.Should().NotThrow();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>

@@ -30,9 +30,12 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
     }
 
-    public async Task SaveAsync(UserConfig config, CancellationToken ct = default)
+    public Task SaveAsync(UserConfig config, CancellationToken ct = default) =>
+        SaveAsync(_scopeResolver.Resolve()?.ScopeId ?? "default", config, ct);
+
+    public async Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
     {
-        var actorId = ActorIdPrefix + (_scopeResolver.Resolve()?.ScopeId ?? "default");
+        var actorId = ActorIdPrefix + NormalizeScopeId(scopeId);
 
         var actor = await _bootstrap.EnsureAsync<UserConfigGAgent>(actorId, ct);
 
@@ -47,6 +50,7 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
             RemoteRuntimeBaseUrl = UserConfigRuntime.NormalizeBaseUrl(
                 config.RemoteRuntimeBaseUrl,
                 UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl),
+            GithubUsername = NormalizeOptional(config.GithubUsername) ?? string.Empty,
             MaxToolRounds = config.MaxToolRounds,
         };
 
@@ -63,5 +67,14 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         };
 
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+    }
+
+    private static string NormalizeScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 }

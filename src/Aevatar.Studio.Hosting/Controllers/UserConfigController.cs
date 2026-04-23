@@ -72,6 +72,7 @@ public sealed class UserConfigController : ControllerBase
                 RuntimeMode: request.RuntimeMode is null ? current.RuntimeMode : request.RuntimeMode.Trim(),
                 LocalRuntimeBaseUrl: request.LocalRuntimeBaseUrl is null ? current.LocalRuntimeBaseUrl : request.LocalRuntimeBaseUrl.Trim(),
                 RemoteRuntimeBaseUrl: request.RemoteRuntimeBaseUrl is null ? current.RemoteRuntimeBaseUrl : request.RemoteRuntimeBaseUrl.Trim(),
+                GithubUsername: request.GithubUsername is null ? current.GithubUsername : NormalizeOptional(request.GithubUsername),
                 MaxToolRounds: request.MaxToolRounds ?? current.MaxToolRounds);
             await _commandService.SaveAsync(merged, cancellationToken);
             return Ok(merged);
@@ -93,7 +94,14 @@ public sealed class UserConfigController : ControllerBase
         [property: JsonPropertyName("runtimeMode")] string? RuntimeMode = null,
         [property: JsonPropertyName("localRuntimeBaseUrl")] string? LocalRuntimeBaseUrl = null,
         [property: JsonPropertyName("remoteRuntimeBaseUrl")] string? RemoteRuntimeBaseUrl = null,
+        [property: JsonPropertyName("githubUsername")] string? GithubUsername = null,
         [property: JsonPropertyName("maxToolRounds")] int? MaxToolRounds = null);
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     [HttpGet("models")]
     public async Task<ActionResult<NyxIdLlmStatusResponse>> GetModels(CancellationToken cancellationToken)

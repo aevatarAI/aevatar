@@ -160,6 +160,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             LocalRuntimeBaseUrl = evt.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl = evt.RemoteRuntimeBaseUrl,
             MaxToolRounds = evt.MaxToolRounds,
+            GithubUsername = evt.GithubUsername,
         };
 
     #endregion
@@ -629,6 +630,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "remote",
             LocalRuntimeBaseUrl = "http://old-local",
             RemoteRuntimeBaseUrl = "http://old-remote",
+            GithubUsername = "old-user",
             MaxToolRounds = 5,
         };
 
@@ -639,6 +641,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "local",
             LocalRuntimeBaseUrl = "http://new-local",
             RemoteRuntimeBaseUrl = "http://new-remote",
+            GithubUsername = "new-user",
             MaxToolRounds = 10,
         };
 
@@ -649,6 +652,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
         next.RuntimeMode.Should().Be("local");
         next.LocalRuntimeBaseUrl.Should().Be("http://new-local");
         next.RemoteRuntimeBaseUrl.Should().Be("http://new-remote");
+        next.GithubUsername.Should().Be("new-user");
         next.MaxToolRounds.Should().Be(10);
     }
 
@@ -664,12 +668,14 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "remote",
             LocalRuntimeBaseUrl = "",
             RemoteRuntimeBaseUrl = "https://api.example.com",
+            GithubUsername = "fresh-user",
             MaxToolRounds = 3,
         };
 
         var next = ApplyConfig(state, evt);
 
         next.DefaultModel.Should().Be("gpt-4");
+        next.GithubUsername.Should().Be("fresh-user");
         next.MaxToolRounds.Should().Be(3);
     }
 
@@ -690,6 +696,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "",
             LocalRuntimeBaseUrl = "",
             RemoteRuntimeBaseUrl = "",
+            GithubUsername = "",
             MaxToolRounds = 0,
         };
 
@@ -697,6 +704,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
 
         next.DefaultModel.Should().Be("new-model");
         next.MaxToolRounds.Should().Be(0);
+        next.GithubUsername.Should().BeEmpty();
         next.PreferredLlmRoute.Should().BeEmpty();
     }
 

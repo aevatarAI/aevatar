@@ -79,4 +79,5 @@ public sealed record UserConfig(
     string RuntimeMode = UserConfigRuntimeDefaults.LocalMode,
     string LocalRuntimeBaseUrl = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
     string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
+    string? GithubUsername = null,
     int MaxToolRounds = 0);

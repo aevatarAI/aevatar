@@ -48,6 +48,7 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
             LocalRuntimeBaseUrl = evt.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl = evt.RemoteRuntimeBaseUrl,
             MaxToolRounds = evt.MaxToolRounds,
+            GithubUsername = evt.GithubUsername,
         };
     }
 
