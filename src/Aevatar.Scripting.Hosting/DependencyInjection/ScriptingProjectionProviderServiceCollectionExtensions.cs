@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -18,11 +20,11 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ScriptReadModelDocument, string>)))
-            return services;
-
         if (configuration == null)
         {
+            if (HasAllScriptingDocumentReaders(services, DocumentProviderKind.InMemory))
+                return services;
+
             AddInMemoryDocumentStores(services);
             services.AddInMemoryGraphProjectionStore();
             return services;
@@ -49,6 +51,12 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
                 "Exactly one document projection provider must be enabled. Configure either Projection:Document:Providers:Elasticsearch:Enabled=true or Projection:Document:Providers:InMemory:Enabled=true.");
         }
 
+        var selectedDocumentProvider = enableElasticsearchDocument
+            ? DocumentProviderKind.Elasticsearch
+            : DocumentProviderKind.InMemory;
+        if (HasAllScriptingDocumentReaders(services, selectedDocumentProvider))
+            return services;
+
         var graphProviderCount = (enableNeo4jGraph ? 1 : 0) + (enableInMemoryGraph ? 1 : 0);
         if (graphProviderCount != 1)
         {
@@ -58,32 +66,27 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
         if (enableElasticsearchDocument)
         {
-            services.AddElasticsearchDocumentProjectionStore<ScriptDefinitionSnapshotDocument, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptDefinitionSnapshotDocument>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ScriptCatalogEntryDocument, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptCatalogEntryDocument>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ScriptReadModelDocument, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptReadModelDocument>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ScriptEvolutionReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptEvolutionReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ScriptNativeDocumentReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptNativeDocumentReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                indexScopeSelector: readModel => readModel.DocumentIndexScope);
+            TryAddElasticsearchDocumentStore<ScriptDefinitionSnapshotDocument>(
+                services,
+                configuration,
+                static readModel => readModel.Id);
+            TryAddElasticsearchDocumentStore<ScriptCatalogEntryDocument>(
+                services,
+                configuration,
+                static readModel => readModel.Id);
+            TryAddElasticsearchDocumentStore<ScriptReadModelDocument>(
+                services,
+                configuration,
+                static readModel => readModel.Id);
+            TryAddElasticsearchDocumentStore<ScriptEvolutionReadModel>(
+                services,
+                configuration,
+                static readModel => readModel.Id);
+            TryAddElasticsearchDocumentStore<ScriptNativeDocumentReadModel>(
+                services,
+                configuration,
+                static readModel => readModel.Id,
+                static readModel => readModel.DocumentIndexScope);
         }
         else
         {
@@ -105,24 +108,87 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
     {
-        services.AddInMemoryDocumentProjectionStore<ScriptDefinitionSnapshotDocument, string>(
-            keySelector: static readModel => readModel.Id,
+        TryAddInMemoryDocumentStore<ScriptDefinitionSnapshotDocument>(services, static readModel => readModel.Id);
+        TryAddInMemoryDocumentStore<ScriptCatalogEntryDocument>(services, static readModel => readModel.Id);
+        TryAddInMemoryDocumentStore<ScriptReadModelDocument>(services, static readModel => readModel.Id);
+        TryAddInMemoryDocumentStore<ScriptEvolutionReadModel>(services, static readModel => readModel.Id);
+        TryAddInMemoryDocumentStore<ScriptNativeDocumentReadModel>(services, static readModel => readModel.Id);
+    }
+
+    private static bool HasAllScriptingDocumentReaders(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+    {
+        return HasDocumentReaderForProvider<ScriptDefinitionSnapshotDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ScriptCatalogEntryDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ScriptReadModelDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ScriptEvolutionReadModel>(services, providerKind)
+               && HasDocumentReaderForProvider<ScriptNativeDocumentReadModel>(services, providerKind);
+    }
+
+    private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        return services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<TDocument, string>));
+    }
+
+    private static bool HasDocumentReaderForProvider<TDocument>(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        return providerKind switch
+        {
+            DocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TDocument, string>)),
+            DocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TDocument, string>)),
+            _ => false,
+        };
+    }
+
+    private static void EnsureCompatibleDocumentReaderProvider<TDocument>(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        if (!HasAnyDocumentReader<TDocument>(services))
+            return;
+        if (HasDocumentReaderForProvider<TDocument>(services, providerKind))
+            return;
+
+        throw new InvalidOperationException(
+            $"Projection document reader for {typeof(TDocument).Name} is already registered with a different provider.");
+    }
+
+    private static void TryAddElasticsearchDocumentStore<TDocument>(
+        IServiceCollection services,
+        IConfiguration configuration,
+        Func<TDocument, string> keySelector,
+        Func<TDocument, string?>? indexScopeSelector = null)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        EnsureCompatibleDocumentReaderProvider<TDocument>(services, DocumentProviderKind.Elasticsearch);
+        if (HasDocumentReaderForProvider<TDocument>(services, DocumentProviderKind.Elasticsearch))
+            return;
+
+        services.AddElasticsearchDocumentProjectionStore<TDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TDocument>>().Metadata,
+            keySelector: keySelector,
             keyFormatter: static key => key,
-            defaultSortSelector: static readModel => readModel.UpdatedAt);
-        services.AddInMemoryDocumentProjectionStore<ScriptCatalogEntryDocument, string>(
-            keySelector: static readModel => readModel.Id,
-            keyFormatter: static key => key,
-            defaultSortSelector: static readModel => readModel.UpdatedAt);
-        services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
-            keySelector: static readModel => readModel.Id,
-            keyFormatter: static key => key,
-            defaultSortSelector: static readModel => readModel.UpdatedAt);
-        services.AddInMemoryDocumentProjectionStore<ScriptEvolutionReadModel, string>(
-            keySelector: static readModel => readModel.Id,
-            keyFormatter: static key => key,
-            defaultSortSelector: static readModel => readModel.UpdatedAt);
-        services.AddInMemoryDocumentProjectionStore<ScriptNativeDocumentReadModel, string>(
-            keySelector: static readModel => readModel.Id,
+            indexScopeSelector: indexScopeSelector);
+    }
+
+    private static void TryAddInMemoryDocumentStore<TDocument>(
+        IServiceCollection services,
+        Func<TDocument, string> keySelector)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        EnsureCompatibleDocumentReaderProvider<TDocument>(services, DocumentProviderKind.InMemory);
+        if (HasDocumentReaderForProvider<TDocument>(services, DocumentProviderKind.InMemory))
+            return;
+
+        services.AddInMemoryDocumentProjectionStore<TDocument, string>(
+            keySelector: keySelector,
             keyFormatter: static key => key,
             defaultSortSelector: static readModel => readModel.UpdatedAt);
     }
@@ -244,5 +310,11 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
             throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
 
         return parsed;
+    }
+
+    private enum DocumentProviderKind
+    {
+        InMemory,
+        Elasticsearch,
     }
 }
