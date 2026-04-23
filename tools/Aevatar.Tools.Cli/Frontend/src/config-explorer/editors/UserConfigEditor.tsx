@@ -14,6 +14,13 @@ const FIELDS: FieldDef[] = [
     description: 'Override the LLM model used for chat. Leave empty to use provider default.',
   },
   {
+    key: 'githubUsername',
+    label: 'GitHub Username',
+    type: 'text',
+    placeholder: 'e.g. octocat',
+    description: 'Default GitHub account used to prefill Day One daily report agents.',
+  },
+  {
     key: 'preferredLlmRoute',
     label: 'Preferred LLM Route',
     type: 'text',

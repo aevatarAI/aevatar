@@ -4189,12 +4189,17 @@ public sealed class ScopeServiceEndpointsTests
         }
 
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
     }
 
     private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
             throw new InvalidOperationException("config unavailable");
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
+            GetAsync(ct);
     }
 
     private sealed class RecordingResumeDispatchService
