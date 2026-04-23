@@ -81,6 +81,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Conversation = activity.Conversation?.Clone() ?? new ConversationReference(),
                 Outbound = result.Outbound?.Clone() ?? new MessageContent(),
                 CompletedAtUnixMs = nowMs,
+                OutboundDelivery = result.OutboundDelivery?.Clone(),
             };
             await PersistDomainEventAsync(completed);
             Logger.LogInformation(
@@ -146,6 +147,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Conversation = cmd.Conversation?.Clone() ?? new ConversationReference(),
                 Outbound = result.Outbound?.Clone() ?? (cmd.Payload?.Clone() ?? new MessageContent()),
                 CompletedAtUnixMs = nowMs,
+                OutboundDelivery = result.OutboundDelivery?.Clone(),
             };
             await PersistDomainEventAsync(completed);
             Logger.LogInformation(

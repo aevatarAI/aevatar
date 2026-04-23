@@ -135,7 +135,8 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
                 outbound: new MessageContent { Text = replyPayload },
-                authPrincipal: "bot")
+                authPrincipal: "bot",
+                outboundDelivery: result.OutboundDelivery?.Clone())
             : result;
     }
 
@@ -184,7 +185,8 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
         return ConversationTurnResult.Sent(
             sentActivityId: $"direct-reply:{sentActivitySeed}",
             outbound: new MessageContent { Text = replyText },
-            authPrincipal: "bot");
+            authPrincipal: "bot",
+            outboundDelivery: inbound.OutboundDelivery?.Clone());
     }
 
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationAsync(string? registrationId, CancellationToken ct)
@@ -324,6 +326,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
             Text = activity.Content?.Text ?? string.Empty,
             MessageId = activity.Id,
             ChatType = ResolveChatType(activity.Conversation, activity.Type),
+            OutboundDelivery = activity.OutboundDelivery?.Clone(),
             Extra = extra,
         };
     }

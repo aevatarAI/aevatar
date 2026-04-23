@@ -24,14 +24,25 @@ public sealed class LarkConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter, replyGenerator: replyGenerator);
 
         var result = await runner.RunInboundAsync(
-            BuildInboundActivity("hello", "msg-1", ConversationScope.Group, "oc_group_chat_1"),
+            BuildInboundActivity(
+                "hello",
+                "msg-1",
+                ConversationScope.Group,
+                "oc_group_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-1",
+                    ReplyAccessToken = "relay-token-1",
+                }),
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("direct-reply:msg-1");
+        result.OutboundDelivery?.ReplyMessageId.Should().Be("relay-msg-1");
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Be("reply-1");
         adapter.Replies[0].Inbound.ConversationId.Should().Be("oc_group_chat_1");
+        adapter.Replies[0].Inbound.OutboundDelivery?.ReplyAccessToken.Should().Be("relay-token-1");
         replyGenerator.GeneratedActivities.Should().ContainSingle(activity => activity.Id == "msg-1");
     }
 
@@ -209,7 +220,8 @@ public sealed class LarkConversationTurnRunnerTests
         string text,
         string messageId,
         ConversationScope scope = ConversationScope.Group,
-        string? partition = "oc_group_chat_1")
+        string? partition = "oc_group_chat_1",
+        OutboundDeliveryContext? outboundDelivery = null)
     {
         return new ChatActivity
         {
@@ -233,6 +245,7 @@ public sealed class LarkConversationTurnRunnerTests
             {
                 Text = text,
             },
+            OutboundDelivery = outboundDelivery?.Clone(),
         };
     }
 

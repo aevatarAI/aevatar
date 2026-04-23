@@ -18,6 +18,7 @@ message ConversationTurnCompletedEvent {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 5;
   aevatar.gagents.channel.abstractions.MessageContent outbound = 6;
   int64 completed_at_unix_ms = 7;
+  aevatar.gagents.channel.abstractions.OutboundDeliveryContext outbound_delivery = 8;
 }
 
 message ConversationContinueRequestedEvent {
