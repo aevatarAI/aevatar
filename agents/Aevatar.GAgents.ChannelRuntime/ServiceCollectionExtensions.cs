@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
@@ -12,6 +13,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.ChannelRuntime.Outbound;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -178,6 +180,10 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
+
+        // interactive reply composer registry, collector, dispatcher, and LLM-facing tool
+        services.AddChannelInteractiveReplyTools();
+        services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
         services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
         services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
 
@@ -185,7 +191,13 @@ public static class ServiceCollectionExtensions
         {
             client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
         });
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>());
+        services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<LarkChannelNativeMessageProducer>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
+            sp => sp.GetRequiredService<LarkMessageComposer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
+        services.TryAddSingleton<LarkPayloadRedactor>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
         services.TryAddSingleton<INyxIdRelayRegistrationCredentialResolver, NyxIdRelayRegistrationCredentialResolver>();
         services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>

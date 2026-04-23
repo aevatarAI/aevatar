@@ -20,6 +20,8 @@ internal sealed class ChannelLlmReplyInboxRuntime :
     private readonly IStreamProvider _streamProvider;
     private readonly IActorRuntime _actorRuntime;
     private readonly IConversationReplyGenerator _replyGenerator;
+    private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
+    private readonly NyxIdRelayOptions? _relayOptions;
     private readonly ILogger<ChannelLlmReplyInboxRuntime> _logger;
     private IAsyncDisposable? _subscription;
 
@@ -27,11 +29,15 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         IStreamProvider streamProvider,
         IActorRuntime actorRuntime,
         IConversationReplyGenerator replyGenerator,
+        IInteractiveReplyCollector? interactiveReplyCollector,
+        NyxIdRelayOptions? relayOptions,
         ILogger<ChannelLlmReplyInboxRuntime> logger)
     {
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
+        _interactiveReplyCollector = interactiveReplyCollector;
+        _relayOptions = relayOptions;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -68,7 +74,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         await StopAsync(CancellationToken.None);
     }
 
-    private async Task ProcessAsync(NeedsLlmReplyEvent request)
+    internal async Task ProcessAsync(NeedsLlmReplyEvent request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -82,6 +88,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         }
 
         string replyText;
+        MessageContent? outboundIntent = null;
         var terminalState = LlmReplyTerminalState.Completed;
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
@@ -89,12 +96,24 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         try
         {
             var effectiveMetadata = BuildEffectiveMetadata(request);
-            replyText = await _replyGenerator.GenerateReplyAsync(
-                request.Activity,
-                effectiveMetadata,
-                CancellationToken.None) ?? string.Empty;
+            IDisposable? interactiveReplyScope = null;
+            try
+            {
+                if (ShouldCaptureInteractiveReply(request.Activity))
+                    interactiveReplyScope = _interactiveReplyCollector?.BeginScope();
 
-            if (string.IsNullOrWhiteSpace(replyText))
+                replyText = await _replyGenerator.GenerateReplyAsync(
+                    request.Activity,
+                    effectiveMetadata,
+                    CancellationToken.None) ?? string.Empty;
+                outboundIntent = _interactiveReplyCollector?.TryTake();
+            }
+            finally
+            {
+                interactiveReplyScope?.Dispose();
+            }
+
+            if (outboundIntent is null && string.IsNullOrWhiteSpace(replyText))
             {
                 terminalState = LlmReplyTerminalState.Failed;
                 errorCode = "empty_reply";
@@ -122,7 +141,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             RegistrationId = request.RegistrationId,
             SourceActorId = InboxStreamId,
             Activity = request.Activity.Clone(),
-            Outbound = new MessageContent { Text = replyText },
+            Outbound = outboundIntent?.Clone() ?? new MessageContent { Text = replyText },
             TerminalState = terminalState,
             ErrorCode = errorCode,
             ErrorSummary = errorSummary,
@@ -152,6 +171,21 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
         metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
         return metadata;
+    }
+
+    private bool ShouldCaptureInteractiveReply(ChatActivity? activity)
+    {
+        if (_interactiveReplyCollector is null)
+            return false;
+
+        if (_relayOptions is { InteractiveRepliesEnabled: false })
+            return false;
+
+        return activity?.OutboundDelivery is
+        {
+            ReplyMessageId.Length: > 0,
+            ReplyAccessToken.Length: > 0,
+        };
     }
 }
 

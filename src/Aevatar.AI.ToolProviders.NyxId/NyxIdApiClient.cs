@@ -419,18 +419,47 @@ public sealed class NyxIdApiClient
     public Task<string> PushChannelEventAsync(string token, string conversationId, string body, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/channel-events/{Uri.EscapeDataString(conversationId)}", body, ct);
 
-    public async Task<NyxIdChannelRelayReplyResult> SendChannelRelayTextReplyAsync(
+    /// <summary>
+    /// Sends a channel relay reply with plain text only.
+    /// </summary>
+    /// <remarks>
+    /// Kept as a thin wrapper over <see cref="SendChannelRelayReplyAsync"/> so legacy call sites that
+    /// only need a text fallback continue to compile. New call sites should prefer the rich overload.
+    /// </remarks>
+    public Task<NyxIdChannelRelayReplyResult> SendChannelRelayTextReplyAsync(
         string token,
         string messageId,
         string text,
         CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+
+        return SendChannelRelayReplyAsync(token, messageId, new ChannelRelayReplyBody(text), ct);
+    }
+
+    /// <summary>
+    /// Sends a channel relay reply with arbitrary body shape — text fallback and/or rich card metadata.
+    /// </summary>
+    /// <remarks>
+    /// The <paramref name="body"/> is serialized as <c>{ message_id, reply: { text?, metadata: { card? } } }</c>.
+    /// Transport-neutral callers (for example, the interactive reply dispatcher) use this overload to
+    /// forward composer output verbatim; NyxID's per-platform adapter renders the card for each platform.
+    /// </remarks>
+    public async Task<NyxIdChannelRelayReplyResult> SendChannelRelayReplyAsync(
+        string token,
+        string messageId,
+        ChannelRelayReplyBody body,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
         if (string.IsNullOrWhiteSpace(token))
             return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
         if (string.IsNullOrWhiteSpace(messageId))
             return new NyxIdChannelRelayReplyResult(false, Detail: "missing_message_id");
-        if (string.IsNullOrWhiteSpace(text))
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text");
+        if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
 
         var response = await PostAsync(
             token,
@@ -438,10 +467,7 @@ public sealed class NyxIdApiClient
             JsonSerializer.Serialize(new
             {
                 message_id = messageId,
-                reply = new
-                {
-                    text,
-                },
+                reply = BuildReplyNode(body),
             }),
             ct);
 
@@ -467,6 +493,19 @@ public sealed class NyxIdApiClient
             _logger.LogWarning(ex, "Nyx channel relay reply returned invalid JSON");
             return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_response");
         }
+    }
+
+    private static object BuildReplyNode(ChannelRelayReplyBody body)
+    {
+        var hasText = !string.IsNullOrWhiteSpace(body.Text);
+        var hasCard = body.Metadata?.Card is not null;
+
+        if (hasText && hasCard)
+            return new { text = body.Text, metadata = new { card = body.Metadata!.Card } };
+        if (hasText)
+            return new { text = body.Text };
+
+        return new { metadata = new { card = body.Metadata!.Card } };
     }
 
     // ─── Admin Invite Codes ───

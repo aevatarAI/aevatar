@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.ChannelRuntime.Outbound;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,6 +21,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdRelayOutboundPort _relayOutboundPort;
+    private readonly IInteractiveReplyDispatcher? _interactiveReplyDispatcher;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -29,6 +31,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IEnumerable<IPlatformAdapter> platformAdapters,
         NyxIdApiClient nyxClient,
         NyxIdRelayOutboundPort relayOutboundPort,
+        IInteractiveReplyDispatcher? interactiveReplyDispatcher,
         ILogger<ChannelConversationTurnRunner> logger)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
@@ -37,6 +40,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _relayOutboundPort = relayOutboundPort ?? throw new ArgumentNullException(nameof(relayOutboundPort));
+        _interactiveReplyDispatcher = interactiveReplyDispatcher;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -78,8 +82,8 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 "Deferred LLM reply is missing the source activity.");
         }
 
-        var replyText = reply.Outbound?.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(replyText))
+        var outboundIntent = reply.Outbound?.Clone() ?? new MessageContent();
+        if (!HasContent(outboundIntent))
         {
             return ConversationTurnResult.TransientFailure(
                 string.IsNullOrWhiteSpace(reply.ErrorCode) ? "empty_reply" : reply.ErrorCode,
@@ -105,7 +109,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ? reply.Activity.Id
             : reply.CorrelationId;
         return await SendReplyAsync(
-            replyText,
+            outboundIntent,
             sentSeed,
             reply.Activity.Conversation,
             inbound,
@@ -146,7 +150,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         };
 
         return await SendReplyAsync(
-            command.Payload?.Text ?? string.Empty,
+            command.Payload?.Clone() ?? new MessageContent(),
             command.CommandId,
             command.Conversation,
             inbound,
@@ -212,39 +216,51 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
         CancellationToken ct) =>
-        await SendReplyAsync(replyText, activity.Id, activity.Conversation, inbound, registration, ct);
+        await SendReplyAsync(
+            new MessageContent { Text = replyText },
+            activity.Id,
+            activity.Conversation,
+            inbound,
+            registration,
+            ct);
 
     private async Task<ConversationTurnResult> SendReplyAsync(
-        string replyText,
+        MessageContent outboundIntent,
         string sentActivitySeed,
         ConversationReference? conversation,
         InboundMessage inbound,
         ChannelBotRegistrationEntry? registration,
         CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(outboundIntent);
+
         if (HasRelayDelivery(inbound))
         {
             var relayDelivery = inbound.OutboundDelivery!.Clone();
+            if (await TrySendInteractiveRelayReplyAsync(
+                    outboundIntent,
+                    sentActivitySeed,
+                    conversation,
+                    inbound,
+                    relayDelivery,
+                    ct) is { } interactiveResult)
+            {
+                return interactiveResult;
+            }
+
             var emit = await _relayOutboundPort.SendAsync(
                 ResolveRelayPlatform(inbound, conversation),
                 conversation?.Clone() ?? new ConversationReference(),
-                new MessageContent { Text = replyText },
+                outboundIntent,
                 relayDelivery,
                 ct);
-            if (!emit.Success)
-                return ToRelayFailure(emit);
-
-            return ConversationTurnResult.Sent(
-                sentActivityId: string.IsNullOrWhiteSpace(emit.SentActivityId)
-                    ? $"direct-reply:{sentActivitySeed}"
-                    : emit.SentActivityId,
-                outbound: new MessageContent { Text = replyText },
-                authPrincipal: "bot",
-                outboundDelivery: new OutboundDeliveryContext
-                {
-                    ReplyMessageId = relayDelivery.ReplyMessageId,
-                    ReplyAccessToken = relayDelivery.ReplyAccessToken,
-                });
+            return emit.Success
+                ? BuildRelaySentResult(
+                    emit.SentActivityId,
+                    sentActivitySeed,
+                    outboundIntent,
+                    relayDelivery)
+                : ToRelayFailure(emit);
         }
 
         if (registration is null)
@@ -261,6 +277,17 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationTurnResult.PermanentFailure(
                 "adapter_not_found",
                 $"No platform adapter registered for '{registration.Platform}'.");
+        }
+
+        var replyText = NormalizeReplyText(
+            string.IsNullOrWhiteSpace(outboundIntent.Text) && HasInteractiveContent(outboundIntent)
+                ? NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent)
+                : outboundIntent.Text);
+        if (string.IsNullOrWhiteSpace(replyText))
+        {
+            return ConversationTurnResult.TransientFailure(
+                "empty_reply",
+                "Deferred LLM reply is empty.");
         }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -286,6 +313,91 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             outbound: new MessageContent { Text = replyText },
             authPrincipal: "bot",
             outboundDelivery: inbound.OutboundDelivery?.Clone());
+    }
+
+    private async Task<ConversationTurnResult?> TrySendInteractiveRelayReplyAsync(
+        MessageContent outboundIntent,
+        string sentActivitySeed,
+        ConversationReference? conversation,
+        InboundMessage inbound,
+        OutboundDeliveryContext relayDelivery,
+        CancellationToken ct)
+    {
+        if (!HasInteractiveContent(outboundIntent))
+            return null;
+
+        var fallbackText = NormalizeReplyText(NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent));
+        if (_interactiveReplyDispatcher is null)
+        {
+            _logger.LogWarning(
+                "Interactive relay reply requested without dispatcher; degrading to text. messageId={MessageId}",
+                relayDelivery.ReplyMessageId);
+            return await SendRelayTextFallbackAsync(
+                fallbackText,
+                sentActivitySeed,
+                conversation,
+                inbound,
+                relayDelivery,
+                ct);
+        }
+
+        var dispatch = await _interactiveReplyDispatcher.DispatchAsync(
+            ResolveRelayChannel(inbound, conversation),
+            relayDelivery.ReplyMessageId,
+            relayDelivery.ReplyAccessToken,
+            outboundIntent,
+            new ComposeContext
+            {
+                Conversation = conversation?.Clone() ?? new ConversationReference(),
+            },
+            ct);
+        if (dispatch.Succeeded)
+        {
+            var delivered = dispatch.FellBackToText
+                ? new MessageContent { Text = fallbackText }
+                : outboundIntent.Clone();
+            return BuildRelaySentResult(
+                dispatch.MessageId,
+                sentActivitySeed,
+                delivered,
+                relayDelivery);
+        }
+
+        _logger.LogWarning(
+            "Interactive relay reply rejected; degrading to text. messageId={MessageId}, detail={Detail}",
+            relayDelivery.ReplyMessageId,
+            dispatch.Detail);
+        return await SendRelayTextFallbackAsync(
+            fallbackText,
+            sentActivitySeed,
+            conversation,
+            inbound,
+            relayDelivery,
+            ct);
+    }
+
+    private async Task<ConversationTurnResult> SendRelayTextFallbackAsync(
+        string? fallbackText,
+        string sentActivitySeed,
+        ConversationReference? conversation,
+        InboundMessage inbound,
+        OutboundDeliveryContext relayDelivery,
+        CancellationToken ct)
+    {
+        var outbound = new MessageContent { Text = NormalizeReplyText(fallbackText) };
+        var emit = await _relayOutboundPort.SendAsync(
+            ResolveRelayPlatform(inbound, conversation),
+            conversation?.Clone() ?? new ConversationReference(),
+            outbound,
+            relayDelivery,
+            ct);
+        return emit.Success
+            ? BuildRelaySentResult(
+                emit.SentActivityId,
+                sentActivitySeed,
+                outbound,
+                relayDelivery)
+            : ToRelayFailure(emit);
     }
 
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationAsync(string? registrationId, CancellationToken ct)
@@ -576,11 +688,15 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static string ResolveRelayPlatform(InboundMessage inbound, ConversationReference? conversation)
     {
-        if (!string.IsNullOrWhiteSpace(inbound.TransportExtras?.NyxPlatform))
-            return inbound.TransportExtras.NyxPlatform;
-        if (!string.IsNullOrWhiteSpace(inbound.Platform))
-            return inbound.Platform;
-        return conversation?.Channel?.Value ?? string.Empty;
+        var platform = !string.IsNullOrWhiteSpace(inbound.TransportExtras?.NyxPlatform)
+            ? inbound.TransportExtras.NyxPlatform
+            : !string.IsNullOrWhiteSpace(inbound.Platform)
+                ? inbound.Platform
+                : conversation?.Channel?.Value ?? string.Empty;
+
+        return string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase)
+            ? "lark"
+            : platform;
     }
 
     private static ConversationTurnResult ToRelayFailure(EmitResult emit)
@@ -599,4 +715,35 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             _ => ConversationTurnResult.TransientFailure(errorCode, errorMessage),
         };
     }
+
+    private static ChannelId ResolveRelayChannel(InboundMessage inbound, ConversationReference? conversation) =>
+        ChannelId.From(ResolveRelayPlatform(inbound, conversation));
+
+    private static bool HasContent(MessageContent content) =>
+        !string.IsNullOrWhiteSpace(content.Text) ||
+        HasInteractiveContent(content) ||
+        content.Attachments.Count > 0;
+
+    private static bool HasInteractiveContent(MessageContent content) =>
+        content.Actions.Count > 0 || content.Cards.Count > 0;
+
+    private static string NormalizeReplyText(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? "(no content)" : text.Trim();
+
+    private static ConversationTurnResult BuildRelaySentResult(
+        string? sentActivityId,
+        string sentActivitySeed,
+        MessageContent outbound,
+        OutboundDeliveryContext relayDelivery) =>
+        ConversationTurnResult.Sent(
+            sentActivityId: string.IsNullOrWhiteSpace(sentActivityId)
+                ? $"direct-reply:{sentActivitySeed}"
+                : sentActivityId,
+            outbound: outbound.Clone(),
+            authPrincipal: "bot",
+            outboundDelivery: new OutboundDeliveryContext
+            {
+                ReplyMessageId = relayDelivery.ReplyMessageId,
+                ReplyAccessToken = relayDelivery.ReplyAccessToken,
+            });
 }

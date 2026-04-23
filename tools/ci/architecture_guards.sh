@@ -931,6 +931,9 @@ bash tools/ci/scripting_runtime_snapshot_guard.sh
 echo "Running runtime callback guards..."
 bash tools/ci/runtime_callback_guards.sh
 
+echo "Running channel card literal guard..."
+bash tools/ci/channel_card_literal_guard.sh
+
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh
 

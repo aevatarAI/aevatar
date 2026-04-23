@@ -290,6 +290,84 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunLlmReplyAsync_ShouldDispatchInteractiveRelayReply_WhenOutboundContainsActions()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();
+        interactiveDispatcher.DispatchAsync(
+                Arg.Any<ChannelId>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MessageContent>(),
+                Arg.Any<ComposeContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new InteractiveReplyDispatchResult(
+                Succeeded: true,
+                MessageId: "reply-card-1",
+                PlatformMessageId: "platform-card-1",
+                Capability: ComposeCapability.Exact,
+                FellBackToText: false,
+                Detail: null)));
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-1"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            interactiveReplyDispatcher: interactiveDispatcher);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-card-1",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-1",
+                ReplyAccessToken = "relay-token-1",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+            });
+        var outbound = new MessageContent
+        {
+            Text = "Choose one",
+        };
+        outbound.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "confirm",
+            Label = "Confirm",
+            IsPrimary = true,
+        });
+
+        var result = await runner.RunLlmReplyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-relay-card-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = activity,
+            Outbound = outbound,
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 42,
+        }, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("reply-card-1");
+        result.Outbound.Actions.Should().ContainSingle();
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().BeEmpty();
+        await interactiveDispatcher.Received(1).DispatchAsync(
+            Arg.Is<ChannelId>(channel => channel.Value == "lark"),
+            "relay-msg-1",
+            "relay-token-1",
+            Arg.Is<MessageContent>(message => message.Text == "Choose one" && message.Actions.Count == 1),
+            Arg.Any<ComposeContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunContinueAsync_DirectMessageWithoutPartition_ReturnsPermanentFailure()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -352,7 +430,8 @@ public sealed class ChannelConversationTurnRunnerTests
         RecordingPlatformAdapter adapter,
         IServiceProvider? services = null,
         IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort = null,
-        RecordingJsonHandler? relayHandler = null)
+        RecordingJsonHandler? relayHandler = null,
+        IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
         services ??= new ServiceCollection().BuildServiceProvider();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
@@ -375,6 +454,7 @@ public sealed class ChannelConversationTurnRunnerTests
             [adapter],
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://example.com" }),
             relayOutboundPort,
+            interactiveReplyDispatcher,
             NullLogger<ChannelConversationTurnRunner>.Instance);
     }
 

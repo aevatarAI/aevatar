@@ -30,4 +30,6 @@ public class NyxIdRelayOptions
     public bool RequireTimestampHeader { get; set; } = true;
 
     public int ReplayWindowSeconds { get; set; } = 300;
+
+    public bool InteractiveRepliesEnabled { get; set; } = true;
 }
