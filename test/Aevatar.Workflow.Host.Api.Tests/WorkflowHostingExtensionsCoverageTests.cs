@@ -4,6 +4,7 @@ using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Hosting;
 using Aevatar.Workflow.Core;
@@ -358,6 +359,26 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         services.Count.Should().Be(afterFirstRegistration);
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldFillMissingReadersWhenPartialRegistrationExists()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
+        services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>)).Should().Be(1);
     }
 
     [Fact]

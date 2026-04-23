@@ -37,8 +37,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        // Idempotency guard: pick a Studio-specific readmodel as canary.
-        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string>)))
+        if (HasAllStudioDocumentReaders(services))
             return services;
 
         var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
@@ -83,6 +82,9 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         IConfiguration configuration)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
+        if (HasDocumentReader<TDoc>(services))
+            return;
+
         services.AddElasticsearchDocumentProjectionStore<TDoc, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TDoc>>().Metadata,
@@ -95,10 +97,31 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         IServiceCollection services)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
+        if (HasDocumentReader<TDoc>(services))
+            return;
+
         services.AddInMemoryDocumentProjectionStore<TDoc, string>(
             keySelector: readModel => readModel.ActorId,
             keyFormatter: key => key,
             defaultSortSelector: readModel => readModel.UpdatedAt);
+    }
+
+    private static bool HasAllStudioDocumentReaders(IServiceCollection services)
+    {
+        return HasDocumentReader<RoleCatalogCurrentStateDocument>(services)
+               && HasDocumentReader<ConnectorCatalogCurrentStateDocument>(services)
+               && HasDocumentReader<ChatHistoryIndexCurrentStateDocument>(services)
+               && HasDocumentReader<ChatConversationCurrentStateDocument>(services)
+               && HasDocumentReader<GAgentRegistryCurrentStateDocument>(services)
+               && HasDocumentReader<UserMemoryCurrentStateDocument>(services)
+               && HasDocumentReader<StreamingProxyParticipantCurrentStateDocument>(services)
+               && HasDocumentReader<UserConfigCurrentStateDocument>(services);
+    }
+
+    private static bool HasDocumentReader<TDoc>(IServiceCollection services)
+        where TDoc : class, IProjectionReadModel<TDoc>, new()
+    {
+        return services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<TDoc, string>));
     }
 
     private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
