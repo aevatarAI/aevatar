@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.ConnectorCatalog;
@@ -37,10 +39,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        // Idempotency guard: pick a Studio-specific readmodel as canary.
-        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string>)))
-            return services;
-
         var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
         var inMemoryEnabled = ResolveOptionalBool(
             configuration["Projection:Document:Providers:InMemory:Enabled"],
@@ -51,6 +49,12 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             throw new InvalidOperationException(
                 "Exactly one document projection provider must be enabled for Studio.");
         }
+
+        var selectedDocumentProvider = elasticsearchEnabled
+            ? DocumentProviderKind.Elasticsearch
+            : DocumentProviderKind.InMemory;
+        if (HasAllStudioDocumentReaders(services, selectedDocumentProvider))
+            return services;
 
         if (elasticsearchEnabled)
         {
@@ -83,6 +87,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         IConfiguration configuration)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
+        EnsureCompatibleDocumentReaderProvider<TDoc>(services, DocumentProviderKind.Elasticsearch);
+        if (HasDocumentReaderForProvider<TDoc>(services, DocumentProviderKind.Elasticsearch))
+            return;
+
         services.AddElasticsearchDocumentProjectionStore<TDoc, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TDoc>>().Metadata,
@@ -95,10 +103,61 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         IServiceCollection services)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
+        EnsureCompatibleDocumentReaderProvider<TDoc>(services, DocumentProviderKind.InMemory);
+        if (HasDocumentReaderForProvider<TDoc>(services, DocumentProviderKind.InMemory))
+            return;
+
         services.AddInMemoryDocumentProjectionStore<TDoc, string>(
             keySelector: readModel => readModel.ActorId,
             keyFormatter: key => key,
             defaultSortSelector: readModel => readModel.UpdatedAt);
+    }
+
+    private static bool HasAllStudioDocumentReaders(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+    {
+        return HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ChatHistoryIndexCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<StreamingProxyParticipantCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind);
+    }
+
+    private static bool HasAnyDocumentReader<TDoc>(IServiceCollection services)
+        where TDoc : class, IProjectionReadModel<TDoc>, new()
+    {
+        return services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<TDoc, string>));
+    }
+
+    private static bool HasDocumentReaderForProvider<TDoc>(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+        where TDoc : class, IProjectionReadModel<TDoc>, new()
+    {
+        return providerKind switch
+        {
+            DocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TDoc, string>)),
+            DocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TDoc, string>)),
+            _ => false,
+        };
+    }
+
+    private static void EnsureCompatibleDocumentReaderProvider<TDoc>(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+        where TDoc : class, IProjectionReadModel<TDoc>, new()
+    {
+        if (!HasAnyDocumentReader<TDoc>(services))
+            return;
+        if (HasDocumentReaderForProvider<TDoc>(services, providerKind))
+            return;
+
+        throw new InvalidOperationException(
+            $"Projection document reader for {typeof(TDoc).Name} is already registered with a different provider.");
     }
 
     private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
@@ -148,5 +207,11 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StreamingProxyParticipantGAgentState.Descriptor,
             ChatHistoryIndexState.Descriptor,
             ChatConversationState.Descriptor);
+    }
+
+    private enum DocumentProviderKind
+    {
+        InMemory,
+        Elasticsearch,
     }
 }

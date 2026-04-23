@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Bindings;
@@ -87,8 +89,6 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)))
-            return services;
         var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
         var inMemoryEnabled = ResolveOptionalBool(
             configuration["Projection:Document:Providers:InMemory:Enabled"],
@@ -100,77 +100,115 @@ public static class ServiceCollectionExtensions
                 "Exactly one document projection provider must be enabled for GAgentService.");
         }
 
+        var selectedDocumentProvider = elasticsearchEnabled
+            ? DocumentProviderKind.Elasticsearch
+            : DocumentProviderKind.InMemory;
+        if (HasAllGAgentServiceProjectionReaders(services, selectedDocumentProvider))
+            return services;
+
         if (elasticsearchEnabled)
         {
-            services.AddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceCatalogReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ServiceRevisionCatalogReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceRevisionCatalogReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ServiceDeploymentCatalogReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceDeploymentCatalogReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ServiceServingSetReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceServingSetReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ServiceRolloutReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceRolloutReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ServiceTrafficViewReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserConfigCurrentStateDocument>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
+            TryAddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ServiceRevisionCatalogReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ServiceDeploymentCatalogReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ServiceServingSetReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ServiceRolloutReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ServiceTrafficViewReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<ServiceCatalogReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                defaultSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<ServiceRevisionCatalogReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                defaultSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<ServiceDeploymentCatalogReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                defaultSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<ServiceServingSetReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                defaultSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<ServiceRolloutReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                defaultSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                defaultSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                defaultSortSelector: readModel => readModel.UpdatedAt);
+            TryAddInMemoryDocumentProjectionStore<ServiceCatalogReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ServiceRevisionCatalogReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ServiceDeploymentCatalogReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ServiceServingSetReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ServiceRolloutReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
         }
 
         return services;
+    }
+
+    private static bool HasAllGAgentServiceProjectionReaders(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+    {
+        return HasProjectionDocumentReaderForProvider<ServiceCatalogReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ServiceRevisionCatalogReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ServiceDeploymentCatalogReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ServiceServingSetReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ServiceRolloutReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ServiceRolloutCommandObservationReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ServiceTrafficViewReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind);
+    }
+
+    private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        return services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<TReadModel, string>));
+    }
+
+    private static bool HasProjectionDocumentReaderForProvider<TReadModel>(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        return providerKind switch
+        {
+            DocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TReadModel, string>)),
+            DocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TReadModel, string>)),
+            _ => false,
+        };
+    }
+
+    private static void EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(
+        IServiceCollection services,
+        DocumentProviderKind providerKind)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        if (!HasAnyProjectionDocumentReader<TReadModel>(services))
+            return;
+        if (HasProjectionDocumentReaderForProvider<TReadModel>(services, providerKind))
+            return;
+
+        throw new InvalidOperationException(
+            $"Projection document reader for {typeof(TReadModel).Name} is already registered with a different provider.");
+    }
+
+    private static void TryAddElasticsearchDocumentProjectionStore<TReadModel>(
+        IServiceCollection services,
+        IConfiguration configuration,
+        Func<TReadModel, string> keySelector)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(services, DocumentProviderKind.Elasticsearch);
+        if (HasProjectionDocumentReaderForProvider<TReadModel>(services, DocumentProviderKind.Elasticsearch))
+            return;
+
+        services.AddElasticsearchDocumentProjectionStore<TReadModel, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TReadModel>>().Metadata,
+            keySelector: keySelector,
+            keyFormatter: static key => key);
+    }
+
+    private static void TryAddInMemoryDocumentProjectionStore<TReadModel>(
+        IServiceCollection services,
+        Func<TReadModel, string> keySelector)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        EnsureCompatibleProjectionDocumentReaderProvider<TReadModel>(services, DocumentProviderKind.InMemory);
+        if (HasProjectionDocumentReaderForProvider<TReadModel>(services, DocumentProviderKind.InMemory))
+            return;
+
+        services.AddInMemoryDocumentProjectionStore<TReadModel, string>(
+            keySelector: keySelector,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
     }
 
     private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
@@ -207,5 +245,11 @@ public static class ServiceCollectionExtensions
             throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
 
         return parsed;
+    }
+
+    private enum DocumentProviderKind
+    {
+        InMemory,
+        Elasticsearch,
     }
 }
