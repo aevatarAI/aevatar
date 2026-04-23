@@ -77,15 +77,14 @@ public sealed class NyxRelayDayOneBridgeTests
     }
 
     [Fact]
-    public async Task HandleAsync_ForKnownCommandWithoutArguments_ReturnsHelpText()
+    public async Task HandleAsync_ForKnownCommandWithoutArguments_InvokesAgentBuilderTool()
     {
         var bridge = new NyxRelayDayOneBridge(new ServiceCollection().BuildServiceProvider());
         var request = BuildRequest("/daily", conversationType: "private");
 
         var reply = await bridge.HandleAsync(request, CancellationToken.None);
 
-        reply.Should().Contain("Daily report agent command");
-        reply.Should().Contain("/daily github_username=alice");
+        reply.Should().Contain("Create daily report agent failed");
     }
 
     [Fact]

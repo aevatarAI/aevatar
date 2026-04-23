@@ -21,6 +21,7 @@ message UserConfigCurrentStateDocument {
   string local_runtime_base_url = 13;
   string remote_runtime_base_url = 14;
   int32 max_tool_rounds = 15;
+  string github_username = 16;
 }
 
 // ─── GAgentRegistry Current State ReadModel ───

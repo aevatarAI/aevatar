@@ -459,6 +459,9 @@ public sealed class ActorBackedStoreAdapterTests
 
         public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
             Task.FromResult(_config);
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
+            GetAsync(ct);
     }
 
     // ════════════════════════════════════════════════════════════
