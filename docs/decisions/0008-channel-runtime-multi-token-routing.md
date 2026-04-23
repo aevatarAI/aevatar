@@ -1,10 +1,12 @@
 ---
 title: "Channel Runtime Multi-Token Credential Routing"
-status: active
+status: superseded
 owner: chronoai
 ---
 
 # ADR-0008: Channel Runtime Multi-Token Credential Routing
+
+> Historical note: ADR-0012 / issue `#308` superseded the `ChannelUserGAgent`-based runtime described below. The current supported production contract no longer includes `ChannelUserGAgent` or Telegram callback ownership.
 
 ## Context
 
@@ -60,7 +62,7 @@ Webhook → ChannelCallbackEndpoints (parse + 200 OK)
 - **Reply path uses org token, not effective token.** Bot API credentials belong to the org. The user's personal token cannot send messages via the org's bot.
 - **Cache staleness window:** Up to 5 minutes. Service list changes are eventually consistent.
 - **Actor population growth:** One ChannelUserGAgent per (platform, registrationId, senderId). No cleanup mechanism yet (see aevatarAI/aevatar#149).
-- **Replaceable boundary:** The dual-token merge logic in NyxIdProxyTool is the only code that would change if NyxID #209 ships. ChannelUserGAgent and per-sender identity tracking are permanent.
+- **Replaceable boundary (historical decision):** The original ADR assumed the dual-token merge logic in `NyxIdProxyTool` was the only code that would change if NyxID #209 shipped. issue `#308` later proved the `ChannelUserGAgent` / per-sender identity path itself should be deleted, not preserved.
 
 ## Related
 

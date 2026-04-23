@@ -228,6 +228,14 @@ describe("runtimeRunsApi", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/scopes/scope-1/workflow/draft-run",
       expect.objectContaining({
+        body: JSON.stringify({
+          eventFormat: "agui",
+          prompt: "Run draft",
+          workflowYamls: ["name: draft"],
+          headers: {
+            source: "studio",
+          },
+        }),
         method: "POST",
       })
     );

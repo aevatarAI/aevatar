@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
@@ -112,13 +112,17 @@ const acceptedSaveResponse = {
   },
 };
 
-function renderPage(overrideContext = {}) {
+function renderPage(
+  overrideContext = {},
+  overrideProps: Record<string, unknown> = {},
+) {
   return renderWithQueryClient(
     React.createElement(ScriptsWorkbenchPage, {
       appContext: {
         ...appContext,
         ...overrideContext,
       },
+      ...overrideProps,
     }),
   );
 }
@@ -346,6 +350,115 @@ describe('ScriptsWorkbenchPage', () => {
     expect(
       screen.getByDisplayValue(/Aevatar\.Studio\.Application\.Scripts\.Contracts/),
     ).toBeTruthy();
+  });
+
+  it('registers a leave guard that confirms before leaving unsaved scope changes', async () => {
+    let registeredLeaveGuard: (() => Promise<boolean>) | null = null;
+    window.localStorage.setItem(
+      'aevatar:console:scripts-studio:v1',
+      JSON.stringify([
+        {
+          key: 'draft-guard',
+          scriptId: 'script-1',
+          revision: 'draft-guard',
+          baseRevision: 'rev-1',
+          input: '',
+          package: {
+            csharpSources: [
+              {
+                path: 'Behavior.cs',
+                content: 'public sealed class DemoScript {}',
+              },
+            ],
+            protoFiles: [],
+            entryBehaviorTypeName: 'DraftBehavior',
+            entrySourcePath: 'Behavior.cs',
+          },
+          selectedFilePath: 'Behavior.cs',
+          definitionActorId: 'definition-1',
+          runtimeActorId: 'runtime-1',
+          updatedAtUtc: '2026-03-24T00:00:00Z',
+          lastSourceHash: 'hash-1',
+          scopeDetail: {
+            available: true,
+            scopeId: 'scope-1',
+            script: {
+              scopeId: 'scope-1',
+              scriptId: 'script-1',
+              catalogActorId: 'catalog-1',
+              definitionActorId: 'definition-1',
+              activeRevision: 'rev-1',
+              activeSourceHash: 'hash-1',
+              updatedAt: '2026-03-24T00:00:00Z',
+            },
+            source: {
+              sourceText: 'public sealed class DemoScript {}',
+              definitionActorId: 'definition-1',
+              revision: 'rev-1',
+              sourceHash: 'hash-1',
+            },
+          },
+        },
+      ]),
+    );
+
+    renderPage(
+      {},
+      {
+        onRegisterLeaveGuard: (guard: (() => Promise<boolean>) | null) => {
+          registeredLeaveGuard = guard;
+        },
+      },
+    );
+
+    await screen.findByLabelText('Script ID');
+    const sourceEditor = screen
+      .getAllByRole('textbox', { hidden: true })
+      .find((element) => {
+        if (element.getAttribute('aria-hidden') === 'true') {
+          return false;
+        }
+        const value = (element as HTMLInputElement | HTMLTextAreaElement).value;
+        return value.includes('DemoScript') || value.includes('DraftBehavior');
+      });
+
+    expect(sourceEditor).toBeTruthy();
+
+    fireEvent.change(sourceEditor!, {
+      target: {
+        value: `${(sourceEditor as HTMLTextAreaElement).value}\n// leave-guard`,
+      },
+    });
+
+    await waitFor(() => {
+      expect(registeredLeaveGuard).toBeTruthy();
+      expect(
+        (sourceEditor as HTMLTextAreaElement).value.includes('// leave-guard'),
+      ).toBe(true);
+    });
+
+    let blockedLeave: Promise<boolean> | null = null;
+    await act(async () => {
+      blockedLeave = registeredLeaveGuard?.() || null;
+    });
+
+    expect(blockedLeave).not.toBeNull();
+    expect(await screen.findByText('Leave Scripts Studio?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue editing' }));
+    await expect(blockedLeave!).resolves.toBe(false);
+    await waitFor(() => {
+      expect(screen.queryByText('Leave Scripts Studio?')).toBeNull();
+    });
+
+    let allowedLeave: Promise<boolean> | null = null;
+    await act(async () => {
+      allowedLeave = registeredLeaveGuard?.() || null;
+    });
+
+    expect(allowedLeave).not.toBeNull();
+    expect(await screen.findByText('Leave Scripts Studio?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave page' }));
+    await expect(allowedLeave!).resolves.toBe(true);
   });
 
   it('migrates the broken legacy starter script from local storage', async () => {

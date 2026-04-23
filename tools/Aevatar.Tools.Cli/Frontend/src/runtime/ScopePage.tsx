@@ -25,6 +25,18 @@ import {
 } from './sseUtils';
 import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
 import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta, AttachmentInfo, ContentPartDto } from './chatTypes';
+import { InvokeWorkbench, type InvokeHistoryEntry } from './InvokeWorkbench';
+import { parseHumanInputChoices } from './humanInputUtils';
+import {
+  buildInvokeRequestPayload,
+  buildInvokeTransportLabel,
+  extractInvokePendingHumanInput,
+  getInvokeSurfaceSupport,
+  getNonStreamableInvokeEndpoints,
+  getStreamableInvokeEndpoints,
+  parseInvokeHeaders,
+  summarizeInvokeEvents,
+} from './invokeUtils';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
 import { NYXID_API_URL } from '../auth/nyxid';
@@ -78,6 +90,11 @@ const CONVERSATION_ROUTE_DEFAULT_VALUE = '__config_default__';
 const CONVERSATION_ROUTE_GATEWAY_VALUE = '__gateway__';
 const LLM_ROUTE_HEADER_KEY = 'nyxid.route_preference';
 const LLM_MODEL_HEADER_KEY = 'aevatar.model_override';
+const BUILTIN_SCOPE_SERVICES: ServiceOption[] = [
+  { id: 'onboarding', label: 'Onboarding', kind: 'onboarding', deploymentStatus: 'setup', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+  { id: NYXID_CHAT_SERVICE_ID, label: 'NyxID Chat', kind: 'nyxid-chat', deploymentStatus: 'serving', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+  { id: STREAMING_PROXY_SERVICE_ID, label: 'Streaming Proxy', kind: 'streaming-proxy', deploymentStatus: 'serving', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -131,38 +148,6 @@ function tryParseStreamingProxyRoomId(conversationId?: string | null) {
   if (!conversationId) return null;
   const prefix = `${STREAMING_PROXY_SERVICE_ID}:`;
   return conversationId.startsWith(prefix) ? conversationId.slice(prefix.length) : null;
-}
-
-/**
- * Parse numbered/lettered choices from a prompt string.
- * Detects patterns like: "1. Option" / "1) Option" / "A. Option" / "a) Option"
- * Also handles indented variants (leading whitespace).
- */
-function parseChoicesFromPrompt(prompt: string): { questionText: string; choices: { key: string; label: string }[] } {
-  const lines = prompt.split('\n');
-  const choicePattern = /^\s*([0-9]+|[A-Za-z])[.)]\s+(.+)$/;
-  const choices: { key: string; label: string }[] = [];
-  let firstChoiceIndex = -1;
-
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(choicePattern);
-    if (match) {
-      if (firstChoiceIndex < 0) firstChoiceIndex = i;
-      choices.push({ key: match[1], label: match[2].trim() });
-    } else if (choices.length > 0 && lines[i].trim() === '') {
-      // Allow blank lines between choices
-    } else if (choices.length > 0) {
-      // Non-choice, non-blank line after choices started — stop parsing
-      break;
-    }
-  }
-
-  if (choices.length < 2) {
-    return { questionText: prompt, choices: [] };
-  }
-
-  const questionText = lines.slice(0, firstChoiceIndex).join('\n').trim();
-  return { questionText, choices };
 }
 
 function buildConversationHeaders(
@@ -1191,10 +1176,7 @@ function ChatBubble({
         )}
 
         {msg.pendingHumanInput && (() => {
-          const structuredOptions = msg.pendingHumanInput.options;
-          const parsed = structuredOptions && structuredOptions.length >= 2
-            ? { questionText: msg.pendingHumanInput.prompt, choices: structuredOptions.map((option, index) => ({ key: String(index + 1), label: option })) }
-            : parseChoicesFromPrompt(msg.pendingHumanInput.prompt);
+          const parsed = parseHumanInputChoices(msg.pendingHumanInput.prompt, msg.pendingHumanInput.options);
           const hasChoices = parsed.choices.length >= 2;
 
           return hasChoices ? (
@@ -1212,7 +1194,7 @@ function ChatBubble({
                 {parsed.choices.map(choice => (
                   <button
                     key={choice.key}
-                    onClick={() => onResumeHumanInput?.(msg, choice.key)}
+                    onClick={() => onResumeHumanInput?.(msg, choice.value)}
                     className="flex w-full items-center gap-2.5 rounded-xl border border-blue-200 bg-white px-3 py-2 text-left text-[13px] text-gray-700 transition-colors hover:border-blue-300 hover:bg-blue-100"
                   >
                     <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg bg-blue-100 text-[12px] font-semibold text-blue-600">
@@ -1914,11 +1896,7 @@ export default function ScopePage() {
   const scopeId = nyxid.loadSession()?.user.sub || '';
 
   // Services
-  const [services, setServices] = useState<ServiceOption[]>([
-    { id: 'onboarding', label: 'Onboarding', kind: 'onboarding', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-    { id: NYXID_CHAT_SERVICE_ID, label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-    { id: STREAMING_PROXY_SERVICE_ID, label: 'Streaming Proxy', kind: 'streaming-proxy', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-  ]);
+  const [services, setServices] = useState<ServiceOption[]>(BUILTIN_SCOPE_SERVICES);
   const [selectedService, setSelectedService] = useState(NYXID_CHAT_SERVICE_ID);
 
 
@@ -1960,11 +1938,7 @@ export default function ScopePage() {
   useEffect(() => {
     if (!scopeId) return;
     api.scope.listServices(scopeId).then(svcList => {
-      const base: ServiceOption[] = [
-        { id: 'onboarding', label: 'Onboarding', kind: 'onboarding', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-        { id: NYXID_CHAT_SERVICE_ID, label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-        { id: STREAMING_PROXY_SERVICE_ID, label: 'Streaming Proxy', kind: 'streaming-proxy', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-      ];
+      const base: ServiceOption[] = [...BUILTIN_SCOPE_SERVICES];
       if (Array.isArray(svcList)) {
         const builtinIds = new Set(base.map(b => b.id));
         for (const s of svcList) {
@@ -1974,13 +1948,25 @@ export default function ScopePage() {
             endpointId: ep?.endpointId || ep?.EndpointId || '',
             displayName: ep?.displayName || ep?.DisplayName || ep?.endpointId || '',
             kind: ep?.kind || ep?.Kind || 'command',
+            requestTypeUrl: ep?.requestTypeUrl || ep?.RequestTypeUrl || '',
+            responseTypeUrl: ep?.responseTypeUrl || ep?.ResponseTypeUrl || '',
+            description: ep?.description || ep?.Description || '',
           }));
           const kind: ServiceOption['kind'] = isStreamingProxyServiceCandidate(String(sid || ''), String(name || ''), eps)
             ? 'streaming-proxy'
             : 'service';
           const isDuplicate = builtinIds.has(sid)
             || base.some(b => b.label === name);
-          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind, endpoints: eps });
+          if (sid && !isDuplicate) {
+            base.push({
+              id: sid,
+              label: name,
+              kind,
+              endpoints: eps,
+              deploymentStatus: String(s?.deployment_status || s?.deploymentStatus || s?.DeploymentStatus || ''),
+              serviceKey: String(s?.service_key || s?.serviceKey || s?.ServiceKey || ''),
+            });
+          }
         }
       }
       setServices(base);
@@ -3371,12 +3357,12 @@ export default function ScopePage() {
   }, [scopeId, activeConvId]);
 
   // Endpoint tabs
-  type EndpointTab = 'chat' | 'query' | 'execute' | 'raw';
+  type EndpointTab = 'chat' | 'query' | 'invoke' | 'raw';
   const [activeEndpoint, setActiveEndpoint] = useState<EndpointTab>('chat');
   const endpointTabs: { id: EndpointTab; label: string }[] = [
     { id: 'chat', label: 'Chat' },
     { id: 'query', label: 'Query' },
-    { id: 'execute', label: 'Execute' },
+    { id: 'invoke', label: 'Invoke' },
     { id: 'raw', label: 'Raw' },
   ];
 
@@ -3422,39 +3408,212 @@ export default function ScopePage() {
     }
   };
 
-  // ── Execute tab: invoke service endpoints ──
-  const activeEndpoints = activeService?.endpoints ?? [];
+  // ── Invoke tab: user-facing streaming service invoke ──
+  type InvokeDraft = {
+    endpointId: string;
+    prompt: string;
+    actorId: string;
+    headersText: string;
+    headers: Record<string, string>;
+  };
+  const invokeSupport = useMemo(
+    () => getInvokeSurfaceSupport(activeService),
+    [activeService],
+  );
+  const invokeableEndpoints = useMemo(
+    () => getStreamableInvokeEndpoints(activeService),
+    [activeService],
+  );
+  const hiddenInvokeEndpoints = useMemo(
+    () => getNonStreamableInvokeEndpoints(activeService),
+    [activeService],
+  );
   const [invokeEndpointId, setInvokeEndpointId] = useState('chat');
-  // Auto-set endpoint when service changes
   useEffect(() => {
-    if (activeEndpoints.length > 0 && !activeEndpoints.some(ep => ep.endpointId === invokeEndpointId)) {
-      setInvokeEndpointId(activeEndpoints[0].endpointId);
+    if (invokeableEndpoints.length > 0 && !invokeableEndpoints.some(ep => ep.endpointId === invokeEndpointId)) {
+      setInvokeEndpointId(invokeableEndpoints[0].endpointId);
     }
-  }, [activeService?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [invokeBody, setInvokeBody] = useState('{\n  "prompt": ""\n}');
+  }, [invokeEndpointId, invokeableEndpoints]);
+  const activeInvokeEndpoint = invokeableEndpoints.find(endpoint => endpoint.endpointId === invokeEndpointId) || invokeableEndpoints[0] || null;
+  const [invokePrompt, setInvokePrompt] = useState('');
+  const [invokeActorId, setInvokeActorId] = useState('');
+  const [invokeHeadersText, setInvokeHeadersText] = useState('');
+  const [invokeAdvancedOpen, setInvokeAdvancedOpen] = useState(false);
   const [invokeEvents, setInvokeEvents] = useState<Array<{ type: string; data: any }>>([]);
+  const [invokeHistory, setInvokeHistory] = useState<InvokeHistoryEntry[]>([]);
+  const [activeInvokeHistoryId, setActiveInvokeHistoryId] = useState<string | null>(null);
   const [invokeLoading, setInvokeLoading] = useState(false);
+  const [invokeFormError, setInvokeFormError] = useState<string | null>(null);
+  const [invokeResumeLoading, setInvokeResumeLoading] = useState(false);
+  const [invokeResumeError, setInvokeResumeError] = useState<string | null>(null);
   const invokeAbortRef = useRef<AbortController | null>(null);
+  const invokeHeaderParse = useMemo(
+    () => parseInvokeHeaders(invokeHeadersText),
+    [invokeHeadersText],
+  );
+  const invokeHeaderError = invokeHeaderParse.errors[0] || null;
+  const invokeRequestPayload = useMemo(
+    () => buildInvokeRequestPayload(invokePrompt, invokeActorId, invokeHeaderParse.headers),
+    [invokeActorId, invokeHeaderParse.headers, invokePrompt],
+  );
+  const invokeRequestPreview = useMemo(
+    () => JSON.stringify(invokeRequestPayload, null, 2),
+    [invokeRequestPayload],
+  );
+  const invokeTransportLabel = useMemo(
+    () => buildInvokeTransportLabel(scopeId, activeService, activeInvokeEndpoint?.endpointId || invokeEndpointId),
+    [activeInvokeEndpoint?.endpointId, activeService, invokeEndpointId, scopeId],
+  );
+  const invokeSummary = useMemo(
+    () => summarizeInvokeEvents(invokeEvents),
+    [invokeEvents],
+  );
+  const invokeHistoryForService = useMemo(
+    () => [...invokeHistory]
+      .filter(entry => entry.serviceId === activeService.id)
+      .sort((left, right) => right.updatedAt - left.updatedAt),
+    [activeService.id, invokeHistory],
+  );
+  const activeInvokeHistoryEntry = useMemo(
+    () => invokeHistoryForService.find(entry => entry.id === activeInvokeHistoryId) || invokeHistoryForService[0] || null,
+    [activeInvokeHistoryId, invokeHistoryForService],
+  );
+  const pendingInvokeHumanInput = useMemo(
+    () => extractInvokePendingHumanInput(
+      invokeEvents,
+      activeService.id,
+      trimOptional(invokeActorId)
+        || trimOptional(activeInvokeHistoryEntry?.request.actorId)
+        || trimOptional(invokeSummary.actorId)
+        || trimOptional(activeInvokeHistoryEntry?.summary.actorId),
+    ),
+    [activeInvokeHistoryEntry?.request.actorId, activeInvokeHistoryEntry?.summary.actorId, activeService.id, invokeActorId, invokeEvents, invokeSummary.actorId],
+  );
 
-  const handleInvokeSubmit = async () => {
-    if (!scopeId) return;
-    setInvokeLoading(true);
+  useEffect(() => {
+    setInvokeFormError(null);
+  }, [activeService?.id, invokeEndpointId, invokeHeadersText, invokePrompt]);
+
+  useEffect(() => {
+    if (!pendingInvokeHumanInput) {
+      setInvokeResumeLoading(false);
+      setInvokeResumeError(null);
+    }
+  }, [pendingInvokeHumanInput]);
+
+  useEffect(() => {
     setInvokeEvents([]);
+    setInvokeActorId('');
+    setInvokeHeadersText('');
+    setInvokeAdvancedOpen(false);
+    setActiveInvokeHistoryId(null);
+    setInvokeResumeLoading(false);
+    setInvokeResumeError(null);
+  }, [activeService?.id]);
+
+  useEffect(() => {
+    if (activeInvokeHistoryId && invokeHistoryForService.some(entry => entry.id === activeInvokeHistoryId)) {
+      return;
+    }
+
+    if (invokeLoading) {
+      return;
+    }
+
+    if (invokeHistoryForService.length === 0) {
+      setActiveInvokeHistoryId(null);
+      return;
+    }
+
+    const latest = invokeHistoryForService[0];
+    setActiveInvokeHistoryId(latest.id);
+    setInvokeEndpointId(latest.request.endpointId);
+    setInvokePrompt(latest.request.prompt);
+    setInvokeActorId(latest.request.actorId);
+    setInvokeHeadersText(latest.request.headersText);
+    setInvokeAdvancedOpen(Boolean(latest.request.actorId || latest.request.headersText.trim()));
+    setInvokeEvents(latest.events);
+  }, [activeInvokeHistoryId, invokeHistoryForService, invokeLoading]);
+
+  const syncInvokeHistoryEntry = useCallback((entryId: string, events: Array<{ type: string; data: any }>) => {
+    const summary = summarizeInvokeEvents(events);
+    setInvokeHistory(prev => prev.map(entry => (
+      entry.id === entryId
+        ? { ...entry, events, summary, updatedAt: Date.now() }
+        : entry
+    )));
+  }, []);
+
+  const runInvokeDraft = useCallback(async (draft: InvokeDraft) => {
+    if (!scopeId || !invokeSupport.supported) {
+      return;
+    }
+
+    const prompt = draft.prompt.trim();
+    if (!prompt) {
+      setInvokeFormError('Prompt is required.');
+      return;
+    }
+
+    const headerParse = parseInvokeHeaders(draft.headersText);
+    if (headerParse.errors[0]) {
+      setInvokeFormError(headerParse.errors[0]);
+      return;
+    }
+
+    const normalizedActorId = trimOptional(draft.actorId) || '';
+    const sessionId = genId();
+    const createdAt = Date.now();
+    const sessionRecord: InvokeHistoryEntry = {
+      id: sessionId,
+      serviceId: activeService.id,
+      createdAt,
+      updatedAt: createdAt,
+      request: {
+        prompt,
+        actorId: normalizedActorId,
+        headersText: draft.headersText,
+        endpointId: draft.endpointId,
+        endpointLabel: invokeableEndpoints.find(endpoint => endpoint.endpointId === draft.endpointId)?.displayName || draft.endpointId,
+      },
+      transportLabel: buildInvokeTransportLabel(scopeId, activeService, draft.endpointId),
+      requestPreview: JSON.stringify(buildInvokeRequestPayload(prompt, normalizedActorId, headerParse.headers), null, 2),
+      events: [],
+      summary: summarizeInvokeEvents([]),
+    };
+
+    setInvokeFormError(null);
+    setInvokeLoading(true);
+    setInvokeResumeLoading(false);
+    setInvokeResumeError(null);
+    setInvokeEvents([]);
+    setActiveInvokeHistoryId(sessionId);
+    setInvokeHistory(prev => [sessionRecord, ...prev]);
     const controller = new AbortController();
     invokeAbortRef.current = controller;
     const collected: Array<{ type: string; data: any }> = [];
+
     try {
-      const parsed = JSON.parse(invokeBody);
-      const prompt = parsed.prompt || '';
       const serviceId = activeService.kind === 'nyxid-chat' ? NYXID_CHAT_SERVICE_ID : activeService.id;
+
       if (activeService.kind === 'nyxid-chat' && !nyxidChatBoundRef.current) {
         await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', 'NyxID Chat', NYXID_CHAT_SERVICE_ID);
         nyxidChatBoundRef.current = true;
       }
+
       const pushFrame = (frame: any) => {
         const evt = normalizeBackendSseFrame(frame);
-        if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
+        if (!evt) {
+          return;
+        }
+
+        collected.push({ type: evt.type, data: evt });
+        const nextEvents = [...collected];
+        setInvokeEvents(nextEvents);
+        setActiveInvokeHistoryId(sessionId);
+        syncInvokeHistoryEntry(sessionId, nextEvents);
       };
+
       if (activeService.kind === 'streaming-proxy') {
         const roomId = await ensureStreamingProxyRoom();
         await api.streamingProxy.streamChat(
@@ -3468,22 +3627,185 @@ export default function ScopePage() {
           conversationModel,
         );
       } else {
-        await api.scope.streamInvoke(scopeId, serviceId, prompt, pushFrame, controller.signal, invokeEndpointId);
+        await api.scope.streamInvoke(
+          scopeId,
+          serviceId,
+          prompt,
+          pushFrame,
+          controller.signal,
+          draft.endpointId,
+          headerParse.headers,
+          normalizedActorId || undefined,
+        );
       }
-      if (collected.length === 0) collected.push({ type: 'info', data: { message: 'No events received' } });
-      setInvokeEvents([...collected]);
+
+      if (collected.length === 0) {
+        const nextEvents = [{ type: 'INFO', data: { message: 'No events received.' } }];
+        setInvokeEvents(nextEvents);
+        syncInvokeHistoryEntry(sessionId, nextEvents);
+      } else {
+        syncInvokeHistoryEntry(sessionId, [...collected]);
+      }
     } catch (e: any) {
-      if (e?.name !== 'AbortError') {
-        collected.push({ type: 'ERROR', data: { message: e?.message || JSON.stringify(e) } });
-        setInvokeEvents([...collected]);
-      }
+      const nextEvents = [
+        ...collected,
+        e?.name === 'AbortError'
+          ? { type: 'RUN_STOPPED', data: { reason: 'Invocation stopped by user.' } }
+          : { type: 'ERROR', data: { message: e?.message || JSON.stringify(e) } },
+      ];
+      setInvokeEvents(nextEvents);
+      syncInvokeHistoryEntry(sessionId, nextEvents);
     } finally {
       setInvokeLoading(false);
       invokeAbortRef.current = null;
     }
+  }, [
+    activeConvId,
+    activeService,
+    conversationModel,
+    conversationRoute,
+    ensureStreamingProxyRoom,
+    invokeSupport.supported,
+    invokeableEndpoints,
+    nyxidChatBoundRef,
+    scopeId,
+    syncInvokeHistoryEntry,
+  ]);
+
+  const handleInvokeSubmit = async () => {
+    await runInvokeDraft({
+      endpointId: activeInvokeEndpoint?.endpointId || invokeEndpointId,
+      prompt: invokePrompt,
+      actorId: invokeActorId,
+      headersText: invokeHeadersText,
+      headers: invokeHeaderParse.headers,
+    });
   };
 
   const handleInvokeStop = () => { invokeAbortRef.current?.abort(); };
+
+  const handleLoadInvokeFixture = useCallback(() => {
+    if (activeService.kind === 'streaming-proxy') {
+      setInvokePrompt('Summarize the strongest and weakest arguments from this room discussion and tell me where the team still disagrees.');
+      return;
+    }
+
+    if (activeService.kind === 'nyxid-chat') {
+      setInvokePrompt('Help me verify that this scope chat binding works. Explain your answer briefly and mention any tool usage you perform.');
+      return;
+    }
+
+    setInvokePrompt('Review this request and explain your final answer: refund for order #92817 — third time asking.');
+  }, [activeService.kind]);
+
+  const handleReplayLastInvoke = useCallback(async () => {
+    const latest = invokeHistoryForService[0];
+    if (!latest || invokeLoading) {
+      return;
+    }
+
+    setInvokeEndpointId(latest.request.endpointId);
+    setInvokePrompt(latest.request.prompt);
+    setInvokeActorId(latest.request.actorId);
+    setInvokeHeadersText(latest.request.headersText);
+    setInvokeAdvancedOpen(Boolean(latest.request.actorId || latest.request.headersText.trim()));
+
+    await runInvokeDraft({
+      endpointId: latest.request.endpointId,
+      prompt: latest.request.prompt,
+      actorId: latest.request.actorId,
+      headersText: latest.request.headersText,
+      headers: parseInvokeHeaders(latest.request.headersText).headers,
+    });
+  }, [invokeHistoryForService, invokeLoading, runInvokeDraft]);
+
+  const handleSelectInvokeHistory = useCallback((historyId: string) => {
+    const record = invokeHistoryForService.find(entry => entry.id === historyId);
+    if (!record) {
+      return;
+    }
+
+    setActiveInvokeHistoryId(historyId);
+    setInvokeEndpointId(record.request.endpointId);
+    setInvokePrompt(record.request.prompt);
+    setInvokeActorId(record.request.actorId);
+    setInvokeHeadersText(record.request.headersText);
+    setInvokeAdvancedOpen(Boolean(record.request.actorId || record.request.headersText.trim()));
+    setInvokeResumeLoading(false);
+    setInvokeResumeError(null);
+    setInvokeEvents(record.events);
+  }, [invokeHistoryForService]);
+
+  const handleInvokeResumeHumanInput = useCallback(async (userInput: string) => {
+    if (!scopeId || invokeLoading || invokeResumeLoading) {
+      return;
+    }
+
+    const pending = pendingInvokeHumanInput;
+    const selectedHistory = activeInvokeHistoryEntry;
+    const normalizedInput = String(userInput || '').trim();
+
+    if (!pending || !selectedHistory) {
+      return;
+    }
+
+    if (!normalizedInput) {
+      setInvokeResumeError('A response is required before the run can continue.');
+      return;
+    }
+
+    setInvokeResumeError(null);
+    setInvokeResumeLoading(true);
+
+    try {
+      const response = await api.scope.resumeRun(
+        scopeId,
+        pending.serviceId || activeService.id,
+        pending.runId,
+        {
+          stepId: pending.stepId,
+          userInput: normalizedInput,
+          approved: true,
+          actorId: pending.actorId,
+        },
+      );
+
+      const timestamp = Date.now();
+      const nextEvents = [
+        ...invokeEvents,
+        {
+          type: 'HUMAN_INPUT_RESPONSE',
+          data: {
+            timestamp,
+            stepId: pending.stepId,
+            runId: pending.runId,
+            approved: true,
+            userInput: normalizedInput,
+            actorId: response?.actorId || pending.actorId || selectedHistory.summary.actorId || undefined,
+            commandId: response?.commandId || '',
+            correlationId: response?.correlationId || '',
+          },
+        },
+      ];
+
+      setInvokeEvents(nextEvents);
+      setActiveInvokeHistoryId(selectedHistory.id);
+      syncInvokeHistoryEntry(selectedHistory.id, nextEvents);
+    } catch (error: any) {
+      setInvokeResumeError(error?.message || 'Resume failed.');
+    } finally {
+      setInvokeResumeLoading(false);
+    }
+  }, [
+    activeInvokeHistoryEntry,
+    activeService.id,
+    invokeEvents,
+    invokeLoading,
+    invokeResumeLoading,
+    pendingInvokeHumanInput,
+    scopeId,
+    syncInvokeHistoryEntry,
+  ]);
 
   // ── Raw tab: API console ──
   const [rawMethod, setRawMethod] = useState('GET');
@@ -3655,110 +3977,48 @@ export default function ScopePage() {
             )}
           </div>
         </div>
-      ) : activeEndpoint === 'execute' ? (
-        /* ── Execute: invoke service endpoint with streaming ── */
-        <div className="flex-1 min-h-0 overflow-auto bg-[#F2F1EE]">
-          <div className="max-w-3xl mx-auto w-full p-6 space-y-5">
-            <div className="rounded-[16px] border border-[#E6E3DE] bg-white p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-[13px] font-semibold text-gray-700">Invoke: {activeService.label}</div>
-                  <div className="text-[11px] text-gray-400">
-                    Endpoint: <span className="font-mono">{invokeEndpointId}:stream</span>
-                    {' · Kind: '}<span className="font-mono">{activeService.kind}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-[11px] text-gray-400">Endpoint</label>
-                  {activeEndpoints.length > 1 ? (
-                    <select
-                      className="rounded-md border border-[#E6E3DE] bg-[#FAFAF8] px-2 py-1 text-[12px] font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                      value={invokeEndpointId}
-                      onChange={e => setInvokeEndpointId(e.target.value)}
-                    >
-                      {activeEndpoints.map(ep => (
-                        <option key={ep.endpointId} value={ep.endpointId}>
-                          {ep.endpointId} ({ep.kind})
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className="text-[12px] font-mono text-gray-500 bg-[#FAFAF8] border border-[#E6E3DE] rounded-md px-2 py-1">
-                      {activeEndpoints[0]?.endpointId || invokeEndpointId}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <textarea
-                rows={6}
-                className="w-full rounded-lg border border-[#E6E3DE] bg-[#FAFAF8] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
-                value={invokeBody}
-                onChange={e => setInvokeBody(e.target.value)}
-                spellCheck={false}
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleInvokeSubmit}
-                  disabled={invokeLoading}
-                  className="rounded-lg bg-[#18181B] px-5 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
-                >
-                  {invokeLoading ? 'Streaming...' : 'Invoke'}
-                </button>
-                {invokeLoading && (
-                  <button
-                    onClick={handleInvokeStop}
-                    className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-100 transition-colors"
-                  >
-                    Stop
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {invokeEvents.length > 0 && (
-              <div className="rounded-[16px] border border-[#E6E3DE] bg-white overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-2 border-b border-[#E6E3DE] bg-[#FAFAF8]">
-                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                    Events ({invokeEvents.length})
-                  </span>
-                  <button
-                    onClick={() => setInvokeEvents([])}
-                    className="text-[11px] text-gray-400 hover:text-gray-600"
-                  >
-                    Clear
-                  </button>
-                </div>
-                <div className="divide-y divide-[#F0EDE8] max-h-[50vh] overflow-auto">
-                  {invokeEvents.map((evt, i) => (
-                    <div key={i} className="px-4 py-2.5 hover:bg-[#FAFAF8]">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                          evt.type === 'ERROR' || evt.type === 'RUN_ERROR'
-                            ? 'bg-red-100 text-red-600'
-                            : evt.type.includes('CONTENT')
-                            ? 'bg-blue-50 text-blue-600'
-                            : evt.type.includes('STEP')
-                            ? 'bg-amber-50 text-amber-600'
-                            : evt.type.includes('TOOL')
-                            ? 'bg-violet-50 text-violet-600'
-                            : 'bg-gray-100 text-gray-500'
-                        }`}>
-                          {evt.type}
-                        </span>
-                        <span className="text-[10px] text-gray-300">#{i + 1}</span>
-                      </div>
-                      <pre className="text-[11px] text-gray-600 font-mono whitespace-pre-wrap line-clamp-3">
-                        {evt.type === 'TEXT_MESSAGE_CONTENT'
-                          ? String(evt.data?.delta || '')
-                          : JSON.stringify(evt.data, null, 2)}
-                      </pre>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+      ) : activeEndpoint === 'invoke' ? (
+        <InvokeWorkbench
+          scopeId={scopeId}
+          service={activeService}
+          invokeSupport={invokeSupport}
+          invokeableEndpoints={invokeableEndpoints}
+          hiddenInvokeEndpoints={hiddenInvokeEndpoints}
+          activeEndpoint={activeInvokeEndpoint}
+          endpointId={activeInvokeEndpoint?.endpointId || invokeEndpointId}
+          onEndpointChange={setInvokeEndpointId}
+          prompt={invokePrompt}
+          onPromptChange={setInvokePrompt}
+          actorId={invokeActorId}
+          onActorIdChange={setInvokeActorId}
+          headersText={invokeHeadersText}
+          onHeadersTextChange={setInvokeHeadersText}
+          advancedOpen={invokeAdvancedOpen}
+          onAdvancedOpenChange={setInvokeAdvancedOpen}
+          formError={invokeFormError}
+          headerError={invokeHeaderError}
+          transportLabel={invokeTransportLabel}
+          requestPreview={invokeRequestPreview}
+          events={invokeEvents}
+          summary={invokeSummary}
+          loading={invokeLoading}
+          pendingHumanInput={pendingInvokeHumanInput}
+          resumeLoading={invokeResumeLoading}
+          resumeError={invokeResumeError}
+          history={invokeHistoryForService}
+          activeHistoryId={activeInvokeHistoryId}
+          onSelectHistory={handleSelectInvokeHistory}
+          onInvoke={() => { void handleInvokeSubmit(); }}
+          onStop={handleInvokeStop}
+          onLoadFixture={handleLoadInvokeFixture}
+          onSaveRequest={() => { void copyTextToClipboard(invokeRequestPreview); }}
+          onReplayLast={() => { void handleReplayLastInvoke(); }}
+          onResumeHumanInput={value => { void handleInvokeResumeHumanInput(value); }}
+          onGoToChat={() => setActiveEndpoint('chat')}
+          onGoToRaw={() => setActiveEndpoint('raw')}
+          renderResponse={text => renderContent(text, 'assistant')}
+          copyText={copyTextToClipboard}
+        />
       ) : activeEndpoint === 'raw' ? (
         /* ── Raw: API console ── */
         <div className="flex-1 min-h-0 overflow-auto bg-[#F2F1EE]">

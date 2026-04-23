@@ -101,9 +101,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
         CancellationToken ct)
     {
         AgentBuilderFlowDecision? decision = null;
-        var relayMode = !string.IsNullOrWhiteSpace(registration.NyxAgentApiKeyId);
-        var relayDecisionMatched = relayMode &&
-                                  NyxRelayAgentBuilderFlow.TryResolve(inboundEvent, out decision);
+        var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(inboundEvent, out decision);
         if (!relayDecisionMatched &&
             (!AgentBuilderCardFlow.TryResolve(inboundEvent, out decision) || decision is null))
         {
@@ -345,7 +343,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = registration.GetNyxUserToken(),
+            RegistrationToken = string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };

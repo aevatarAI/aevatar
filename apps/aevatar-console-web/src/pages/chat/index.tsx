@@ -848,11 +848,7 @@ const ChatPage: React.FC = () => {
   }, [persistConversationOverrides]);
 
   const handleCreate = useCallback(() => {
-    history.push(
-      buildStudioWorkflowEditorRoute({
-        draftMode: "new",
-      })
-    );
+    history.push(buildStudioWorkflowEditorRoute());
   }, []);
 
   const handleSelectConversation = useCallback(
