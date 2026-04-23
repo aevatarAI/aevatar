@@ -510,9 +510,11 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             authPrincipal: "bot");
     }
 
-    private static IReadOnlyDictionary<string, string> BuildReplyMetadata(ChannelInboundEvent inboundEvent)
+    private static IReadOnlyDictionary<string, string> BuildReplyMetadata(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity? activity = null)
     {
-        return new Dictionary<string, string>(StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
@@ -522,6 +524,12 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.MessageId] = inboundEvent.MessageId,
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
+
+        var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
+        if (!string.IsNullOrWhiteSpace(platformMessageId))
+            metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
+
+        return metadata;
     }
 
     private static IReadOnlyDictionary<string, string> BuildAgentBuilderMetadata(
@@ -529,7 +537,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelInboundEvent inboundEvent,
         string? userAccessToken)
     {
-        var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent), StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent, activity), StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
@@ -622,7 +630,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-        foreach (var pair in BuildReplyMetadata(inboundEvent))
+        foreach (var pair in BuildReplyMetadata(inboundEvent, activity))
             request.Metadata[pair.Key] = pair.Value;
 
         return request;

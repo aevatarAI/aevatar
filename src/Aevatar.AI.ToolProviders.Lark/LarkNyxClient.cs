@@ -44,6 +44,26 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["reaction_type"] = new Dictionary<string, object?>
+            {
+                ["emoji_type"] = request.EmojiType,
+            },
+        };
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId)}/reactions",
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
     public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
     {
         var query = $"page_size={request.PageSize}";

@@ -95,6 +95,94 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkMessagesReactTool_ShouldDefaultToCurrentMessage_AndOkEmoji()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ReactionCreateResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "reaction_id": "reaction_123",
+                    "operator": {
+                      "operator_id": "cli_app",
+                      "operator_type": "app"
+                    },
+                    "action_time": "1730000001",
+                    "reaction_type": {
+                      "emoji_type": "OK"
+                    }
+                  }
+                }
+                """,
+        };
+        var tool = new LarkMessagesReactTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>
+            {
+                ["channel.message_id"] = "om_current_1",
+            });
+
+        var result = await tool.ExecuteAsync("""{}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_current_1");
+        document.RootElement.GetProperty("emoji_type").GetString().Should().Be("OK");
+        document.RootElement.GetProperty("reaction_id").GetString().Should().Be("reaction_123");
+        document.RootElement.GetProperty("used_current_message").GetBoolean().Should().BeTrue();
+        client.LastReactionRequest.Should().NotBeNull();
+        client.LastReactionRequest!.MessageId.Should().Be("om_current_1");
+        client.LastReactionRequest.EmojiType.Should().Be("OK");
+    }
+
+    [Fact]
+    public async Task LarkMessagesReactTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkMessagesReactTool(new StubLarkNyxClient());
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"message_id":"om_1"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{}"""))
+                .Should().Contain("message_id is required");
+            (await tool.ExecuteAsync("""{"message_id":"msg_1"}"""))
+                .Should().Contain("message_id must be a Lark message id like om_xxx");
+        }
+
+        using (new AgentToolRequestMetadataScope(
+                   "token-123",
+                   new Dictionary<string, string>
+                   {
+                       ["channel.message_id"] = "msg_from_relay",
+                   }))
+        {
+            (await tool.ExecuteAsync("""{}"""))
+                .Should().Contain("Current turn metadata did not expose a Lark platform message_id");
+        }
+
+        var errorTool = new LarkMessagesReactTool(new StubLarkNyxClient
+        {
+            ReactionCreateResponse = """{"error":true,"status":429,"message":"rate limited"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync("""{"message_id":"om_1","emoji_type":"收到"}""");
+
+            result.Should().Contain("nyx_proxy_error status=429");
+            result.Should().Contain("\"message_id\":\"om_1\"");
+            result.Should().Contain("\"emoji_type\":\"OK\"");
+        }
+    }
+
+    [Fact]
     public async Task LarkChatsLookupTool_ReturnsNormalizedCandidates()
     {
         var client = new StubLarkNyxClient
@@ -520,8 +608,9 @@ public class LarkToolsTests
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(5);
+        tools.Should().HaveCount(6);
         tools.Should().Contain(tool => tool is LarkMessagesSendTool);
+        tools.Should().Contain(tool => tool is LarkMessagesReactTool);
         tools.Should().Contain(tool => tool is LarkChatsLookupTool);
         tools.Should().Contain(tool => tool is LarkSheetsAppendRowsTool);
         tools.Should().Contain(tool => tool is LarkApprovalsListTool);
@@ -568,6 +657,32 @@ public class LarkToolsTests
         var body = handler.LastBody;
         body.Should().Contain("receive_id");
         body.Should().Contain("uuid-1");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_CreateMessageReaction_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"reaction_id":"reaction_1"}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.CreateMessageReactionAsync(
+            "token-123",
+            new LarkMessageReactionRequest("om_123", "OK"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions");
+        handler.LastRequest.Headers.Authorization!.Parameter.Should().Be("token-123");
+        handler.LastBody.Should().Contain("\"emoji_type\":\"OK\"");
     }
 
     [Fact]
@@ -695,12 +810,14 @@ public class LarkToolsTests
     private sealed class StubLarkNyxClient : ILarkNyxClient
     {
         public string SendResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string ReactionCreateResponse { get; set; } = """{"code":0,"data":{}}""";
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
 
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
+        public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
         public LarkChatSearchRequest? LastSearchRequest { get; private set; }
         public LarkSheetAppendRowsRequest? LastSheetAppendRequest { get; private set; }
         public LarkApprovalTaskQueryRequest? LastApprovalQueryRequest { get; private set; }
@@ -710,6 +827,12 @@ public class LarkToolsTests
         {
             LastSendRequest = request;
             return Task.FromResult(SendResponse);
+        }
+
+        public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct)
+        {
+            LastReactionRequest = request;
+            return Task.FromResult(ReactionCreateResponse);
         }
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
@@ -763,15 +886,27 @@ public class LarkToolsTests
     {
         private readonly IReadOnlyDictionary<string, string>? _previous;
 
-        public AgentToolRequestMetadataScope(string? accessToken = null)
+        public AgentToolRequestMetadataScope(
+            string? accessToken = null,
+            IReadOnlyDictionary<string, string>? extraMetadata = null)
         {
             _previous = AgentToolRequestContext.CurrentMetadata;
-            AgentToolRequestContext.CurrentMetadata = string.IsNullOrWhiteSpace(accessToken)
-                ? null
-                : new Dictionary<string, string>
-                {
-                    [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
-                };
+            if (string.IsNullOrWhiteSpace(accessToken) && (extraMetadata == null || extraMetadata.Count == 0))
+            {
+                AgentToolRequestContext.CurrentMetadata = null;
+                return;
+            }
+
+            var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!string.IsNullOrWhiteSpace(accessToken))
+                metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
+            if (extraMetadata != null)
+            {
+                foreach (var entry in extraMetadata)
+                    metadata[entry.Key] = entry.Value;
+            }
+
+            AgentToolRequestContext.CurrentMetadata = metadata;
         }
 
         public void Dispose()

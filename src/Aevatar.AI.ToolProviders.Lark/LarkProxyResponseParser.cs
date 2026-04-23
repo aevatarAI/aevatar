@@ -72,6 +72,27 @@ internal static class LarkProxyResponseParser
             CreateTime: TryReadString(data, "create_time"));
     }
 
+    public static LarkMessageReactionResult ParseReactionCreateSuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        var operatorData = data.TryGetProperty("operator", out var operatorProp) &&
+                           operatorProp.ValueKind == JsonValueKind.Object
+            ? operatorProp
+            : default;
+        var reactionType = data.TryGetProperty("reaction_type", out var reactionProp) &&
+                           reactionProp.ValueKind == JsonValueKind.Object
+            ? reactionProp
+            : default;
+
+        return new LarkMessageReactionResult(
+            ReactionId: TryReadString(data, "reaction_id"),
+            OperatorId: TryReadString(operatorData, "operator_id"),
+            OperatorType: TryReadString(operatorData, "operator_type"),
+            ActionTime: TryReadString(data, "action_time"),
+            EmojiType: TryReadString(reactionType, "emoji_type"));
+    }
+
     public static LarkChatLookupResult ParseChatSearchSuccess(
         string response,
         string? query,
@@ -211,6 +232,13 @@ internal sealed record LarkSendResult(
     string? MessageId,
     string? ChatId,
     string? CreateTime);
+
+internal sealed record LarkMessageReactionResult(
+    string? ReactionId,
+    string? OperatorId,
+    string? OperatorType,
+    string? ActionTime,
+    string? EmojiType);
 
 internal sealed record LarkChatCandidate(
     string? ChatId,

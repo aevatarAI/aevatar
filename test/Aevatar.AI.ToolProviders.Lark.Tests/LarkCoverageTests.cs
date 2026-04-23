@@ -22,6 +22,11 @@ public sealed class LarkCoverageTests
         sendTool.Description.Should().Contain("Proactively send a Lark message");
         sendTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
 
+        var reactTool = new LarkMessagesReactTool(client);
+        reactTool.Name.Should().Be("lark_messages_react");
+        reactTool.Description.Should().Contain("Add an emoji reaction");
+        reactTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+
         var lookupTool = new LarkChatsLookupTool(client);
         lookupTool.Name.Should().Be("lark_chats_lookup");
         lookupTool.Description.Should().Contain("Search Lark chats");
@@ -230,6 +235,14 @@ public sealed class LarkCoverageTests
     private sealed class StubLarkNyxClient : ILarkNyxClient
     {
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct)
         {
             _ = token;
             _ = request;

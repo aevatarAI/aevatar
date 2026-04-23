@@ -42,6 +42,8 @@ public sealed class LarkAgentToolSource : IAgentToolSource
         var tools = new List<IAgentTool>();
         if (_options.EnableMessageSend)
             tools.Add(new LarkMessagesSendTool(_client));
+        if (_options.EnableMessageReactionCreate)
+            tools.Add(new LarkMessagesReactTool(_client));
         if (_options.EnableChatLookup)
             tools.Add(new LarkChatsLookupTool(_client));
         if (_options.EnableSheetsAppendRows)

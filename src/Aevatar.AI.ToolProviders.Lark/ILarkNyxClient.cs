@@ -3,6 +3,7 @@ namespace Aevatar.AI.ToolProviders.Lark;
 public interface ILarkNyxClient
 {
     Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct);
+    Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct);
     Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct);
     Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct);
     Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct);
@@ -15,6 +16,10 @@ public sealed record LarkSendMessageRequest(
     string MessageType,
     string ContentJson,
     string? IdempotencyKey = null);
+
+public sealed record LarkMessageReactionRequest(
+    string MessageId,
+    string EmojiType);
 
 public sealed record LarkChatSearchRequest(
     string? Query,

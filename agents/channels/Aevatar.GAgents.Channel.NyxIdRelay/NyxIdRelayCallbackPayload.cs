@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -7,11 +8,17 @@ public sealed class NyxIdRelayCallbackPayload
     [JsonPropertyName("message_id")]
     public string? MessageId { get; set; }
 
+    [JsonPropertyName("platform_message_id")]
+    public string? PlatformMessageId { get; set; }
+
     [JsonPropertyName("platform")]
     public string? Platform { get; set; }
 
     [JsonPropertyName("reply_token")]
     public string? ReplyToken { get; set; }
+
+    [JsonPropertyName("reply_to_platform_message_id")]
+    public string? ReplyToPlatformMessageId { get; set; }
 
     [JsonPropertyName("agent")]
     public NyxIdRelayAgentPayload? Agent { get; set; }
@@ -27,6 +34,9 @@ public sealed class NyxIdRelayCallbackPayload
 
     [JsonPropertyName("timestamp")]
     public string? Timestamp { get; set; }
+
+    [JsonPropertyName("raw_platform_data")]
+    public JsonElement? RawPlatformData { get; set; }
 }
 
 public sealed class NyxIdRelayAgentPayload

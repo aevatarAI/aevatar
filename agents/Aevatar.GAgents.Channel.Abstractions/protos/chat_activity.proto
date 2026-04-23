@@ -282,6 +282,8 @@ message TransportExtras {
   string nyx_conversation_id = 4;
   // The short-lived Nyx user access token carried by the relay callback for downstream proxy calls.
   string nyx_user_access_token = 5;
+  // The platform-native message id of the originating user message when Nyx relay can recover it.
+  string nyx_platform_message_id = 6;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.
