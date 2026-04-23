@@ -4,6 +4,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -102,10 +103,12 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
     {
         AgentBuilderFlowDecision? decision = null;
         var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(inboundEvent, out decision);
-        if (!relayDecisionMatched &&
-            (!AgentBuilderCardFlow.TryResolve(inboundEvent, out decision) || decision is null))
+        if (!relayDecisionMatched)
         {
-            return null;
+            decision = await AgentBuilderCardFlow.TryResolveAsync(
+                inboundEvent,
+                _services.GetService<IUserConfigQueryPort>(),
+                ct);
         }
 
         if (decision is null)
@@ -199,7 +202,10 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(inbound);
 
-        var routed = ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand);
+        var routed = ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var resumeCommand);
+        if (!routed)
+            routed = ChannelWorkflowTextRouting.TryBuildWorkflowResumeCommand(inbound, out resumeCommand);
+
         if (!routed ||
             resumeCommand is null)
         {

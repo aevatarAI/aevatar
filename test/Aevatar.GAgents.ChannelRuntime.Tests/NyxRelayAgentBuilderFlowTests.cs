@@ -7,11 +7,12 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxRelayAgentBuilderFlowTests
 {
     [Fact]
-    public void TryResolve_ShouldReturnHelp_ForDailyReportWithoutArguments()
+    public void TryResolve_ShouldBuildToolCall_ForDailyReportWithoutArguments()
     {
         var inbound = new ChannelInboundEvent
         {
             ChatType = "p2p",
+            ConversationId = "oc_default_daily",
             Text = "/daily",
         };
 
@@ -19,9 +20,15 @@ public sealed class NyxRelayAgentBuilderFlowTests
 
         matched.Should().BeTrue();
         decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeFalse();
-        decision.ReplyPayload.Should().Contain("Daily report agent command");
-        decision.ReplyPayload.Should().Contain("/daily github_username=alice");
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_daily_report");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
+        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
+        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
+        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
+        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_default_daily");
     }
 
     [Fact]
@@ -51,7 +58,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
     [Theory]
     [InlineData("/daily =broken")]
     [InlineData("/daily github_username=")]
-    public void TryResolve_ShouldNotTreatMalformedKeyValueTokenAsPositional(string text)
+    public void TryResolve_ShouldPassThroughNullGithubUsername_WhenMissingOrEmpty(string text)
     {
         var inbound = new ChannelInboundEvent
         {
@@ -64,8 +71,12 @@ public sealed class NyxRelayAgentBuilderFlowTests
 
         matched.Should().BeTrue();
         decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeFalse();
-        decision.ReplyPayload.Should().Contain("github_username is required");
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_daily_report");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
+        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
     }
 
     [Fact]

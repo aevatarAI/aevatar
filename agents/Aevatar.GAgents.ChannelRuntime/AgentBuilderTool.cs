@@ -6,20 +6,25 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class AgentBuilderTool : IAgentTool
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<AgentBuilderTool>? _logger;
 
-    public AgentBuilderTool(IServiceProvider serviceProvider)
+    public AgentBuilderTool(IServiceProvider serviceProvider, ILogger<AgentBuilderTool>? logger = null)
     {
         _serviceProvider = serviceProvider;
+        _logger = logger;
     }
 
     public string Name => "agent_builder";
@@ -163,8 +168,15 @@ public sealed class AgentBuilderTool : IAgentTool
         string token,
         CancellationToken ct)
     {
+        var scopeId = ResolveUserConfigScopeId();
+        var userConfigQueryPort = _serviceProvider.GetService<IUserConfigQueryPort>();
+        var userConfigCommandService = _serviceProvider.GetService<IUserConfigCommandService>();
+        var userConfig = await TryGetUserConfigAsync(userConfigQueryPort, scopeId, ct);
+        var requestedGithubUsername = NormalizeOptional(args.Str("github_username"));
+        var effectiveGithubUsername = requestedGithubUsername ?? userConfig?.GithubUsername;
+
         if (!AgentBuilderTemplates.TryBuildDailyReportSpec(
-                args.Str("github_username") ?? string.Empty,
+                effectiveGithubUsername ?? string.Empty,
                 args.Str("repositories"),
                 out var templateSpec,
                 out var templateError))
@@ -246,6 +258,12 @@ public sealed class AgentBuilderTool : IAgentTool
             await actor.HandleEventAsync(
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
+
+        await TryPersistGithubUsernamePreferenceAsync(
+            scopeId,
+            requestedGithubUsername,
+            userConfigCommandService,
+            ct);
 
         await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
@@ -1210,6 +1228,59 @@ public sealed class AgentBuilderTool : IAgentTool
     {
         var normalized = (value ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    private static string ResolveUserConfigScopeId() =>
+        NormalizeOptional(AgentToolRequestContext.TryGet("scope_id")) ?? "default";
+
+    private async Task<StudioUserConfig?> TryGetUserConfigAsync(
+        IUserConfigQueryPort? queryPort,
+        string scopeId,
+        CancellationToken ct)
+    {
+        if (queryPort is null)
+            return null;
+
+        try
+        {
+            return await queryPort.GetAsync(scopeId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to load user config for scope {ScopeId}", scopeId);
+            return null;
+        }
+    }
+
+    private async Task TryPersistGithubUsernamePreferenceAsync(
+        string scopeId,
+        string? githubUsername,
+        IUserConfigCommandService? commandService,
+        CancellationToken ct)
+    {
+        var normalizedGithubUsername = NormalizeOptional(githubUsername);
+        if (normalizedGithubUsername is null || commandService is null)
+            return;
+
+        try
+        {
+            await commandService.SaveGithubUsernameAsync(scopeId, normalizedGithubUsername, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Failed to persist daily report GitHub username preference for scope {ScopeId}",
+                scopeId);
+        }
     }
 
     private sealed class BuilderArgs

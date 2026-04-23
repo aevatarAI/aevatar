@@ -8,10 +8,12 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Xunit;
+using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -203,6 +205,192 @@ public sealed class AgentBuilderToolTests
                 .Should()
                 .BeEquivalentTo(["svc-github", "svc-lark"]);
             apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_UsesUserConfigGithubUsername_WhenArgumentMissing()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-github","slug":"api-github"},
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") }));
+        services.AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort(
+            new StudioUserConfig(DefaultModel: string.Empty, GithubUsername: "saved-user")));
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-1",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            await skillRunnerActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal) &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal)),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_PersistsSubmittedGithubUsername_ToUserConfig()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-github","slug":"api-github"},
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
+
+        var userConfigQueryPort = new StubUserConfigQueryPort(
+            new StudioUserConfig(DefaultModel: "gpt-5.4", GithubUsername: "old-user"));
+        var userConfigCommandService = new RecordingUserConfigCommandService();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") }));
+        services.AddSingleton<IUserConfigQueryPort>(userConfigQueryPort);
+        services.AddSingleton<IUserConfigCommandService>(userConfigCommandService);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-1",
+                  "github_username": "new-user",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+            userConfigCommandService.SavedScopeId.Should().Be("scope-1");
+            userConfigCommandService.SavedGithubUsername.Should().Be("new-user");
+            userConfigCommandService.SavedConfig.Should().BeNull();
         }
         finally
         {
@@ -1093,4 +1281,44 @@ public sealed class AgentBuilderToolTests
     }
 
     private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body);
+
+    private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
+    {
+        private readonly StudioUserConfig _config;
+
+        public StubUserConfigQueryPort(StudioUserConfig config)
+        {
+            _config = config;
+        }
+
+        public Task<StudioUserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
+
+        public Task<StudioUserConfig> GetAsync(string scopeId, CancellationToken ct = default) => Task.FromResult(_config);
+    }
+
+    private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
+    {
+        public string? SavedScopeId { get; private set; }
+        public StudioUserConfig? SavedConfig { get; private set; }
+        public string? SavedGithubUsername { get; private set; }
+
+        public Task SaveAsync(StudioUserConfig config, CancellationToken ct = default)
+        {
+            SavedConfig = config;
+            return Task.CompletedTask;
+        }
+
+        public Task SaveAsync(string scopeId, StudioUserConfig config, CancellationToken ct = default)
+        {
+            SavedScopeId = scopeId;
+            return SaveAsync(config, ct);
+        }
+
+        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default)
+        {
+            SavedScopeId = scopeId;
+            SavedGithubUsername = githubUsername;
+            return Task.CompletedTask;
+        }
+    }
 }

@@ -142,21 +142,9 @@ internal static class NyxRelayAgentBuilderFlow
         out AgentBuilderFlowDecision? decision)
     {
         decision = null;
-        if (tokens.Count == 1)
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportHelpText());
-            return true;
-        }
-
         var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
         var githubUsername = GetOptional(args, "github_username")
                              ?? FirstPositionalArgument(tokens);
-        if (string.IsNullOrWhiteSpace(githubUsername))
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(
-                "github_username is required.\n\n" + BuildDailyReportHelpText());
-            return true;
-        }
 
         if (!TryResolveSchedule(args, out var scheduleCron, out var scheduleTimezone, out var error))
         {
@@ -340,7 +328,7 @@ internal static class NyxRelayAgentBuilderFlow
             $"Workflow ID: {ReadString(root, "workflow_id") ?? "pending"}",
             $"Next scheduled run: {ReadString(root, "next_scheduled_run") ?? "pending"}",
             NormalizeOptional(ReadString(root, "note")),
-            "Approvals will arrive as text instructions in this chat. Use /approve or /reject exactly as shown.",
+            "Approvals will arrive as interactive cards in this chat. Text commands such as /approve and /reject still work as fallback.",
             "Next commands: /agents, /agent-status <agent_id>, /run-agent <agent_id>");
     }
 
@@ -538,7 +526,8 @@ internal static class NyxRelayAgentBuilderFlow
     private static string BuildDailyReportHelpText() =>
         BuildTextBlock(
             "Daily report agent command",
-            "Required: github_username plus either schedule_time or schedule_cron.",
+            "GitHub username can be passed explicitly, or omitted to reuse a saved preference when available.",
+            "Schedule defaults to 09:00 if schedule_time and schedule_cron are both omitted.",
             $"Example: {BuildDailyReportCommandExample()}",
             "Optional: repositories=owner/repo,owner/repo schedule_timezone=Asia/Singapore run_immediately=false");
 
