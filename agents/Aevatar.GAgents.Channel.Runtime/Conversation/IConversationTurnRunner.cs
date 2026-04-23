@@ -21,6 +21,11 @@ public interface IConversationTurnRunner
     Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct);
 
     /// <summary>
+    /// Executes the outbound leg after an asynchronous LLM reply has been generated.
+    /// </summary>
+    Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct);
+
+    /// <summary>
     /// Executes one bot turn for a proactive continue command.
     /// </summary>
     Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct);
@@ -34,28 +39,80 @@ public sealed record ConversationTurnResult(
     string SentActivityId,
     MessageContent Outbound,
     string AuthPrincipal,
+    OutboundDeliveryContext? OutboundDelivery,
     string ErrorCode,
     string ErrorSummary,
     FailureKind FailureKind,
-    TimeSpan? RetryAfter)
+    TimeSpan? RetryAfter,
+    NeedsLlmReplyEvent? LlmReplyRequest)
 {
     /// <summary>
     /// Success factory.
     /// </summary>
-    public static ConversationTurnResult Sent(string sentActivityId, MessageContent outbound, string authPrincipal) =>
-        new(true, sentActivityId, outbound, authPrincipal, string.Empty, string.Empty, FailureKind.Unspecified, null);
+    public static ConversationTurnResult Sent(
+        string sentActivityId,
+        MessageContent outbound,
+        string authPrincipal,
+        OutboundDeliveryContext? outboundDelivery = null) =>
+        new(
+            true,
+            sentActivityId,
+            outbound,
+            authPrincipal,
+            outboundDelivery,
+            string.Empty,
+            string.Empty,
+            FailureKind.Unspecified,
+            null,
+            null);
+
+    /// <summary>
+    /// Deferred-reply success factory.
+    /// </summary>
+    public static ConversationTurnResult LlmReplyRequested(NeedsLlmReplyEvent request, string authPrincipal = "bot") =>
+        new(
+            true,
+            string.Empty,
+            new MessageContent(),
+            authPrincipal,
+            null,
+            string.Empty,
+            string.Empty,
+            FailureKind.Unspecified,
+            null,
+            request?.Clone() ?? throw new ArgumentNullException(nameof(request)));
 
     /// <summary>
     /// Transient failure factory.
     /// </summary>
     public static ConversationTurnResult TransientFailure(string errorCode, string errorSummary, TimeSpan? retryAfter = null) =>
-        new(false, string.Empty, new MessageContent(), string.Empty, errorCode, errorSummary, FailureKind.TransientAdapterError, retryAfter);
+        new(
+            false,
+            string.Empty,
+            new MessageContent(),
+            string.Empty,
+            null,
+            errorCode,
+            errorSummary,
+            FailureKind.TransientAdapterError,
+            retryAfter,
+            null);
 
     /// <summary>
     /// Permanent failure factory.
     /// </summary>
     public static ConversationTurnResult PermanentFailure(string errorCode, string errorSummary) =>
-        new(false, string.Empty, new MessageContent(), string.Empty, errorCode, errorSummary, FailureKind.PermanentAdapterError, null);
+        new(
+            false,
+            string.Empty,
+            new MessageContent(),
+            string.Empty,
+            null,
+            errorCode,
+            errorSummary,
+            FailureKind.PermanentAdapterError,
+            null,
+            null);
 }
 
 /// <summary>
@@ -65,6 +122,10 @@ public sealed class NullConversationTurnRunner : IConversationTurnRunner
 {
     /// <inheritdoc />
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
+        Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
+
+    /// <inheritdoc />
+    public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct) =>
         Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
 
     /// <inheritdoc />

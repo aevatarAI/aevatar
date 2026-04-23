@@ -19,11 +19,6 @@ public static class ChannelCallbackEndpoints
     {
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
-        // Platform callback — receives webhooks directly from platforms. These are invoked by
-        // external services (Lark, Telegram, …) without our JWT, so they must remain anonymous
-        // even after the host applies an authenticated-by-default fallback policy.
-        group.MapPost("/{platform}/callback/{registrationId}", HandleCallbackAsync).AllowAnonymous();
-
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
@@ -48,31 +43,6 @@ public static class ChannelCallbackEndpoints
                ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(ChannelBotRegistrationGAgent.WellKnownId);
     }
 
-    /// <summary>
-    /// Receives a platform webhook callback directly.
-    /// 1. Handles verification challenges (returns immediately).
-    /// 2. Parses inbound message.
-    /// 3. Returns 200 OK immediately (platforms have short timeouts).
-    /// 4. Fires background task: dispatch to actor, collect response, send reply via Nyx provider.
-    /// </summary>
-    private static Task<IResult> HandleCallbackAsync(
-        HttpContext http,
-        string platform,
-        string registrationId)
-    {
-        var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
-        RecordDiagnostic(diagnostics, "Callback:retired", platform, registrationId, "direct_callback_retired");
-        return Task.FromResult<IResult>(Results.Json(
-            new
-            {
-                error = "Direct platform callbacks are retired. ChannelRuntime now accepts only Nyx relay ingress for supported platforms.",
-                registration_id = registrationId,
-                platform,
-                supported_ingress = "/api/webhooks/nyxid-relay",
-            },
-            statusCode: StatusCodes.Status410Gone));
-    }
-
     // ─── Registration CRUD ───
 
     private static readonly JsonSerializerOptions RegistrationJsonOptions = new()
@@ -82,7 +52,7 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
-        [FromServices] INyxLarkProvisioningService provisioningService,
+        [FromServices] IEnumerable<INyxChannelBotProvisioningService> provisioningServices,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -106,11 +76,12 @@ public static class ChannelCallbackEndpoints
         }
 
         var platformNormalized = request.Platform.Trim().ToLowerInvariant();
-        if (!string.Equals(platformNormalized, "lark", StringComparison.OrdinalIgnoreCase))
+        var provisioningServiceMap = BuildProvisioningServiceMap(provisioningServices);
+        if (!provisioningServiceMap.TryGetValue(platformNormalized, out var provisioningService))
         {
             return Results.Conflict(new
             {
-                error = $"Platform '{platformNormalized}' is not in the supported production contract. ChannelRuntime currently provisions only Lark via Nyx relay ingress.",
+                error = $"Platform '{platformNormalized}' is not in the supported production contract. ChannelRuntime currently provisions relay registrations for: {string.Join(", ", provisioningServiceMap.Keys.OrderBy(static key => key, StringComparer.OrdinalIgnoreCase))}.",
             });
         }
 
@@ -124,29 +95,29 @@ public static class ChannelCallbackEndpoints
             return Results.Unauthorized();
         }
 
-        if (string.IsNullOrWhiteSpace(request.AppId) ||
-            string.IsNullOrWhiteSpace(request.AppSecret) ||
-            string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
+        if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
         {
-            return Results.BadRequest(new { error = "app_id, app_secret, and webhook_base_url are required for Nyx-backed Lark provisioning" });
+            return Results.BadRequest(new { error = "webhook_base_url is required for Nyx-backed relay provisioning" });
         }
 
         var result = await provisioningService.ProvisionAsync(
-            new NyxLarkProvisioningRequest(
+            new NyxChannelBotProvisioningRequest(
+                Platform: platformNormalized,
                 AccessToken: accessToken,
-                AppId: request.AppId.Trim(),
-                AppSecret: request.AppSecret.Trim(),
                 WebhookBaseUrl: request.WebhookBaseUrl.Trim(),
                 ScopeId: request.ScopeId?.Trim() ?? string.Empty,
                 Label: request.Label?.Trim() ?? string.Empty,
-                NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty),
+                NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty,
+                Lark: new NyxChannelLarkCredentials(
+                    AppId: request.AppId?.Trim() ?? string.Empty,
+                    AppSecret: request.AppSecret?.Trim() ?? string.Empty)),
             ct);
 
         var payload = new
         {
             status = result.Status,
             registration_id = result.RegistrationId ?? string.Empty,
-            platform = "lark",
+            platform = result.Platform,
             nyx_provider_slug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
                 ? "api-lark-bot"
                 : request.NyxProviderSlug.Trim(),
@@ -164,7 +135,8 @@ public static class ChannelCallbackEndpoints
 
         var statusCode = ResolveProvisioningFailureStatusCode(result.Error);
         logger.LogWarning(
-            "Nyx-backed Lark provisioning rejected: statusCode={StatusCode}, error={Error}",
+            "Nyx-backed channel provisioning rejected: platform={Platform}, statusCode={StatusCode}, error={Error}",
+            result.Platform,
             statusCode,
             result.Error);
         return Results.Json(payload, statusCode: statusCode);
@@ -280,11 +252,37 @@ public static class ChannelCallbackEndpoints
     {
         return error switch
         {
+            "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
             "missing_app_id" or "missing_app_secret" or "missing_webhook_base_url" => StatusCodes.Status400BadRequest,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status502BadGateway,
         };
+    }
+
+    private static IReadOnlyDictionary<string, INyxChannelBotProvisioningService> BuildProvisioningServiceMap(
+        IEnumerable<INyxChannelBotProvisioningService> provisioningServices)
+    {
+        ArgumentNullException.ThrowIfNull(provisioningServices);
+
+        var serviceMap = new Dictionary<string, INyxChannelBotProvisioningService>(StringComparer.OrdinalIgnoreCase);
+        foreach (var provisioningService in provisioningServices)
+        {
+            if (provisioningService is null)
+                continue;
+
+            var platformKey = provisioningService.Platform?.Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(platformKey))
+                continue;
+
+            if (!serviceMap.TryAdd(platformKey, provisioningService))
+            {
+                throw new InvalidOperationException(
+                    $"Multiple Nyx channel provisioning services are registered for platform '{platformKey}'.");
+            }
+        }
+
+        return serviceMap;
     }
 
     private sealed record RegistrationRequest(

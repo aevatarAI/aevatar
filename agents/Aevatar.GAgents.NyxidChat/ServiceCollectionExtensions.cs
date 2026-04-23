@@ -1,5 +1,5 @@
 using System.Runtime.CompilerServices;
-using Aevatar.GAgents.NyxidChat.Relay;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -13,9 +13,11 @@ public static class ServiceCollectionExtensions
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
 
         services.AddHttpClient();
-        services.TryAddSingleton(BindRelayOptions(configuration));
-        services.TryAddSingleton<NyxRelayJwtValidator>();
-        services.TryAddSingleton<INyxRelayBridgeIdempotencyGuard, NyxRelayBridgeIdempotencyGuard>();
+        services.TryAddSingleton(provider => BindRelayOptions(configuration));
+        services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
+            provider => provider.GetRequiredService<NyxIdRelayOptions>());
+        services.TryAddSingleton<NyxIdRelayTransport>();
+        services.TryAddSingleton<NyxIdRelayAuthValidator>();
 
         return services;
     }

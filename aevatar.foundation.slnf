@@ -13,16 +13,11 @@
       "src\\Aevatar.Foundation.VoicePresence\\Aevatar.Foundation.VoicePresence.csproj",
       "src\\Aevatar.Foundation.VoicePresence.MiniCPM\\Aevatar.Foundation.VoicePresence.MiniCPM.csproj",
       "src\\Aevatar.Foundation.VoicePresence.OpenAI\\Aevatar.Foundation.VoicePresence.OpenAI.csproj",
-      "agents\\Aevatar.GAgents.Channel.Abstractions\\Aevatar.GAgents.Channel.Abstractions.csproj",
-      "agents\\channels\\Aevatar.GAgents.Channel.Lark\\Aevatar.GAgents.Channel.Lark.csproj",
-      "agents\\Aevatar.GAgents.Channel.Runtime\\Aevatar.GAgents.Channel.Runtime.csproj",
       "test\\Aevatar.Foundation.Abstractions.Tests\\Aevatar.Foundation.Abstractions.Tests.csproj",
       "test\\Aevatar.Foundation.Core.Tests\\Aevatar.Foundation.Core.Tests.csproj",
       "test\\Aevatar.Foundation.VoicePresence.Tests\\Aevatar.Foundation.VoicePresence.Tests.csproj",
       "test\\Aevatar.Foundation.VoicePresence.MiniCPM.Tests\\Aevatar.Foundation.VoicePresence.MiniCPM.Tests.csproj",
-      "test\\Aevatar.Foundation.VoicePresence.OpenAI.Tests\\Aevatar.Foundation.VoicePresence.OpenAI.Tests.csproj",
-      "test\\Aevatar.GAgents.Channel.Lark.Tests\\Aevatar.GAgents.Channel.Lark.Tests.csproj",
-      "test\\Aevatar.GAgents.Channel.Protocol.Tests\\Aevatar.GAgents.Channel.Protocol.Tests.csproj"
+      "test\\Aevatar.Foundation.VoicePresence.OpenAI.Tests\\Aevatar.Foundation.VoicePresence.OpenAI.Tests.csproj"
     ]
   }
 }

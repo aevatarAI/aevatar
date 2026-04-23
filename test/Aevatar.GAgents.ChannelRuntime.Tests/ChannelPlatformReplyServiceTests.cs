@@ -1,5 +1,4 @@
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.ChannelRuntime.Adapters;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;

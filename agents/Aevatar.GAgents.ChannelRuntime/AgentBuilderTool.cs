@@ -12,7 +12,6 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -52,6 +51,10 @@ public sealed class AgentBuilderTool : IAgentTool
             "github_username": {
               "type": "string",
               "description": "GitHub username for the daily_report template"
+            },
+            "save_github_username_preference": {
+              "type": "boolean",
+              "description": "When true, save github_username as the owner-scoped default preference after a successful daily_report creation"
             },
             "topic": {
               "type": "string",
@@ -168,15 +171,19 @@ public sealed class AgentBuilderTool : IAgentTool
         string token,
         CancellationToken ct)
     {
-        var scopeId = ResolveUserConfigScopeId();
-        var userConfigQueryPort = _serviceProvider.GetService<IUserConfigQueryPort>();
-        var userConfigCommandService = _serviceProvider.GetService<IUserConfigCommandService>();
-        var userConfig = await TryGetUserConfigAsync(userConfigQueryPort, scopeId, ct);
-        var requestedGithubUsername = NormalizeOptional(args.Str("github_username"));
-        var effectiveGithubUsername = requestedGithubUsername ?? userConfig?.GithubUsername;
+        var rawScopeId = NormalizeOptional(AgentToolRequestContext.TryGet("scope_id"));
+        var configScopeId = NormalizeScopeId(rawScopeId);
+        var githubUsernameResolution = await ResolveDailyReportGithubUsernameAsync(
+            args,
+            nyxClient,
+            token,
+            configScopeId,
+            ct);
+        if (githubUsernameResolution.ErrorResponse is not null)
+            return githubUsernameResolution.ErrorResponse;
 
         if (!AgentBuilderTemplates.TryBuildDailyReportSpec(
-                effectiveGithubUsername ?? string.Empty,
+                githubUsernameResolution.GithubUsername ?? string.Empty,
                 args.Str("repositories"),
                 out var templateSpec,
                 out var templateError))
@@ -238,7 +245,7 @@ public sealed class AgentBuilderTool : IAgentTool
             ScheduleCron = scheduleCron.Trim(),
             ScheduleTimezone = scheduleTimezone.Trim(),
             Enabled = true,
-            ScopeId = AgentToolRequestContext.TryGet("scope_id") ?? string.Empty,
+            ScopeId = configScopeId,
             ProviderName = SkillRunnerDefaults.DefaultProviderName,
             MaxToolRounds = SkillRunnerDefaults.DefaultMaxToolRounds,
             MaxHistoryMessages = SkillRunnerDefaults.DefaultMaxHistoryMessages,
@@ -259,12 +266,6 @@ public sealed class AgentBuilderTool : IAgentTool
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
 
-        await TryPersistGithubUsernamePreferenceAsync(
-            scopeId,
-            requestedGithubUsername,
-            userConfigCommandService,
-            ct);
-
         await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
@@ -274,6 +275,12 @@ public sealed class AgentBuilderTool : IAgentTool
                      string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
             ct,
             maxAttempts: args.Bool("run_immediately") == true ? 20 : 10);
+
+        await SaveGithubUsernamePreferenceIfRequestedAsync(
+            configScopeId,
+            githubUsernameResolution.GithubUsername ?? string.Empty,
+            args.Bool("save_github_username_preference") == true,
+            ct);
 
         return JsonSerializer.Serialize(new
         {
@@ -846,11 +853,8 @@ public sealed class AgentBuilderTool : IAgentTool
         try
         {
             using var doc = JsonDocument.Parse(response);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                return (null, "Nyx proxy service discovery did not return an array.");
-
             var serviceIdsBySlug = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var svc in doc.RootElement.EnumerateArray())
+            foreach (var svc in EnumerateProxyServiceItems(doc.RootElement))
             {
                 var slug = ReadString(svc, "slug");
                 if (string.IsNullOrWhiteSpace(slug))
@@ -886,7 +890,8 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string?> BuildGitHubAuthorizationResponseAsync(
         NyxIdApiClient client,
         string token,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool preferCredentialsRequiredStatus = false)
     {
         var providerTokensResponse = await client.ListProviderTokensAsync(token, ct);
         if (IsErrorPayload(providerTokensResponse))
@@ -963,14 +968,52 @@ public sealed class AgentBuilderTool : IAgentTool
 
         return JsonSerializer.Serialize(new
         {
-            status = "oauth_required",
+            status = preferCredentialsRequiredStatus ? "credentials_required" : "oauth_required",
             template = "daily_report",
             provider = "GitHub",
             provider_id = providerId,
             authorization_url = authorizationUrl,
             documentation_url = documentationUrl,
-            note = "Connect GitHub in NyxID, then return to Feishu and submit the daily report form again.",
+            note = preferCredentialsRequiredStatus
+                ? "Connect GitHub in NyxID, then run /daily again."
+                : "Connect GitHub in NyxID, then return to Feishu and submit the daily report form again.",
         });
+    }
+
+    private async Task<(string? GithubUsername, string? ErrorResponse)> ResolveDailyReportGithubUsernameAsync(
+        BuilderArgs args,
+        NyxIdApiClient nyxClient,
+        string token,
+        string scopeId,
+        CancellationToken ct)
+    {
+        var explicitGithubUsername = NormalizeOptional(args.Str("github_username"));
+        if (explicitGithubUsername is not null)
+            return (explicitGithubUsername, null);
+
+        var preferredGithubUsername = await TryResolvePreferredGithubUsernameAsync(scopeId, ct);
+        if (preferredGithubUsername is not null)
+            return (preferredGithubUsername, null);
+
+        var derivedGithubUsername = await TryResolveGitHubUsernameFromNyxAsync(nyxClient, token, ct);
+        if (derivedGithubUsername is not null)
+            return (derivedGithubUsername, null);
+
+        var authorizationResponse = await BuildGitHubAuthorizationResponseAsync(
+            nyxClient,
+            token,
+            ct,
+            preferCredentialsRequiredStatus: true);
+        if (authorizationResponse is not null)
+            return (null, authorizationResponse);
+
+        return (null, JsonSerializer.Serialize(new
+        {
+            status = "credentials_required",
+            template = "daily_report",
+            provider = "GitHub",
+            note = "Could not resolve github_username. Provide github_username explicitly, save a default preference, or reconnect GitHub in NyxID.",
+        }));
     }
 
     private static bool TryParseApiKeyCreateResponse(
@@ -1155,6 +1198,103 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
+    private async Task<string?> TryResolvePreferredGithubUsernameAsync(string scopeId, CancellationToken ct)
+    {
+        var queryPort = _serviceProvider.GetService<IUserConfigQueryPort>();
+        if (queryPort is null)
+            return null;
+
+        try
+        {
+            var config = await queryPort.GetAsync(scopeId, ct);
+            return NormalizeOptional(config.GithubUsername);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<string?> TryResolveGitHubUsernameFromNyxAsync(
+        NyxIdApiClient client,
+        string token,
+        CancellationToken ct)
+    {
+        try
+        {
+            var response = await client.ProxyRequestAsync(
+                token,
+                "api-github",
+                "user",
+                "GET",
+                null,
+                null,
+                ct);
+            if (IsErrorPayload(response))
+                return null;
+
+            return TryParseGitHubUserLogin(response, out var login)
+                ? login
+                : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task SaveGithubUsernamePreferenceIfRequestedAsync(
+        string scopeId,
+        string githubUsername,
+        bool shouldSave,
+        CancellationToken ct)
+    {
+        if (!shouldSave || string.IsNullOrWhiteSpace(githubUsername))
+            return;
+
+        var commandService = _serviceProvider.GetService<IUserConfigCommandService>();
+        if (commandService is null)
+            return;
+
+        try
+        {
+            await commandService.SaveGithubUsernameAsync(scopeId, githubUsername, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool TryParseGitHubUserLogin(
+        string response,
+        out string? login)
+    {
+        login = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+            login = NormalizeOptional(ReadStringDeep(doc.RootElement, 2, "login", "username"));
+            return login is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static string? ReadString(JsonElement element, params string[] names)
     {
         if (element.ValueKind != JsonValueKind.Object)
@@ -1224,63 +1364,38 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
+    private static IEnumerable<JsonElement> EnumerateProxyServiceItems(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+                yield return item;
+            yield break;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+            yield break;
+
+        foreach (var propertyName in new[] { "services", "custom_services", "data" })
+        {
+            if (!root.TryGetProperty(propertyName, out var items) ||
+                items.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var item in items.EnumerateArray())
+                yield return item;
+        }
+    }
+
+    private static string NormalizeScopeId(string? value) =>
+        NormalizeOptional(value) ?? "default";
+
     private static string? NormalizeOptional(string? value)
     {
         var normalized = (value ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : normalized;
-    }
-
-    private static string ResolveUserConfigScopeId() =>
-        NormalizeOptional(AgentToolRequestContext.TryGet("scope_id")) ?? "default";
-
-    private async Task<StudioUserConfig?> TryGetUserConfigAsync(
-        IUserConfigQueryPort? queryPort,
-        string scopeId,
-        CancellationToken ct)
-    {
-        if (queryPort is null)
-            return null;
-
-        try
-        {
-            return await queryPort.GetAsync(scopeId, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Failed to load user config for scope {ScopeId}", scopeId);
-            return null;
-        }
-    }
-
-    private async Task TryPersistGithubUsernamePreferenceAsync(
-        string scopeId,
-        string? githubUsername,
-        IUserConfigCommandService? commandService,
-        CancellationToken ct)
-    {
-        var normalizedGithubUsername = NormalizeOptional(githubUsername);
-        if (normalizedGithubUsername is null || commandService is null)
-            return;
-
-        try
-        {
-            await commandService.SaveGithubUsernameAsync(scopeId, normalizedGithubUsername, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(
-                ex,
-                "Failed to persist daily report GitHub username preference for scope {ScopeId}",
-                scopeId);
-        }
     }
 
     private sealed class BuilderArgs
