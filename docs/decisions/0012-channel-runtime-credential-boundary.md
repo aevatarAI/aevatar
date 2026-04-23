@@ -37,7 +37,7 @@ The steady-state contract is:
 - channel registration state and readmodels keep only non-secret routing, identity, and status fields
 - ChannelRuntime does not persist, refresh, or update channel bot tokens
 - `update_token` and similar direct credential-management APIs/tools are retired
-- ChannelRuntime does not depend on local `credential_ref` / `ICredentialProvider` / `SecretsStoreCredentialProvider` flows for channel registration or channel reply delivery
+- ChannelRuntime may keep opaque `credential_ref` handles for relay verification secrets, but the secret material itself lives behind `IAevatarSecretsStore` and never enters registration proto/readmodel/query payloads
 - if a platform cannot satisfy this boundary yet, it is removed from the supported production contract instead of keeping channel-wide local credential storage alive
 
 ## Supported Production Contract

@@ -35,15 +35,9 @@ owner: eanzhao
 
 相关架构基线：
 
-<<<<<<<< HEAD:docs/history/2026-03/WORKFLOW_LLM_STREAMING_ARCHITECTURE.md
-1. `docs/architecture/CQRS_ARCHITECTURE.md:43`
-2. `docs/architecture/CQRS_ARCHITECTURE.md:46`
-3. `docs/architecture/PROJECT_ARCHITECTURE.md:79`
-========
 1. `docs/canon/cqrs-projection.md:43`
 2. `docs/canon/cqrs-projection.md:46`
 3. `docs/canon/overview.md:79`
->>>>>>>> c20fc87ec173e49be645ea287f4bb54ecd975935:docs/canon/llm-streaming.md
 
 ## 3. 组件与分层
 

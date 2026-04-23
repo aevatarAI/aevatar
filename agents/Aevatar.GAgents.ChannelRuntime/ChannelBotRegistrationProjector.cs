@@ -49,6 +49,7 @@ public sealed class ChannelBotRegistrationProjector
             NyxChannelBotId = entry.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = entry.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = entry.NyxConversationRouteId ?? string.Empty,
+            CredentialRef = entry.CredentialRef ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             ActorId = context.RootActorId,

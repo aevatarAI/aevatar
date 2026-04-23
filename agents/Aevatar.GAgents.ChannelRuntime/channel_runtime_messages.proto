@@ -22,6 +22,7 @@ message ChannelBotRegistrationEntry {
   string nyx_channel_bot_id = 9;
   string nyx_agent_api_key_id = 10;
   string nyx_conversation_route_id = 11;
+  string credential_ref = 12;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -115,6 +116,7 @@ message ChannelBotRegisterCommand {
   string nyx_channel_bot_id = 6;
   string nyx_agent_api_key_id = 7;
   string nyx_conversation_route_id = 8;
+  string credential_ref = 9;
 }
 
 message ChannelBotUnregisterCommand {
@@ -144,6 +146,7 @@ message ChannelBotRegistrationDocument {
   string nyx_channel_bot_id = 10;
   string nyx_agent_api_key_id = 11;
   string nyx_conversation_route_id = 12;
+  string credential_ref = 13;
 }
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───
@@ -479,7 +482,7 @@ message WorkflowAgentEnabledEvent {
 // ─── Relay / conversation normalization ───
 
 // Normalized inbound callback payload used by relay-aware channel flows
-// (for example deterministic builder/tool routing in LarkConversationTurnRunner).
+// (for example deterministic builder/tool routing in ChannelConversationTurnRunner).
 message ChannelInboundEvent {
   string text = 1;
   string sender_id = 2;
@@ -489,7 +492,7 @@ message ChannelInboundEvent {
   string chat_type = 6;
   string platform = 7;
   string registration_id = 8;
-  string registration_token = 9;      // fallback token from registration
+  string registration_token = 9;      // inbound-scoped token propagated to the LLM provider
   string registration_scope_id = 10;
   string nyx_provider_slug = 11;
   map<string, string> extra = 12;

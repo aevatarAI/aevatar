@@ -3,7 +3,7 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Channel.Lark;
+using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;

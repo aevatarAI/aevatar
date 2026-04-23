@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Aevatar.GAgents.Channel.Lark;
+using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Xunit;
 

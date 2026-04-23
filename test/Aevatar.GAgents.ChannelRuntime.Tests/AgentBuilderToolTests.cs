@@ -131,11 +131,18 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
-            [
-              {"id":"svc-github","slug":"api-github"},
-              {"id":"svc-lark","slug":"api-lark-bot"}
-            ]
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github"}
+              ],
+              "custom_services": [
+                {"id":"svc-lark","slug":"api-lark-bot"}
+              ],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
 
@@ -213,27 +220,31 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_UsesUserConfigGithubUsername_WhenArgumentMissing()
+    public async Task ExecuteAsync_CreateAgent_DailyReport_UsesSavedGithubUsernamePreference_WhenArgumentMissing()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionAsync("skill-runner-pref-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+        queryPort.GetAsync("skill-runner-pref-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
-                AgentId = "skill-runner-1",
+                AgentId = "skill-runner-pref-1",
                 AgentType = SkillRunnerDefaults.AgentType,
                 TemplateName = "daily_report",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
         var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
+        skillRunnerActor.Id.Returns("skill-runner-pref-1");
 
         var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-1", Arg.Any<CancellationToken>())
+        actorRuntime.GetAsync("skill-runner-pref-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-pref-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: "saved-user")));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -245,28 +256,31 @@ public sealed class AgentBuilderToolTests
                   "provider_name":"GitHub",
                   "provider_slug":"github",
                   "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
+                  "status":"active"
                 }
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
-            [
-              {"id":"svc-github","slug":"api-github"},
-              {"id":"svc-lark","slug":"api-lark-bot"}
-            ]
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [{"id":"svc-github","slug":"api-github"}],
+              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
             """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-pref-1","full_key":"full-key-pref-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(actorRuntime);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") }));
-        services.AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort(
-            new StudioUserConfig(DefaultModel: string.Empty, GithubUsername: "saved-user")));
+        services.AddSingleton(userConfigQueryPort);
+        services.AddSingleton(nyxClient);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -282,7 +296,7 @@ public sealed class AgentBuilderToolTests
                 {
                   "action": "create_agent",
                   "template": "daily_report",
-                  "agent_id": "skill-runner-1",
+                  "agent_id": "skill-runner-pref-1",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
                 }
@@ -295,9 +309,11 @@ public sealed class AgentBuilderToolTests
                 Arg.Is<EventEnvelope>(e =>
                     e.Payload != null &&
                     e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal)),
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal) &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal)),
                 Arg.Any<CancellationToken>());
+
+            handler.Requests.Should().NotContain(x => x.Path == "/api/v1/proxy/s/api-github/user");
         }
         finally
         {
@@ -306,27 +322,31 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_PersistsSubmittedGithubUsername_ToUserConfig()
+    public async Task ExecuteAsync_CreateAgent_DailyReport_DerivesGithubUsername_FromNyxProxy_WhenArgumentAndPreferenceMissing()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionAsync("skill-runner-derived-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+        queryPort.GetAsync("skill-runner-derived-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
-                AgentId = "skill-runner-1",
+                AgentId = "skill-runner-derived-1",
                 AgentType = SkillRunnerDefaults.AgentType,
                 TemplateName = "daily_report",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
         var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
+        skillRunnerActor.Id.Returns("skill-runner-derived-1");
 
         var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-1", Arg.Any<CancellationToken>())
+        actorRuntime.GetAsync("skill-runner-derived-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-derived-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioUserConfig(string.Empty)));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -338,32 +358,32 @@ public sealed class AgentBuilderToolTests
                   "provider_name":"GitHub",
                   "provider_slug":"github",
                   "provider_type":"oauth2",
-                  "status":"active",
-                  "connected_at":"2026-04-15T00:00:00Z"
+                  "status":"active"
                 }
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
-            [
-              {"id":"svc-github","slug":"api-github"},
-              {"id":"svc-lark","slug":"api-lark-bot"}
-            ]
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/user", """{"login":"derived-user"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [{"id":"svc-github","slug":"api-github"}],
+              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
             """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-derived-1","full_key":"full-key-derived-1"}""");
 
-        var userConfigQueryPort = new StubUserConfigQueryPort(
-            new StudioUserConfig(DefaultModel: "gpt-5.4", GithubUsername: "old-user"));
-        var userConfigCommandService = new RecordingUserConfigCommandService();
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(actorRuntime);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") }));
-        services.AddSingleton<IUserConfigQueryPort>(userConfigQueryPort);
-        services.AddSingleton<IUserConfigCommandService>(userConfigCommandService);
+        services.AddSingleton(userConfigQueryPort);
+        services.AddSingleton(nyxClient);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -379,8 +399,7 @@ public sealed class AgentBuilderToolTests
                 {
                   "action": "create_agent",
                   "template": "daily_report",
-                  "agent_id": "skill-runner-1",
-                  "github_username": "new-user",
+                  "agent_id": "skill-runner-derived-1",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
                 }
@@ -388,9 +407,186 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
-            userConfigCommandService.SavedScopeId.Should().Be("scope-1");
-            userConfigCommandService.SavedGithubUsername.Should().Be("new-user");
-            userConfigCommandService.SavedConfig.Should().BeNull();
+
+            await skillRunnerActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: derived-user", StringComparison.Ordinal) &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().ExecutionPrompt.Contains("derived-user", StringComparison.Ordinal)),
+                Arg.Any<CancellationToken>());
+
+            handler.Requests.Should().Contain(x => x.Path == "/api/v1/proxy/s/api-github/user");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequired_WhenUsernameCannotBeResolved()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioUserConfig(string.Empty)));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """{"tokens":[]}""");
+        handler.Add(HttpMethod.Get, "/api/v1/catalog/api-github", """
+            {
+              "slug":"api-github",
+              "provider_config_id":"provider-github",
+              "provider_type":"oauth2",
+              "credential_mode":"user",
+              "documentation_url":"https://docs.github.com/en/apps/oauth-apps"
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/credentials", """
+            {
+              "provider_config_id":"provider-github",
+              "has_credentials":true
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/providers/provider-github/connect/oauth", """
+            {
+              "authorization_url":"https://github.example.com/oauth/start"
+            }
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(userConfigQueryPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("credentials_required");
+            doc.RootElement.GetProperty("authorization_url").GetString().Should().Be("https://github.example.com/oauth/start");
+            doc.RootElement.GetProperty("note").GetString().Should().Contain("run /daily again");
+
+            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_SavesGithubUsernamePreference_WhenRequested()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-save-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-save-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-save-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-save-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-save-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-save-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var userConfigCommandService = Substitute.For<IUserConfigCommandService>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [{"id":"svc-github","slug":"api-github"}],
+              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-save-1","full_key":"full-key-save-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(userConfigCommandService);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-save-1",
+                  "github_username": "alice",
+                  "save_github_username_preference": true,
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            await userConfigCommandService.Received(1)
+                .SaveGithubUsernameAsync("scope-1", "alice", Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -420,10 +616,16 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
-            [
-              {"id":"svc-lark","slug":"api-lark-bot"}
-            ]
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [
+                {"id":"svc-lark","slug":"api-lark-bot"}
+              ],
+              "custom_services": [],
+              "total": 1,
+              "page": 1,
+              "per_page": 100
+            }
             """);
 
         var nyxClient = new NyxIdApiClient(
@@ -665,10 +867,16 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
-            [
-              {"id":"svc-lark","slug":"api-lark-bot"}
-            ]
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [
+                {"id":"svc-lark","slug":"api-lark-bot"}
+              ],
+              "custom_services": [],
+              "total": 1,
+              "page": 1,
+              "per_page": 100
+            }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
 

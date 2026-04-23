@@ -82,9 +82,6 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            // Direct route matches the target grain and triggers the event
-            // handler pipeline — same pattern used by every other working
-            // write path in the repo (GAgentService / ProjectionScope etc.).
             Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
         };
 

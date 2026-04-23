@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQueryPort
+    , IChannelBotRegistrationQueryByNyxIdentityPort
 {
     private readonly IProjectionDocumentReader<ChannelBotRegistrationDocument, string> _documentReader;
 
@@ -41,6 +42,44 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             .ToArray();
     }
 
+    public Task<ChannelBotRegistrationEntry?> GetByNyxAgentApiKeyIdAsync(
+        string nyxAgentApiKeyId,
+        CancellationToken ct = default) =>
+        QuerySingleByFieldAsync(nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId), nyxAgentApiKeyId, ct);
+
+    public Task<ChannelBotRegistrationEntry?> GetByNyxChannelBotIdAsync(
+        string nyxChannelBotId,
+        CancellationToken ct = default) =>
+        QuerySingleByFieldAsync(nameof(ChannelBotRegistrationDocument.NyxChannelBotId), nyxChannelBotId, ct);
+
+    private async Task<ChannelBotRegistrationEntry?> QuerySingleByFieldAsync(
+        string fieldPath,
+        string fieldValue,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(fieldValue))
+            return null;
+
+        var result = await _documentReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = 1,
+                Filters =
+                [
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = fieldPath,
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(fieldValue),
+                    },
+                ],
+            },
+            ct);
+
+        var document = result.Items.FirstOrDefault();
+        return document == null ? null : ToEntry(document);
+    }
+
     private static ChannelBotRegistrationEntry ToEntry(ChannelBotRegistrationDocument document) =>
         new()
         {
@@ -52,5 +91,6 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             NyxChannelBotId = document.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = document.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
+            CredentialRef = document.CredentialRef ?? string.Empty,
         };
 }
