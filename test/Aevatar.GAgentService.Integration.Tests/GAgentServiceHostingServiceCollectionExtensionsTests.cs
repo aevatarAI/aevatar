@@ -15,7 +15,9 @@ using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.Hosting;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
@@ -243,6 +245,51 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
 
         services.Count.Should().Be(afterFirstRegistration);
+    }
+
+    [Fact]
+    public void AddGAgentServiceProjectionReadModelProviders_ShouldFillMissingReadersWhenPartialRegistrationExists()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddGAgentServiceProjection();
+        services.AddInMemoryDocumentProjectionStore<ServiceCatalogReadModel, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        services.AddGAgentServiceProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
+        services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
+    }
+
+    [Fact]
+    public void AddGAgentServiceProjectionReadModelProviders_ShouldRejectPartialRegistrationFromDifferentProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddGAgentServiceProjection();
+        services.AddInMemoryDocumentProjectionStore<ServiceCatalogReadModel, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        var act = () => services.AddGAgentServiceProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ServiceCatalogReadModel*different provider*");
     }
 
     [Fact]
