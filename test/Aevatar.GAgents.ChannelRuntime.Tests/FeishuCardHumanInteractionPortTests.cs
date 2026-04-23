@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.GAgents.Channel.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -31,7 +32,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler));
-        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
+        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, new LarkMessageComposer(), NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
         await port.DeliverSuspensionAsync(BuildApprovalRequest(), "agent-1", CancellationToken.None);
 
@@ -67,6 +68,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         var port = new FeishuCardHumanInteractionPort(
             registry,
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
+            new LarkMessageComposer(),
             NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
         var act = () => port.DeliverSuspensionAsync(BuildApprovalRequest(), "missing-agent", CancellationToken.None);
@@ -89,6 +91,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         var port = new FeishuCardHumanInteractionPort(
             registry,
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
+            new LarkMessageComposer(),
             NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
         var act = () => port.DeliverSuspensionAsync(BuildApprovalRequest(), "agent-2", CancellationToken.None);
@@ -116,7 +119,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler));
-        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
+        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, new LarkMessageComposer(), NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
         await port.DeliverApprovalResolutionAsync(
             new HumanApprovalResolution
@@ -166,7 +169,7 @@ public sealed class FeishuCardHumanInteractionPortTests
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler));
-        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
+        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, new LarkMessageComposer(), NullLogger<FeishuCardHumanInteractionPort>.Instance);
 
         await port.DeliverApprovalResolutionAsync(
             new HumanApprovalResolution

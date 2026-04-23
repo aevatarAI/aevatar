@@ -42,6 +42,53 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                 IsInteractive: false);
         }
 
+        var headerTitle = ResolveHeaderTitle(intent, effectiveText);
+        var template = ResolveHeaderTemplate(intent);
+        var formMode = RequiresFormWrapping(intent);
+
+        if (formMode)
+        {
+            var formElements = new List<object>();
+            var leading = BuildLeadingMarkdown(effectiveText, intent);
+            if (leading is not null)
+                formElements.Add(leading);
+
+            formElements.Add(new
+            {
+                tag = "form",
+                name = DefaultFormName,
+                elements = intent.Actions.Select(BuildFormChildAction).ToArray(),
+            });
+
+            var formCardJson = JsonSerializer.Serialize(new
+            {
+                schema = "2.0",
+                config = new
+                {
+                    wide_screen_mode = true,
+                },
+                header = new
+                {
+                    title = new
+                    {
+                        tag = "plain_text",
+                        content = headerTitle,
+                    },
+                    template,
+                },
+                body = new
+                {
+                    elements = formElements,
+                },
+            });
+
+            return new LarkOutboundMessage(
+                MessageType: "interactive",
+                ContentJson: formCardJson,
+                PlainText: effectiveText,
+                IsInteractive: true);
+        }
+
         var elements = new List<object>();
         if (!string.IsNullOrWhiteSpace(effectiveText))
         {
@@ -82,9 +129,9 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                 title = new
                 {
                     tag = "plain_text",
-                    content = string.IsNullOrWhiteSpace(effectiveText) ? "Aevatar" : effectiveText,
+                    content = headerTitle,
                 },
-                template = "blue",
+                template,
             },
             elements,
         });
@@ -115,6 +162,88 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         return ComposeCapability.Exact;
     }
 
+    private const string DefaultFormName = "card_form";
+
+    private static bool RequiresFormWrapping(MessageContent intent) =>
+        intent.Actions.Any(a => a.Kind == ActionElementKind.TextInput);
+
+    private static string ResolveHeaderTitle(MessageContent intent, string effectiveText)
+    {
+        if (intent.Cards.Count > 0)
+        {
+            var first = intent.Cards[0];
+            if (!string.IsNullOrWhiteSpace(first.Title))
+                return first.Title;
+        }
+
+        return string.IsNullOrWhiteSpace(effectiveText) ? "Aevatar" : effectiveText;
+    }
+
+    private static string ResolveHeaderTemplate(MessageContent intent) =>
+        intent.Actions.Any(a => a.IsDanger) ? "orange" : "blue";
+
+    private static object? BuildLeadingMarkdown(string effectiveText, MessageContent intent)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(effectiveText))
+            parts.Add(effectiveText);
+
+        for (var i = 0; i < intent.Cards.Count; i++)
+        {
+            var card = intent.Cards[i];
+            // In form mode the first card's title is consumed as the card header title,
+            // so skip the title when rendering its body markdown to avoid duplication.
+            var skipTitle = i == 0;
+            var markdown = BuildCardMarkdown(card, skipTitle);
+            if (!string.IsNullOrWhiteSpace(markdown))
+                parts.Add(markdown);
+        }
+
+        if (parts.Count == 0)
+            return null;
+
+        return new
+        {
+            tag = "markdown",
+            content = string.Join("\n\n", parts),
+        };
+    }
+
+    private static object BuildFormChildAction(ActionElement action) =>
+        action.Kind == ActionElementKind.TextInput
+            ? BuildFormInput(action)
+            : BuildFormButton(action);
+
+    private static object BuildFormInput(ActionElement action) => new
+    {
+        tag = "input",
+        name = action.ActionId,
+        label = new
+        {
+            tag = "plain_text",
+            content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
+        },
+        placeholder = new
+        {
+            tag = "plain_text",
+            content = action.Placeholder ?? string.Empty,
+        },
+    };
+
+    private static object BuildFormButton(ActionElement action) => new
+    {
+        tag = "button",
+        type = action.IsPrimary ? "primary" : "default",
+        name = action.ActionId,
+        form_action_type = "submit",
+        text = new
+        {
+            tag = "plain_text",
+            content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
+        },
+        value = BuildActionValueObject(action),
+    };
+
     private static object BuildAction(ActionElement action) => new
     {
         tag = "button",
@@ -124,17 +253,42 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
         },
         type = action.IsPrimary ? "primary" : "default",
-        value = new
-        {
-            action_id = action.ActionId,
-            value = action.Value,
-        },
+        value = BuildActionValueObject(action),
     };
 
-    private static string BuildCardMarkdown(CardBlock card)
+    private static IDictionary<string, object?> BuildActionValueObject(ActionElement action)
+    {
+        var map = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["action_id"] = action.ActionId,
+            ["value"] = action.Value,
+        };
+
+        foreach (var argument in action.Arguments)
+        {
+            if (string.Equals(argument.Key, "action_id", StringComparison.Ordinal) ||
+                string.Equals(argument.Key, "value", StringComparison.Ordinal))
+                continue;
+
+            map[argument.Key] = CoerceArgumentValue(argument.Value);
+        }
+
+        return map;
+    }
+
+    private static object? CoerceArgumentValue(string raw)
+    {
+        if (bool.TryParse(raw, out var boolean))
+            return boolean;
+        if (long.TryParse(raw, out var integer))
+            return integer;
+        return raw;
+    }
+
+    private static string BuildCardMarkdown(CardBlock card, bool skipTitle = false)
     {
         var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(card.Title))
+        if (!skipTitle && !string.IsNullOrWhiteSpace(card.Title))
             parts.Add($"**{card.Title}**");
         if (!string.IsNullOrWhiteSpace(card.Text))
             parts.Add(card.Text);

@@ -123,14 +123,28 @@ behaviour without redeploying.
 - New abstractions (`ChannelNativeMessage`, `IChannelMessageComposerRegistry`,
   `IInteractiveReplyCollector`, `IChannelNativeMessageProducer`,
   `IInteractiveReplyDispatcher`).
+- Proto additions: `ActionElementKind.TEXT_INPUT` and `ActionElement.arguments` map
+  (carries correlation keys forwarded verbatim to the adapter so inbound parsers still
+  see them in the expected locations).
 - `NyxIdApiClient.SendChannelRelayReplyAsync` rich overload; existing text overload
   becomes a thin wrapper.
+- `LarkMessageComposer` extended to render form-wrapped cards when `TextInput` actions
+  are present (emits `body.elements[].tag=form` with mixed `tag=input` + `tag=button`
+  children, merges `ActionElement.Arguments` into the button `value` object, and picks
+  the `orange` header template whenever any action is marked `is_danger`).
 - `LarkChannelNativeMessageProducer` wrapping the existing `LarkMessageComposer`.
 - `NyxIdRelayInteractiveReplyDispatcher` default implementation.
 - New project `Aevatar.AI.ToolProviders.Channel` with `ReplyWithInteractionTool` and
   its `IAgentToolSource`.
 - Relay finalize integration with the `Aevatar:NyxId:Relay:InteractiveRepliesEnabled`
   feature flag.
+- `FeishuCardHumanInteractionPort` migrated: builds a `MessageContent` intent and
+  delegates card JSON to `LarkMessageComposer`. Outbound shape stays byte-compatible
+  with `NyxIdRelayWorkflowCards` inbound parsing (pinned by round-trip tests).
+- CI guard `channel_card_literal_guard.sh` forbidding raw Lark card literals
+  (`msg_type=interactive`, `schema=2.0`, `tag=button`, `tag=form`, `tag=input`) inside
+  `agents/Aevatar.GAgents.ChannelRuntime` / `agents/Aevatar.GAgents.NyxidChat`. Wired
+  into `tools/ci/architecture_guards.sh`.
 
 ### Out of scope / follow-ups
 
@@ -138,18 +152,20 @@ behaviour without redeploying.
   finalize path is prepared to dispatch an interactive reply but the bridge has no hook
   to populate the collector. A follow-up can surface an interactive reply API on
   `INyxRelayDayOneBridge`.
-- **`FeishuCardHumanInteractionPort` migration.** The approval card relies on Feishu
-  `tag=input` form fields plus a form-submit button. The neutral `MessageContent` /
-  `ActionElement` schemas do not yet cover text-input form controls, so a proto
-  extension must land first before the port can be migrated. Tracked as a follow-up
-  to avoid a premature lossy abstraction.
+- **`AgentBuilderCardFlow` migration.** The agent-builder flow (daily report / social
+  media / list-agents cards) still builds Lark 2.0 card JSON inline. It's an
+  independent card surface (user-driven agent creation UI, not workflow human
+  interaction) and migrating it is a self-contained second pass. The CI guard
+  grandfathers the single file via an explicit allowlist entry; new code anywhere else
+  in `ChannelRuntime` / `NyxidChat` cannot introduce raw card literals.
+- **Port rename.** Keeping `FeishuCardHumanInteractionPort` named as-is until the
+  transport (proactive outbound via `NyxIdApiClient.ProxyRequestAsync`) is also
+  abstracted platform-neutrally. The port currently hardcodes the Lark
+  `open-apis/im/v1/messages` path; a neutral rename implies a neutral transport, which
+  is a follow-up.
 - **Platform coverage.** NyxID today ships card support only for Lark / Feishu. When
   NyxID adds card support for Telegram / Slack / Discord, the corresponding Aevatar
   composer + `IChannelNativeMessageProducer` implementations become additive.
-- **CI guard.** A guard forbidding `msg_type = "interactive"` / raw `elements` /
-  `"tag":"button"` string literals inside `ChannelRuntime` / `NyxidChat` will be added
-  once `FeishuCardHumanInteractionPort` is migrated (the guard would trip on its current
-  legacy Lark JSON).
 
 ## Related
 
