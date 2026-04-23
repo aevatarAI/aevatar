@@ -8,20 +8,14 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Tool for NyxId chat to manage Aevatar channel bot registrations.
-/// Allows the agent to register, list, and delete channel bots so users
-/// don't need to call the REST API manually.
+/// Tool for NyxID chat to manage ChannelRuntime registrations.
+/// ChannelRuntime is no longer a channel credential authority; the supported
+/// production path is Lark registration provisioned through Nyx relay.
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
     private readonly IServiceProvider _serviceProvider;
 
-    /// <summary>
-    /// Constructor takes IServiceProvider only. Dependencies (IChannelBotRegistrationQueryPort,
-    /// IActorRuntime) are resolved lazily in ExecuteAsync — at call time the Orleans silo is
-    /// fully started and all services are available. This avoids construction-time DI failures
-    /// when the tool is instantiated during grain activation.
-    /// </summary>
     public ChannelRegistrationTool(IServiceProvider serviceProvider)
     {
         _serviceProvider = serviceProvider;
@@ -30,12 +24,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
     public string Name => "channel_registrations";
 
     public string Description =>
-        "Manage Aevatar channel bot registrations (Lark, Telegram, Discord). " +
-        "Actions: list, register, register_lark_via_nyx, delete, update_token. " +
-        "Use this to set up platform bot callbacks so users can chat with agents via messaging apps. " +
-        "Use register_lark_via_nyx for the Nyx-backed Lark relay path so Aevatar stores only Nyx IDs and no Lark credentials. " +
-        "Use register only for direct-callback platforms such as Telegram. " +
-        "Use update_token only for direct-callback platforms that still keep token ownership outside the Lark Nyx relay path.";
+        "Manage ChannelRuntime registrations for the supported Nyx-backed Lark relay flow. " +
+        "Actions: list, register_lark_via_nyx, delete. " +
+        "Direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials.";
 
     public string ParametersSchema => """
         {
@@ -43,41 +34,20 @@ public sealed class ChannelRegistrationTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "register", "register_lark_via_nyx", "delete", "update_token"],
-              "description": "Action to perform (default: list). Use register for direct-callback platforms, register_lark_via_nyx for the Nyx relay path, and update_token only for direct-callback registrations."
-            },
-            "platform": {
-              "type": "string",
-              "enum": ["lark", "telegram", "discord"],
-              "description": "Platform (for register). Lark must use register_lark_via_nyx."
+              "enum": ["list", "register_lark_via_nyx", "delete"],
+              "description": "Action to perform (default: list)."
             },
             "nyx_provider_slug": {
               "type": "string",
-              "description": "NyxID bot service slug (required for direct-callback register; optional for register_lark_via_nyx)"
-            },
-            "verification_token": {
-              "type": "string",
-              "description": "Platform verification token for direct-callback platforms (for register, optional)"
+              "description": "NyxID bot service slug (optional for register_lark_via_nyx; defaults to api-lark-bot)"
             },
             "scope_id": {
               "type": "string",
-              "description": "Scope ID for multi-tenant isolation (for register, optional)"
+              "description": "Scope ID for multi-tenant isolation (optional)"
             },
             "webhook_base_url": {
               "type": "string",
-              "description": "Base URL for webhook callbacks, e.g. 'https://aevatar-console-backend-api.aevatar.ai' (required for register_lark_via_nyx; optional for direct-callback register)"
-            },
-            "credential_ref": {
-              "type": "string",
-              "description": "Opaque credential reference for direct-callback platform secrets (for register, optional)"
-            },
-            "nyx_refresh_token": {
-              "type": "string",
-              "description": "Refresh token to store alongside the direct-callback access token (for register, update_token). If omitted, the tool falls back to nyxid.refresh_token metadata when available; update_token otherwise preserves the stored refresh token."
-            },
-            "registration_id": {
-              "type": "string",
-              "description": "Registration ID (for delete, update_token)"
+              "description": "Base URL for Nyx relay callbacks, e.g. 'https://aevatar-console-backend-api.aevatar.ai' (required for register_lark_via_nyx)"
             },
             "app_id": {
               "type": "string",
@@ -89,11 +59,15 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "label": {
               "type": "string",
-              "description": "Human-readable label for the Nyx channel bot (optional for register_lark_via_nyx)"
+              "description": "Human-readable label for the Nyx channel bot (optional)"
+            },
+            "registration_id": {
+              "type": "string",
+              "description": "Registration ID (for delete)"
             },
             "confirm": {
               "type": "boolean",
-              "description": "Must be true to execute delete. First call delete without confirm to see details, then call again with confirm=true."
+              "description": "Must be true to execute delete. First call delete without confirm to inspect the registration."
             }
           }
         }
@@ -104,21 +78,18 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
-        var refreshTokenMetadata = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdRefreshToken);
 
-        using var doc = JsonDocument.Parse(argumentsJson);
-        var root = doc.RootElement;
+        using var document = JsonDocument.Parse(argumentsJson);
+        var root = document.RootElement;
         var action = GetStr(root, "action") ?? "list";
 
         return action switch
         {
             "list" => await ExecuteWithRuntimeAsync((queryPort, _) => ListAsync(queryPort, ct)),
-            "register" => await ExecuteWithRuntimeAsync((_, actorRuntime) =>
-                RegisterAsync(actorRuntime, token, ResolveRegisterRefreshToken(root, refreshTokenMetadata), root, ct)),
-            "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(root, ct),
+            "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
             "delete" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) => DeleteAsync(queryPort, actorRuntime, root, ct)),
-            "update_token" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) =>
-                UpdateTokenAsync(queryPort, actorRuntime, token, refreshTokenMetadata, root, ct)),
+            "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
+            "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
             _ => await ExecuteWithRuntimeAsync((queryPort, _) => ListAsync(queryPort, ct)),
         };
     }
@@ -134,193 +105,52 @@ public sealed class ChannelRegistrationTool : IAgentTool
         return await operation(queryPort, actorRuntime);
     }
 
-    private static string? GetStr(JsonElement el, string prop) =>
-        el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    private static string? GetStr(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
-    private static bool TryGetProvidedString(JsonElement el, string prop, out string? value)
-    {
-        if (el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String)
+    private static string RetiredActionError(string message) =>
+        JsonSerializer.Serialize(new
         {
-            value = v.GetString();
-            return true;
-        }
-
-        value = null;
-        return false;
-    }
-
-    internal static string ResolveRegisterRefreshToken(JsonElement args, string? metadataRefreshToken)
-    {
-        if (TryGetProvidedString(args, "nyx_refresh_token", out var explicitRefreshToken))
-            return explicitRefreshToken?.Trim() ?? string.Empty;
-
-        return !string.IsNullOrWhiteSpace(metadataRefreshToken)
-            ? metadataRefreshToken.Trim()
-            : string.Empty;
-    }
-
-    internal static string ResolveUpdateRefreshToken(
-        JsonElement args,
-        string? metadataRefreshToken,
-        string? existingRefreshToken)
-    {
-        if (TryGetProvidedString(args, "nyx_refresh_token", out var explicitRefreshToken))
-            return explicitRefreshToken?.Trim() ?? string.Empty;
-
-        if (!string.IsNullOrWhiteSpace(metadataRefreshToken))
-            return metadataRefreshToken.Trim();
-
-        return existingRefreshToken?.Trim() ?? string.Empty;
-    }
-
-    private static ChannelBotDirectCallbackBinding? BuildDirectCallbackBinding(
-        string? nyxUserToken,
-        string? nyxRefreshToken,
-        string? verificationToken,
-        string? credentialRef)
-    {
-        var userToken = nyxUserToken?.Trim() ?? string.Empty;
-        var refreshToken = nyxRefreshToken?.Trim() ?? string.Empty;
-        var verifyToken = verificationToken?.Trim() ?? string.Empty;
-        var secretRef = credentialRef?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(userToken) &&
-            string.IsNullOrWhiteSpace(refreshToken) &&
-            string.IsNullOrWhiteSpace(verifyToken) &&
-            string.IsNullOrWhiteSpace(secretRef))
-        {
-            return null;
-        }
-
-        return new ChannelBotDirectCallbackBinding
-        {
-            NyxUserToken = userToken,
-            NyxRefreshToken = refreshToken,
-            VerificationToken = verifyToken,
-            CredentialRef = secretRef,
-            EncryptKey = string.Empty,
-        };
-    }
-
-    private static ChannelBotDirectCallbackBinding MergeDirectCallbackBinding(
-        ChannelBotDirectCallbackBinding? existing,
-        string userToken,
-        string refreshToken) =>
-        new()
-        {
-            NyxUserToken = userToken,
-            NyxRefreshToken = refreshToken,
-            VerificationToken = existing?.VerificationToken ?? string.Empty,
-            CredentialRef = existing?.CredentialRef ?? string.Empty,
-            EncryptKey = existing?.EncryptKey ?? string.Empty,
-        };
+            error_code = "retired_action",
+            error = message,
+        });
 
     private async Task<string> ListAsync(IChannelBotRegistrationQueryPort queryPort, CancellationToken ct)
     {
         var registrations = await queryPort.QueryAllAsync(ct);
-        var result = registrations.Select(e => new
+        var result = registrations.Select(entry => new
         {
-            id = e.Id,
-            platform = e.Platform,
-            registration_mode = string.IsNullOrWhiteSpace(e.NyxAgentApiKeyId) ? "direct_callback" : "nyx_relay_webhook",
-            nyx_provider_slug = e.NyxProviderSlug,
-            scope_id = e.ScopeId,
-            webhook_url = e.WebhookUrl,
-            callback_url = string.IsNullOrWhiteSpace(e.NyxAgentApiKeyId)
-                ? $"/api/channels/{e.Platform}/callback/{e.Id}"
-                : string.Empty,
-            nyx_channel_bot_id = e.NyxChannelBotId,
-            nyx_agent_api_key_id = e.NyxAgentApiKeyId,
-            nyx_conversation_route_id = e.NyxConversationRouteId,
+            id = entry.Id,
+            platform = entry.Platform,
+            registration_mode = "nyx_relay_webhook",
+            nyx_provider_slug = entry.NyxProviderSlug,
+            scope_id = entry.ScopeId,
+            webhook_url = entry.WebhookUrl,
+            callback_url = string.Empty,
+            nyx_channel_bot_id = entry.NyxChannelBotId,
+            nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
+            nyx_conversation_route_id = entry.NyxConversationRouteId,
         }).ToList();
 
-        return JsonSerializer.Serialize(new { registrations = result, total = result.Count },
+        return JsonSerializer.Serialize(
+            new { registrations = result, total = result.Count },
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
     }
 
-    private async Task<string> RegisterAsync(
-        IActorRuntime actorRuntime,
-        string token, string refreshToken, JsonElement args, CancellationToken ct)
-    {
-        var platform = GetStr(args, "platform");
-        if (string.IsNullOrWhiteSpace(platform))
-            return """{"error":"'platform' is required for register"}""";
-
-        if (string.Equals(platform.Trim(), "lark", StringComparison.OrdinalIgnoreCase))
-        {
-            return """
-                {"error":"Direct Lark registration is retired. Use action=register_lark_via_nyx so Lark webhook ingress goes through NyxID."}
-                """;
-        }
-
-        var nyxProviderSlug = GetStr(args, "nyx_provider_slug");
-        if (string.IsNullOrWhiteSpace(nyxProviderSlug))
-            return """{"error":"'nyx_provider_slug' is required for register (e.g. 'api-lark-bot')"}""";
-
-        var webhookBaseUrl = GetStr(args, "webhook_base_url") ?? "";
-        var callbackPath = $"/api/channels/{platform.Trim().ToLowerInvariant()}/callback";
-        var webhookUrl = !string.IsNullOrWhiteSpace(webhookBaseUrl)
-            ? webhookBaseUrl.TrimEnd('/') + callbackPath
-            : string.Empty;
-
-        var registrationId = Guid.NewGuid().ToString("N");
-
-        var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-                    ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
-                        ChannelBotRegistrationGAgent.WellKnownId);
-
-        var cmd = new ChannelBotRegisterCommand
-        {
-            Platform = platform.Trim().ToLowerInvariant(),
-            NyxProviderSlug = nyxProviderSlug.Trim(),
-            ScopeId = GetStr(args, "scope_id")?.Trim() ?? string.Empty,
-            WebhookUrl = webhookUrl,
-            RequestedId = registrationId,
-        };
-        cmd.ApplyDirectCallbackBinding(BuildDirectCallbackBinding(
-            token,
-            refreshToken,
-            GetStr(args, "verification_token"),
-            GetStr(args, "credential_ref")));
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(cmd),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(envelope);
-
-        return JsonSerializer.Serialize(new
-        {
-            status = "accepted",
-            registration_id = registrationId,
-            platform = cmd.Platform,
-            nyx_provider_slug = cmd.NyxProviderSlug,
-            callback_url = $"{callbackPath}/{registrationId}",
-            webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
-            refresh_token_present = !string.IsNullOrWhiteSpace(cmd.DirectCallbackBinding?.NyxRefreshToken),
-            note = "Registration accepted. Read model visibility is asynchronous; try 'list' after a few seconds if the entry does not appear immediately.",
-        });
-    }
-
-    private async Task<string> RegisterLarkViaNyxAsync(JsonElement args, CancellationToken ct)
+    private async Task<string> RegisterLarkViaNyxAsync(
+        string accessToken,
+        JsonElement args,
+        CancellationToken ct)
     {
         var provisioningService = _serviceProvider.GetService<INyxLarkProvisioningService>();
         if (provisioningService is null)
             return """{"error":"Nyx-backed Lark provisioning service is not registered."}""";
 
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
-        if (string.IsNullOrWhiteSpace(token))
-            return """{"error":"No NyxID access token available. User must be authenticated."}""";
-
         var result = await provisioningService.ProvisionAsync(
             new NyxLarkProvisioningRequest(
-                AccessToken: token,
+                AccessToken: accessToken,
                 AppId: GetStr(args, "app_id")?.Trim() ?? string.Empty,
                 AppSecret: GetStr(args, "app_secret")?.Trim() ?? string.Empty,
                 WebhookBaseUrl: GetStr(args, "webhook_base_url")?.Trim() ?? string.Empty,
@@ -347,76 +177,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
         });
     }
 
-    private async Task<string> UpdateTokenAsync(
-        IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
-        string token, string? metadataRefreshToken, JsonElement args, CancellationToken ct)
-    {
-        var registrationId = GetStr(args, "registration_id") ?? GetStr(args, "id");
-        if (string.IsNullOrWhiteSpace(registrationId))
-            return """{"error":"'registration_id' is required for update_token"}""";
-
-        var exists = await queryPort.GetAsync(registrationId, ct);
-        if (exists is null)
-            return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
-
-        if (string.Equals(exists.Platform, "lark", StringComparison.OrdinalIgnoreCase))
-        {
-            return """
-                {"error":"Lark token refresh is not supported on the Nyx relay path. Re-provision through register_lark_via_nyx and use Nyx relay callbacks instead of persisted Nyx session tokens."}
-                """;
-        }
-        var runtimeQueryPort = _serviceProvider.GetService<IChannelBotRegistrationRuntimeQueryPort>();
-        var runtimeRegistration = runtimeQueryPort is null
-            ? exists
-            : await runtimeQueryPort.GetAsync(registrationId, ct) ?? exists;
-        var currentDirectCallbackBinding = runtimeRegistration.ResolveDirectCallbackBinding();
-        var refreshToken = ResolveUpdateRefreshToken(
-            args,
-            metadataRefreshToken,
-            currentDirectCallbackBinding?.NyxRefreshToken);
-
-        // Always dispatch to the actor — it is the authority on current state.
-        var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-                    ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
-                        ChannelBotRegistrationGAgent.WellKnownId);
-
-        var cmd = new ChannelBotUpdateTokenCommand
-        {
-            RegistrationId = registrationId,
-        };
-        cmd.ApplyDirectCallbackBinding(MergeDirectCallbackBinding(
-            currentDirectCallbackBinding,
-            token,
-            refreshToken));
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(cmd),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(envelope);
-
-        return JsonSerializer.Serialize(new
-        {
-            status = "accepted",
-            registration_id = registrationId,
-            platform = exists.Platform,
-            refresh_token_present = !string.IsNullOrWhiteSpace(refreshToken),
-            note = !string.IsNullOrWhiteSpace(refreshToken)
-                ? "Token update accepted. Read model visibility is asynchronous; stored refresh tokens remain available for manual re-auth or migration flows."
-                : "Token update accepted. Read model visibility is asynchronous; query/list results may lag briefly until the projection pipeline catches up.",
-        });
-    }
-
     private async Task<string> DeleteAsync(
-        IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
-        JsonElement args, CancellationToken ct)
+        IChannelBotRegistrationQueryPort queryPort,
+        IActorRuntime actorRuntime,
+        JsonElement args,
+        CancellationToken ct)
     {
         var registrationId = GetStr(args, "registration_id") ?? GetStr(args, "id");
         if (string.IsNullOrWhiteSpace(registrationId))
@@ -426,7 +191,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (exists is null)
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
 
-        var confirm = args.TryGetProperty("confirm", out var cv) && cv.ValueKind == JsonValueKind.True;
+        var confirm = args.TryGetProperty("confirm", out var confirmValue) && confirmValue.ValueKind == JsonValueKind.True;
         if (!confirm)
         {
             return JsonSerializer.Serialize(new
@@ -434,7 +199,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
                 status = "confirm_required",
                 registration_id = exists.Id,
                 platform = exists.Platform,
-                registration_mode = string.IsNullOrWhiteSpace(exists.NyxAgentApiKeyId) ? "direct_callback" : "nyx_relay_webhook",
+                registration_mode = "nyx_relay_webhook",
                 nyx_provider_slug = exists.NyxProviderSlug,
                 scope_id = exists.ScopeId,
                 nyx_channel_bot_id = exists.NyxChannelBotId,
@@ -448,12 +213,12 @@ public sealed class ChannelRegistrationTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId);
 
-        var cmd = new ChannelBotUnregisterCommand { RegistrationId = registrationId };
+        var command = new ChannelBotUnregisterCommand { RegistrationId = registrationId };
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(cmd),
+            Payload = Any.Pack(command),
             Route = new EnvelopeRoute
             {
                 Direct = new DirectRoute { TargetActorId = actor.Id },
@@ -461,6 +226,25 @@ public sealed class ChannelRegistrationTool : IAgentTool
         };
 
         await actor.HandleEventAsync(envelope);
-        return JsonSerializer.Serialize(new { status = "deleted", registration_id = registrationId });
+
+        var confirmed = false;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(500, ct);
+
+            if (await queryPort.GetAsync(registrationId, ct) == null)
+            {
+                confirmed = true;
+                break;
+            }
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            status = confirmed ? "deleted" : "accepted",
+            registration_id = registrationId,
+            note = confirmed ? string.Empty : "Delete submitted but projection not yet confirmed. Try 'list' after a few seconds.",
+        });
     }
 }
