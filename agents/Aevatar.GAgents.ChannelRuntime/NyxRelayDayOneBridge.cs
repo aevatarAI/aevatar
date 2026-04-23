@@ -76,16 +76,19 @@ internal sealed class NyxRelayDayOneBridge : INyxRelayDayOneBridge
         !string.IsNullOrWhiteSpace(conversationType) &&
         string.Equals(conversationType.Trim(), DeviceConversationType, StringComparison.OrdinalIgnoreCase);
 
+    // Fail-closed: only an explicit "private" maps to p2p. Missing or unrecognized types fall
+    // back to group so the known-command path returns a private-chat restriction instead of
+    // silently executing Day One side effects on an unexpected surface.
     private static string MapChatType(string? conversationType)
     {
         if (string.IsNullOrWhiteSpace(conversationType))
-            return PrivateChatType;
+            return GroupChatType;
 
         return conversationType.Trim().ToLowerInvariant() switch
         {
             "private" => PrivateChatType,
             "group" or "channel" => GroupChatType,
-            _ => PrivateChatType,
+            _ => GroupChatType,
         };
     }
 

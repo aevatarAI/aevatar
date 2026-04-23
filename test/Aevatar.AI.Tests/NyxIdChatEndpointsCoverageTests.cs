@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -945,12 +946,92 @@ public class NyxIdChatEndpointsCoverageTests
         runtime.Actors.Should().ContainKey("nyxid-relay-conv-1");
     }
 
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDedupeBridgeSideEffects_ForDuplicateMessageId()
+    {
+        const string scopeId = "scope-dedupe";
+        const string messageId = "msg-dedupe-1";
+        var relay = CreateRelayInvocationDependencies(scopeId: scopeId, relayApiKeyId: scopeId);
+        var payload = $$"""
+            {
+              "message_id":"{{messageId}}",
+              "platform":"lark",
+              "agent":{"api_key_id":"{{scopeId}}"},
+              "conversation":{"id":"conv-d","platform_id":"chat-d","type":"private"},
+              "content":{"text":"/daily alice"}
+            }
+            """;
+        var bridge = new StubDayOneBridge { ShouldHandleResult = true };
+        var deduplicator = new StubEventDeduplicator();
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<INyxRelayDayOneBridge>(bridge)
+            .AddSingleton<IEventDeduplicator>(deduplicator)
+            .BuildServiceProvider();
+
+        DefaultHttpContext BuildContext()
+        {
+            var context = new DefaultHttpContext { RequestServices = services };
+            context.Request.ContentType = "application/json";
+            context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+            context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+            return context;
+        }
+
+        // First delivery: HandleAsync fires in background; the bridge signals via TCS once
+        // it has been invoked so the test can sequence the second (duplicate) delivery
+        // without a polling wait.
+        var firstResult = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            BuildContext(),
+            new StubActorRuntime(),
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var firstResponse = await ExecuteResultAsync(firstResult);
+        await bridge.FirstHandleStarted;
+
+        var secondResult = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            BuildContext(),
+            new StubActorRuntime(),
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var secondResponse = await ExecuteResultAsync(secondResult);
+
+        firstResponse.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        secondResponse.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        firstResponse.Body.Should().NotContain("duplicate");
+        secondResponse.Body.Should().Contain("\"dedupe\":\"duplicate\"",
+            because: "retried callbacks for the same message_id must be reported as duplicates");
+
+        bridge.ShouldHandleCalls.Should().HaveCount(2);
+        deduplicator.RecordedKeys.Should().OnlyContain(k => k == $"nyxid-relay-bridge:{scopeId}:{messageId}");
+        deduplicator.RecordedKeys.Should().HaveCount(2,
+            because: "both callbacks query the deduplicator, but only the first gets first-seen");
+        bridge.HandleCalls.Should().ContainSingle(
+            because: "only the first-seen callback should fire AgentBuilder side effects");
+    }
+
     private sealed class StubDayOneBridge : INyxRelayDayOneBridge
     {
+        private readonly TaskCompletionSource _firstHandleStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public bool ShouldHandleResult { get; set; } = true;
         public string ReplyText { get; set; } = "stub reply";
         public List<NyxRelayBridgeRequest> ShouldHandleCalls { get; } = new();
         public List<NyxRelayBridgeRequest> HandleCalls { get; } = new();
+        public Task FirstHandleStarted => _firstHandleStarted.Task;
 
         public bool ShouldHandle(NyxRelayBridgeRequest request)
         {
@@ -961,7 +1042,21 @@ public class NyxIdChatEndpointsCoverageTests
         public Task<string> HandleAsync(NyxRelayBridgeRequest request, CancellationToken ct)
         {
             HandleCalls.Add(request);
+            _firstHandleStarted.TrySetResult();
             return Task.FromResult(ReplyText);
+        }
+    }
+
+    private sealed class StubEventDeduplicator : IEventDeduplicator
+    {
+        private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+
+        public List<string> RecordedKeys { get; } = new();
+
+        public Task<bool> TryRecordAsync(string eventId)
+        {
+            RecordedKeys.Add(eventId);
+            return Task.FromResult(_seen.Add(eventId));
         }
     }
 

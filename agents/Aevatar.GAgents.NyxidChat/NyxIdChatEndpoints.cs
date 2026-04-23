@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat.Relay;
 using Google.Protobuf.WellKnownTypes;
@@ -860,6 +861,30 @@ public static class NyxIdChatEndpoints
 
                 if (dayOneBridge.ShouldHandle(bridgeRequest))
                 {
+                    // Dedupe at the Nyx-relay callback boundary so retried webhooks with the
+                    // same message_id do not double-fire AgentBuilderTool side effects (a single
+                    // `/daily` would otherwise create multiple agents + API keys on retry). The
+                    // LLM fallback path relies on the actor's session for equivalent dedupe; the
+                    // bridge skips the actor entirely, so it must guard itself here.
+                    var deduplicator = http.RequestServices.GetService<IEventDeduplicator>();
+                    var dedupeKey = BuildBridgeDedupeKey(scopeId, message.MessageId!);
+                    var firstDelivery = deduplicator is null
+                                        || await deduplicator.TryRecordAsync(dedupeKey);
+                    if (!firstDelivery)
+                    {
+                        logger.LogInformation(
+                            "Relay Day One bridge duplicate callback suppressed: message_id={MessageId}, dedupe_key={DedupeKey}",
+                            message.MessageId,
+                            dedupeKey);
+                        return Results.Accepted(value: new
+                        {
+                            status = "accepted",
+                            bridge = "day_one_command",
+                            dedupe = "duplicate",
+                            message_id = message.MessageId,
+                        });
+                    }
+
                     logger.LogInformation(
                         "Relay Day One bridge owning message: platform={Platform}, conversation={ConversationId}, message_id={MessageId}",
                         platform, conversationId, message.MessageId);
@@ -1058,6 +1083,9 @@ public static class NyxIdChatEndpoints
 
         return false;
     }
+
+    private static string BuildBridgeDedupeKey(string scopeId, string messageId) =>
+        $"nyxid-relay-bridge:{scopeId}:{messageId}";
 
     private static async Task FinalizeDayOneBridgeReplyAsync(
         INyxRelayDayOneBridge bridge,

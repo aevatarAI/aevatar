@@ -61,6 +61,21 @@ public sealed class NyxRelayDayOneBridgeTests
         reply.Should().Contain("private chat");
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("unknown-future-type")]
+    public async Task HandleAsync_ForMissingOrUnknownConversationType_FailsClosedWithRestriction(string? conversationType)
+    {
+        var bridge = new NyxRelayDayOneBridge(new ServiceCollection().BuildServiceProvider());
+        var request = BuildRequest("/daily alice", conversationType);
+
+        var reply = await bridge.HandleAsync(request, CancellationToken.None);
+
+        reply.Should().Contain("private chat",
+            because: "missing or unrecognized conversation.type must not be treated as p2p");
+    }
+
     [Fact]
     public async Task HandleAsync_ForKnownCommandWithoutArguments_ReturnsHelpText()
     {
