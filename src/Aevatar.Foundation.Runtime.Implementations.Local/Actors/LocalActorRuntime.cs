@@ -55,6 +55,17 @@ public sealed class LocalActorRuntime : IActorRuntime
     public async Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
     {
         var actorId = id ?? AgentId.New(agentType);
+        if (_actors.TryGetValue(actorId, out var existing))
+        {
+            if (existing.Agent.GetType() != agentType)
+            {
+                throw new InvalidOperationException(
+                    $"Actor '{actorId}' already exists with agent type '{existing.Agent.GetType().FullName}', expected '{agentType.FullName}'.");
+            }
+
+            return existing;
+        }
+
         var agent = CreateAgentInstance(agentType);
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
         var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
@@ -76,7 +87,21 @@ public sealed class LocalActorRuntime : IActorRuntime
         InjectDependencies(agent, publisher, actorId, logger);
 
         if (!_actors.TryAdd(actorId, actor))
-            throw new InvalidOperationException($"Actor {actorId} already exists");
+        {
+            var authoritative = _actors.GetValueOrDefault(actorId);
+            if (authoritative != null)
+            {
+                if (authoritative.Agent.GetType() != agentType)
+                {
+                    throw new InvalidOperationException(
+                        $"Actor '{actorId}' already exists with agent type '{authoritative.Agent.GetType().FullName}', expected '{agentType.FullName}'.");
+                }
+
+                return authoritative;
+            }
+
+            throw new InvalidOperationException($"Actor '{actorId}' already exists.");
+        }
 
         var agentTypeName = agentType.AssemblyQualifiedName ?? agentType.FullName ?? agentType.Name;
         await _activationIndexStore.UpsertAsync(actorId, agentTypeName, ct);

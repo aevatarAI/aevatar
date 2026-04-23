@@ -10,9 +10,8 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// are lost from the InMemory store.
 ///
 /// StartAsync awaits the activation with retries so the host does not
-/// accept HTTP requests until the registration read-model is populated.
-/// This eliminates the race where webhooks arrive before the projection
-/// is ready and get rejected with 404.
+/// accept HTTP requests until the registration projection binder is active.
+/// Request paths must not activate or prime this projection themselves.
 /// </summary>
 public sealed class ChannelBotRegistrationStartupService : IHostedService
 {
@@ -61,11 +60,11 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
         }
 
         // All retries exhausted — let the host start in degraded mode.
-        // Registrations will appear missing until a new register call
-        // re-activates the projection scope.
+        // Registrations may appear missing until the projection binder is
+        // re-activated by a later host restart or operator intervention.
         _logger.LogError(
             "Channel bot registration projection scope activation failed after {MaxRetries} attempts — " +
-            "registrations may not be visible until a new registration triggers re-activation",
+            "registrations may not be visible until the projection binder is re-activated",
             MaxRetries);
     }
 

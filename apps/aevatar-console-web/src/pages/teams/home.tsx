@@ -360,6 +360,10 @@ function resolveScopePreviewService(input: {
   readonly binding: StudioScopeBindingStatus | null | undefined;
   readonly services: readonly ServiceCatalogSnapshot[];
 }): ServiceCatalogSnapshot | null {
+  if (!input.binding?.available) {
+    return null;
+  }
+
   const boundServiceId = trimOptional(input.binding?.serviceId);
   if (!boundServiceId) {
     return null;
@@ -407,7 +411,9 @@ function buildScopeBackedTeamPreview(input: {
     binding: input.binding,
     services: input.services,
   });
-  const boundServiceId = trimOptional(input.binding?.serviceId);
+  const boundServiceId = input.binding?.available
+    ? trimOptional(input.binding?.serviceId)
+    : "";
   const serviceId = trimOptional(matchedService?.serviceId) || boundServiceId;
   const runtimeUnavailable = resolveRuntimeUnavailable({
     runtimeAvailableByServiceId: input.runtimeAvailableByServiceId,
@@ -494,7 +500,6 @@ function buildScopeBackedTeamPreview(input: {
       : "";
   const builderHref = buildStudioWorkflowWorkspaceRoute({
     scopeId: input.scopeId,
-    scopeLabel: input.scopeId,
   });
   const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
   if (runtimeHref) {
@@ -878,8 +883,11 @@ const TeamsHomePage: React.FC = () => {
     [bindingQuery.data, servicesQuery.data, workflowsQuery.data],
   );
   const scopePreviewServiceId = React.useMemo(
-    () => trimOptional(bindingQuery.data?.serviceId),
-    [bindingQuery.data?.serviceId],
+    () =>
+      bindingQuery.data?.available
+        ? trimOptional(bindingQuery.data?.serviceId)
+        : "",
+    [bindingQuery.data?.available, bindingQuery.data?.serviceId],
   );
   const runtimeServiceIds = React.useMemo(() => {
     const normalizedScopePreviewServiceId = trimOptional(scopePreviewServiceId);
@@ -976,6 +984,16 @@ const TeamsHomePage: React.FC = () => {
     (unit) => unit.isDraftOnly || (!unit.matchedService && !unit.latestRun),
   );
   const visibleTeamCount = scopePreviewTeam ? 1 : 0;
+  const scopeBindingUnavailableNotice =
+    scopeId.length > 0 &&
+    bindingQuery.isSuccess &&
+    bindingQuery.data?.available === false
+      ? {
+          description:
+            "没有找到已发布的默认入口服务，所以首页暂时没有运行信号。去 Studio 发布团队后，这里会自动出现。",
+          title: "当前 Scope 还没有默认团队入口",
+        }
+      : null;
   const resolvedRosterView =
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
@@ -1176,6 +1194,15 @@ const TeamsHomePage: React.FC = () => {
           />
         ) : null}
 
+        {scopeBindingUnavailableNotice ? (
+          <Alert
+            description={scopeBindingUnavailableNotice.description}
+            showIcon
+            title={scopeBindingUnavailableNotice.title}
+            type="info"
+          />
+        ) : null}
+
         {scopeId ? (
           <>
             <div
@@ -1198,7 +1225,6 @@ const TeamsHomePage: React.FC = () => {
                       history.push(
                         buildStudioWorkflowWorkspaceRoute({
                           scopeId,
-                          scopeLabel: scopeId,
                         }),
                       )
                     }
@@ -1308,7 +1334,6 @@ const TeamsHomePage: React.FC = () => {
                     history.push(
                       buildStudioWorkflowWorkspaceRoute({
                         scopeId,
-                        scopeLabel: scopeId,
                       }),
                     )
                   }

@@ -88,8 +88,9 @@ const TeamCreatePage: React.FC = () => {
         entryName: resolvedEntryName || undefined,
         teamDraftWorkflowId: resolvedDraftWorkflowId || undefined,
         teamDraftWorkflowName: resolvedDraftWorkflowName || undefined,
-        workflowId: resolvedDraftWorkflowId || undefined,
-        draftMode: resolvedDraftWorkflowId ? undefined : 'new',
+        focus: resolvedDraftWorkflowId
+          ? `workflow:${resolvedDraftWorkflowId}`
+          : undefined,
         tab: 'studio',
       }),
     );

@@ -24,7 +24,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             .Match(current, evt)
             .On<ChannelBotRegisteredEvent>(ApplyRegistered)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
-            .On<ChannelBotTokenUpdatedEvent>(ApplyTokenUpdated)
             .On<ChannelBotTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .OrCurrent();
 
@@ -33,17 +32,25 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     [EventHandler]
     public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
+        if (!string.Equals(cmd.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.LogWarning(
+                "Ignoring retired direct-callback registration request: platform={Platform}, requestedId={RequestedId}",
+                cmd.Platform,
+                cmd.RequestedId);
+            return;
+        }
+
         var entry = new ChannelBotRegistrationEntry
         {
             Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
-            NyxUserToken = cmd.NyxUserToken,
-            VerificationToken = cmd.VerificationToken,
             ScopeId = cmd.ScopeId,
             WebhookUrl = cmd.WebhookUrl,
-            EncryptKey = cmd.EncryptKey,
-            CredentialRef = cmd.CredentialRef ?? string.Empty,
+            NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
+            NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
+            NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
@@ -68,24 +75,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             TombstoneStateVersion = NextCommittedVersion(),
         });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
-    }
-
-    [EventHandler]
-    public async Task HandleUpdateToken(ChannelBotUpdateTokenCommand cmd)
-    {
-        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
-        if (entry is null || entry.Tombstoned)
-        {
-            Logger.LogWarning("Cannot update token: channel bot registration not found: {Id}", cmd.RegistrationId);
-            return;
-        }
-
-        await PersistDomainEventAsync(new ChannelBotTokenUpdatedEvent
-        {
-            RegistrationId = cmd.RegistrationId,
-            NyxUserToken = cmd.NyxUserToken,
-        });
-        Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
     }
 
     [EventHandler]
@@ -141,15 +130,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         return next;
     }
 
-    private static ChannelBotRegistrationStoreState ApplyTokenUpdated(ChannelBotRegistrationStoreState current, ChannelBotTokenUpdatedEvent evt)
-    {
-        var next = current.Clone();
-        var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
-        if (entry is not null)
-            entry.NyxUserToken = evt.NyxUserToken;
-        return next;
-    }
-
     private static ChannelBotRegistrationStoreState ApplyTombstonesCompacted(
         ChannelBotRegistrationStoreState current,
         ChannelBotTombstonesCompactedEvent evt)
@@ -172,4 +152,5 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
         .CurrentVersion + 1;
+
 }

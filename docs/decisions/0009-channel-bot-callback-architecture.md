@@ -6,6 +6,8 @@ owner: eanzhao
 
 # ADR-0009: Channel Bot Callback Architecture
 
+> Historical note: the `ChannelUserGAgent` continuation model discussed below has since been removed from the supported runtime path. Current production ingress is the Nyx relay contract described in ADR-0011 / ADR-0012.
+
 ## Context
 
 Integrating Lark (飞书) bot with Aevatar required a webhook callback flow:
@@ -23,7 +25,7 @@ Multiple architectural issues were discovered during implementation (2026-04-11)
 
 ### 2. Never subscribe to another actor's stream within a grain turn
 
-**Problem:** `ChannelUserGAgent` subscribed to `NyxIdChatGAgent`'s Orleans stream and awaited `responseTcs.Task` in the same grain turn. Orleans delivers explicit stream subscription callbacks as turns on the subscribing grain. The grain was blocked awaiting the response, so the callback turn could never execute — **deadlock**.
+**Problem (legacy path):** `ChannelUserGAgent` subscribed to `NyxIdChatGAgent`'s Orleans stream and awaited `responseTcs.Task` in the same grain turn. Orleans delivers explicit stream subscription callbacks as turns on the subscribing grain. The grain was blocked awaiting the response, so the callback turn could never execute — **deadlock**.
 
 **Rule (CLAUDE.md):** Cross-actor waiting must use the continuation pattern:
 1. Send request → end current turn
@@ -64,4 +66,4 @@ Multiple architectural issues were discovered during implementation (2026-04-11)
 
 ## Known Limitations
 
-**At-most-once delivery:** If the process crashes after returning 200 but before the fire-and-forget task completes, the message is permanently lost. The durable fix is the continuation pattern (issue #175): persist `ChannelChatRequestedEvent` to the actor's event store before returning 200, then process via event replay on restart.
+**At-most-once delivery (legacy path):** If the process crashes after returning 200 but before the fire-and-forget task completes, the message is permanently lost. The durable fix was to persist the requested chat turn to durable actor state before returning 200, then process via event replay on restart.

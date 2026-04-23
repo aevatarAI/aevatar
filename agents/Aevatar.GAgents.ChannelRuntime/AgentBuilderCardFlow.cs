@@ -610,7 +610,7 @@ internal static class AgentBuilderCardFlow
                     {
                         tag = "markdown",
                         content =
-                            "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send an approval card into this Feishu private chat.",
+                            "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send approval instructions into this Feishu private chat.",
                     },
                     BuildForm(
                         "social_media_form",

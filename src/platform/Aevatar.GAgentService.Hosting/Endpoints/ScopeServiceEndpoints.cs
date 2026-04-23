@@ -27,11 +27,20 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 public static class ScopeServiceEndpoints
 {
+    private const string DefaultScopeServiceSmokePrompt = "Hello from Studio Bind.";
+    private const string StreamFrameFormatWorkflow = "workflow-run-event";
+    private const string StreamFrameFormatAgui = "agui";
+    private static readonly JsonSerializerOptions PrettyJsonSerializerOptions = new()
+    {
+        WriteIndented = true,
+    };
+
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("ScopeServices").RequireAuthorization();
@@ -65,6 +74,7 @@ public static class ScopeServiceEndpoints
         group.MapPut("/{scopeId}/services/{serviceId}/bindings/{bindingId}", HandleUpdateBindingAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/bindings/{bindingId}:retire", HandleRetireBindingAsync);
         group.MapGet("/{scopeId}/services/{serviceId}/bindings", HandleGetBindingsAsync);
+        group.MapGet("/{scopeId}/services/{serviceId}/endpoints/{endpointId}/contract", HandleGetEndpointContractAsync);
         return app;
     }
 
@@ -1466,6 +1476,54 @@ public static class ScopeServiceEndpoints
         return snapshot == null ? Results.NotFound() : Results.Ok(snapshot);
     }
 
+    private static async Task<IResult> HandleGetEndpointContractAsync(
+        HttpContext http,
+        string scopeId,
+        string serviceId,
+        string endpointId,
+        string? appId,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(endpointId))
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_ENDPOINT_ID",
+                message = "endpointId is required.",
+            });
+        }
+
+        var resolution = await ResolveScopeServiceAsync(
+            http,
+            scopeId,
+            serviceId,
+            lifecycleQueryPort,
+            options.Value,
+            ct,
+            appId);
+        if (resolution.Failure != null)
+            return resolution.Failure;
+
+        var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(resolution.Identity!, ct);
+        var contract = BuildScopeServiceEndpointContractResponse(
+            scopeId,
+            serviceId,
+            endpointId,
+            resolution.Service!,
+            revisions);
+        if (contract != null)
+            return Results.Ok(contract);
+
+        var normalizedEndpointId = NormalizeOptional(endpointId) ?? endpointId.Trim();
+        return Results.NotFound(new
+        {
+            code = "SCOPE_SERVICE_ENDPOINT_CONTRACT_NOT_FOUND",
+            message = $"Endpoint '{normalizedEndpointId}' was not found on service '{serviceId}' in scope '{scopeId}'.",
+        });
+    }
+
     private static async Task<ScopeServiceResolution> ResolveScopeServiceAsync(
         HttpContext http,
         string scopeId,
@@ -1602,6 +1660,235 @@ public static class ScopeServiceEndpoints
             revisions?.LastEventId ?? string.Empty,
             revisions?.UpdatedAt ?? service.UpdatedAt,
             BuildScopeRevisionResponses(service, revisions, servingSet));
+    }
+
+    private static ScopeServiceEndpointContractHttpResponse? BuildScopeServiceEndpointContractResponse(
+        string scopeId,
+        string serviceId,
+        string endpointId,
+        ServiceCatalogSnapshot service,
+        ServiceRevisionCatalogSnapshot? revisions)
+    {
+        var normalizedEndpointId = ScopeWorkflowCapabilityOptions.NormalizeRequired(endpointId, nameof(endpointId));
+        var currentRevision = ResolveCurrentContractRevision(service, revisions, normalizedEndpointId);
+        var endpoint = currentRevision?.Endpoints.FirstOrDefault(x =>
+                string.Equals(x.EndpointId, normalizedEndpointId, StringComparison.Ordinal))
+            ?? service.Endpoints.FirstOrDefault(x =>
+                string.Equals(x.EndpointId, normalizedEndpointId, StringComparison.Ordinal));
+        if (endpoint == null)
+            return null;
+
+        var implementationKind = NormalizeOptional(currentRevision?.ImplementationKind);
+        var supportsSse = IsChatEndpoint(endpoint.Kind);
+        var streamFrameFormat = ResolveScopeServiceStreamFrameFormat(supportsSse, implementationKind);
+        var supportsAguiFrames = string.Equals(streamFrameFormat, StreamFrameFormatAgui, StringComparison.Ordinal);
+        var invokePath = supportsSse
+            ? BuildScopeServiceStreamInvokePath(scopeId, serviceId, normalizedEndpointId)
+            : BuildScopeServiceInvokePath(scopeId, serviceId, normalizedEndpointId);
+        var responseContentType = supportsSse
+            ? "text/event-stream"
+            : "application/json";
+        var defaultSmokeInputMode = supportsSse
+            ? "prompt"
+            : "typed-payload";
+        var defaultSmokePrompt = supportsSse
+            ? DefaultScopeServiceSmokePrompt
+            : null;
+        var sampleRequestJson = supportsSse
+            ? null
+            : BuildTypedInvokeRequestExampleBody(endpoint.RequestTypeUrl, prettyPrinted: true);
+        var smokeTestSupported = supportsSse || sampleRequestJson != null;
+
+        return new ScopeServiceEndpointContractHttpResponse(
+            ScopeId: scopeId,
+            ServiceId: serviceId,
+            EndpointId: normalizedEndpointId,
+            InvokePath: invokePath,
+            Method: "POST",
+            RequestContentType: "application/json",
+            ResponseContentType: responseContentType,
+            RequestTypeUrl: endpoint.RequestTypeUrl,
+            ResponseTypeUrl: endpoint.ResponseTypeUrl,
+            SupportsSse: supportsSse,
+            // This contract currently exposes HTTP POST plus optional SSE streaming only.
+            SupportsWebSocket: false,
+            SupportsAguiFrames: supportsAguiFrames,
+            StreamFrameFormat: streamFrameFormat,
+            SmokeTestSupported: smokeTestSupported,
+            DefaultSmokeInputMode: defaultSmokeInputMode,
+            DefaultSmokePrompt: defaultSmokePrompt,
+            SampleRequestJson: sampleRequestJson,
+            DeploymentStatus: service.DeploymentStatus,
+            RevisionId: currentRevision?.RevisionId
+                ?? NormalizeOptional(service.DefaultServingRevisionId)
+                ?? NormalizeOptional(service.ActiveServingRevisionId)
+                ?? string.Empty,
+            CurlExample: smokeTestSupported
+                ? BuildScopeServiceCurlExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
+                : null,
+            FetchExample: smokeTestSupported
+                ? BuildScopeServiceFetchExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
+                : null);
+    }
+
+    private static string? ResolveScopeServiceStreamFrameFormat(bool supportsSse, string? implementationKind)
+    {
+        if (!supportsSse)
+            return null;
+
+        if (string.Equals(implementationKind, ServiceImplementationKind.Workflow.ToString(), StringComparison.OrdinalIgnoreCase))
+            return StreamFrameFormatWorkflow;
+
+        if (string.Equals(implementationKind, ServiceImplementationKind.Static.ToString(), StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(implementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            return StreamFrameFormatAgui;
+        }
+
+        return null;
+    }
+
+    private static ServiceRevisionSnapshot? ResolveCurrentContractRevision(
+        ServiceCatalogSnapshot service,
+        ServiceRevisionCatalogSnapshot? revisions,
+        string endpointId)
+    {
+        if (revisions == null || revisions.Revisions.Count == 0)
+            return null;
+
+        foreach (var preferredRevisionId in EnumeratePreferredContractRevisionIds(service))
+        {
+            var preferredRevision = revisions.Revisions.FirstOrDefault(x =>
+                string.Equals(x.RevisionId, preferredRevisionId, StringComparison.Ordinal) &&
+                RevisionContainsEndpoint(x, endpointId));
+            if (preferredRevision != null)
+                return preferredRevision;
+        }
+
+        return revisions.Revisions.FirstOrDefault(x =>
+                   RevisionContainsEndpoint(x, endpointId))
+               ?? revisions.Revisions[0];
+    }
+
+    private static IEnumerable<string> EnumeratePreferredContractRevisionIds(ServiceCatalogSnapshot service)
+    {
+        var defaultRevisionId = NormalizeOptional(service.DefaultServingRevisionId);
+        if (!string.IsNullOrWhiteSpace(defaultRevisionId))
+            yield return defaultRevisionId;
+
+        var activeRevisionId = NormalizeOptional(service.ActiveServingRevisionId);
+        if (!string.IsNullOrWhiteSpace(activeRevisionId) &&
+            !string.Equals(activeRevisionId, defaultRevisionId, StringComparison.Ordinal))
+        {
+            yield return activeRevisionId;
+        }
+    }
+
+    private static bool RevisionContainsEndpoint(ServiceRevisionSnapshot revision, string endpointId) =>
+        revision.Endpoints.Any(endpoint => string.Equals(endpoint.EndpointId, endpointId, StringComparison.Ordinal));
+
+    private static bool IsChatEndpoint(string? endpointKind) =>
+        string.Equals(endpointKind?.Trim(), "chat", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildScopeServiceInvokePath(string scopeId, string serviceId, string endpointId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}/invoke/{Uri.EscapeDataString(endpointId)}";
+
+    private static string BuildScopeServiceStreamInvokePath(string scopeId, string serviceId, string endpointId) =>
+        $"{BuildScopeServiceInvokePath(scopeId, serviceId, endpointId)}:stream";
+
+    private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted)
+    {
+        var normalizedRequestTypeUrl = NormalizeOptional(requestTypeUrl);
+        if (normalizedRequestTypeUrl == null)
+            return null;
+
+        return JsonSerializer.Serialize(
+            new
+            {
+                payloadTypeUrl = normalizedRequestTypeUrl,
+                payloadBase64 = BuildBase64PayloadPlaceholder(normalizedRequestTypeUrl),
+            },
+            prettyPrinted ? PrettyJsonSerializerOptions : null);
+    }
+
+    private static string BuildBase64PayloadPlaceholder(string requestTypeUrl)
+    {
+        var typeName = requestTypeUrl
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault();
+        return string.IsNullOrWhiteSpace(typeName)
+            ? "<base64-encoded-protobuf-bytes>"
+            : $"<base64-encoded-{typeName}-protobuf-bytes>";
+    }
+
+    private static string BuildScopeServiceCurlExample(
+        string invokePath,
+        bool supportsSse,
+        string? requestTypeUrl)
+    {
+        if (supportsSse)
+        {
+            var requestBody = JsonSerializer.Serialize(
+                new { prompt = DefaultScopeServiceSmokePrompt });
+            return $"""
+curl -N -X POST \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -H "Authorization: Bearer <token>" \
+  "{invokePath}" \
+  -d '{requestBody}'
+""";
+        }
+
+        var typedBody = BuildTypedInvokeRequestExampleBody(requestTypeUrl, prettyPrinted: false) ?? "{}";
+        return $"""
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  "{invokePath}" \
+  -d '{typedBody}'
+""";
+    }
+
+    private static string BuildScopeServiceFetchExample(
+        string invokePath,
+        bool supportsSse,
+        string? requestTypeUrl)
+    {
+        if (supportsSse)
+        {
+            return $$"""
+const response = await fetch("{{invokePath}}", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <token>",
+  },
+  body: JSON.stringify({
+    prompt: "{{DefaultScopeServiceSmokePrompt}}",
+  }),
+});
+
+// Consume response.body as an SSE stream.
+""";
+        }
+
+        var normalizedRequestTypeUrl = NormalizeOptional(requestTypeUrl) ?? "<type-url>";
+        var payloadBase64 = BuildBase64PayloadPlaceholder(normalizedRequestTypeUrl);
+        return $$"""
+const response = await fetch("{{invokePath}}", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer <token>",
+  },
+  body: JSON.stringify({
+    payloadTypeUrl: "{{normalizedRequestTypeUrl}}",
+    payloadBase64: "{{payloadBase64}}",
+  }),
+});
+""";
     }
 
     private static IReadOnlyList<ScopeBindingRevisionHttpResponse> BuildScopeRevisionResponses(
@@ -2293,6 +2580,29 @@ public static class ScopeServiceEndpoints
         string ServiceId,
         string RevisionId,
         string Status);
+
+    public sealed record ScopeServiceEndpointContractHttpResponse(
+        string ScopeId,
+        string ServiceId,
+        string EndpointId,
+        string InvokePath,
+        string Method,
+        string RequestContentType,
+        string ResponseContentType,
+        string RequestTypeUrl,
+        string ResponseTypeUrl,
+        bool SupportsSse,
+        bool SupportsWebSocket,
+        bool SupportsAguiFrames,
+        string? StreamFrameFormat,
+        bool SmokeTestSupported,
+        string DefaultSmokeInputMode,
+        string? DefaultSmokePrompt,
+        string? SampleRequestJson,
+        string DeploymentStatus,
+        string RevisionId,
+        string? CurlExample = null,
+        string? FetchExample = null);
 
     public sealed record ScopeServiceRunCatalogHttpResponse(
         string ScopeId,
