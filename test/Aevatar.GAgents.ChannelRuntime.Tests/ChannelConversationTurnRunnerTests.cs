@@ -365,7 +365,8 @@ public sealed class ChannelConversationTurnRunnerTests
             NullLogger<NyxIdApiClient>.Instance);
         var relayOutboundPort = new NyxIdRelayOutboundPort(
             relayClient,
-            NullLogger<NyxIdRelayOutboundPort>.Instance);
+            NullLogger<NyxIdRelayOutboundPort>.Instance,
+            [new RelayStubComposer("lark")]);
 
         return new ChannelConversationTurnRunner(
             services,
@@ -500,6 +501,20 @@ public sealed class ChannelConversationTurnRunnerTests
             return Task.FromResult(new PlatformReplyDeliveryResult(true, "ok"));
         }
     }
+
+    private sealed class RelayStubComposer(string platform) : IMessageComposer<RelayStubPayload>
+    {
+        public ChannelId Channel { get; } = ChannelId.From(platform);
+
+        public RelayStubPayload Compose(MessageContent intent, ComposeContext context) =>
+            new(intent.Text ?? string.Empty);
+
+        object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
+
+        public ComposeCapability Evaluate(MessageContent intent, ComposeContext context) => ComposeCapability.Exact;
+    }
+
+    private sealed record RelayStubPayload(string PlainText) : IPlainTextComposedMessage;
 
     private sealed class RecordingWorkflowResumeDispatchService
         : ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>

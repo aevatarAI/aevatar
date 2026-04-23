@@ -1,5 +1,4 @@
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.ChannelRuntime.Adapters;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;

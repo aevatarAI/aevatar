@@ -40,28 +40,32 @@ public sealed class ChannelCallbackEndpointsTests
     [Fact]
     public async Task HandleRegisterAsync_RejectsUnsupportedPlatform()
     {
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
         var result = await InvokeAsync(
             "HandleRegisterAsync",
             CreateJsonHttpContext("""{"platform":"telegram"}"""),
-            provisioningService,
+            new[] { provisioningService },
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         response.Body.Should().Contain("supported production contract");
-        await provisioningService.DidNotReceive().ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>());
+        response.Body.Should().Contain("lark");
+        await provisioningService.DidNotReceive().ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task HandleRegisterAsync_ProvisionsLarkViaNyx()
     {
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkProvisioningResult(
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
                 Succeeded: true,
                 Status: "accepted",
+                Platform: "lark",
                 RegistrationId: "reg-1",
                 NyxChannelBotId: "bot-1",
                 NyxAgentApiKeyId: "key-1",
@@ -76,7 +80,7 @@ public sealed class ChannelCallbackEndpointsTests
         var result = await InvokeAsync(
             "HandleRegisterAsync",
             http,
-            provisioningService,
+            new[] { provisioningService },
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -85,22 +89,26 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("\"registration_id\":\"reg-1\"");
         response.Body.Should().Contain("\"relay_callback_url\":\"https://aevatar.example.com/api/webhooks/nyxid-relay\"");
         await provisioningService.Received(1).ProvisionAsync(
-            Arg.Is<NyxLarkProvisioningRequest>(request =>
+            Arg.Is<NyxChannelBotProvisioningRequest>(request =>
+                request.Platform == "lark" &&
                 request.AccessToken == "test-token" &&
-                request.AppId == "cli_123" &&
-                request.AppSecret == "secret" &&
-                request.WebhookBaseUrl == "https://aevatar.example.com"),
+                request.WebhookBaseUrl == "https://aevatar.example.com" &&
+                request.Lark != null &&
+                request.Lark.AppId == "cli_123" &&
+                request.Lark.AppSecret == "secret"),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task HandleRegisterAsync_ReturnsBadGateway_WhenNyxProvisioningFails()
     {
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkProvisioningResult(
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
                 Succeeded: false,
                 Status: "error",
+                Platform: "lark",
                 Error: "channel_bot_id_request_failed nyx_status=401 body=invalid app secret")));
 
         var http = CreateJsonHttpContext(
@@ -110,7 +118,7 @@ public sealed class ChannelCallbackEndpointsTests
         var result = await InvokeAsync(
             "HandleRegisterAsync",
             http,
-            provisioningService,
+            new[] { provisioningService },
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);

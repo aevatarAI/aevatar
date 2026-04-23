@@ -32,16 +32,53 @@ public sealed record NyxLarkProvisioningResult(
     string? Error = null,
     string? Note = null);
 
+public sealed record NyxChannelLarkCredentials(
+    string AppId,
+    string AppSecret);
+
+public sealed record NyxChannelBotProvisioningRequest(
+    string Platform,
+    string AccessToken,
+    string WebhookBaseUrl,
+    string ScopeId,
+    string Label,
+    string NyxProviderSlug,
+    NyxChannelLarkCredentials? Lark = null);
+
+public sealed record NyxChannelBotProvisioningResult(
+    bool Succeeded,
+    string Status,
+    string Platform,
+    string? RegistrationId = null,
+    string? NyxChannelBotId = null,
+    string? NyxAgentApiKeyId = null,
+    string? CredentialRef = null,
+    string? NyxConversationRouteId = null,
+    string? RelayCallbackUrl = null,
+    string? WebhookUrl = null,
+    string? Error = null,
+    string? Note = null);
+
+public interface INyxChannelBotProvisioningService
+{
+    string Platform { get; }
+
+    Task<NyxChannelBotProvisioningResult> ProvisionAsync(NyxChannelBotProvisioningRequest request, CancellationToken ct);
+}
+
 public interface INyxLarkProvisioningService
 {
+    string Platform { get; }
+
     Task<NyxLarkProvisioningResult> ProvisionAsync(NyxLarkProvisioningRequest request, CancellationToken ct);
 }
 
-public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
+public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, INyxChannelBotProvisioningService
 {
     private const string DefaultNyxProviderSlug = "api-lark-bot";
     private const string LarkBotTokenPlaceholder = "__unused_for_lark__";
     private const string NyxRelayApiKeyPlatform = "generic";
+    public const string PlatformId = "lark";
 
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
@@ -64,6 +101,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         _secretsStore = secretsStore ?? throw new ArgumentNullException(nameof(secretsStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
+
+    public string Platform => PlatformId;
 
     public async Task<NyxLarkProvisioningResult> ProvisionAsync(NyxLarkProvisioningRequest request, CancellationToken ct)
     {
@@ -157,6 +196,29 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
                 ? "local_mirror_accepted_remote_cleanup_skipped"
                 : ex.Message);
         }
+    }
+
+    async Task<NyxChannelBotProvisioningResult> INyxChannelBotProvisioningService.ProvisionAsync(
+        NyxChannelBotProvisioningRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!string.Equals(request.Platform, PlatformId, StringComparison.OrdinalIgnoreCase))
+            return ToGenericResult(Failure("unsupported_platform"));
+
+        var result = await ProvisionAsync(
+            new NyxLarkProvisioningRequest(
+                AccessToken: request.AccessToken,
+                AppId: request.Lark?.AppId ?? string.Empty,
+                AppSecret: request.Lark?.AppSecret ?? string.Empty,
+                WebhookBaseUrl: request.WebhookBaseUrl,
+                ScopeId: request.ScopeId,
+                Label: request.Label,
+                NyxProviderSlug: request.NyxProviderSlug),
+            ct);
+
+        return ToGenericResult(result);
     }
 
     private async Task<RelayApiKeyCredentials> CreateRelayApiKeyAsync(
@@ -413,4 +475,19 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
             Succeeded: false,
             Status: "error",
             Error: string.IsNullOrWhiteSpace(error) ? "unknown_error" : error.Trim());
+
+    private static NyxChannelBotProvisioningResult ToGenericResult(NyxLarkProvisioningResult result) =>
+        new(
+            Succeeded: result.Succeeded,
+            Status: result.Status,
+            Platform: PlatformId,
+            RegistrationId: result.RegistrationId,
+            NyxChannelBotId: result.NyxChannelBotId,
+            NyxAgentApiKeyId: result.NyxAgentApiKeyId,
+            CredentialRef: result.CredentialRef,
+            NyxConversationRouteId: result.NyxConversationRouteId,
+            RelayCallbackUrl: result.RelayCallbackUrl,
+            WebhookUrl: result.WebhookUrl,
+            Error: result.Error,
+            Note: result.Note);
 }

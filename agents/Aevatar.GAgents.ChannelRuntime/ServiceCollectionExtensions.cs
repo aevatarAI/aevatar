@@ -8,9 +8,9 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
-using Aevatar.GAgents.ChannelRuntime.Adapters;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
@@ -105,6 +105,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)
@@ -168,9 +169,6 @@ public static class ServiceCollectionExtensions
                 static doc => doc.Id, static key => key);
         }
 
-        // Register platform adapters
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
-
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
 
         // channel runtime tools
@@ -187,7 +185,7 @@ public static class ServiceCollectionExtensions
         {
             client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
         });
-        services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>());
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
         services.TryAddSingleton<INyxIdRelayRegistrationCredentialResolver, NyxIdRelayRegistrationCredentialResolver>();
         services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>

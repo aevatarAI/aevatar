@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Configuration;
-using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,9 +32,11 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IPlatformAdapter) &&
-            descriptor.ImplementationType == typeof(LarkPlatformAdapter));
+            descriptor.ServiceType == typeof(IMessageComposer) &&
+            descriptor.ImplementationType == typeof(LarkMessageComposer));
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
+            .Should().Be(0);
+        services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
             .Should().Be(1);
     }
 
