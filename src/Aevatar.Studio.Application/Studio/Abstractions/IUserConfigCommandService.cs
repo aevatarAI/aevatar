@@ -9,4 +9,6 @@ public interface IUserConfigCommandService
     Task SaveAsync(UserConfig config, CancellationToken ct = default);
 
     Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default);
+
+    Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default);
 }

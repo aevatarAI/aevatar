@@ -15,6 +15,7 @@ namespace Aevatar.Studio.Projection.CommandServices;
 internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommandService
 {
     private const string ActorIdPrefix = "user-config-";
+    private const string DirectRoute = "aevatar.studio.projection.user-config";
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
@@ -35,10 +36,6 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
 
     public async Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
     {
-        var actorId = ActorIdPrefix + NormalizeScopeId(scopeId);
-
-        var actor = await _bootstrap.EnsureAsync<UserConfigGAgent>(actorId, ct);
-
         var evt = new UserConfigUpdatedEvent
         {
             DefaultModel = config.DefaultModel,
@@ -54,20 +51,17 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
             MaxToolRounds = config.MaxToolRounds,
         };
 
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-            // Direct route matches the target grain and triggers the event
-            // handler pipeline — same pattern used by every other working
-            // write path in the repo (GAgentService / ProjectionScope etc.).
-            Route = EnvelopeRouteSemantics.CreateDirect(
-                "aevatar.studio.projection.user-config", actor.Id),
-        };
-
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await DispatchAsync(scopeId, evt, ct);
     }
+
+    public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
+        DispatchAsync(
+            scopeId,
+            new UserConfigGithubUsernameUpdatedEvent
+            {
+                GithubUsername = NormalizeOptional(githubUsername) ?? string.Empty,
+            },
+            ct);
 
     private static string NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
@@ -76,5 +70,24 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private async Task DispatchAsync(string scopeId, IMessage payload, CancellationToken ct)
+    {
+        var actorId = ActorIdPrefix + NormalizeScopeId(scopeId);
+        var actor = await _bootstrap.EnsureAsync<UserConfigGAgent>(actorId, ct);
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            // Direct route matches the target grain and triggers the event
+            // handler pipeline — same pattern used by every other working
+            // write path in the repo (GAgentService / ProjectionScope etc.).
+            Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
+        };
+
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 }

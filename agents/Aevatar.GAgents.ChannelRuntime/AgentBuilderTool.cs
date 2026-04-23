@@ -262,8 +262,6 @@ public sealed class AgentBuilderTool : IAgentTool
         await TryPersistGithubUsernamePreferenceAsync(
             scopeId,
             requestedGithubUsername,
-            userConfig,
-            userConfigQueryPort,
             userConfigCommandService,
             ct);
 
@@ -1261,8 +1259,6 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task TryPersistGithubUsernamePreferenceAsync(
         string scopeId,
         string? githubUsername,
-        StudioUserConfig? currentConfig,
-        IUserConfigQueryPort? queryPort,
         IUserConfigCommandService? commandService,
         CancellationToken ct)
     {
@@ -1270,19 +1266,9 @@ public sealed class AgentBuilderTool : IAgentTool
         if (normalizedGithubUsername is null || commandService is null)
             return;
 
-        var baseline = currentConfig ?? await TryGetUserConfigAsync(queryPort, scopeId, ct);
-        if (baseline is null ||
-            string.Equals(baseline.GithubUsername, normalizedGithubUsername, StringComparison.Ordinal))
-        {
-            return;
-        }
-
         try
         {
-            await commandService.SaveAsync(
-                scopeId,
-                baseline with { GithubUsername = normalizedGithubUsername },
-                ct);
+            await commandService.SaveGithubUsernameAsync(scopeId, normalizedGithubUsername, ct);
         }
         catch (OperationCanceledException)
         {

@@ -389,9 +389,8 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
             userConfigCommandService.SavedScopeId.Should().Be("scope-1");
-            userConfigCommandService.SavedConfig.Should().NotBeNull();
-            userConfigCommandService.SavedConfig!.GithubUsername.Should().Be("new-user");
-            userConfigCommandService.SavedConfig.DefaultModel.Should().Be("gpt-5.4");
+            userConfigCommandService.SavedGithubUsername.Should().Be("new-user");
+            userConfigCommandService.SavedConfig.Should().BeNull();
         }
         finally
         {
@@ -1301,6 +1300,7 @@ public sealed class AgentBuilderToolTests
     {
         public string? SavedScopeId { get; private set; }
         public StudioUserConfig? SavedConfig { get; private set; }
+        public string? SavedGithubUsername { get; private set; }
 
         public Task SaveAsync(StudioUserConfig config, CancellationToken ct = default)
         {
@@ -1312,6 +1312,13 @@ public sealed class AgentBuilderToolTests
         {
             SavedScopeId = scopeId;
             return SaveAsync(config, ct);
+        }
+
+        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default)
+        {
+            SavedScopeId = scopeId;
+            SavedGithubUsername = githubUsername;
+            return Task.CompletedTask;
         }
     }
 }

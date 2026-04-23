@@ -92,6 +92,23 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
+    public async Task SaveGithubUsernameAsync_WhenExplicitScopeProvided_ShouldDispatchPartialEvent()
+    {
+        var provider = BuildCommandServiceProvider(
+            out _,
+            out var dispatchPort,
+            scopeId: null);
+        await using var serviceProvider = provider;
+        var commandService = provider.GetRequiredService<IUserConfigCommandService>();
+
+        await commandService.SaveGithubUsernameAsync("scope-explicit", "  saved-user  ", CancellationToken.None);
+
+        dispatchPort.ActorId.Should().Be("user-config-scope-explicit");
+        dispatchPort.Envelope.Should().NotBeNull();
+        dispatchPort.Envelope!.Payload.Unpack<UserConfigGithubUsernameUpdatedEvent>().GithubUsername.Should().Be("saved-user");
+    }
+
+    [Fact]
     public async Task SaveAsync_WhenActorMissing_ShouldCreateActorBeforeDispatch()
     {
         // Regression: first save in a scope previously failed with
@@ -689,6 +706,7 @@ public sealed class UserConfigProjectionAndControllerTests
     {
         public UserConfig? SavedConfig { get; private set; }
         public string? SavedScopeId { get; private set; }
+        public string? SavedGithubUsername { get; private set; }
 
         public Task SaveAsync(UserConfig config, CancellationToken ct = default)
         {
@@ -700,6 +718,13 @@ public sealed class UserConfigProjectionAndControllerTests
         {
             SavedScopeId = scopeId;
             return SaveAsync(config, ct);
+        }
+
+        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default)
+        {
+            SavedScopeId = scopeId;
+            SavedGithubUsername = githubUsername;
+            return Task.CompletedTask;
         }
     }
 
