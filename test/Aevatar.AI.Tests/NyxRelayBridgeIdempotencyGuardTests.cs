@@ -61,6 +61,28 @@ public sealed class NyxRelayBridgeIdempotencyGuardTests
             .BeTrue(because: "TTL has elapsed, a later retry is a fresh callback, not a duplicate");
     }
 
+    [Fact]
+    public void TryClaim_ShouldEvictExpiredEntries_ToBoundMemory()
+    {
+        // Without active eviction, every processed message_id stays in the guard forever.
+        // Verify that crossing the sweep interval purges expired keys from the underlying
+        // map, so memory is bounded by recent-traffic * TTL rather than total-traffic.
+        var timeProvider = new MutableTimeProvider(new DateTimeOffset(2026, 4, 23, 0, 0, 0, TimeSpan.Zero));
+        var guard = new NyxRelayBridgeIdempotencyGuard(TimeSpan.FromMinutes(10), timeProvider);
+
+        for (var i = 0; i < 500; i++)
+            guard.TryClaim($"msg-{i}").Should().BeTrue();
+
+        guard.ClaimCount.Should().Be(500);
+
+        // Past TTL + sweep interval; the next claim must trigger the opportunistic sweep.
+        timeProvider.Advance(TimeSpan.FromMinutes(15));
+        guard.TryClaim("msg-after").Should().BeTrue();
+
+        guard.ClaimCount.Should().Be(1,
+            because: "all 500 expired entries must have been swept, leaving only the fresh claim");
+    }
+
     private sealed class MutableTimeProvider : TimeProvider
     {
         private DateTimeOffset _now;
