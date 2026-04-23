@@ -1244,6 +1244,14 @@ public sealed class ScopeServiceEndpointsTests
             },
             RevisionId = "rev-1",
             ImplementationKind = ServiceImplementationKind.Scripting,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                ScriptingPlan = new ScriptingServiceDeploymentPlan
+                {
+                    Revision = "rev-1",
+                    DefinitionActorId = "definition-1",
+                },
+            },
             Endpoints =
             {
                 new ServiceEndpointDescriptor
@@ -1275,8 +1283,8 @@ public sealed class ScopeServiceEndpointsTests
                 "session-1",
                 "scope-a",
                 new Dictionary<string, string>(),
-                new NoOpActorRuntime(),
-                new NoOpActorEventSubscriptionProvider(),
+                new NoOpScriptRuntimeCommandPort(),
+                new NoOpScriptExecutionProjectionPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -1297,6 +1305,14 @@ public sealed class ScopeServiceEndpointsTests
             },
             RevisionId = "rev-1",
             ImplementationKind = ServiceImplementationKind.Scripting,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                ScriptingPlan = new ScriptingServiceDeploymentPlan
+                {
+                    Revision = "rev-1",
+                    DefinitionActorId = "definition-1",
+                },
+            },
             Endpoints =
             {
                 new ServiceEndpointDescriptor
@@ -1328,8 +1344,8 @@ public sealed class ScopeServiceEndpointsTests
                 "session-1",
                 "scope-a",
                 new Dictionary<string, string>(),
-                new MissingActorRuntime(),
-                new NoOpActorEventSubscriptionProvider(),
+                new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'script-runtime-1' could not be resolved. The service may not be activated.")),
+                new NoOpScriptExecutionProjectionPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -3720,6 +3736,28 @@ public sealed class ScopeServiceEndpointsTests
             _ = requestedEventType;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingScriptRuntimeCommandPort(Exception exception) : IScriptRuntimeCommandPort
+    {
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct)
+        {
+            _ = runtimeActorId;
+            _ = runId;
+            _ = inputPayload;
+            _ = scriptRevision;
+            _ = definitionActorId;
+            _ = requestedEventType;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException(exception);
         }
     }
 

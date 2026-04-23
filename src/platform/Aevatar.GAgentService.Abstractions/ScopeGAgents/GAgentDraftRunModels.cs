@@ -32,7 +32,6 @@ public sealed record GAgentDraftRunCommand(
     string? PreferredLlmRoute = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
-    bool PersistActorToScopeStore = true,
     bool UseCorrelationIdAsFallbackSessionId = true) : ICommandContextSeed
 {
     public string? CommandId => null;

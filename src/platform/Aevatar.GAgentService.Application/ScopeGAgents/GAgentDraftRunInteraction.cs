@@ -8,9 +8,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Application.ScopeGAgents;
 
@@ -127,20 +125,14 @@ internal sealed class GAgentDraftRunCommandTargetResolver
     : ICommandTargetResolver<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>
 {
     private readonly IActorRuntime _actorRuntime;
-    private readonly IGAgentActorStore _actorStore;
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
-    private readonly ILogger<GAgentDraftRunCommandTargetResolver> _logger;
 
     public GAgentDraftRunCommandTargetResolver(
         IActorRuntime actorRuntime,
-        IGAgentActorStore actorStore,
-        IGAgentDraftRunProjectionPort projectionPort,
-        ILogger<GAgentDraftRunCommandTargetResolver> logger)
+        IGAgentDraftRunProjectionPort projectionPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _actorStore = actorStore ?? throw new ArgumentNullException(nameof(actorStore));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>> ResolveAsync(
@@ -161,7 +153,6 @@ internal sealed class GAgentDraftRunCommandTargetResolver
             : command.PreferredActorId.Trim();
 
         IActor actor;
-        var isNewActor = false;
         if (preferredActorId is not null)
         {
             var existingActor = await _actorRuntime.GetAsync(preferredActorId);
@@ -172,25 +163,11 @@ internal sealed class GAgentDraftRunCommandTargetResolver
             else
             {
                 actor = await _actorRuntime.CreateAsync(agentType, preferredActorId, ct);
-                isNewActor = true;
             }
         }
         else
         {
             actor = await _actorRuntime.CreateAsync(agentType, null, ct);
-            isNewActor = true;
-        }
-
-        if (isNewActor && command.PersistActorToScopeStore)
-        {
-            try
-            {
-                await _actorStore.AddActorAsync(command.ScopeId, command.ActorTypeName.Trim(), actor.Id, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to persist actor {ActorId} to scope {ScopeId} actor store.", actor.Id, command.ScopeId);
-            }
         }
 
         return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Success(

@@ -63,6 +63,7 @@ public sealed class ScopeGAgentEndpointsTests
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
                     GAgentDraftRunStartError.UnknownActorType))
         };
+        var actorStore = new RecordingGAgentActorStore();
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
 
@@ -73,6 +74,7 @@ public sealed class ScopeGAgentEndpointsTests
                 "Aevatar.IamNotReal, Aevatar.IamNotReal",
                 "hello"),
             interactionService,
+            actorStore,
             logger,
             CancellationToken.None);
 
@@ -97,6 +99,7 @@ public sealed class ScopeGAgentEndpointsTests
                     new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.Unknown, false));
             }
         };
+        var actorStore = new RecordingGAgentActorStore();
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
 
@@ -109,6 +112,7 @@ public sealed class ScopeGAgentEndpointsTests
                 PreferredActorId: "existing-actor",
                 TimeoutMs: 1),
             interactionService,
+            actorStore,
             logger,
             CancellationToken.None);
 
@@ -150,6 +154,7 @@ public sealed class ScopeGAgentEndpointsTests
                     new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.RunFinished, true));
             }
         };
+        var actorStore = new RecordingGAgentActorStore();
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext("Bearer token-abc");
 
@@ -162,11 +167,14 @@ public sealed class ScopeGAgentEndpointsTests
                 PreferredActorId: "existing-actor",
                 TimeoutMs: 200),
             interactionService,
+            actorStore,
             logger,
             CancellationToken.None);
 
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
         context.Response.Headers["X-Correlation-Id"].ToString().Should().Be("corr-123");
+        actorStore.AddedActors.Should().ContainSingle()
+            .Which.Should().Be(("scope-a", "RoleGAgent", "existing-actor"));
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("runStarted");
         body.Should().Contain("runFinished");
@@ -176,6 +184,7 @@ public sealed class ScopeGAgentEndpointsTests
     public async Task HandleDraftRunAsync_ShouldRejectBlankActorTypeAndPrompt()
     {
         var interactionService = new FakeGAgentDraftRunInteractionService();
+        var actorStore = new RecordingGAgentActorStore();
         var logger = LoggerFactory.Create(_ => { });
 
         var missingTypeContext = CreateDraftRunContext();
@@ -184,6 +193,7 @@ public sealed class ScopeGAgentEndpointsTests
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(" ", "hello"),
             interactionService,
+            actorStore,
             logger,
             CancellationToken.None);
         missingTypeContext.Response.StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
@@ -196,6 +206,7 @@ public sealed class ScopeGAgentEndpointsTests
                 "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 " "),
             interactionService,
+            actorStore,
             logger,
             CancellationToken.None);
         missingPromptContext.Response.StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
@@ -215,6 +226,7 @@ public sealed class ScopeGAgentEndpointsTests
                 throw new NyxIdAuthenticationRequiredException("sign in");
             }
         };
+        var actorStore = new RecordingGAgentActorStore();
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
 
@@ -227,12 +239,52 @@ public sealed class ScopeGAgentEndpointsTests
                 PreferredActorId: "auth-actor",
                 TimeoutMs: 50),
             interactionService,
+            actorStore,
             logger,
             CancellationToken.None);
 
         var body = await ReadResponseBodyAsync(context);
+        actorStore.AddedActors.Should().ContainSingle()
+            .Which.Should().Be(("scope-a", "RoleGAgent", "auth-actor"));
         body.Should().Contain("authentication_required");
         body.Should().Contain("NyxID authentication required");
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_ShouldContinueWhenActorRegistrationFails()
+    {
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = async (_, onAcceptedAsync, ct) =>
+            {
+                var receipt = new GAgentDraftRunAcceptedReceipt("actor-1", "RoleGAgent", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                    receipt,
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.RunFinished, true));
+            }
+        };
+        var actorStore = new RecordingGAgentActorStore { ThrowOnAdd = new InvalidOperationException("persist failed") };
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext();
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
+                "hello"),
+            interactionService,
+            actorStore,
+            logger,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
+        context.Response.Headers["X-Correlation-Id"].ToString().Should().Be("corr-1");
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("runStarted");
     }
 
     [Fact]
@@ -594,6 +646,7 @@ public sealed class ScopeGAgentEndpointsTests
         string scopeId,
         ScopeGAgentEndpoints.GAgentDraftRunHttpRequest request,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        IGAgentActorStore actorStore,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -608,6 +661,7 @@ public sealed class ScopeGAgentEndpointsTests
                 scopeId,
                 request,
                 interactionService,
+                actorStore,
                 loggerFactory,
                 ct,
             })!;

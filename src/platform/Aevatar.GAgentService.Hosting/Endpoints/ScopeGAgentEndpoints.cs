@@ -266,6 +266,7 @@ public static class ScopeGAgentEndpoints
         string scopeId,
         GAgentDraftRunHttpRequest request,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -309,6 +310,20 @@ public static class ScopeGAgentEndpoints
             async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
             {
                 http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+
+                try
+                {
+                    await actorStore.AddActorAsync(scopeId, receipt.ActorTypeName, receipt.ActorId, token);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(
+                        ex,
+                        "Failed to persist GAgent actor {ActorId} for scope {ScopeId}.",
+                        receipt.ActorId,
+                        scopeId);
+                }
+
                 await EnsureSseStartedAsync(token);
                 await writer.WriteAsync(
                     new AGUIEvent

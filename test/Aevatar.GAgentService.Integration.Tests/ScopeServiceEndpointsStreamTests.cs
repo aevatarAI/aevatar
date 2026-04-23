@@ -649,9 +649,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
             new GAgentDraftRunCommandTargetResolver(
                 runtime,
-                new StubGAgentActorStore(),
-                projectionPort,
-                NullLogger<GAgentDraftRunCommandTargetResolver>.Instance),
+                projectionPort),
             new DefaultCommandContextPolicy(),
             new GAgentDraftRunCommandTargetBinder(projectionPort),
             new GAgentDraftRunCommandEnvelopeFactory(),
@@ -1000,23 +998,6 @@ public sealed class ScopeServiceEndpointsStreamTests
 
             return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
         }
-    }
-
-    private sealed class StubGAgentActorStore : Aevatar.Studio.Application.Studio.Abstractions.IGAgentActorStore
-    {
-        public Task<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>>([]);
-
-        public Task<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>> GetAsync(string scopeId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.GAgentActorGroup>>([]);
-
-        public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-        public Task AddActorAsync(string scopeId, string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-        public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-        public Task RemoveActorAsync(string scopeId, string gagentType, string actorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class StreamTestAgent : IAgent

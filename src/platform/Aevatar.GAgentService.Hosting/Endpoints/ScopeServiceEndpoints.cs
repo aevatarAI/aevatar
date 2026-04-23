@@ -1028,7 +1028,6 @@ public static class ScopeServiceEndpoints
                     SessionId: sessionId,
                     Headers: headers,
                     InputParts: MapGAgentDraftRunInputParts(inputParts),
-                    PersistActorToScopeStore: false,
                     UseCorrelationIdAsFallbackSessionId: false),
                 EmitAsync,
                 OnAcceptedAsync,

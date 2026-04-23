@@ -2,6 +2,9 @@ using System.Security.Claims;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Studio.Tests;
 
@@ -13,8 +16,24 @@ public sealed class ScopeEndpointAccessTests
             ? new ClaimsIdentity(claims, "test")
             : new ClaimsIdentity(claims);
         var principal = new ClaimsPrincipal(identity);
-        var context = new DefaultHttpContext { User = principal };
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
+        var context = new DefaultHttpContext
+        {
+            User = principal,
+            RequestServices = services,
+        };
         return context;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.Studio.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     [Fact]

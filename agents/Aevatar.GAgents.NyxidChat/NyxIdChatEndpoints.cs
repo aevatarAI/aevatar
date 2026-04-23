@@ -196,7 +196,6 @@ public static class NyxIdChatEndpoints
                 InputParts: request.InputParts is { Count: > 0 }
                     ? request.InputParts.Select(ToDraftRunInputPart).ToArray()
                     : null,
-                PersistActorToScopeStore: false,
                 UseCorrelationIdAsFallbackSessionId: false);
 
             async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
@@ -977,7 +976,6 @@ public static class NyxIdChatEndpoints
                         SessionId: sessionId,
                         NyxIdAccessToken: userToken,
                         Headers: relayMetadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal),
-                        PersistActorToScopeStore: false,
                         UseCorrelationIdAsFallbackSessionId: false),
                     EmitAsync,
                     null,
