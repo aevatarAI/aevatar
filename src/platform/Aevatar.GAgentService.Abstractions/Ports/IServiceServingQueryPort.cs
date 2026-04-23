@@ -12,6 +12,11 @@ public interface IServiceServingQueryPort
         ServiceIdentity identity,
         CancellationToken ct = default);
 
+    Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+        ServiceIdentity identity,
+        string commandId,
+        CancellationToken ct = default);
+
     Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
         ServiceIdentity identity,
         CancellationToken ct = default);

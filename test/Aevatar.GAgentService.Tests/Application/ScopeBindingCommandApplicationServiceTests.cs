@@ -1154,13 +1154,13 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             Task.FromResult(DefaultReceipt);
 
         public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Task.FromResult(new ServiceCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1"));
 
         public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Task.FromResult(new ServiceCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1"));
 
         public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Task.FromResult(new ServiceCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1"));
     }
 
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
@@ -1206,6 +1206,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
             ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity, string commandId, CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
 
         public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
             ServiceIdentity identity, CancellationToken ct = default) =>
