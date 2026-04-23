@@ -212,31 +212,41 @@ describe('StudioMemberBindPanel', () => {
     );
 
     expect(await screen.findByTestId('studio-bind-surface')).toBeTruthy();
-    expect(screen.getByText('Current member contract')).toBeTruthy();
-    expect(screen.getByText('Contract details')).toBeTruthy();
-    expect(screen.getByText('Integration snippets')).toBeTruthy();
-    expect(screen.getByText('Routing status')).toBeTruthy();
-    expect(screen.getByText('Quick smoke test')).toBeTruthy();
-    expect(screen.getByText('Published contract context')).toBeTruthy();
+    const currentContractTitle = screen.getByText('Current member contract');
+    const smokeTestTitle = screen.getByText('Quick smoke test');
+    const snippetsTitle = screen.getByText('Integration snippets');
+    const supportingDetailsTitle = screen.getByText('Supporting details');
+    expect(currentContractTitle).toBeTruthy();
+    expect(smokeTestTitle).toBeTruthy();
+    expect(snippetsTitle).toBeTruthy();
+    expect(supportingDetailsTitle).toBeTruthy();
+    expect(
+      currentContractTitle.compareDocumentPosition(smokeTestTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      smokeTestTitle.compareDocumentPosition(snippetsTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      snippetsTitle.compareDocumentPosition(supportingDetailsTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.queryByText('Binding Contract')).toBeNull();
     expect(screen.queryByText('Current contract')).toBeNull();
+    expect(screen.queryByText('Published contract context')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open published service' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open Runs' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Activate' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull();
     expect(screen.queryByText('Need auth for a smoke test?')).toBeNull();
     expect(screen.getAllByText('Authorization').length).toBeGreaterThan(0);
-    expect(screen.getByText('Authenticated')).toBeTruthy();
-    expect(screen.getByText('Resolved from nyxid.')).toBeTruthy();
-    expect(
-      screen.getByText('This member is the current default route target in this scope.'),
-    ).toBeTruthy();
     await waitFor(() => {
       expect(scopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
         'scope-1',
         'default',
       );
     });
-    expect(await screen.findByText('retired')).toBeTruthy();
     expect(screen.queryByText('Environment')).toBeNull();
     expect(screen.queryByText('Rate limit')).toBeNull();
     expect(screen.queryByText('Allowed origins')).toBeNull();
@@ -332,12 +342,76 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.getByText('Second node final output.')).toBeTruthy();
     expect(
       screen.getByText(
-        'Quick smoke test runs the current Studio draft, not the last published revision. Continue to Invoke when you need to verify the published contract.',
+        'Current draft',
       ),
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue to Invoke' }));
     expect(handleContinueToInvoke).toHaveBeenCalledWith('default', 'chat');
+  });
+
+  it('does not block current draft smoke tests on published endpoint auth state', async () => {
+    const buildWorkflowYamls = jest.fn().mockResolvedValue(['name: workspace-demo']);
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: false,
+          name: '',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        buildWorkflowYamls,
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'Chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+                description: 'Chat with the published workflow.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    const smokeButton = await screen.findByRole('button', { name: 'Send smoke test' });
+    expect(smokeButton).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(smokeButton);
+    });
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          workflowYamls: ['name: workspace-demo'],
+        }),
+        expect.any(AbortSignal),
+      );
+    });
+    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
   it('offers a bind action for the current workflow draft before any published service exists', async () => {

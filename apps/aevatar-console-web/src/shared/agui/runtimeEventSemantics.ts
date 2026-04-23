@@ -14,6 +14,16 @@ import {
 import { normalizeBackendSseFrame } from "@/shared/agui/sseFrameNormalizer";
 
 type JsonRecord = Record<string, unknown>;
+type RuntimeFinalOutputSource =
+  | "run_finished"
+  | "step_completed"
+  | "text_message_end";
+
+const FINAL_OUTPUT_SOURCE_PRIORITY: Record<RuntimeFinalOutputSource, number> = {
+  text_message_end: 1,
+  step_completed: 2,
+  run_finished: 3,
+};
 
 function asRecord(value: unknown): JsonRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -92,6 +102,7 @@ export type RuntimeEventAccumulator = {
   errorText: string;
   events: RuntimeEvent[];
   finalOutput: string;
+  finalOutputSource?: RuntimeFinalOutputSource;
   pendingApproval?: RuntimeToolApprovalRequestInfo;
   pendingRunIntervention?: RuntimeRunInterventionInfo;
   runId: string;
@@ -102,6 +113,27 @@ export type RuntimeEventAccumulator = {
 
 export function normalizeRuntimeFrame(raw: unknown): RuntimeEvent | null {
   return normalizeBackendSseFrame(raw);
+}
+
+function setFinalOutput(
+  accumulator: RuntimeEventAccumulator,
+  output: string | null | undefined,
+  source: RuntimeFinalOutputSource
+): void {
+  const finalOutput = String(output || "").trim();
+  if (!finalOutput) {
+    return;
+  }
+
+  const currentPriority = accumulator.finalOutputSource
+    ? FINAL_OUTPUT_SOURCE_PRIORITY[accumulator.finalOutputSource]
+    : 0;
+  const nextPriority = FINAL_OUTPUT_SOURCE_PRIORITY[source];
+
+  if (nextPriority >= currentPriority) {
+    accumulator.finalOutput = finalOutput;
+    accumulator.finalOutputSource = source;
+  }
 }
 
 export function describeRuntimeEvent(event: RuntimeEvent): string {
@@ -481,9 +513,7 @@ export function applyRuntimeEvent(
         (event as unknown as JsonRecord).delta ||
         "",
     ).trim();
-    if (finalText) {
-      accumulator.finalOutput = finalText;
-    }
+    setFinalOutput(accumulator, finalText, "text_message_end");
   }
 
   if (event.type === AGUIEventType.STEP_STARTED) {
@@ -549,9 +579,7 @@ export function applyRuntimeEvent(
 
   if (event.type === AGUIEventType.RUN_FINISHED) {
     const finalOutput = extractRunFinishedOutput(event);
-    if (finalOutput) {
-      accumulator.finalOutput = finalOutput;
-    }
+    setFinalOutput(accumulator, finalOutput, "run_finished");
   }
 
   const runContext = extractRunContext(event);
@@ -604,9 +632,7 @@ export function applyRuntimeEvent(
       });
     }
 
-    if (completedStep.output?.trim()) {
-      accumulator.finalOutput = completedStep.output.trim();
-    }
+    setFinalOutput(accumulator, completedStep.output, "step_completed");
   }
 
   const stepOutput = extractStepCompletedOutput(event);

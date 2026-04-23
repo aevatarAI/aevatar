@@ -1,6 +1,6 @@
-import { ApiOutlined, CheckCircleOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Empty, Input, Select, Space, Tag, Typography, message } from 'antd';
+import { Alert, Button, Collapse, Empty, Input, Select, Space, Tag, Typography, message } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   applyRuntimeEvent,
@@ -9,18 +9,13 @@ import {
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
-import { history } from '@/shared/navigation/history';
 import type {
   ScopeServiceBindingCatalogSnapshot,
 } from '@/shared/models/runtime/scopeServices';
 import type {
   ServiceCatalogSnapshot,
 } from '@/shared/models/services';
-import {
-  scopeServiceAppId,
-  scopeServiceNamespace,
-  isChatServiceEndpoint,
-} from '@/shared/runs/scopeConsole';
+import { isChatServiceEndpoint } from '@/shared/runs/scopeConsole';
 import {
   describeScopeServiceBindingTarget,
   getScopeServiceCurrentRevision,
@@ -99,10 +94,17 @@ const controlsGridStyle: React.CSSProperties = {
   gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto',
 };
 
-const bindBodyGridStyle: React.CSSProperties = {
+const pageFlowStyle: React.CSSProperties = {
   display: 'grid',
   gap: 16,
-  gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 380px)',
+  minHeight: 0,
+};
+
+const workflowGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  gridTemplateColumns: 'minmax(0, 1.08fr) minmax(360px, 0.92fr)',
+  alignItems: 'start',
   minHeight: 0,
 };
 
@@ -155,6 +157,12 @@ const snippetBlockStyle: React.CSSProperties = {
   whiteSpace: 'pre-wrap',
 };
 
+const snippetPreviewStyle: React.CSSProperties = {
+  ...snippetBlockStyle,
+  maxHeight: 320,
+  overflowY: 'auto',
+};
+
 const listColumnStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -167,22 +175,6 @@ const compactCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 8,
   padding: 12,
-};
-
-const supportingContextCardStyle: React.CSSProperties = {
-  background: '#fafafa',
-  border: '1px solid #eef2f7',
-  borderRadius: 12,
-  display: 'grid',
-  gap: 12,
-  padding: 12,
-};
-
-const sidePanelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 16,
-  minHeight: 0,
 };
 
 const smokeInputStyle: React.CSSProperties = {
@@ -215,21 +207,6 @@ function formatDateTime(value: string | null | undefined): string {
   return date.toLocaleString();
 }
 
-function buildScopedServiceCatalogHref(
-  scopeId: string,
-  service: Pick<
-    ServiceCatalogSnapshot,
-    'appId' | 'namespace' | 'serviceId' | 'tenantId'
-  >,
-): string {
-  const params = new URLSearchParams();
-  params.set('tenantId', trimOptional(service.tenantId) || scopeId);
-  params.set('appId', trimOptional(service.appId) || scopeServiceAppId);
-  params.set('namespace', trimOptional(service.namespace) || scopeServiceNamespace);
-  params.set('serviceId', trimOptional(service.serviceId));
-  return `/services?${params.toString()}`;
-}
-
 function createIdleSmokeTestResult(): SmokeTestResult {
   return {
     error: '',
@@ -247,19 +224,6 @@ function copyText(value: string): Promise<void> | void {
   }
 
   return navigator.clipboard.writeText(value);
-}
-
-function formatDeploymentTag(value: string): string {
-  const normalized = trimOptional(value).toLowerCase();
-  if (!normalized) {
-    return 'draft';
-  }
-
-  if (normalized === 'active') {
-    return 'live';
-  }
-
-  return normalized;
 }
 
 function buildBindingSectionTitle(count: number): string {
@@ -432,6 +396,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       selectedService,
     ],
   );
+  const publishedSmokeRequiresAuth =
+    !runsCurrentWorkflowDraft &&
+    Boolean(bindContract?.authEnabled && !bindContract.authAuthenticated);
 
   useEffect(() => {
     const nextDefaultInput = createDefaultBindSampleInput(bindContract);
@@ -722,449 +689,92 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
 
   return (
     <div data-testid="studio-bind-surface" style={rootStyle}>
-      <div style={bindBodyGridStyle}>
-        <div style={listColumnStyle}>
-          <AevatarPanel
-            title="Current member contract"
-            titleHelp="Bind should answer how the current member is called right now, so keep the invoke URL, revision, auth, and endpoint posture visible together."
-            extra={
-              <Button
-                icon={<CopyOutlined />}
-                onClick={() => void copyText(bindContract?.invokeUrl || '')}
-              >
-                Copy URL
-              </Button>
-            }
-          >
-            <div style={{ display: 'grid', gap: 12 }}>
-              <Typography.Text type="secondary">
-                {runsCurrentWorkflowDraft
-                  ? 'The contract card stays member-first here. Quick smoke test runs the current Studio draft, while the published contract context below stays available as supporting background information.'
-                  : hasMultiplePublishedServices
-                    ? 'The contract card stays member-first here. Published service selection remains available below only as supporting context while Studio completes the member-first API cutover.'
-                    : 'The contract card stays member-first here so the invoke URL, revision, and endpoint details stay together.'}
-              </Typography.Text>
-              {bindContract ? (
-                <>
+      <div style={pageFlowStyle}>
+        <AevatarPanel
+          title="Current member contract"
+          titleHelp="Keep only the callable essentials here so the page opens with the method, URL, auth, and revision at a glance."
+          extra={
+            <Button
+              icon={<CopyOutlined />}
+              onClick={() => void copyText(bindContract?.invokeUrl || '')}
+            >
+              Copy URL
+            </Button>
+          }
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            <Typography.Text type="secondary">
+              {runsCurrentWorkflowDraft
+                ? 'Keep the current draft in focus here; the smoke test and snippets below are the two fastest follow-up actions.'
+                : 'Keep the active invoke contract in focus here; the smoke test and snippets below are the two fastest follow-up actions.'}
+            </Typography.Text>
+            {bindContract ? (
+              <>
+                <div
+                  data-testid="studio-bind-contract-card"
+                  style={{
+                    alignItems: 'stretch',
+                    border: '1px solid #d9d9d9',
+                    borderRadius: 12,
+                    display: 'flex',
+                    overflow: 'hidden',
+                  }}
+                >
                   <div
-                    data-testid="studio-bind-contract-card"
                     style={{
-                      alignItems: 'stretch',
-                      border: '1px solid #d9d9d9',
-                      borderRadius: 12,
+                      alignItems: 'center',
+                      background: '#fafafa',
+                      borderRight: '1px solid #d9d9d9',
+                      color: '#6b7280',
                       display: 'flex',
-                      overflow: 'hidden',
+                      fontFamily: monoFontFamily,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      justifyContent: 'center',
+                      minWidth: 74,
+                      padding: '0 14px',
                     }}
                   >
-                    <div
-                      style={{
-                        alignItems: 'center',
-                        background: '#fafafa',
-                        borderRight: '1px solid #d9d9d9',
-                        color: '#6b7280',
-                        display: 'flex',
-                        fontFamily: monoFontFamily,
-                        fontSize: 12,
-                        fontWeight: 700,
-                        justifyContent: 'center',
-                        minWidth: 74,
-                        padding: '0 14px',
-                      }}
-                    >
-                      {bindContract.method}
-                    </div>
-                    <div
-                      style={{
-                        color: '#111827',
-                        flex: 1,
-                        fontFamily: monoFontFamily,
-                        fontSize: 12.5,
-                        minWidth: 0,
-                        overflowX: 'auto',
-                        padding: '12px 14px',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {bindContract.invokeUrl}
-                    </div>
-                  </div>
-                  <Space wrap size={[8, 8]}>
-                    <Tag color="blue">{formatDeploymentTag(bindContract.deploymentStatus)}</Tag>
-                    <Tag>auth · {bindContract.authLabel}</Tag>
-                    <Tag>scope · {bindContract.scopeLabel}</Tag>
-                    <Tag>revision · {bindContract.revisionId}</Tag>
-                    {bindContract.streaming.sse ? (
-                      <Tag color="gold">stream · text/event-stream</Tag>
-                    ) : (
-                      <Tag>response · application/json</Tag>
-                    )}
-                    {bindContract.streaming.aguiFrames ? (
-                      <Tag color="geekblue">AGUI frames</Tag>
-                    ) : null}
-                  </Space>
-                  <Typography.Text type="secondary">
-                    {bindContract.endpointDescription}{' '}
-                    {bindContract.authHint}
-                  </Typography.Text>
-                </>
-              ) : (
-                <Empty
-                  description="Inspect the published contract in focus to reveal its invoke URL and endpoint details."
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                />
-              )}
-              <div style={supportingContextCardStyle}>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <Typography.Text strong>Published contract context</Typography.Text>
-                  <Typography.Text type="secondary">
-                    Studio still resolves invoke URL, revisions, and governance details through the published service surface. Keep this in the background unless you explicitly need to inspect another published contract.
-                  </Typography.Text>
-                </div>
-                <div style={controlsGridStyle}>
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    <Typography.Text type="secondary">Published service</Typography.Text>
-                    {hasMultiplePublishedServices ? (
-                      <Select
-                        options={serviceOptions}
-                        placeholder="Select a published service"
-                        value={selectedServiceId || undefined}
-                        onChange={(value) => {
-                          setSelectedServiceId(String(value || ''));
-                          setSelectedEndpointId('');
-                        }}
-                      />
-                    ) : (
-                      <div style={valueCardStyle}>
-                        <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                          {selectedService?.displayName ||
-                            selectedService?.serviceId ||
-                            'No published service'}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          {selectedService?.serviceId || 'No service id'}
-                        </Typography.Text>
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    <Typography.Text type="secondary">Endpoint</Typography.Text>
-                    <Select
-                      disabled={!selectedService}
-                      options={endpointOptions}
-                      placeholder="Select an endpoint"
-                      value={selectedEndpointId || undefined}
-                      onChange={(value) => setSelectedEndpointId(String(value || ''))}
-                    />
+                    {bindContract.method}
                   </div>
                   <div
                     style={{
-                      alignItems: 'flex-end',
-                      display: 'flex',
-                      justifyContent: 'flex-end',
+                      color: '#111827',
+                      flex: 1,
+                      fontFamily: monoFontFamily,
+                      fontSize: 12.5,
+                      minWidth: 0,
+                      overflowX: 'auto',
+                      padding: '12px 14px',
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    <Button
-                      icon={<ApiOutlined />}
-                      disabled={!selectedService}
-                      type="text"
-                      onClick={() => {
-                        if (!selectedService) {
-                          return;
-                        }
-
-                        history.push(buildScopedServiceCatalogHref(scopeId, selectedService));
-                      }}
-                    >
-                      Open published service
-                    </Button>
+                    {bindContract.invokeUrl}
                   </div>
                 </div>
-              </div>
-            </div>
-          </AevatarPanel>
-
-          <AevatarPanel
-            title="Contract details"
-            titleHelp="Only keep the details that actually change how this member is invoked or validated."
-          >
-            {bindContract ? (
-              <div style={parameterGridStyle}>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Scope</Typography.Text>
-                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                    {bindContract.scopeLabel}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    {bindContract.scopeSource
-                      ? `Resolved from ${bindContract.scopeSource}.`
-                      : 'Bound to the current Studio scope.'}
-                  </Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Authorization</Typography.Text>
-                  <Typography.Text strong>{bindContract.authLabel}</Typography.Text>
-                  <Typography.Text type="secondary">{bindContract.authHint}</Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Revision</Typography.Text>
-                  <Typography.Text strong>{bindContract.revisionId}</Typography.Text>
-                  <Typography.Text type="secondary">
-                    {bindContract.serviceDisplayName}
-                  </Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Delivery</Typography.Text>
-                  <Typography.Text strong>{bindContract.method}</Typography.Text>
-                  <Typography.Text type="secondary">
-                    {bindContract.streaming.sse
-                      ? 'Streams through text/event-stream.'
-                      : 'Returns a single JSON response.'}
-                  </Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Streaming</Typography.Text>
-                  <Space wrap size={[6, 6]}>
-                    <Tag color={bindContract.streaming.sse ? 'blue' : 'default'}>SSE</Tag>
-                    <Tag color={bindContract.streaming.webSocket ? 'blue' : 'default'}>
-                      WebSocket
-                    </Tag>
-                    <Tag
-                      color={bindContract.streaming.aguiFrames ? 'geekblue' : 'default'}
-                    >
-                      AGUI
-                    </Tag>
-                  </Space>
-                </div>
-                {bindContract.requestTypeUrl ? (
-                  <div style={valueCardStyle}>
-                    <Typography.Text type="secondary">Request schema</Typography.Text>
-                    <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                      {bindContract.requestTypeUrl}
-                    </Typography.Text>
-                  </div>
-                ) : null}
-                {bindContract.responseTypeUrl ? (
-                  <div style={valueCardStyle}>
-                    <Typography.Text type="secondary">Response schema</Typography.Text>
-                    <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                      {bindContract.responseTypeUrl}
-                    </Typography.Text>
-                  </div>
-                ) : null}
-              </div>
+                <Space wrap size={[8, 8]}>
+                  <Tag>auth · {bindContract.authLabel}</Tag>
+                  <Tag>revision · {bindContract.revisionId}</Tag>
+                  {bindContract.streaming.sse ? (
+                    <Tag color="gold">stream · text/event-stream</Tag>
+                  ) : (
+                    <Tag>response · application/json</Tag>
+                  )}
+                  {bindContract.streaming.aguiFrames ? (
+                    <Tag color="geekblue">AGUI frames</Tag>
+                  ) : null}
+                </Space>
+              </>
             ) : (
               <Empty
-                description="Keep one published contract in focus to review its details."
+                description="Inspect the published contract in focus to reveal its invoke URL and endpoint details."
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
               />
             )}
-          </AevatarPanel>
+          </div>
+        </AevatarPanel>
 
-          <AevatarPanel
-            title="Integration snippets"
-            titleHelp="Copy these examples directly into your external integration or keep iterating inside Studio Invoke."
-          >
-            {bindContract ? (
-              <div style={{ display: 'grid', gap: 12 }}>
-                <div style={snippetHeaderStyle}>
-                  <div style={snippetTabsStyle}>
-                    {(['curl', 'fetch', 'sdk'] as SnippetTab[]).map((tabKey) => (
-                      <button
-                        aria-pressed={snippetTab === tabKey}
-                        className={AEVATAR_INTERACTIVE_CHIP_CLASS}
-                        key={tabKey}
-                        type="button"
-                        style={{
-                          ...snippetTabButtonStyle,
-                          background: snippetTab === tabKey ? '#111827' : '#ffffff',
-                          borderColor: snippetTab === tabKey ? '#111827' : '#d9d9d9',
-                          color: snippetTab === tabKey ? '#ffffff' : '#111827',
-                        }}
-                        onClick={() => setSnippetTab(tabKey)}
-                      >
-                        {tabKey.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
-                  <Button
-                    icon={<CopyOutlined />}
-                    onClick={() => void copyText(selectedSnippet)}
-                  >
-                    Copy snippet
-                  </Button>
-                </div>
-                <pre style={snippetBlockStyle}>{selectedSnippet}</pre>
-              </div>
-            ) : (
-              <Empty
-                description="Inspect one contract first to generate its snippets."
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
-            )}
-          </AevatarPanel>
-
-          <AevatarPanel
-            title="Routing status"
-            titleHelp="This is the currently resolvable scope-level route target while Studio is still completing the team router and member binding API cutover."
-          >
-            <div style={{ display: 'grid', gap: 12 }}>
-              <Alert
-                showIcon
-                message={routingStatusMessage}
-                type={routingStatusType}
-              />
-              <div style={parameterGridStyle}>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Current member</Typography.Text>
-                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                    {selectedService?.displayName ||
-                      selectedService?.serviceId ||
-                      'No published contract'}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    {selectedService?.serviceId || 'Select a contract to inspect routing.'}
-                  </Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Current scope route target</Typography.Text>
-                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                    {scopeBinding?.available
-                      ? scopeBinding.displayName || scopeBinding.serviceId
-                      : 'No default route target'}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    {scopeBinding?.available
-                      ? `Revision ${scopeBinding.activeServingRevisionId || scopeBinding.defaultServingRevisionId || 'n/a'}`
-                      : 'Studio cannot resolve a default route target for this scope yet.'}
-                  </Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Routing posture</Typography.Text>
-                  <Space wrap size={[6, 6]}>
-                    <Tag color={isSelectedServiceCurrentRouteTarget ? 'green' : 'default'}>
-                      {isSelectedServiceCurrentRouteTarget ? 'default route target' : 'not default'}
-                    </Tag>
-                    {scopeBinding?.available ? (
-                      <Tag color="blue">
-                        deployment · {scopeBinding.deploymentStatus || 'unknown'}
-                      </Tag>
-                    ) : null}
-                  </Space>
-                </div>
-              </div>
-            </div>
-          </AevatarPanel>
-
-          <AevatarPanel
-            title={buildBindingSectionTitle(bindingList.length)}
-            titleHelp="These are extra scope-level dependencies, such as connectors, secrets, or other services, that this member needs at runtime."
-          >
-            {bindingsQuery.isLoading ? (
-              <Typography.Text type="secondary">Loading bindings...</Typography.Text>
-            ) : bindingList.length > 0 ? (
-              <div style={listColumnStyle}>
-                {bindingList.map((binding) => (
-                  <div key={binding.bindingId} style={compactCardStyle}>
-                    <Space wrap size={[8, 8]}>
-                      <Typography.Text strong>
-                        {binding.displayName || binding.bindingId}
-                      </Typography.Text>
-                      <AevatarStatusTag
-                        domain="governance"
-                        label={binding.bindingKind}
-                        status={binding.retired ? 'retired' : 'active'}
-                      />
-                    </Space>
-                    <Typography.Text type="secondary">
-                      Target {describeScopeServiceBindingTarget(binding)}
-                    </Typography.Text>
-                    <Typography.Text type="secondary">
-                      Policies{' '}
-                      {binding.policyIds.length > 0 ? binding.policyIds.join(', ') : 'none'}
-                    </Typography.Text>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <Empty
-                description="This service does not depend on any extra connectors, secrets, or service bindings in the current scope."
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
-            )}
-          </AevatarPanel>
-
-          <AevatarPanel
-            title={`Revisions (${revisionList.length})`}
-            titleHelp="Published revisions stay visible here so you can verify which revision is serving, which one is default, and what implementation target each revision points to."
-          >
-            {revisionsQuery.isLoading ? (
-              <Typography.Text type="secondary">Loading published revisions...</Typography.Text>
-            ) : revisionsQuery.error ? (
-              <Alert
-                showIcon
-                message="Failed to load revisions"
-                description={
-                  revisionsQuery.error instanceof Error
-                    ? revisionsQuery.error.message
-                    : 'Studio could not load the published revisions for this contract.'
-                }
-                type="error"
-              />
-            ) : revisionList.length > 0 ? (
-              <div style={listColumnStyle}>
-                {revisionList.map((revision) => {
-                  const isCurrent = revision.revisionId === currentPublishedRevision?.revisionId;
-                  return (
-                    <div
-                      key={revision.revisionId}
-                      style={{
-                        ...revisionCardStyle,
-                        borderColor: isCurrent ? '#6b8cff' : '#eef2f7',
-                        boxShadow: isCurrent
-                          ? '0 0 0 1px rgba(107, 140, 255, 0.18)'
-                          : 'none',
-                      }}
-                    >
-                      <Space wrap size={[8, 8]}>
-                        <Typography.Text strong>{revision.revisionId}</Typography.Text>
-                        <AevatarStatusTag
-                          domain="governance"
-                          label={formatStudioScopeBindingImplementationKind(
-                            revision.implementationKind,
-                          )}
-                          status={revision.status || 'draft'}
-                        />
-                        {revision.isDefaultServing ? (
-                          <Tag color="green">default</Tag>
-                        ) : null}
-                        {revision.isActiveServing ? (
-                          <Tag color="blue">active</Tag>
-                        ) : null}
-                        {revision.retiredAt ? <Tag color="red">retired</Tag> : null}
-                        {isCurrent ? <Tag color="gold">current contract</Tag> : null}
-                      </Space>
-                      <Typography.Text type="secondary">
-                        {describeStudioScopeBindingRevisionTarget(revision)} ·{' '}
-                        {describeStudioScopeBindingRevisionContext(revision) || 'No detail'}
-                      </Typography.Text>
-                      <Typography.Text type="secondary">
-                        Serving {revision.servingState || revision.status || 'unknown'} · Published{' '}
-                        {formatDateTime(revision.publishedAt)}
-                      </Typography.Text>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <Empty
-                description="No published revisions are available for this contract yet."
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
-            )}
-          </AevatarPanel>
-        </div>
-
-        <div style={sidePanelStyle}>
+        <div style={workflowGridStyle}>
           <AevatarPanel
             title="Quick smoke test"
             titleHelp={
@@ -1174,30 +784,26 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             }
           >
             <div data-testid="studio-bind-smoke-test" style={{ display: 'grid', gap: 12 }}>
-              <Alert
-                showIcon
-                message="Authorization"
-                description={
-                  bindContract?.authAuthenticated
-                    ? `${bindContract.authHint} In-browser Studio requests attach the active bearer session automatically.`
-                    : bindContract?.authEnabled
-                      ? `${bindContract?.authHint} Sign in before running a smoke test.`
-                      : bindContract?.authHint || 'Studio auth is not enabled for this environment.'
-                }
-                type={
-                  bindContract?.authEnabled && !bindContract?.authAuthenticated
-                    ? 'warning'
-                    : 'info'
-                }
-              />
-              {runsCurrentWorkflowDraft ? (
-                <Alert
-                  showIcon
-                  message="Current draft execution"
-                  description="Quick smoke test runs the current Studio draft, not the last published revision. Continue to Invoke when you need to verify the published contract."
-                  type="info"
-                />
-              ) : null}
+              <div style={{ display: 'grid', gap: 6 }}>
+                <Typography.Text strong>Authorization</Typography.Text>
+                <Typography.Text type="secondary">
+                  {runsCurrentWorkflowDraft
+                    ? 'Current draft smoke tests use Studio draft execution. Published endpoint authorization is checked after you continue to Invoke.'
+                    : bindContract?.authAuthenticated
+                      ? `${bindContract.authHint} In-browser Studio requests attach the active bearer session automatically.`
+                      : bindContract?.authEnabled
+                        ? `${bindContract?.authHint} Sign in before running a smoke test.`
+                        : bindContract?.authHint || 'Studio auth is not enabled for this environment.'}
+                </Typography.Text>
+                {runsCurrentWorkflowDraft ? (
+                  <Space wrap size={[6, 6]}>
+                    <Tag color="blue">Current draft</Tag>
+                    <Typography.Text type="secondary">
+                      Quick smoke test runs the current Studio draft before publish.
+                    </Typography.Text>
+                  </Space>
+                ) : null}
+              </div>
               <div style={{ display: 'grid', gap: 8 }}>
                 <Typography.Text strong>
                   {runsCurrentWorkflowDraft ||
@@ -1207,7 +813,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 </Typography.Text>
                 <Input.TextArea
                   aria-label="Bind smoke test input"
-                  autoSize={{ minRows: 5, maxRows: 10 }}
+                  autoSize={{ minRows: 4, maxRows: 8 }}
                   placeholder={
                     runsCurrentWorkflowDraft
                       ? 'Ask the current workflow draft to do a quick task...'
@@ -1239,7 +845,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   disabled={
                     (!runsCurrentWorkflowDraft &&
                       (!selectedService || !selectedEndpoint)) ||
-                    Boolean(bindContract?.authEnabled && !bindContract?.authAuthenticated)
+                    publishedSmokeRequiresAuth
                   }
                   onClick={() => void handleRunSmokeTest()}
                 >
@@ -1287,9 +893,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               {smokeTestResult.responseSummary ? (
                 runsCurrentWorkflowDraft || bindContract?.streaming.sse ? (
                   <div style={{ display: 'grid', gap: 10 }}>
-                    <Typography.Text strong>
-                      Streaming summary
-                    </Typography.Text>
+                    <Typography.Text strong>Streaming summary</Typography.Text>
                     <Typography.Text type="secondary">
                       {smokeTestResult.eventCount} observed events
                     </Typography.Text>
@@ -1320,7 +924,338 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               ) : null}
             </div>
           </AevatarPanel>
+
+          <AevatarPanel
+            title="Integration snippets"
+            titleHelp="Give the user a ready-to-copy call shape right away, without making them hunt through the support sections."
+          >
+            {bindContract ? (
+              <div style={{ display: 'grid', gap: 12 }}>
+                <div style={snippetHeaderStyle}>
+                  <div style={snippetTabsStyle}>
+                    {(['curl', 'fetch', 'sdk'] as SnippetTab[]).map((tabKey) => (
+                      <button
+                        aria-pressed={snippetTab === tabKey}
+                        className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                        key={tabKey}
+                        type="button"
+                        style={{
+                          ...snippetTabButtonStyle,
+                          background: snippetTab === tabKey ? '#111827' : '#ffffff',
+                          borderColor: snippetTab === tabKey ? '#111827' : '#d9d9d9',
+                          color: snippetTab === tabKey ? '#ffffff' : '#111827',
+                        }}
+                        onClick={() => setSnippetTab(tabKey)}
+                      >
+                        {tabKey.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                  <Button icon={<CopyOutlined />} onClick={() => void copyText(selectedSnippet)}>
+                    Copy snippet
+                  </Button>
+                </div>
+                <Typography.Text type="secondary">
+                  Use the selected snippet to call the current member contract from your shell,
+                  browser, or SDK.
+                </Typography.Text>
+                <pre style={snippetPreviewStyle}>{selectedSnippet}</pre>
+              </div>
+            ) : (
+              <Empty
+                description="Inspect one contract first to generate its snippets."
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
+            )}
+          </AevatarPanel>
         </div>
+
+        <AevatarPanel
+          title="Supporting details"
+          titleHelp="Keep the source selector, routing, bindings, and revision history available below the primary workflow."
+        >
+          <Collapse
+            bordered={false}
+            defaultActiveKey={[]}
+            ghost
+            items={[
+              {
+                key: 'published-contract-source',
+                label: 'Published contract source',
+                children: (
+                  <div style={{ display: 'grid', gap: 12 }}>
+                    <Typography.Text type="secondary">
+                      Studio still resolves invoke URL, revisions, and governance details through
+                      the published service surface. Keep this section nearby when you need to
+                      switch the active contract source.
+                    </Typography.Text>
+                    <div style={controlsGridStyle}>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        <Typography.Text type="secondary">Published service</Typography.Text>
+                        {hasMultiplePublishedServices ? (
+                          <Select
+                            options={serviceOptions}
+                            placeholder="Select a published service"
+                            value={selectedServiceId || undefined}
+                            onChange={(value) => {
+                              setSelectedServiceId(String(value || ''));
+                              setSelectedEndpointId('');
+                            }}
+                          />
+                        ) : (
+                          <div style={valueCardStyle}>
+                            <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                              {selectedService?.displayName ||
+                                selectedService?.serviceId ||
+                                'No published service'}
+                            </Typography.Text>
+                            <Typography.Text type="secondary">
+                              {selectedService?.serviceId || 'No service id'}
+                            </Typography.Text>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        <Typography.Text type="secondary">Endpoint</Typography.Text>
+                        <Select
+                          disabled={!selectedService}
+                          options={endpointOptions}
+                          placeholder="Select an endpoint"
+                          value={selectedEndpointId || undefined}
+                          onChange={(value) => setSelectedEndpointId(String(value || ''))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: 'contract-details',
+                label: 'Contract details',
+                children: bindContract ? (
+                  <div style={parameterGridStyle}>
+                    <div style={valueCardStyle}>
+                      <Typography.Text type="secondary">Scope</Typography.Text>
+                      <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                        {bindContract.scopeLabel}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        {bindContract.scopeSource
+                          ? `Resolved from ${bindContract.scopeSource}.`
+                          : 'Bound to the current Studio scope.'}
+                      </Typography.Text>
+                    </div>
+                    <div style={valueCardStyle}>
+                      <Typography.Text type="secondary">Authorization</Typography.Text>
+                      <Typography.Text strong>{bindContract.authLabel}</Typography.Text>
+                      <Typography.Text type="secondary">{bindContract.authHint}</Typography.Text>
+                    </div>
+                    <div style={valueCardStyle}>
+                      <Typography.Text type="secondary">Revision</Typography.Text>
+                      <Typography.Text strong>{bindContract.revisionId}</Typography.Text>
+                      <Typography.Text type="secondary">{bindContract.serviceDisplayName}</Typography.Text>
+                    </div>
+                    <div style={valueCardStyle}>
+                      <Typography.Text type="secondary">Delivery</Typography.Text>
+                      <Typography.Text strong>{bindContract.method}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {bindContract.streaming.sse
+                          ? 'Streams through text/event-stream.'
+                          : 'Returns a single JSON response.'}
+                      </Typography.Text>
+                    </div>
+                    <div style={valueCardStyle}>
+                      <Typography.Text type="secondary">Streaming</Typography.Text>
+                      <Space wrap size={[6, 6]}>
+                        <Tag color={bindContract.streaming.sse ? 'blue' : 'default'}>SSE</Tag>
+                        <Tag color={bindContract.streaming.webSocket ? 'blue' : 'default'}>
+                          WebSocket
+                        </Tag>
+                        <Tag color={bindContract.streaming.aguiFrames ? 'geekblue' : 'default'}>
+                          AGUI
+                        </Tag>
+                      </Space>
+                    </div>
+                    {bindContract.requestTypeUrl ? (
+                      <div style={valueCardStyle}>
+                        <Typography.Text type="secondary">Request schema</Typography.Text>
+                        <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                          {bindContract.requestTypeUrl}
+                        </Typography.Text>
+                      </div>
+                    ) : null}
+                    {bindContract.responseTypeUrl ? (
+                      <div style={valueCardStyle}>
+                        <Typography.Text type="secondary">Response schema</Typography.Text>
+                        <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                          {bindContract.responseTypeUrl}
+                        </Typography.Text>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <Empty
+                    description="Keep one published contract in focus to review its details."
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  />
+                ),
+              },
+              {
+                key: 'routing-status',
+                label: 'Routing status',
+                children: (
+                  <div style={{ display: 'grid', gap: 12 }}>
+                    <Alert showIcon message={routingStatusMessage} type={routingStatusType} />
+                    <div style={parameterGridStyle}>
+                      <div style={valueCardStyle}>
+                        <Typography.Text type="secondary">Current member</Typography.Text>
+                        <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                          {selectedService?.displayName ||
+                            selectedService?.serviceId ||
+                            'No published contract'}
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          {selectedService?.serviceId || 'Select a contract to inspect routing.'}
+                        </Typography.Text>
+                      </div>
+                      <div style={valueCardStyle}>
+                        <Typography.Text type="secondary">Current scope route target</Typography.Text>
+                        <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                          {scopeBinding?.available
+                            ? scopeBinding.displayName || scopeBinding.serviceId
+                            : 'No default route target'}
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          {scopeBinding?.available
+                            ? `Revision ${scopeBinding.activeServingRevisionId || scopeBinding.defaultServingRevisionId || 'n/a'}`
+                            : 'Studio cannot resolve a default route target for this scope yet.'}
+                        </Typography.Text>
+                      </div>
+                      <div style={valueCardStyle}>
+                        <Typography.Text type="secondary">Routing posture</Typography.Text>
+                        <Space wrap size={[6, 6]}>
+                          <Tag color={isSelectedServiceCurrentRouteTarget ? 'green' : 'default'}>
+                            {isSelectedServiceCurrentRouteTarget
+                              ? 'default route target'
+                              : 'not default'}
+                          </Tag>
+                          {scopeBinding?.available ? (
+                            <Tag color="blue">
+                              deployment · {scopeBinding.deploymentStatus || 'unknown'}
+                            </Tag>
+                          ) : null}
+                        </Space>
+                      </div>
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: 'bound-dependencies',
+                label: buildBindingSectionTitle(bindingList.length),
+                children: bindingsQuery.isLoading ? (
+                  <Typography.Text type="secondary">Loading bindings...</Typography.Text>
+                ) : bindingList.length > 0 ? (
+                  <div style={listColumnStyle}>
+                    {bindingList.map((binding) => (
+                      <div key={binding.bindingId} style={compactCardStyle}>
+                        <Space wrap size={[8, 8]}>
+                          <Typography.Text strong>
+                            {binding.displayName || binding.bindingId}
+                          </Typography.Text>
+                          <AevatarStatusTag
+                            domain="governance"
+                            label={binding.bindingKind}
+                            status={binding.retired ? 'retired' : 'active'}
+                          />
+                        </Space>
+                        <Typography.Text type="secondary">
+                          Target {describeScopeServiceBindingTarget(binding)}
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          Policies {binding.policyIds.length > 0 ? binding.policyIds.join(', ') : 'none'}
+                        </Typography.Text>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Empty
+                    description="This service does not depend on any extra connectors, secrets, or service bindings in the current scope."
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  />
+                ),
+              },
+              {
+                key: 'revisions',
+                label: `Revisions (${revisionList.length})`,
+                children: revisionsQuery.isLoading ? (
+                  <Typography.Text type="secondary">Loading published revisions...</Typography.Text>
+                ) : revisionsQuery.error ? (
+                  <Alert
+                    showIcon
+                    message="Failed to load revisions"
+                    description={
+                      revisionsQuery.error instanceof Error
+                        ? revisionsQuery.error.message
+                        : 'Studio could not load the published revisions for this contract.'
+                    }
+                    type="error"
+                  />
+                ) : revisionList.length > 0 ? (
+                  <div style={listColumnStyle}>
+                    {revisionList.map((revision) => {
+                      const isCurrent = revision.revisionId === currentPublishedRevision?.revisionId;
+                      return (
+                        <div
+                          key={revision.revisionId}
+                          style={{
+                            ...revisionCardStyle,
+                            borderColor: isCurrent ? '#6b8cff' : '#eef2f7',
+                            boxShadow: isCurrent
+                              ? '0 0 0 1px rgba(107, 140, 255, 0.18)'
+                              : 'none',
+                          }}
+                        >
+                          <Space wrap size={[8, 8]}>
+                            <Typography.Text strong>{revision.revisionId}</Typography.Text>
+                            <AevatarStatusTag
+                              domain="governance"
+                              label={formatStudioScopeBindingImplementationKind(
+                                revision.implementationKind,
+                              )}
+                              status={revision.status || 'draft'}
+                            />
+                            {revision.isDefaultServing ? (
+                              <Tag color="green">default</Tag>
+                            ) : null}
+                            {revision.isActiveServing ? (
+                              <Tag color="blue">active</Tag>
+                            ) : null}
+                            {revision.retiredAt ? <Tag color="red">retired</Tag> : null}
+                            {isCurrent ? <Tag color="gold">current contract</Tag> : null}
+                          </Space>
+                          <Typography.Text type="secondary">
+                            {describeStudioScopeBindingRevisionTarget(revision)} ·{' '}
+                            {describeStudioScopeBindingRevisionContext(revision) || 'No detail'}
+                          </Typography.Text>
+                          <Typography.Text type="secondary">
+                            Serving {revision.servingState || revision.status || 'unknown'} · Published{' '}
+                            {formatDateTime(revision.publishedAt)}
+                          </Typography.Text>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Empty
+                    description="No published revisions are available for this contract yet."
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  />
+                ),
+              },
+            ]}
+          />
+        </AevatarPanel>
       </div>
     </div>
   );

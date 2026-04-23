@@ -277,22 +277,7 @@ body.aevatar-studio-host
     border-color 0.18s ease,
     box-shadow 0.18s ease,
     color 0.18s ease,
-    opacity 0.18s ease,
-    transform 0.14s ease;
-}
-
-.aevatar-interactive-button:not(:disabled):not([aria-disabled='true']):hover,
-.aevatar-interactive-chip:not(:disabled):not([aria-disabled='true']):hover,
-.aevatar-pressable-card:not([aria-disabled='true']):hover {
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
-  transform: translateY(-1px);
-}
-
-.aevatar-interactive-button:not(:disabled):not([aria-disabled='true']):active,
-.aevatar-interactive-chip:not(:disabled):not([aria-disabled='true']):active,
-.aevatar-pressable-card:not([aria-disabled='true']):active {
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
-  transform: translateY(0) scale(0.985);
+    opacity 0.18s ease;
 }
 
 .aevatar-interactive-button:focus-visible,
@@ -308,13 +293,11 @@ body.aevatar-studio-host
 .aevatar-interactive-chip[aria-disabled='true'] {
   box-shadow: none !important;
   cursor: not-allowed !important;
-  transform: none !important;
 }
 
 .aevatar-pressable-card[aria-disabled='true'] {
   box-shadow: none !important;
   cursor: not-allowed !important;
-  transform: none !important;
 }
 
 .ant-btn.aevatar-interactive-button.ant-btn-loading {

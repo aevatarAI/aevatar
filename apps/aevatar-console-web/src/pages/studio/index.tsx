@@ -1310,12 +1310,32 @@ const StudioPage: React.FC = () => {
       ),
     [scopeScriptsQuery.data],
   );
+  const availableScopeScriptIds = useMemo(
+    () =>
+      new Set(
+        availableScopeScripts
+          .map((detail) => normalizeComparableText(detail.script?.scriptId))
+          .filter(Boolean),
+      ),
+    [availableScopeScripts],
+  );
   const publishedScopeServiceRevisionQueries = useQueries({
     queries: publishedScopeServices.map((service) => {
       const serviceId = trimOptional(service.serviceId);
       const isCurrentScopeBindingService =
         scopeBindingQuery.data?.available &&
         trimOptional(scopeBindingQuery.data.serviceId) === serviceId;
+      const serviceLookupValues = [
+        trimOptional(service.displayName),
+        serviceId,
+      ].filter(Boolean);
+      const hasKnownImplementationCollision = serviceLookupValues.some(
+        (lookupValue) =>
+          Boolean(findWorkflowSummaryByLookupValue(visibleWorkflowSummaries, lookupValue)) ||
+          availableScopeScriptIds.has(normalizeComparableText(lookupValue)),
+      );
+      const isRouteSelectedService =
+        trimOptional(routeState.memberId) === serviceId;
 
       return {
         queryKey: [
@@ -1327,7 +1347,8 @@ const StudioPage: React.FC = () => {
           studioHostReady &&
           Boolean(resolvedStudioScopeId) &&
           Boolean(serviceId) &&
-          !isCurrentScopeBindingService,
+          !isCurrentScopeBindingService &&
+          (hasKnownImplementationCollision || isRouteSelectedService),
         queryFn: () =>
           scopeRuntimeApi.getServiceRevisions(resolvedStudioScopeId, serviceId),
       };
@@ -1370,18 +1391,14 @@ const StudioPage: React.FC = () => {
       const revision = serviceId
         ? currentServiceRevisionByServiceId.get(serviceId) ?? null
         : null;
+      const revisionWorkflowName = trimOptional(revision?.workflowName);
       const matchedWorkflow =
-        revision?.implementationKind === 'workflow'
+        revision?.implementationKind === 'workflow' && revisionWorkflowName
           ? findWorkflowSummaryByLookupValue(
               visibleWorkflowSummaries,
-              trimOptional(revision.workflowName) || trimOptional(service.displayName),
+              revisionWorkflowName,
             )
-          : !revision
-            ? findWorkflowSummaryByLookupValue(
-                visibleWorkflowSummaries,
-                trimOptional(service.displayName),
-              )
-            : null;
+          : null;
       const matchedScriptId =
         revision?.implementationKind === 'script'
           ? trimOptional(revision.scriptId)

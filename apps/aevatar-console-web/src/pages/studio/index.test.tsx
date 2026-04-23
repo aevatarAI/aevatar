@@ -3596,6 +3596,100 @@ describe("StudioPage", () => {
     ).toBeTruthy();
   });
 
+  it("does not hide a workflow draft when the matching service revision cannot be loaded", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    mockServicesApi.listServices.mockResolvedValueOnce([
+      {
+        serviceId: "default",
+        displayName: "workspace-demo",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-default",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with workspace-demo.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
+    mockScopeRuntimeApi.getServiceRevisions.mockRejectedValueOnce(
+      new Error("revision service unavailable"),
+    );
+
+    renderStudioPage("/studio?scopeId=scope-1&tab=studio");
+
+    const rail = await screen.findByLabelText("Team members");
+    await waitFor(() => {
+      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
+        "scope-1",
+        "default",
+      );
+      expect(
+        within(rail).getAllByRole("button", { name: "workspace-demo" }),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("does not fetch revisions for unrelated services on initial Studio rail render", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    mockServicesApi.listServices.mockResolvedValueOnce([
+      {
+        serviceId: "default",
+        displayName: "workspace-demo",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-default",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with workspace-demo.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+      {
+        serviceId: "billing-api",
+        displayName: "Billing API",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-billing",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with billing.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
+
+    renderStudioPage("/studio?scopeId=scope-1&tab=studio");
+
+    const rail = await screen.findByLabelText("Team members");
+    expect(await within(rail).findByRole("button", { name: "Billing API" })).toBeTruthy();
+
+    await waitFor(() => {
+      expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+    });
+  });
+
   it("does not truncate the team member rail when more than eight members are available", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
