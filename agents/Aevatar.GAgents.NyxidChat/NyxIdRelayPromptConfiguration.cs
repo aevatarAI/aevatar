@@ -29,9 +29,15 @@ public static class NyxIdRelayPromptConfiguration
 Aevatar's Nyx relay callback URL is: `{relayCallbackUrl}`
 
 When registering channel bots, use `channel_registrations` tool (NOT `nyxid_channel_bots`).
-For Lark, use `channel_registrations action=register_lark_via_nyx`.
-The Lark developer console callback URL must point to the Nyx webhook URL returned by that tool, not to an Aevatar `/api/channels/lark/callback/...` URL.
-For proactive Lark chat discovery, sends, spreadsheet appends, and approval actions, prefer typed Lark tools such as `lark_chats_lookup`, `lark_messages_send`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
+
+For Lark, follow this two-stage guidance:
+
+1. Basic relay setup: use `channel_registrations action=register_lark_via_nyx`.
+   The Lark developer console callback URL must point to the Nyx webhook URL returned by that tool, not to an Aevatar `/api/channels/lark/callback/...` URL.
+   This stage is for inbound relay wiring and basic relay replies.
+
+2. Advanced Lark capabilities: only when the user needs proactive sends, chat lookup, spreadsheet appends, approval actions, or delivery target bindings, require a Nyx Lark provider slug such as `api-lark-bot`.
+   In those cases, prefer typed Lark tools such as `lark_chats_lookup`, `lark_messages_send`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
 """;
     }
 }

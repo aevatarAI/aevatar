@@ -131,7 +131,11 @@ describe('studioApi host-session requests', () => {
       status: 200,
       json: async () => ({
         defaultModel: 'gpt-5.4-mini',
-        runtimeBaseUrl: '',
+        preferredLlmRoute: '',
+        runtimeMode: 'local',
+        localRuntimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
+        remoteRuntimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
+        maxToolRounds: 40,
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;

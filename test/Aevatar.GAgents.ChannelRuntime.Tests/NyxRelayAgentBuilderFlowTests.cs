@@ -7,21 +7,99 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxRelayAgentBuilderFlowTests
 {
     [Fact]
-    public void TryResolve_ShouldReturnHelp_ForDailyReportWithoutArguments()
+    public void TryResolve_ShouldBuildToolCall_ForDailyReportWithoutArguments()
     {
         var inbound = new ChannelInboundEvent
         {
             ChatType = "p2p",
-            Text = "/daily-report",
+            ConversationId = "oc_default_daily",
+            Text = "/daily",
         };
 
         var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
 
         matched.Should().BeTrue();
         decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeFalse();
-        decision.ReplyPayload.Should().Contain("Daily report agent command");
-        decision.ReplyPayload.Should().Contain("/daily-report github_username=alice");
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_daily_report");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
+        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
+        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
+        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
+        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_default_daily");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldAcceptPositionalGithubUsername_AndForwardConversationId()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_8a70aeefbdb4340e1fa5f575b4c794eb",
+            Text = "/daily eanzhao",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_daily_report");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
+        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
+        body.RootElement.GetProperty("github_username").GetString().Should().Be("eanzhao");
+        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_8a70aeefbdb4340e1fa5f575b4c794eb");
+    }
+
+    [Theory]
+    [InlineData("/daily =broken")]
+    [InlineData("/daily github_username=")]
+    public void TryResolve_ShouldPassThroughNullGithubUsername_WhenMissingOrEmpty(string text)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_chat_xyz",
+            Text = text,
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_daily_report");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
+        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldAcceptPositionalSocialMediaTopic()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_chat_abc",
+            Text = "/social-media \"Launch update\" schedule_time=10:30",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_social_media");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("topic").GetString().Should().Be("Launch update");
+        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("30 10 * * *");
+        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_chat_abc");
     }
 
     [Fact]
@@ -87,5 +165,88 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
         decision.ReplyPayload.Should().Contain("/delete-agent agent-1 confirm");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldReturnUnknownCommandUsage_ForUnknownSlash()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/daily_report alice",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("Unknown command: /daily_report");
+        decision.ReplyPayload.Should().Contain("/daily github_username=alice");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldReturnUnknownCommandUsage_ForNonsenseSlash()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/foobar",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("Unknown command: /foobar");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldReturnPrivateChatRestriction_ForKnownCommandInGroup()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "group",
+            Text = "/daily alice",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("private chat");
+        decision.ReplyPayload.Should().Contain("/daily");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldFallThrough_ForNonSlashText()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "hello there",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeFalse();
+        decision.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryResolve_ShouldFallThrough_ForEmptyText()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "   ",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeFalse();
+        decision.Should().BeNull();
     }
 }

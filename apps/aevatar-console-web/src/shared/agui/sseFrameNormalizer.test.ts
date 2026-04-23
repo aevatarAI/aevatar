@@ -58,4 +58,23 @@ describe("sseFrameNormalizer", () => {
       type: "TOOL_APPROVAL_REQUEST",
     });
   });
+
+  it("keeps final assistant text from textMessageEnd frames", () => {
+    expect(
+      normalizeBackendSseFrame({
+        textMessageEnd: {
+          delta: "final delta",
+          message: "final message",
+          messageId: "msg-1",
+        },
+        timestamp: 4,
+      })
+    ).toEqual({
+      delta: "final delta",
+      message: "final message",
+      messageId: "msg-1",
+      timestamp: 4,
+      type: AGUIEventType.TEXT_MESSAGE_END,
+    });
+  });
 });

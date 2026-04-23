@@ -17,6 +17,7 @@ import {
 import { studioApi } from "@/shared/studio/api";
 import { buildStudioWorkflowEditorRoute } from "@/shared/studio/navigation";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import { chatHistoryApi } from "./chatHistoryApi";
 import {
@@ -848,11 +849,7 @@ const ChatPage: React.FC = () => {
   }, [persistConversationOverrides]);
 
   const handleCreate = useCallback(() => {
-    history.push(
-      buildStudioWorkflowEditorRoute({
-        draftMode: "new",
-      })
-    );
+    history.push(buildStudioWorkflowEditorRoute());
   }, []);
 
   const handleSelectConversation = useCallback(
@@ -2075,6 +2072,7 @@ const ChatPage: React.FC = () => {
               }}
             >
               <button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 onClick={handleNewChat}
                 style={{
                   background: "#ffffff",

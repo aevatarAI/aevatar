@@ -104,6 +104,7 @@ describe('GovernanceIndexPage', () => {
 
     expect(await screen.findByText('选择一个服务')).toBeTruthy();
     expect(screen.getByText('当前范围 tenant-a / app-a / default')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '加载治理工作台' })).toBeDisabled();
   });
 
   it('hides write actions when no service is selected', async () => {

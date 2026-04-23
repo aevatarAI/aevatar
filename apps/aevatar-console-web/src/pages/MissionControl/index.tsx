@@ -26,6 +26,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useMissionControlRuntime, type UseMissionControlRuntimeResult } from './hooks/useMissionControlRuntime';
 import InspectorPanel from './InspectorPanel';
 import type {
@@ -599,6 +600,7 @@ function MissionDock({
     >
       <button
         aria-label="Resize dock"
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         onKeyDown={(event) => {
           if (ui.isDockCollapsed) {
             return;

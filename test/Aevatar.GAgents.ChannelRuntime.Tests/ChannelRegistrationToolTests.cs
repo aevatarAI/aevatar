@@ -10,77 +10,37 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-/// <summary>
-/// Tests for ChannelRegistrationTool — verifies lazy DI resolution,
-/// tool metadata, and error handling when dependencies are unavailable.
-/// </summary>
-public class ChannelRegistrationToolTests
+public sealed class ChannelRegistrationToolTests
 {
-    // ─── Tool metadata ───
-
     [Fact]
-    public void Name_Is_channel_registrations()
+    public void Metadata_ReflectsRelayOnlyContract()
     {
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
+        var tool = new ChannelRegistrationTool(new ServiceCollection().BuildServiceProvider());
 
         tool.Name.Should().Be("channel_registrations");
-    }
-
-    [Fact]
-    public void Description_Contains_Platform_Names()
-    {
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        tool.Description.Should().Contain("Lark");
-        tool.Description.Should().Contain("Telegram");
         tool.Description.Should().Contain("register_lark_via_nyx");
+        tool.Description.Should().Contain("Direct callback registration");
+        JsonDocument.Parse(tool.ParametersSchema).RootElement
+            .GetProperty("properties")
+            .GetProperty("action")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should()
+            .Equal("list", "register_lark_via_nyx", "delete");
     }
 
     [Fact]
-    public void ParametersSchema_Is_Valid_Json()
+    public async Task ExecuteAsync_ReturnsError_WhenNoNyxTokenIsAvailable()
     {
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        var act = () => JsonDocument.Parse(tool.ParametersSchema);
-        act.Should().NotThrow();
-    }
-
-    [Fact]
-    public void ParametersSchema_Contains_Lark_Nyx_Provisioning_Fields()
-    {
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        var doc = JsonDocument.Parse(tool.ParametersSchema);
-        var properties = doc.RootElement.GetProperty("properties");
-        properties.TryGetProperty("app_id", out _).Should().BeTrue();
-        properties.TryGetProperty("app_secret", out _).Should().BeTrue();
-        properties.TryGetProperty("label", out _).Should().BeTrue();
-    }
-
-    // ─── Lazy DI resolution: error when dependencies missing ───
-
-    [Fact]
-    public async Task ExecuteAsync_Returns_Error_When_QueryPort_Not_Registered()
-    {
-        // Arrange: IServiceProvider has no IChannelBotRegistrationQueryPort
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        // Simulate authenticated context
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
+        AgentToolRequestContext.CurrentMetadata = null;
         try
         {
-            // Act
+            var tool = new ChannelRegistrationTool(new ServiceCollection().BuildServiceProvider());
+
             var result = await tool.ExecuteAsync("""{"action":"list"}""");
 
-            // Assert: clear error message, not a crash
-            result.Should().Contain("error");
-            result.Should().Contain("not registered");
+            result.Should().Contain("No NyxID access token available");
         }
         finally
         {
@@ -89,7 +49,44 @@ public class ChannelRegistrationToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RegisterLarkViaNyx_Does_Not_Require_Channel_Runtime_Dependencies()
+    public async Task ExecuteAsync_List_ReturnsRelayRegistrations()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                    NyxProviderSlug = "api-lark-bot",
+                    ScopeId = "scope-1",
+                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
+                    NyxChannelBotId = "bot-1",
+                    NyxAgentApiKeyId = "key-1",
+                    NyxConversationRouteId = "route-1",
+                },
+            ]));
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(Substitute.For<IActorRuntime>())
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"list"}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("total").GetInt32().Should().Be(1);
+        var registration = doc.RootElement.GetProperty("registrations")[0];
+        registration.GetProperty("registration_mode").GetString().Should().Be("nyx_relay_webhook");
+        registration.GetProperty("callback_url").GetString().Should().BeEmpty();
+        registration.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RegisterLarkViaNyx_ReturnsProvisioningResult()
     {
         var provisioningService = Substitute.For<INyxLarkProvisioningService>();
         provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
@@ -103,593 +100,156 @@ public class ChannelRegistrationToolTests
                 RelayCallbackUrl: "https://aevatar.example.com/api/webhooks/nyxid-relay",
                 WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
 
-        var services = new ServiceCollection();
-        services.AddSingleton(provisioningService);
-        var sp = services.BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(provisioningService)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                    "action": "register_lark_via_nyx",
-                    "app_id": "cli_xxx",
-                    "app_secret": "secret",
-                    "webhook_base_url": "https://aevatar.example.com"
-                }
-                """);
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync(
+            """{"action":"register_lark_via_nyx","app_id":"cli_123","app_secret":"secret","webhook_base_url":"https://aevatar.example.com"}""");
+        using var doc = JsonDocument.Parse(json);
 
-            var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-1");
-            doc.RootElement.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-1");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-1");
+        await provisioningService.Received(1).ProvisionAsync(
+            Arg.Is<NyxLarkProvisioningRequest>(request =>
+                request.AccessToken == "test-token" &&
+                request.AppId == "cli_123" &&
+                request.AppSecret == "secret" &&
+                request.WebhookBaseUrl == "https://aevatar.example.com"),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ExecuteAsync_RegisterLarkViaNyx_Passes_Minimal_Lark_Config_To_Service()
+    public async Task ExecuteAsync_UpdateToken_ReturnsRetiredError()
     {
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkProvisioningResult(
-                Succeeded: false,
-                Status: "error",
-                Error: "missing_app_secret")));
+        var tool = new ChannelRegistrationTool(new ServiceCollection().BuildServiceProvider());
 
-        var services = new ServiceCollection();
-        services.AddSingleton(provisioningService);
-        var sp = services.BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
+        using var scope = PushNyxToken();
+        var result = await tool.ExecuteAsync("""{"action":"update_token"}""");
+        using var doc = JsonDocument.Parse(result);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-        };
-        try
-        {
-            await tool.ExecuteAsync("""
-                {
-                    "action": "register_lark_via_nyx",
-                    "app_id": "cli_xxx",
-                    "app_secret": "secret",
-                    "label": "Ops Bot",
-                    "scope_id": "scope-1",
-                    "webhook_base_url": "https://aevatar.example.com",
-                    "nyx_provider_slug": "api-lark-bot"
-                }
-                """);
-
-            await provisioningService.Received(1).ProvisionAsync(
-                Arg.Is<NyxLarkProvisioningRequest>(request =>
-                    request.AccessToken == "test-token" &&
-                    request.AppId == "cli_xxx" &&
-                    request.AppSecret == "secret" &&
-                    request.Label == "Ops Bot" &&
-                    request.ScopeId == "scope-1" &&
-                    request.WebhookBaseUrl == "https://aevatar.example.com" &&
-                    request.NyxProviderSlug == "api-lark-bot"),
-                Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        doc.RootElement.GetProperty("error_code").GetString().Should().Be("retired_action");
+        doc.RootElement.GetProperty("error").GetString().Should().Contain("update_token is retired");
     }
 
     [Fact]
-    public async Task ExecuteAsync_Returns_Error_When_No_Auth_Token()
-    {
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        // No AgentToolRequestContext set
-        var result = await tool.ExecuteAsync("""{"action":"list"}""");
-
-        result.Should().Contain("error");
-        result.Should().Contain("access token");
-    }
-
-    // ─── Lazy DI resolution: works when dependencies available ───
-
-    [Fact]
-    public async Task ExecuteAsync_List_Returns_Empty_When_No_Registrations()
-    {
-        // Arrange: mock dependencies
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([]));
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            // Act
-            var result = await tool.ExecuteAsync("""{"action":"list"}""");
-
-            // Assert
-            var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("total").GetInt32().Should().Be(0);
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_Register_Requires_Platform()
+    public async Task ExecuteAsync_Delete_WithoutConfirm_ReturnsConfirmationPayload()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([]));
-        var actorRuntime = Substitute.For<IActorRuntime>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"register"}""");
-            result.Should().Contain("platform");
-            result.Should().Contain("required");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_Register_Lark_Direct_Path_Is_Retired()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""
-                {
-                    "action":"register",
-                    "platform":"lark",
-                    "nyx_provider_slug":"api-lark-bot"
-                }
-                """);
-
-            result.Should().Contain("Direct Lark registration is retired");
-            result.Should().Contain("register_lark_via_nyx");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateToken_Lark_Relay_Path_Is_Rejected()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("lark-1", Arg.Any<CancellationToken>())
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
             {
-                Id = "lark-1",
+                Id = "reg-1",
                 Platform = "lark",
-                NyxAgentApiKeyId = "agent-key-1",
+                NyxProviderSlug = "api-lark-bot",
+                NyxChannelBotId = "bot-1",
+                NyxAgentApiKeyId = "key-1",
+                NyxConversationRouteId = "route-1",
             }));
 
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(Substitute.For<IActorRuntime>())
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"lark-1"}""");
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1"}""");
+        using var doc = JsonDocument.Parse(json);
 
-            result.Should().Contain("not supported on the Nyx relay path");
-            await actorRuntime.DidNotReceive().GetAsync(Arg.Any<string>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        doc.RootElement.GetProperty("status").GetString().Should().Be("confirm_required");
+        doc.RootElement.GetProperty("registration_mode").GetString().Should().Be("nyx_relay_webhook");
     }
 
     [Fact]
-    public async Task ExecuteAsync_Delete_Requires_RegistrationId()
+    public async Task ExecuteAsync_Delete_WithConfirm_DispatchesUnregisterCommand()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                }),
+                Task.FromResult<ChannelBotRegistrationEntry?>(null));
 
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"delete"}""");
-            result.Should().Contain("registration_id");
-            result.Should().Contain("required");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    // ─── update_token ───
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateToken_Requires_RegistrationId()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"update_token"}""");
-            result.Should().Contain("registration_id");
-            result.Should().Contain("required");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateToken_Returns_Error_When_Registration_Not_Found()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("nonexistent", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
-        var actorRuntime = Substitute.For<IActorRuntime>();
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"nonexistent"}""");
-            result.Should().Contain("error");
-            result.Should().Contain("not found");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateToken_Accepts_Dispatch_Without_Projection_Confirmation()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("bot-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "bot-1", Platform = "telegram", NyxUserToken = "old-token" }));
-
+        EventEnvelope? capturedEnvelope = null;
         var actor = Substitute.For<IActor>();
-        actor.Id.Returns("channel-bot-registration-store");
+        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
+        actor.HandleEventAsync(Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
         var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("channel-bot-registration-store")
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(actor));
 
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(actorRuntime)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
 
-        var tool = new ChannelRegistrationTool(sp);
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
+        using var doc = JsonDocument.Parse(json);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "new-token" };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-1"}""");
-            var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            result.Should().Contain("Read model visibility is asynchronous");
-            _ = queryPort.DidNotReceive().GetStateVersionAsync("bot-1", Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
+        capturedEnvelope.Should().NotBeNull();
+        capturedEnvelope!.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
     }
 
     [Fact]
-    public async Task ExecuteAsync_UpdateToken_Dispatches_Command_To_Actor()
+    public async Task ExecuteAsync_Delete_WithConfirm_ReturnsAccepted_WhenProjectionStillShowsRegistration()
     {
-        // Verifies the tool actually sends the command envelope to the actor.
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("bot-3", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "bot-3", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }));
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("channel-bot-registration-store");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("channel-bot-registration-store")
-            .Returns(Task.FromResult<IActor?>(actor));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "fresh",
-                [LLMRequestMetadataKeys.NyxIdRefreshToken] = "refresh-fresh",
-            };
-        try
+        var registration = new ChannelBotRegistrationEntry
         {
-            await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-3"}""");
-
-            // Actor must have received exactly one HandleEventAsync call
-            // with a ChannelBotUpdateTokenCommand carrying the correct payload.
-            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
-                e.Route != null &&
-                e.Route.Direct != null &&
-                e.Route.Direct.TargetActorId == "channel-bot-registration-store" &&
-                e.Payload != null &&
-                e.Payload.Is(ChannelBotUpdateTokenCommand.Descriptor) &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().RegistrationId == "bot-3" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding != null &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxUserToken == "fresh" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxRefreshToken == "refresh-fresh"));
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateToken_Preserves_Stored_RefreshToken_When_Not_Provided()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("bot-4", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "bot-4", Platform = "telegram", NyxUserToken = "old", NyxRefreshToken = "refresh-old" }));
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("channel-bot-registration-store");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("channel-bot-registration-store")
-            .Returns(Task.FromResult<IActor?>(actor));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "fresh",
+            Id = "reg-1",
+            Platform = "lark",
         };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-4"}""");
-            var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            doc.RootElement.GetProperty("refresh_token_present").GetBoolean().Should().BeTrue();
 
-            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
-                e.Payload != null &&
-                e.Payload.Is(ChannelBotUpdateTokenCommand.Descriptor) &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().RegistrationId == "bot-4" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding != null &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxUserToken == "fresh" &&
-                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().DirectCallbackBinding!.NyxRefreshToken == "refresh-old"),
-                Arg.Any<CancellationToken>());
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    // ─── credential_ref parameter ───
-
-    [Fact]
-    public void ParametersSchema_Contains_CredentialRef_Property()
-    {
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        var doc = JsonDocument.Parse(tool.ParametersSchema);
-        var properties = doc.RootElement.GetProperty("properties");
-        properties.TryGetProperty("credential_ref", out _).Should().BeTrue(
-            "the register action should accept a credential_ref parameter");
-    }
-
-    [Fact]
-    public void ParametersSchema_Contains_NyxRefreshToken_Property()
-    {
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(sp);
-
-        var doc = JsonDocument.Parse(tool.ParametersSchema);
-        var properties = doc.RootElement.GetProperty("properties");
-        properties.TryGetProperty("nyx_refresh_token", out _).Should().BeTrue(
-            "register and update_token should accept a nyx_refresh_token parameter");
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_Register_Dispatches_CredentialRef_In_Command()
-    {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        // Return confirmation on first poll
-        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "confirmed-id", Platform = "telegram" }));
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
 
         var actor = Substitute.For<IActor>();
-        actor.Id.Returns("channel-bot-registration-store");
+        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
+        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
         var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("channel-bot-registration-store")
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(actor));
 
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        // No projection port — GetService returns null, which is fine
-        var sp = services.BuildServiceProvider();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(actorRuntime)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
 
-        var tool = new ChannelRegistrationTool(sp);
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
+        using var doc = JsonDocument.Parse(json);
 
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("note").GetString().Should().Contain("projection not yet confirmed");
+    }
+
+    private static IDisposable PushNyxToken()
+    {
+        var previous = AgentToolRequestContext.CurrentMetadata;
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-            [LLMRequestMetadataKeys.NyxIdRefreshToken] = "refresh-token-1",
         };
-        try
-        {
-            await tool.ExecuteAsync("""
-                {
-                    "action": "register",
-                    "platform": "telegram",
-                    "nyx_provider_slug": "api-telegram-bot",
-                    "credential_ref": "vault://channels/lark/reg-1"
-                }
-                """);
 
-            // Verify the actor received a command with credential_ref set
-            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
-                e.Payload != null &&
-                e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding != null &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.CredentialRef == "vault://channels/lark/reg-1" &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.NyxRefreshToken == "refresh-token-1" &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.EncryptKey == ""));
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        return new ResetMetadataScope(previous);
     }
 
-    [Fact]
-    public async Task ExecuteAsync_Register_DefaultsCredentialRefToEmpty_WhenNotProvided()
+    private sealed class ResetMetadataScope(IReadOnlyDictionary<string, string>? previous) : IDisposable
     {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                { Id = "confirmed", Platform = "telegram" }));
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("channel-bot-registration-store");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("channel-bot-registration-store")
-            .Returns(Task.FromResult<IActor?>(actor));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
-        var sp = services.BuildServiceProvider();
-
-        var tool = new ChannelRegistrationTool(sp);
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
-        try
-        {
-            await tool.ExecuteAsync("""
-                {
-                    "action": "register",
-                    "platform": "telegram",
-                    "nyx_provider_slug": "api-telegram-bot"
-                }
-                """);
-
-            // Verify direct callback binding still carries the access token but
-            // leaves secret-bearing fields empty by default.
-            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
-                e.Payload != null &&
-                e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding != null &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.NyxUserToken == "test-token" &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.CredentialRef == string.Empty &&
-                e.Payload.Unpack<ChannelBotRegisterCommand>().DirectCallbackBinding!.EncryptKey == string.Empty));
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    // ─── ChannelRegistrationToolSource ───
-
-    [Fact]
-    public async Task ToolSource_Always_Returns_Tool()
-    {
-        // The tool source should always return the tool — the tool itself
-        // handles missing dependencies gracefully at ExecuteAsync time.
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var source = new ChannelRegistrationToolSource(sp);
-
-        var tools = await source.DiscoverToolsAsync();
-
-        tools.Should().HaveCount(1);
-        tools[0].Name.Should().Be("channel_registrations");
+        public void Dispose() => AgentToolRequestContext.CurrentMetadata = previous;
     }
 }

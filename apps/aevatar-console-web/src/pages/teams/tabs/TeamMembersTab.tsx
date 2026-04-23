@@ -4,6 +4,7 @@ import {
   AevatarInspectorEmpty,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_PRESSABLE_CARD_CLASS } from "@/shared/ui/interactionStandards";
 import {
   DetailPill,
   FactLine,
@@ -195,6 +196,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             {identityRows.map((row) => (
               <button
                 aria-label={`选择成员 ${row.member} ${row.actorId}`}
+                className={AEVATAR_PRESSABLE_CARD_CLASS}
                 key={row.key}
                 onClick={() => onSelectActor(row.actorId)}
                 style={{

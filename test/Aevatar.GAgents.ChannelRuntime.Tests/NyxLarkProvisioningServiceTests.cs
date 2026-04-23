@@ -63,6 +63,7 @@ public class NyxLarkProvisioningServiceTests
 
         handler.Requests.Should().HaveCount(3);
         handler.Requests[0].Body.Should().Contain("\"callback_url\":\"https://aevatar.example.com/api/webhooks/nyxid-relay\"");
+        handler.Requests[0].Body.Should().Contain("\"platform\":\"generic\"");
         handler.Requests[1].Body.Should().Contain("\"bot_token\":\"__unused_for_lark__\"");
         handler.Requests[1].Body.Should().Contain("\"app_id\":\"cli_a1b2c3\"");
         handler.Requests[2].Body.Should().Contain("\"default_agent\":true");
@@ -162,10 +163,7 @@ public class NyxLarkProvisioningServiceTests
         command.RequestedId == registrationId &&
         command.Platform == "lark" &&
         command.NyxProviderSlug == "api-lark-bot" &&
-        command.NyxUserToken == string.Empty &&
-        command.NyxRefreshToken == string.Empty &&
-        command.VerificationToken == string.Empty &&
-        command.CredentialRef == string.Empty &&
+        command.ScopeId == "scope-1" &&
         command.NyxAgentApiKeyId == "key-123" &&
         command.NyxChannelBotId == "bot-456" &&
         command.NyxConversationRouteId == "route-789" &&

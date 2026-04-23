@@ -63,6 +63,7 @@ public sealed class UserConfigCurrentStateProjector
             RuntimeMode = state.RuntimeMode,
             LocalRuntimeBaseUrl = state.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl = state.RemoteRuntimeBaseUrl,
+            GithubUsername = state.GithubUsername,
             MaxToolRounds = state.MaxToolRounds,
         };
 

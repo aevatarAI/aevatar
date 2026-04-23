@@ -49,6 +49,44 @@ export function routePathFromProviderSlug(slug: string): string {
   return normalized ? `/api/v1/proxy/s/${normalized}` : USER_LLM_ROUTE_GATEWAY;
 }
 
+export function resolveReadyConversationRoute(
+  preferredRoute: string,
+  readyGatewayProvider: { providerSlug: string } | null | undefined,
+  readyServiceProviders: readonly { providerSlug: string }[]
+): string {
+  if (preferredRoute === USER_LLM_ROUTE_GATEWAY) {
+    if (readyGatewayProvider) {
+      return USER_LLM_ROUTE_GATEWAY;
+    }
+
+    const fallbackServiceProvider = readyServiceProviders.find((provider) =>
+      trimConversationValue(provider.providerSlug)
+    );
+    return fallbackServiceProvider
+      ? routePathFromProviderSlug(fallbackServiceProvider.providerSlug)
+      : USER_LLM_ROUTE_GATEWAY;
+  }
+
+  const matchingServiceProvider = readyServiceProviders.find(
+    (provider) =>
+      routePathFromProviderSlug(provider.providerSlug) === preferredRoute
+  );
+  if (matchingServiceProvider) {
+    return preferredRoute;
+  }
+
+  if (readyGatewayProvider) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  const fallbackServiceProvider = readyServiceProviders.find((provider) =>
+    trimConversationValue(provider.providerSlug)
+  );
+  return fallbackServiceProvider
+    ? routePathFromProviderSlug(fallbackServiceProvider.providerSlug)
+    : preferredRoute;
+}
+
 export function buildConversationHeaders(
   llmRoute: string | undefined,
   llmModel: string | undefined
@@ -282,7 +320,9 @@ export function buildConversationModelGroups(input: {
   const fallbackGroups =
     explicitGroups.length > 0
       ? []
-      : buildFallbackModelGroups(input.models?.supportedModels ?? [], routeProviders);
+      : input.effectiveRoute === USER_LLM_ROUTE_GATEWAY
+        ? buildFallbackModelGroups(input.models?.supportedModels ?? [], routeProviders)
+        : [];
 
   const groups = [...explicitGroups, ...fallbackGroups];
   const selectedModel =

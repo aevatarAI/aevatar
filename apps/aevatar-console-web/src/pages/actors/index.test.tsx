@@ -200,6 +200,92 @@ describe("ActorsPage", () => {
     });
   });
 
+  it("bounds the actor table body instead of clipping the parent panel", async () => {
+    const { container } = renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+
+    const tableShell = container.querySelector<HTMLElement>(".topology-actor-table-shell");
+    const table = container.querySelector<HTMLElement>(".topology-actor-table");
+    const tableBody = container.querySelector<HTMLElement>(
+      ".topology-actor-table .ant-table-body",
+    );
+
+    expect(tableShell).toBeTruthy();
+    expect(tableShell).toHaveStyle({
+      maxWidth: "100%",
+      minWidth: "0",
+      overflowX: "auto",
+      width: "100%",
+    });
+    expect(table).toBeTruthy();
+    expect(table).toHaveStyle({
+      maxHeight: "min(52vh, 440px)",
+      maxWidth: "100%",
+      minWidth: "0",
+      overflow: "hidden",
+      width: "100%",
+    });
+    expect(tableBody).toBeTruthy();
+    expect(tableBody).toHaveStyle({
+      maxHeight: "calc(min(52vh, 440px) - 64px)",
+    });
+  });
+
+  it("does not open the preview drawer when only the row is clicked", async () => {
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+    const plannerRow = findActorRow("SupportPlanner");
+
+    expect(plannerRow).toBeTruthy();
+
+    fireEvent.click(plannerRow as HTMLElement);
+
+    expect(screen.queryByText("对象快速概览")).toBeNull();
+
+    fireEvent.click(
+      within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
+    );
+
+    expect(await screen.findByText("对象快速概览")).toBeTruthy();
+  });
+
+  it("opens runtime runs from the preview drawer using the preview actor context", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/explorer?scopeId=scope-team-1&serviceId=service-draft&runId=run-123",
+    );
+
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+    const plannerRow = findActorRow("SupportPlanner");
+
+    expect(plannerRow).toBeTruthy();
+
+    fireEvent.click(
+      within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
+    );
+
+    expect(await screen.findByText("对象快速概览")).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看运行" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/runs");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("actorId")).toBe("actor://workflow/customer-support/planner");
+    expect(params.get("scopeId")).toBe("scope-team-1");
+    expect(params.get("serviceOverrideId")).toBe("service-draft");
+    expect(params.get("route")).toBe("SupportPlanner");
+    expect(params.get("returnTo")).toContain("/runtime/explorer/detail");
+    expect(params.get("returnTo")).toContain("actorId=actor%3A%2F%2Fworkflow%2Fcustomer-support%2Fplanner");
+  });
+
   it("shows a dedicated unavailable message when preview actor snapshot is gone", async () => {
     (runtimeActorsApi.getActorSnapshot as jest.Mock).mockRejectedValueOnce(
       new Error("HTTP 404 Not Found"),
