@@ -70,7 +70,7 @@ internal static class NyxIdRelayReplies
         var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
 
         var model = !string.IsNullOrWhiteSpace(modelOverride)
-            ? $"{modelOverride} (from config.json)"
+            ? $"{modelOverride} (from user config)"
             : $"server-default={serverDefault}";
 
         var error = errorMessage.Length > 300 ? errorMessage[..300] + "..." : errorMessage;

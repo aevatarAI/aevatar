@@ -160,7 +160,7 @@ public static partial class NyxIdChatEndpoints
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Failed to load user config from chrono-storage — falling back to server defaults");
+            logger?.LogWarning(ex, "Failed to load user config from the projection read model; falling back to server defaults");
         }
     }
 
