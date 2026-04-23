@@ -74,6 +74,24 @@ const buildWorkbenchPrimaryColumnStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+const workflowWorkbenchLayoutStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  minHeight: 0,
+  minWidth: 0,
+};
+
+const workflowEditingSurfaceHeight = 'clamp(560px, calc(100vh - 320px), 760px)';
+
+const workflowWorkspaceRowStyle: React.CSSProperties = {
+  alignItems: 'stretch',
+  display: 'flex',
+  gap: 16,
+  minHeight: workflowEditingSurfaceHeight,
+  minWidth: 0,
+};
+
 const buildSurfaceCardStyle: React.CSSProperties = {
   background: '#ffffff',
   border: '1px solid #e8dfd0',
@@ -155,17 +173,79 @@ const workflowCanvasSurfaceStyle: React.CSSProperties = {
   background: '#fdfaf4',
   border: '1px solid #ede5d8',
   borderRadius: 22,
-  minHeight: 456,
+  flex: '1 1 auto',
+  minHeight: 0,
   overflow: 'hidden',
   padding: 12,
 };
 
-const workflowSideRailStyle: React.CSSProperties = {
-  alignSelf: 'start',
+const workflowCanvasPanelStyle: React.CSSProperties = {
+  ...buildSurfaceCardStyle,
   display: 'grid',
+  flex: '8 1 0',
   gap: 16,
-  position: 'sticky',
-  top: 12,
+  gridTemplateRows: 'auto minmax(0, 1fr)',
+  height: '100%',
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const workflowCanvasBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+  minHeight: 0,
+};
+
+const workflowStepDetailCardStyle: React.CSSProperties = {
+  ...buildSurfaceCardStyle,
+  display: 'grid',
+  flex: '2 1 320px',
+  gap: 16,
+  gridTemplateRows: 'auto auto minmax(0, 1fr)',
+  height: '100%',
+  maxWidth: 360,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const workflowStepDetailBodyStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+  minHeight: 0,
+  overflowY: 'auto',
+  paddingRight: 4,
+};
+
+const workflowDryRunSectionStyle: React.CSSProperties = {
+  alignSelf: 'stretch',
+  background: '#ffffff',
+  border: '1px solid #e8dfd0',
+  borderRadius: 20,
+  display: 'grid',
+  gap: 12,
+  minWidth: 0,
+  padding: 18,
+  position: 'relative',
+  width: '100%',
+  zIndex: 0,
+};
+
+const workflowDryRunOutputStyle: React.CSSProperties = {
+  background: '#faf8f3',
+  border: '1px solid #efe7da',
+  borderRadius: 14,
+  color: '#425466',
+  fontFamily: 'Monaco, Menlo, monospace',
+  fontSize: 12,
+  lineHeight: '20px',
+  margin: 0,
+  maxHeight: 140,
+  minHeight: 96,
+  overflow: 'auto',
+  padding: 12,
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
 };
 
 const workflowDetailsGridStyle: React.CSSProperties = {
@@ -200,13 +280,21 @@ const workflowTypePickerStyle: React.CSSProperties = {
   borderRadius: 18,
   display: 'grid',
   gap: 10,
+  gridTemplateRows: 'auto auto minmax(0, 1fr)',
+  maxHeight: 'min(360px, calc(100vh - 420px))',
+  minHeight: 0,
+  overflow: 'hidden',
   padding: 14,
 };
 
 const workflowTypePickerGridStyle: React.CSSProperties = {
+  alignContent: 'start',
   display: 'grid',
   gap: 10,
   gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+  minHeight: 0,
+  overflowY: 'auto',
+  paddingRight: 4,
 };
 
 const workflowTypeOptionStyle: React.CSSProperties = {
@@ -263,6 +351,28 @@ const dryRunOutputStyle: React.CSSProperties = {
   wordBreak: 'break-word',
 };
 
+const dryRunSummaryStyle: React.CSSProperties = {
+  ...dryRunOutputStyle,
+  color: '#5f5b53',
+  maxHeight: 140,
+  minHeight: 0,
+};
+
+const dryRunDebugDetailsStyle: React.CSSProperties = {
+  background: '#fcfaf6',
+  border: '1px solid #efe7da',
+  borderRadius: 14,
+  padding: 12,
+};
+
+const dryRunDebugSummaryStyle: React.CSSProperties = {
+  color: '#5f5b53',
+  cursor: 'pointer',
+  fontSize: 12,
+  fontWeight: 600,
+  listStyle: 'none',
+};
+
 const modalCardStyle: React.CSSProperties = {
   background: '#fcfaf6',
   border: '1px solid #efe7da',
@@ -292,6 +402,15 @@ const IDLE_DRAFT_RUN_STATE: DraftRunState = {
   status: 'idle',
 };
 
+function getRunDebugLines(state: DraftRunState): string[] {
+  return [
+    state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
+    state.actorId.trim() ? `actorId: ${state.actorId.trim()}` : '',
+    state.commandId.trim() ? `commandId: ${state.commandId.trim()}` : '',
+    state.events.length > 0 ? `events: ${state.events.length}` : '',
+  ].filter(Boolean);
+}
+
 function renderRunOutput(state: DraftRunState): string {
   if (state.error.trim()) {
     return state.error.trim();
@@ -301,18 +420,33 @@ function renderRunOutput(state: DraftRunState): string {
     return state.assistantText.trim();
   }
 
-  if (state.runId.trim() || state.actorId.trim() || state.commandId.trim()) {
-    return [
-      state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
-      state.actorId.trim() ? `actorId: ${state.actorId.trim()}` : '',
-      state.commandId.trim() ? `commandId: ${state.commandId.trim()}` : '',
-      state.events.length > 0 ? `events: ${state.events.length}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
+  if (state.status === 'running') {
+    return 'Waiting for assistant output...';
   }
 
-  return 'Run the current draft to inspect transcript and runtime context here.';
+  if (state.status === 'success' && getRunDebugLines(state).length > 0) {
+    return 'Run completed, but no assistant output was returned.';
+  }
+
+  return 'Run the current draft to inspect the assistant output here.';
+}
+
+function renderRunSummary(state: DraftRunState): string {
+  return getRunDebugLines(state).join('\n');
+}
+
+function extractRunFinishedOutput(result: unknown): string {
+  if (typeof result === 'string') {
+    return result;
+  }
+
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return '';
+  }
+
+  const record = result as Record<string, unknown>;
+  const candidate = record.output ?? record.Output ?? record.message ?? record.text;
+  return typeof candidate === 'string' ? candidate : '';
 }
 
 function tryParseStepParameters(
@@ -436,9 +570,35 @@ async function consumeAguiDraftRun(
         nextAssistantText += String((event as { delta?: string }).delta || '');
       }
 
+      if (event.type === AGUIEventType.TEXT_MESSAGE_END) {
+        const finalAssistantText =
+          String(
+            (event as { message?: string; delta?: string }).message ||
+              (event as { delta?: string }).delta ||
+              '',
+          ) || '';
+        if (!nextAssistantText.trim() && finalAssistantText.trim()) {
+          nextAssistantText = finalAssistantText;
+        }
+      }
+
       if (event.type === AGUIEventType.RUN_STARTED) {
         nextRunId = String((event as { runId?: string }).runId || nextRunId);
-        nextActorId = String((event as { threadId?: string }).threadId || nextActorId);
+        nextActorId = String(
+          (event as { actorId?: string; threadId?: string }).actorId ||
+            (event as { threadId?: string }).threadId ||
+            nextActorId,
+        );
+      }
+
+      if (event.type === AGUIEventType.RUN_FINISHED) {
+        const finalOutput = extractRunFinishedOutput(
+          (event as { result?: unknown }).result,
+        );
+        if (!nextAssistantText.trim() && finalOutput.trim()) {
+          nextAssistantText = finalOutput;
+        }
+        nextStatus = 'success';
       }
 
       if (event.type === AGUIEventType.CUSTOM) {
@@ -607,6 +767,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   onNodeLayoutChange,
   onContinueToBind,
 }) => {
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
   const [viewMode, setViewMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [runState, setRunState] = React.useState<DraftRunState>(IDLE_DRAFT_RUN_STATE);
   const [workflowRunError, setWorkflowRunError] = React.useState('');
@@ -853,8 +1014,39 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     [workflowGraph.edges, workflowGraph.nodes, workflowName],
   );
 
+  React.useEffect(() => {
+    if (viewMode !== 'canvas' || typeof window === 'undefined') {
+      return;
+    }
+
+    const root = panelRef.current;
+    if (!root) {
+      return;
+    }
+
+    const scrollParent = root.parentElement;
+    if (!scrollParent) {
+      return;
+    }
+
+    const overflowY = window.getComputedStyle(scrollParent).overflowY;
+    if (!/(auto|scroll)/.test(overflowY)) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      scrollParent.scrollTop = 0;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [viewMode, workflowName]);
+
   return (
-    <div data-testid="studio-workflow-build-panel" style={buildWorkbenchGridStyle}>
+    <div
+      ref={panelRef}
+      data-testid="studio-workflow-build-panel"
+      style={workflowWorkbenchLayoutStyle}
+    >
       <div data-testid="workflow-stage-actions" style={workflowStageActionsStyle}>
         <div style={workflowStageActionsRowStyle}>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
@@ -885,11 +1077,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         ) : null}
       </div>
 
-      <div
-        data-testid="workflow-build-primary-column"
-        style={buildWorkbenchPrimaryColumnStyle}
-      >
-        <section style={buildSurfaceCardStyle}>
+      <div data-testid="workflow-editor-workspace" style={workflowWorkspaceRowStyle}>
+        <section
+          data-testid="workflow-build-primary-column"
+          style={workflowCanvasPanelStyle}
+        >
           <div style={workflowToolbarStyle}>
             <Space wrap size={[8, 8]}>
               <div style={sectionEyebrowStyle}>DAG Canvas</div>
@@ -929,81 +1121,98 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               </Button>
             </div>
           </div>
-          {stepTypePickerOpen ? (
-            <div data-testid="workflow-step-type-picker" style={workflowTypePickerStyle}>
-              <div style={workflowSectionHeadingStyle}>Choose step type</div>
-              <div style={workflowInlineMetaStyle}>
-                先决定要插入哪种 step，再把它接到当前选中的节点后面。
+          <div style={workflowCanvasBodyStyle}>
+            {stepTypePickerOpen ? (
+              <div data-testid="workflow-step-type-picker" style={workflowTypePickerStyle}>
+                <div style={workflowSectionHeadingStyle}>Choose step type</div>
+                <div style={workflowInlineMetaStyle}>
+                  先决定要插入哪种 step，再把它接到当前选中的节点后面。
+                </div>
+                <div
+                  data-testid="workflow-step-type-picker-grid"
+                  style={workflowTypePickerGridStyle}
+                >
+                  {describedStepTypes.map((entry) => (
+                    <button
+                      key={entry.stepType}
+                      type="button"
+                      style={workflowTypeOptionStyle}
+                      onClick={() => void handleInsertStep(entry.stepType)}
+                    >
+                      <strong style={{ color: '#1f2937', fontSize: 13 }}>{entry.stepType}</strong>
+                      <span style={{ color: '#6b7280', fontSize: 12, lineHeight: '18px' }}>
+                        {entry.description}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div style={workflowTypePickerGridStyle}>
-                {describedStepTypes.map((entry) => (
-                  <button
-                    key={entry.stepType}
-                    type="button"
-                    style={workflowTypeOptionStyle}
-                    onClick={() => void handleInsertStep(entry.stepType)}
-                  >
-                    <strong style={{ color: '#1f2937', fontSize: 13 }}>{entry.stepType}</strong>
-                    <span style={{ color: '#6b7280', fontSize: 12, lineHeight: '18px' }}>
-                      {entry.description}
-                    </span>
-                  </button>
-                ))}
+            ) : null}
+            {viewMode === 'canvas' ? (
+              <div style={workflowCanvasSurfaceStyle}>
+                <GraphCanvas
+                  autoFitKey={workflowCanvasAutoFitKey}
+                  bottomInset={0}
+                  height="100%"
+                  variant="studio"
+                  nodes={[...workflowGraph.nodes]}
+                  edges={[...workflowGraph.edges]}
+                  selectedNodeId={selectedNodeId || undefined}
+                  onNodeSelect={onSelectGraphNode}
+                  onConnectNodes={onConnectNodes}
+                  onNodeLayoutChange={onNodeLayoutChange}
+                />
               </div>
-            </div>
-          ) : null}
-          {viewMode === 'canvas' ? (
-            <div style={workflowCanvasSurfaceStyle}>
-              <GraphCanvas
-                autoFitKey={workflowCanvasAutoFitKey}
-                bottomInset={0}
-                height={500}
-                variant="studio"
-                nodes={[...workflowGraph.nodes]}
-                edges={[...workflowGraph.edges]}
-                selectedNodeId={selectedNodeId || undefined}
-                onNodeSelect={onSelectGraphNode}
-                onConnectNodes={onConnectNodes}
-                onNodeLayoutChange={onNodeLayoutChange}
-              />
-            </div>
-          ) : (
-            <section data-testid="workflow-yaml-panel" style={buildSurfaceCardStyle}>
-              <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-                <div style={sectionEyebrowStyle}>Workflow YAML</div>
-                <Tag color="blue">raw draft</Tag>
-              </div>
-              <Input.TextArea
-                aria-label="定义 YAML"
-                autoSize={{ minRows: 18, maxRows: 28 }}
-                value={draftYaml}
-                onChange={(event) => onSetDraftYaml(event.target.value)}
-              />
-            </section>
-          )}
+            ) : (
+              <section
+                data-testid="workflow-yaml-panel"
+                style={{ ...buildSurfaceCardStyle, flex: '1 1 auto', minHeight: 0 }}
+              >
+                <div
+                  style={{
+                    alignItems: 'center',
+                    display: 'flex',
+                    gap: 8,
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <div style={sectionEyebrowStyle}>Workflow YAML</div>
+                  <Tag color="blue">raw draft</Tag>
+                </div>
+                <Input.TextArea
+                  aria-label="定义 YAML"
+                  autoSize={{ minRows: 18, maxRows: 28 }}
+                  value={draftYaml}
+                  onChange={(event) => onSetDraftYaml(event.target.value)}
+                />
+              </section>
+            )}
+          </div>
         </section>
-      </div>
 
-      <aside style={workflowSideRailStyle}>
         <section
           data-testid="workflow-step-detail-panel"
-          style={buildSurfaceCardStyle}
+          style={workflowStepDetailCardStyle}
         >
-          <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+          <div
+            style={{
+              alignItems: 'center',
+              display: 'flex',
+              gap: 8,
+              justifyContent: 'space-between',
+            }}
+          >
             <div style={{ display: 'grid', gap: 4 }}>
               <div style={sectionEyebrowStyle}>Step Detail</div>
-              {selectedStep ? (
-                <Typography.Text strong>{selectedStep.id}</Typography.Text>
-              ) : null}
+              {selectedStep ? <Typography.Text strong>{selectedStep.id}</Typography.Text> : null}
             </div>
             {selectedStep ? <Tag>{selectedStep.type}</Tag> : null}
           </div>
-          {stepMutationError ? (
-            <Alert message={stepMutationError} showIcon type="error" />
-          ) : null}
-          {selectedStep && stepDraft ? (
-            <>
-              <div style={workflowDetailsGridStyle}>
+          {stepMutationError ? <Alert message={stepMutationError} showIcon type="error" /> : null}
+          <div style={workflowStepDetailBodyStyle}>
+            {selectedStep && stepDraft ? (
+              <>
+                <div style={workflowDetailsGridStyle}>
                 <div style={workflowFieldStyle}>
                   <div style={workflowSectionHeadingStyle}>Basics</div>
                   <label htmlFor="workflow-step-id" style={workflowFieldLabelStyle}>
@@ -1253,84 +1462,91 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           ) : (
             <Empty description="Select a step from the DAG canvas first." />
           )}
+          </div>
         </section>
+      </div>
 
-        <section style={dryRunAsideStyle}>
-          <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-            <div style={{ display: 'grid', gap: 4 }}>
-              <div style={sectionEyebrowStyle}>Dry-run</div>
-              <Typography.Text strong>Workflow draft run</Typography.Text>
-            </div>
-            <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-              seeded fixture
-            </span>
+      <section data-testid="workflow-dry-run-panel" style={workflowDryRunSectionStyle}>
+        <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <div style={sectionEyebrowStyle}>Dry-run</div>
+            <Typography.Text strong>Workflow draft run</Typography.Text>
           </div>
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div style={workflowInlineMetaStyle}>
-              Route: {dryRunRouteLabel || 'Config default'}
-            </div>
-            <div style={workflowInlineMetaStyle}>
-              Model: {dryRunModelLabel || 'Use configured default'}
-            </div>
+          <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
+            seeded fixture
+          </span>
+        </div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div style={workflowInlineMetaStyle}>
+            Route: {dryRunRouteLabel || 'Config default'}
           </div>
-          {dryRunBlockedReason ? (
-            <Alert
-              action={
-                onOpenRunSetup ? (
-                  <Button size="small" type="link" onClick={onOpenRunSetup}>
-                    Connect provider
-                  </Button>
-                ) : undefined
-              }
-              message={dryRunBlockedReason}
-              showIcon
-              type="warning"
-            />
-          ) : null}
-          <Input.TextArea
-            aria-label="Workflow dry run input"
-            autoSize={{ minRows: 6, maxRows: 10 }}
-            placeholder="Describe the input you want this workflow member to handle."
-            value={runPrompt}
-            onChange={(event) => onRunPromptChange(event.target.value)}
+          <div style={workflowInlineMetaStyle}>
+            Model: {dryRunModelLabel || 'Use configured default'}
+          </div>
+        </div>
+        {dryRunBlockedReason ? (
+          <Alert
+            action={
+              onOpenRunSetup ? (
+                <Button size="small" type="link" onClick={onOpenRunSetup}>
+                  Connect provider
+                </Button>
+              ) : undefined
+            }
+            message={dryRunBlockedReason}
+            showIcon
+            type="warning"
           />
-          <Space wrap size={[8, 8]}>
-            <Button
-              icon={<PlayCircleOutlined />}
-              loading={runState.status === 'running'}
-              type="primary"
-              disabled={Boolean(dryRunBlockedReason?.trim())}
-              onClick={() => void handleRun()}
-            >
-              Run
-            </Button>
-            <Button
-              onClick={() =>
-                onRunPromptChange(
-                  JSON.stringify(
-                    {
-                      channel: 'telegram',
-                      text: 'refund for order #92817 — 3rd time asking',
-                      user: 'alex',
-                    },
-                    null,
-                    2,
-                  ),
+        ) : null}
+        <Input.TextArea
+          aria-label="Workflow dry run input"
+          autoSize={{ minRows: 4, maxRows: 6 }}
+          placeholder="Describe the input you want this workflow member to handle."
+          value={runPrompt}
+          onChange={(event) => onRunPromptChange(event.target.value)}
+        />
+        <Space wrap size={[8, 8]}>
+          <Button
+            icon={<PlayCircleOutlined />}
+            loading={runState.status === 'running'}
+            type="primary"
+            disabled={Boolean(dryRunBlockedReason?.trim())}
+            onClick={() => void handleRun()}
+          >
+            Run
+          </Button>
+          <Button
+            onClick={() =>
+              onRunPromptChange(
+                JSON.stringify(
+                  {
+                    channel: 'telegram',
+                    text: 'refund for order #92817 — 3rd time asking',
+                    user: 'alex',
+                  },
+                  null,
+                  2,
                 )
-              }
-            >
-              Load fixture
-            </Button>
-          </Space>
-          {workflowRunError ? (
-            <Alert message={workflowRunError} showIcon type="error" />
-          ) : null}
-          <div>
-            <div style={sectionEyebrowStyle}>Output</div>
-            <pre style={dryRunOutputStyle}>{renderRunOutput(runState)}</pre>
-          </div>
-        </section>
-      </aside>
+              )
+            }
+          >
+            Load fixture
+          </Button>
+        </Space>
+        {workflowRunError ? (
+          <Alert message={workflowRunError} showIcon type="error" />
+        ) : null}
+        <div>
+          <div style={sectionEyebrowStyle}>Output</div>
+          <pre style={workflowDryRunOutputStyle}>{renderRunOutput(runState)}</pre>
+        </div>
+        {renderRunSummary(runState) ? (
+          <details style={dryRunDebugDetailsStyle}>
+            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
+          </details>
+        ) : null}
+      </section>
     </div>
   );
 };
@@ -2060,6 +2276,12 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <div style={sectionEyebrowStyle}>Output</div>
           <pre style={dryRunOutputStyle}>{renderRunOutput(runState)}</pre>
         </div>
+        {renderRunSummary(runState) ? (
+          <details style={dryRunDebugDetailsStyle}>
+            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
+          </details>
+        ) : null}
       </aside>
     </div>
   );

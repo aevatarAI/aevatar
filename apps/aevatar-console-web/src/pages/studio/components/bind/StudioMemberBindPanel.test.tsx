@@ -235,4 +235,42 @@ describe('StudioMemberBindPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue to Invoke' }));
     expect(handleContinueToInvoke).toHaveBeenCalledWith('default', 'chat');
   });
+
+  it('offers a bind action for the current workflow draft before any published service exists', async () => {
+    const handleBindPendingCandidate = jest.fn().mockResolvedValue(undefined);
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        scopeId: 'scope-1',
+        pendingBindingCandidate: {
+          kind: 'workflow',
+          displayName: 'draft',
+          description:
+            'Bind creates the first published member service for this workflow draft.',
+          actionLabel: 'Bind current workflow',
+        },
+        onBindPendingCandidate: handleBindPendingCandidate,
+        services: [],
+      }),
+    );
+
+    expect(await screen.findByTestId('studio-bind-surface')).toBeTruthy();
+    expect(
+      screen.getByText('No published service exists for draft yet.'),
+    ).toBeTruthy();
+    expect(screen.getByText('Create binding contract')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Bind current workflow' }));
+    });
+
+    expect(handleBindPendingCandidate).toHaveBeenCalledTimes(1);
+  });
 });
