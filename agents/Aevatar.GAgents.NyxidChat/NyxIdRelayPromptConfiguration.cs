@@ -37,7 +37,7 @@ For Lark, follow this two-stage guidance:
    This stage is for inbound relay wiring and basic relay replies.
 
 2. Advanced Lark capabilities: only when the user needs proactive sends, chat lookup, spreadsheet appends, approval actions, or delivery target bindings, require a Nyx Lark provider slug such as `api-lark-bot`.
-   In those cases, prefer typed Lark tools such as `lark_chats_lookup`, `lark_messages_send`, `lark_messages_react`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
+   In those cases, prefer typed Lark tools such as `lark_messages_send`, `lark_messages_reply`, `lark_messages_search`, `lark_messages_batch_get`, `lark_messages_react`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
 
 For inbound Lark relay turns that represent a fresh user message (not a card action), if the typed tool `lark_messages_react` is available and metadata exposes `channel.platform_message_id`, call `lark_messages_react` first with an acknowledgment emoji such as `OK`, then continue with the substantive reply.
 """;

@@ -3,21 +3,20 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.Lark.Tools;
 
-public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.Parameters>
+public sealed class LarkMessagesReactionsDeleteTool : AgentToolBase<LarkMessagesReactionsDeleteTool.Parameters>
 {
     private readonly ILarkNyxClient _client;
 
-    public LarkMessagesReactTool(ILarkNyxClient client)
+    public LarkMessagesReactionsDeleteTool(ILarkNyxClient client)
     {
         _client = client;
     }
 
-    public override string Name => "lark_messages_react";
+    public override string Name => "lark_messages_reactions_delete";
 
     public override string Description =>
-        "Add an emoji reaction to a Lark message. " +
-        "On a channel relay turn you can omit message_id to react to the current inbound message. " +
-        "Defaults to emoji_type=OK (an acknowledgement like '了解').";
+        "Delete a specific Lark message reaction record by reaction_id. " +
+        "On a channel relay turn you can omit message_id to operate on the current inbound message.";
 
     public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
@@ -29,18 +28,15 @@ public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.
 
         var messageId = LarkMessageIdResolver.ResolveOrCurrent(parameters.MessageId, out var usedCurrentMessage, out var messageError);
         if (!string.IsNullOrWhiteSpace(messageError))
-        {
-            return LarkProxyResponseParser.Serialize(new
-            {
-                success = false,
-                error = messageError,
-            });
-        }
+            return LarkProxyResponseParser.Serialize(new { success = false, error = messageError });
 
-        var emojiType = LarkReactionEmojiHelper.NormalizeOrDefault(parameters.EmojiType);
-        var response = await _client.CreateMessageReactionAsync(
+        var reactionId = parameters.ReactionId?.Trim();
+        if (string.IsNullOrWhiteSpace(reactionId))
+            return LarkProxyResponseParser.Serialize(new { success = false, error = "reaction_id is required." });
+
+        var response = await _client.DeleteMessageReactionAsync(
             token,
-            new LarkMessageReactionRequest(messageId!, emojiType),
+            new LarkMessageReactionDeleteRequest(messageId!, reactionId),
             ct);
 
         if (LarkProxyResponseParser.TryParseError(response, out var error))
@@ -50,7 +46,7 @@ public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.
                 success = false,
                 error,
                 message_id = messageId,
-                emoji_type = emojiType,
+                reaction_id = reactionId,
             });
         }
 
@@ -59,8 +55,8 @@ public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.
         {
             success = true,
             message_id = messageId,
-            emoji_type = result.EmojiType ?? emojiType,
-            reaction_id = result.ReactionId,
+            reaction_id = result.ReactionId ?? reactionId,
+            emoji_type = result.EmojiType,
             operator_id = result.OperatorId,
             operator_type = result.OperatorType,
             action_time = result.ActionTime,
@@ -71,6 +67,6 @@ public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.
     public sealed class Parameters
     {
         public string? MessageId { get; set; }
-        public string? EmojiType { get; set; }
+        public string? ReactionId { get; set; }
     }
 }

@@ -160,9 +160,14 @@ Ensure NyxID has a usable Lark outbound provider slug, typically `api-lark-bot`:
 If not: `nyxid_catalog action=list` → find the slug → guide user to add it
 
 For advanced Lark API operations, prefer typed tools such as:
-- `lark_chats_lookup`
 - `lark_messages_send`
+- `lark_messages_reply`
+- `lark_messages_search`
+- `lark_messages_batch_get`
 - `lark_messages_react`
+- `lark_messages_reactions_list`
+- `lark_messages_reactions_delete`
+- `lark_chats_lookup`
 - `lark_sheets_append_rows`
 - `lark_approvals_list`
 - `lark_approvals_act`

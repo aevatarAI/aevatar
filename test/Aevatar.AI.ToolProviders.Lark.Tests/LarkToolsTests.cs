@@ -95,6 +95,74 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkMessagesReplyTool_ShouldDefaultToCurrentMessage_AndReplyInThread()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ReplyResponse = """{"code":0,"data":{"message_id":"om_reply_1","chat_id":"oc_456","create_time":"1730000002"}}""",
+        };
+        var tool = new LarkMessagesReplyTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>
+            {
+                ["channel.platform_message_id"] = "om_current_2",
+            });
+
+        var result = await tool.ExecuteAsync("""{"text":"收到，我继续看一下","reply_in_thread":true}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_reply_1");
+        document.RootElement.GetProperty("reply_in_thread").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("used_current_message").GetBoolean().Should().BeTrue();
+        client.LastReplyRequest.Should().NotBeNull();
+        client.LastReplyRequest!.MessageId.Should().Be("om_current_2");
+        client.LastReplyRequest.ReplyInThread.Should().BeTrue();
+        client.LastReplyRequest.MessageType.Should().Be("text");
+    }
+
+    [Fact]
+    public async Task LarkMessagesReplyTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkMessagesReplyTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"message_id":"om_1","text":"hello"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{"text":"hello"}"""))
+                .Should().Contain("message_id is required");
+            (await tool.ExecuteAsync("""{"message_id":"msg_1","text":"hello"}"""))
+                .Should().Contain("message_id must be a Lark message id like om_xxx");
+            (await tool.ExecuteAsync("""{"message_id":"om_1","message_type":"markdown","text":"hello"}"""))
+                .Should().Contain("message_type must be one of");
+            (await tool.ExecuteAsync("""{"message_id":"om_1","message_type":"text","text":" "}"""))
+                .Should().Contain("text is required when message_type=text");
+            (await tool.ExecuteAsync("""{"message_id":"om_1","message_type":"interactive_card"}"""))
+                .Should().Contain("card_json is required when message_type=interactive_card");
+            (await tool.ExecuteAsync("""{"message_id":"om_1","message_type":"interactive_card","card_json":"{bad json}"}"""))
+                .Should().Contain("card_json is not valid JSON");
+        }
+
+        var errorTool = new LarkMessagesReplyTool(new StubLarkNyxClient
+        {
+            ReplyResponse = """{"error":true,"status":500,"message":"reply failed"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync("""{"message_id":"om_1","text":"hello"}""");
+            result.Should().Contain("nyx_proxy_error status=500");
+            result.Should().Contain("\"message_id\":\"om_1\"");
+        }
+    }
+
+    [Fact]
     public async Task LarkMessagesReactTool_ShouldDefaultToCurrentMessage_AndOkEmoji()
     {
         var client = new StubLarkNyxClient
@@ -179,6 +247,332 @@ public class LarkToolsTests
             result.Should().Contain("nyx_proxy_error status=429");
             result.Should().Contain("\"message_id\":\"om_1\"");
             result.Should().Contain("\"emoji_type\":\"OK\"");
+        }
+    }
+
+    [Fact]
+    public async Task LarkMessagesReactionsListTool_ShouldDefaultToCurrentMessage_AndNormalizeFilter()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ReactionListResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "items": [
+                      {
+                        "reaction_id": "reaction_1",
+                        "operator": {
+                          "operator_id": "ou_1",
+                          "operator_type": "user"
+                        },
+                        "action_time": "1730000003",
+                        "reaction_type": {
+                          "emoji_type": "OK"
+                        }
+                      }
+                    ],
+                    "has_more": false
+                  }
+                }
+                """,
+        };
+        var tool = new LarkMessagesReactionsListTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>
+            {
+                ["channel.platform_message_id"] = "om_current_3",
+            });
+
+        var result = await tool.ExecuteAsync("""{"emoji_type":"收到"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_current_3");
+        document.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+        client.LastReactionListRequest.Should().NotBeNull();
+        client.LastReactionListRequest!.MessageId.Should().Be("om_current_3");
+        client.LastReactionListRequest.EmojiType.Should().Be("OK");
+    }
+
+    [Fact]
+    public async Task LarkMessagesReactionsListTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkMessagesReactionsListTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"message_id":"om_1"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{}"""))
+                .Should().Contain("message_id is required");
+            (await tool.ExecuteAsync("""{"message_id":"om_1","user_id_type":"email"}"""))
+                .Should().Contain("user_id_type must be one of");
+            (await tool.ExecuteAsync("""{"message_id":"om_1","page_size":101}"""))
+                .Should().Contain("page_size must be between 1 and 100");
+        }
+
+        var errorTool = new LarkMessagesReactionsListTool(new StubLarkNyxClient
+        {
+            ReactionListResponse = """{"error":true,"status":404,"message":"missing"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync("""{"message_id":"om_1"}""");
+            result.Should().Contain("nyx_proxy_error status=404");
+            result.Should().Contain("\"message_id\":\"om_1\"");
+        }
+    }
+
+    [Fact]
+    public async Task LarkMessagesReactionsDeleteTool_ShouldDeleteReactionFromCurrentMessage()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ReactionDeleteResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "reaction_id": "reaction_1",
+                    "operator": {
+                      "operator_id": "ou_1",
+                      "operator_type": "user"
+                    },
+                    "action_time": "1730000004",
+                    "reaction_type": {
+                      "emoji_type": "OK"
+                    }
+                  }
+                }
+                """,
+        };
+        var tool = new LarkMessagesReactionsDeleteTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>
+            {
+                ["channel.platform_message_id"] = "om_current_4",
+            });
+
+        var result = await tool.ExecuteAsync("""{"reaction_id":"reaction_1"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_current_4");
+        document.RootElement.GetProperty("reaction_id").GetString().Should().Be("reaction_1");
+        client.LastReactionDeleteRequest.Should().NotBeNull();
+        client.LastReactionDeleteRequest!.MessageId.Should().Be("om_current_4");
+    }
+
+    [Fact]
+    public async Task LarkMessagesReactionsDeleteTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkMessagesReactionsDeleteTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"message_id":"om_1","reaction_id":"reaction_1"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{"message_id":"om_1"}"""))
+                .Should().Contain("reaction_id is required");
+        }
+
+        var errorTool = new LarkMessagesReactionsDeleteTool(new StubLarkNyxClient
+        {
+            ReactionDeleteResponse = """{"error":true,"status":409,"message":"already removed"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync("""{"message_id":"om_1","reaction_id":"reaction_1"}""");
+            result.Should().Contain("nyx_proxy_error status=409");
+            result.Should().Contain("\"reaction_id\":\"reaction_1\"");
+        }
+    }
+
+    [Fact]
+    public async Task LarkMessagesBatchGetTool_ShouldNormalizeMessages()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessagesBatchGetResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "items": [
+                      {
+                        "message_id": "om_1",
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "chat_id": "oc_1",
+                        "thread_id": "omt_1",
+                        "sender": {
+                          "id": "ou_sender",
+                          "name": "Alice",
+                          "sender_type": "user"
+                        },
+                        "body": {
+                          "content": "{\"text\":\"hello\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+                """,
+        };
+        var tool = new LarkMessagesBatchGetTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var result = await tool.ExecuteAsync("""{"message_ids":["om_1"]}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("total").GetInt32().Should().Be(1);
+        document.RootElement.GetProperty("messages")[0].GetProperty("content").GetString().Should().Be("hello");
+        client.LastBatchGetRequest.Should().NotBeNull();
+        client.LastBatchGetRequest!.MessageIds.Should().ContainSingle().Which.Should().Be("om_1");
+    }
+
+    [Fact]
+    public async Task LarkMessagesBatchGetTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkMessagesBatchGetTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"message_ids":["om_1"]}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{}"""))
+                .Should().Contain("message_ids must contain at least one");
+            (await tool.ExecuteAsync("""{"message_ids":["msg_1"]}"""))
+                .Should().Contain("message_id must be a Lark message id like om_xxx");
+        }
+
+        var errorTool = new LarkMessagesBatchGetTool(new StubLarkNyxClient
+        {
+            MessagesBatchGetResponse = """{"error":true,"status":503,"message":"mget offline"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await errorTool.ExecuteAsync("""{"message_ids":["om_1"]}"""))
+                .Should().Contain("nyx_proxy_error status=503");
+        }
+    }
+
+    [Fact]
+    public async Task LarkMessagesSearchTool_ShouldSearchAndHydrateMessages()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessageSearchResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "items": [
+                      { "meta_data": { "message_id": "om_1" } }
+                    ],
+                    "has_more": true,
+                    "page_token": "page-2"
+                  }
+                }
+                """,
+            MessagesBatchGetResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "items": [
+                      {
+                        "message_id": "om_1",
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "chat_id": "oc_1",
+                        "sender": {
+                          "id": "ou_sender",
+                          "name": "Alice",
+                          "sender_type": "user"
+                        },
+                        "body": {
+                          "content": "{\"text\":\"incident handled\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+                """,
+        };
+        var tool = new LarkMessagesSearchTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var result = await tool.ExecuteAsync("""{"query":"incident","chat_ids":["oc_1"],"start_time":"2026-04-20T00:00:00+08:00","end_time":"2026-04-23T23:59:59+08:00"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("has_more").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("page_token").GetString().Should().Be("page-2");
+        document.RootElement.GetProperty("message_ids")[0].GetString().Should().Be("om_1");
+        document.RootElement.GetProperty("messages")[0].GetProperty("content").GetString().Should().Be("incident handled");
+        client.LastMessageSearchRequest.Should().NotBeNull();
+        client.LastMessageSearchRequest!.Query.Should().Be("incident");
+    }
+
+    [Fact]
+    public async Task LarkMessagesSearchTool_ShouldValidateInputs_AndDegradeWhenHydrationFails()
+    {
+        var tool = new LarkMessagesSearchTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"query":"incident"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{}"""))
+                .Should().Contain("At least one search filter is required");
+            (await tool.ExecuteAsync("""{"query":"incident","include_attachment_type":"doc"}"""))
+                .Should().Contain("include_attachment_type must be one of");
+            (await tool.ExecuteAsync("""{"query":"incident","chat_type":"channel"}"""))
+                .Should().Contain("chat_type must be one of");
+            (await tool.ExecuteAsync("""{"query":"incident","sender_type":"app"}"""))
+                .Should().Contain("sender_type must be one of");
+            (await tool.ExecuteAsync("""{"query":"incident","sender_type":"bot","exclude_sender_type":"bot"}"""))
+                .Should().Contain("sender_type and exclude_sender_type cannot be the same");
+            (await tool.ExecuteAsync("""{"query":"incident","start_time":"bad-time"}"""))
+                .Should().Contain("start_time and end_time must be ISO 8601");
+            (await tool.ExecuteAsync("""{"query":"incident","page_size":51}"""))
+                .Should().Contain("page_size must be between 1 and 50");
+        }
+
+        var degradeTool = new LarkMessagesSearchTool(new StubLarkNyxClient
+        {
+            MessageSearchResponse = """{"code":0,"data":{"items":[{"meta_data":{"message_id":"om_1"}}]}}""",
+            MessagesBatchGetResponse = """{"error":true,"status":502,"message":"mget failed"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await degradeTool.ExecuteAsync("""{"query":"incident"}""");
+            result.Should().Contain("message hydration failed");
+            result.Should().Contain("\"message_ids\":[\"om_1\"]");
         }
     }
 
@@ -608,9 +1002,14 @@ public class LarkToolsTests
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(6);
+        tools.Should().HaveCount(11);
         tools.Should().Contain(tool => tool is LarkMessagesSendTool);
+        tools.Should().Contain(tool => tool is LarkMessagesReplyTool);
         tools.Should().Contain(tool => tool is LarkMessagesReactTool);
+        tools.Should().Contain(tool => tool is LarkMessagesReactionsListTool);
+        tools.Should().Contain(tool => tool is LarkMessagesReactionsDeleteTool);
+        tools.Should().Contain(tool => tool is LarkMessagesSearchTool);
+        tools.Should().Contain(tool => tool is LarkMessagesBatchGetTool);
         tools.Should().Contain(tool => tool is LarkChatsLookupTool);
         tools.Should().Contain(tool => tool is LarkSheetsAppendRowsTool);
         tools.Should().Contain(tool => tool is LarkApprovalsListTool);
@@ -660,6 +1059,32 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkNyxClient_ReplyToMessage_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"message_id":"om_reply_1"}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.ReplyToMessageAsync(
+            "token-123",
+            new LarkReplyMessageRequest("om_123", "text", """{"text":"Roger that"}""", true, "uuid-2"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reply");
+        handler.LastBody.Should().Contain("\"reply_in_thread\":true");
+        handler.LastBody.Should().Contain("\"uuid\":\"uuid-2\"");
+    }
+
+    [Fact]
     public async Task LarkNyxClient_CreateMessageReaction_ShapesProxyRequest()
     {
         var handler = new RecordingHandler(_ =>
@@ -683,6 +1108,88 @@ public class LarkToolsTests
             .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions");
         handler.LastRequest.Headers.Authorization!.Parameter.Should().Be("token-123");
         handler.LastBody.Should().Contain("\"emoji_type\":\"OK\"");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_ListAndDeleteMessageReactions_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"items":[]}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.ListMessageReactionsAsync(
+            "token-123",
+            new LarkMessageReactionListRequest("om_123", "SMILE", 50, "page-1", "open_id"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions?page_size=50&reaction_type=SMILE&page_token=page-1&user_id_type=open_id");
+
+        await client.DeleteMessageReactionAsync(
+            "token-123",
+            new LarkMessageReactionDeleteRequest("om_123", "reaction_1"),
+            CancellationToken.None);
+
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Delete);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions/reaction_1");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_SearchAndBatchGetMessages_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"items":[]}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.SearchMessagesAsync(
+            "token-123",
+            new LarkMessageSearchRequest(
+                Query: "incident",
+                ChatIds: ["oc_1"],
+                SenderIds: ["ou_1"],
+                IncludeAttachmentType: "file",
+                ChatType: "group",
+                SenderType: "user",
+                ExcludeSenderType: "bot",
+                IsAtMe: true,
+                StartTime: "2026-04-20T00:00:00+08:00",
+                EndTime: "2026-04-23T23:59:59+08:00",
+                PageSize: 20,
+                PageToken: "page-2"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/search?page_size=20&page_token=page-2");
+        handler.LastBody.Should().Contain("\"query\":\"incident\"");
+        handler.LastBody.Should().Contain("\"chat_ids\"");
+        handler.LastBody.Should().Contain("\"from_ids\"");
+        handler.LastBody.Should().Contain("\"include_attachment_types\"");
+        handler.LastBody.Should().Contain("\"time_range\"");
+
+        await client.BatchGetMessagesAsync(
+            "token-123",
+            new LarkMessagesBatchGetRequest(["om_1", "om_2"]),
+            CancellationToken.None);
+
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/mget?card_msg_content_type=raw_card_content&message_ids=om_1&message_ids=om_2");
     }
 
     [Fact]
@@ -810,14 +1317,24 @@ public class LarkToolsTests
     private sealed class StubLarkNyxClient : ILarkNyxClient
     {
         public string SendResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string ReplyResponse { get; set; } = """{"code":0,"data":{}}""";
         public string ReactionCreateResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string ReactionListResponse { get; set; } = """{"code":0,"data":{"items":[]}}""";
+        public string ReactionDeleteResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string MessageSearchResponse { get; set; } = """{"code":0,"data":{"items":[],"count":0}}""";
+        public string MessagesBatchGetResponse { get; set; } = """{"code":0,"data":{"items":[]}}""";
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
 
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
+        public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
+        public LarkMessageReactionListRequest? LastReactionListRequest { get; private set; }
+        public LarkMessageReactionDeleteRequest? LastReactionDeleteRequest { get; private set; }
+        public LarkMessageSearchRequest? LastMessageSearchRequest { get; private set; }
+        public LarkMessagesBatchGetRequest? LastBatchGetRequest { get; private set; }
         public LarkChatSearchRequest? LastSearchRequest { get; private set; }
         public LarkSheetAppendRowsRequest? LastSheetAppendRequest { get; private set; }
         public LarkApprovalTaskQueryRequest? LastApprovalQueryRequest { get; private set; }
@@ -829,10 +1346,40 @@ public class LarkToolsTests
             return Task.FromResult(SendResponse);
         }
 
+        public Task<string> ReplyToMessageAsync(string token, LarkReplyMessageRequest request, CancellationToken ct)
+        {
+            LastReplyRequest = request;
+            return Task.FromResult(ReplyResponse);
+        }
+
         public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct)
         {
             LastReactionRequest = request;
             return Task.FromResult(ReactionCreateResponse);
+        }
+
+        public Task<string> ListMessageReactionsAsync(string token, LarkMessageReactionListRequest request, CancellationToken ct)
+        {
+            LastReactionListRequest = request;
+            return Task.FromResult(ReactionListResponse);
+        }
+
+        public Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct)
+        {
+            LastReactionDeleteRequest = request;
+            return Task.FromResult(ReactionDeleteResponse);
+        }
+
+        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
+        {
+            LastMessageSearchRequest = request;
+            return Task.FromResult(MessageSearchResponse);
+        }
+
+        public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
+        {
+            LastBatchGetRequest = request;
+            return Task.FromResult(MessagesBatchGetResponse);
         }
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)

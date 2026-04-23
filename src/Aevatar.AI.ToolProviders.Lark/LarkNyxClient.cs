@@ -44,6 +44,29 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public Task<string> ReplyToMessageAsync(string token, LarkReplyMessageRequest request, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["msg_type"] = request.MessageType,
+            ["content"] = request.ContentJson,
+        };
+
+        if (request.ReplyInThread)
+            body["reply_in_thread"] = true;
+        if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            body["uuid"] = request.IdempotencyKey.Trim();
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId)}/reply",
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
     public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct)
     {
         var body = new Dictionary<string, object?>
@@ -60,6 +83,109 @@ public sealed class LarkNyxClient : ILarkNyxClient
             $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId)}/reactions",
             "POST",
             JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> ListMessageReactionsAsync(string token, LarkMessageReactionListRequest request, CancellationToken ct)
+    {
+        var queryParts = new List<string>
+        {
+            $"page_size={request.PageSize}",
+        };
+        if (!string.IsNullOrWhiteSpace(request.EmojiType))
+            queryParts.Add($"reaction_type={Uri.EscapeDataString(request.EmojiType.Trim())}");
+        if (!string.IsNullOrWhiteSpace(request.PageToken))
+            queryParts.Add($"page_token={Uri.EscapeDataString(request.PageToken.Trim())}");
+        if (!string.IsNullOrWhiteSpace(request.UserIdType))
+            queryParts.Add($"user_id_type={Uri.EscapeDataString(request.UserIdType.Trim())}");
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId)}/reactions?{string.Join("&", queryParts)}",
+            "GET",
+            body: null,
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct)
+    {
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId)}/reactions/{Uri.EscapeDataString(request.ReactionId)}",
+            "DELETE",
+            body: null,
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
+    {
+        var paramsParts = new List<string>
+        {
+            $"page_size={request.PageSize}",
+        };
+        if (!string.IsNullOrWhiteSpace(request.PageToken))
+            paramsParts.Add($"page_token={Uri.EscapeDataString(request.PageToken.Trim())}");
+
+        var body = new Dictionary<string, object?>
+        {
+            ["query"] = request.Query,
+        };
+        var filter = new Dictionary<string, object?>();
+        if (request.ChatIds is { Count: > 0 })
+            filter["chat_ids"] = request.ChatIds;
+        if (request.SenderIds is { Count: > 0 })
+            filter["from_ids"] = request.SenderIds;
+        if (!string.IsNullOrWhiteSpace(request.IncludeAttachmentType))
+            filter["include_attachment_types"] = new[] { request.IncludeAttachmentType.Trim() };
+        if (!string.IsNullOrWhiteSpace(request.ChatType))
+            filter["chat_type"] = request.ChatType.Trim();
+        if (!string.IsNullOrWhiteSpace(request.SenderType))
+            filter["from_types"] = new[] { request.SenderType.Trim() };
+        if (!string.IsNullOrWhiteSpace(request.ExcludeSenderType))
+            filter["exclude_from_types"] = new[] { request.ExcludeSenderType.Trim() };
+        if (request.IsAtMe)
+            filter["is_at_me"] = true;
+
+        var timeRange = new Dictionary<string, object?>();
+        if (!string.IsNullOrWhiteSpace(request.StartTime))
+            timeRange["start_time"] = request.StartTime.Trim();
+        if (!string.IsNullOrWhiteSpace(request.EndTime))
+            timeRange["end_time"] = request.EndTime.Trim();
+        if (timeRange.Count > 0)
+            filter["time_range"] = timeRange;
+        if (filter.Count > 0)
+            body["filter"] = filter;
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/search?{string.Join("&", paramsParts)}",
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
+    {
+        var parts = new List<string>
+        {
+            "card_msg_content_type=raw_card_content",
+        };
+        foreach (var messageId in request.MessageIds)
+            parts.Add($"message_ids={Uri.EscapeDataString(messageId)}");
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/im/v1/messages/mget?{string.Join("&", parts)}",
+            "GET",
+            body: null,
             extraHeaders: null,
             ct);
     }
