@@ -11,8 +11,8 @@ internal static class AgentBuilderTemplates
             name = "daily_report",
             status = "ready",
             description = "Generate a daily GitHub progress summary and send it back to the current Feishu private chat.",
-            required_fields = new[] { "github_username", "schedule_cron" },
-            optional_fields = new[] { "repositories", "schedule_timezone", "run_immediately" },
+            required_fields = new[] { "schedule_cron" },
+            optional_fields = new[] { "github_username", "repositories", "schedule_timezone", "run_immediately" },
         },
         new
         {

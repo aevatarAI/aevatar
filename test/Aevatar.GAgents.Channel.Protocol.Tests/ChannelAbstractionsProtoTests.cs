@@ -44,6 +44,18 @@ public sealed class ChannelAbstractionsProtoTests
             },
             ReplyToActivityId = "orig-1",
             RawPayloadBlobRef = "blob://payload/1",
+            OutboundDelivery = new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-1",
+                ReplyAccessToken = "relay-token-1",
+            },
+            TransportExtras = new TransportExtras
+            {
+                NyxMessageId = "nyx-msg-1",
+                NyxAgentApiKeyId = "nyx-key-1",
+                NyxPlatform = "lark",
+                NyxConversationId = "nyx-conv-1",
+            },
         };
         activity.Mentions.Add(new ParticipantRef
         {
@@ -82,12 +94,18 @@ public sealed class ChannelAbstractionsProtoTests
         parsed.Content.CardAction.ActionId.ShouldBe("approve");
         parsed.Content.Actions[0].Kind.ShouldBe(ActionElementKind.Button);
         parsed.Conversation.Scope.ShouldBe(ConversationScope.Thread);
+        parsed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
+        parsed.TransportExtras.NyxAgentApiKeyId.ShouldBe("nyx-key-1");
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ChatActivity));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(MessageContent));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(CardActionSubmission));
+        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(OutboundDeliveryContext));
+        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(TransportExtras));
     }
 
     [Fact]
