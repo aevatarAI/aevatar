@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
 using Google.Protobuf.WellKnownTypes;
@@ -126,13 +127,16 @@ internal sealed class GAgentDraftRunCommandTargetResolver
 {
     private readonly IActorRuntime _actorRuntime;
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IAgentTypeVerifier? _agentTypeVerifier;
 
     public GAgentDraftRunCommandTargetResolver(
         IActorRuntime actorRuntime,
-        IGAgentDraftRunProjectionPort projectionPort)
+        IGAgentDraftRunProjectionPort projectionPort,
+        IAgentTypeVerifier? agentTypeVerifier = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _agentTypeVerifier = agentTypeVerifier;
     }
 
     public async Task<CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>> ResolveAsync(
@@ -158,6 +162,12 @@ internal sealed class GAgentDraftRunCommandTargetResolver
             var existingActor = await _actorRuntime.GetAsync(preferredActorId);
             if (existingActor != null)
             {
+                if (!await MatchesExpectedTypeAsync(existingActor, agentType, ct))
+                {
+                    return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Failure(
+                        GAgentDraftRunStartError.ActorTypeMismatch);
+                }
+
                 actor = existingActor;
             }
             else
@@ -172,6 +182,23 @@ internal sealed class GAgentDraftRunCommandTargetResolver
 
         return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Success(
             new GAgentDraftRunCommandTarget(actor, command.ActorTypeName, _projectionPort));
+    }
+
+    private async Task<bool> MatchesExpectedTypeAsync(
+        IActor actor,
+        System.Type expectedType,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(expectedType);
+
+        if (expectedType.IsAssignableFrom(actor.Agent.GetType()))
+            return true;
+
+        if (_agentTypeVerifier == null)
+            return false;
+
+        return await _agentTypeVerifier.IsExpectedAsync(actor.Id, expectedType, ct);
     }
 }
 

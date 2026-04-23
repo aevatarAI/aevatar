@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddCqrsCore();
+        services.TryAddSingleton<IGAgentDraftRunActorPreparationPort, GAgentDraftRunActorPreparationService>();
         services.TryAddSingleton<ICommandTargetResolver<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetResolver>();
         services.TryAddSingleton<ICommandTargetBinder<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetBinder>();
         services.TryAddSingleton<ICommandEnvelopeFactory<GAgentDraftRunCommand>, GAgentDraftRunCommandEnvelopeFactory>();

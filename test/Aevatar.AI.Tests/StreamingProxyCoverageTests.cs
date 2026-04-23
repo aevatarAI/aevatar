@@ -417,7 +417,7 @@ public class StreamingProxyCoverageTests
 
         var finalizeTask = InvokeTaskAsync(method.Invoke(
             null,
-            ["room-a", "session-123", signalChannel.Reader, durableCompletionResolver, writer, CancellationToken.None]));
+            ["room-a", "session-123", signalChannel.Reader, durableCompletionResolver, writer, null, CancellationToken.None]));
 
         await terminalQueryPort.FirstQueryObserved.Task;
         finalizeTask.IsCompleted.Should().BeFalse();
@@ -429,6 +429,41 @@ public class StreamingProxyCoverageTests
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_FINISHED");
         body.Should().NotContain("RUN_ERROR");
+    }
+
+    [Fact]
+    public async Task FinalizeFromLiveOrDurableCompletionAsync_ShouldEmitRunError_WhenTerminalStateNeverAppears()
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyGAgent).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxySseWriter",
+            context.Response);
+        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
+        var signalChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
+        signalChannel.Writer.TryComplete();
+
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "FinalizeFromLiveOrDurableCompletionAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        await InvokeTaskAsync(method.Invoke(
+            null,
+            [
+                "room-a",
+                "session-123",
+                signalChannel.Reader,
+                durableCompletionResolver,
+                writer,
+                TimeSpan.FromMilliseconds(50),
+                CancellationToken.None,
+            ]));
+
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("StreamingProxy completion timed out.");
     }
 
     [Fact]

@@ -43,6 +43,7 @@ public enum GAgentDraftRunStartError
 {
     None = 0,
     UnknownActorType = 1,
+    ActorTypeMismatch = 2,
 }
 
 public enum GAgentDraftRunCompletionStatus

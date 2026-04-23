@@ -1048,6 +1048,12 @@ public static class ScopeServiceEndpoints
                 throw new InvalidOperationException(
                     $"GAgent type '{plan.ActorTypeName}' could not be resolved.");
             }
+
+            if (!interaction.Succeeded && interaction.Error == GAgentDraftRunStartError.ActorTypeMismatch)
+            {
+                throw new InvalidOperationException(
+                    $"Actor '{resolvedActorId}' is not compatible with requested type '{plan.ActorTypeName}'.");
+            }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

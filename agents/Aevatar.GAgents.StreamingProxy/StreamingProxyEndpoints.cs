@@ -266,6 +266,7 @@ public static class StreamingProxyEndpoints
                         activityChannel.Reader,
                         durableCompletionResolver,
                         writer,
+                        null,
                         ct);
                     return;
                 }
@@ -313,6 +314,7 @@ public static class StreamingProxyEndpoints
                     activityChannel.Reader,
                     durableCompletionResolver,
                     writer,
+                    null,
                     ct);
             }
             finally
@@ -687,12 +689,24 @@ public static class StreamingProxyEndpoints
         ChannelReader<StreamingProxyStreamSignal> signalReader,
         StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
         StreamingProxySseWriter writer,
+        TimeSpan? terminalCompletionTimeout,
         CancellationToken ct)
     {
+        var deadline = DateTimeOffset.UtcNow + (terminalCompletionTimeout ?? TimeSpan.FromMilliseconds(StreamingProxyDefaults.TerminalCompletionTimeoutMs));
         var signalWaitWindow = TimeSpan.FromSeconds(2);
         while (!ct.IsCancellationRequested)
         {
-            if (await WaitForTerminalSignalAsync(signalReader, signalWaitWindow, ct))
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                await writer.WriteRunErrorAsync("StreamingProxy completion timed out.", CancellationToken.None);
+                return;
+            }
+
+            var boundedWaitWindow = remaining < signalWaitWindow
+                ? remaining
+                : signalWaitWindow;
+            if (await WaitForTerminalSignalAsync(signalReader, boundedWaitWindow, ct))
                 return;
 
             var durableCompletion = await durableCompletionResolver.ResolveAsync(actorId, sessionId, ct);
@@ -707,7 +721,14 @@ public static class StreamingProxyEndpoints
                 case StreamingProxyProjectionCompletionStatus.Unknown:
                 default:
                     signalWaitWindow = TimeSpan.FromMilliseconds(200);
-                    await Task.Delay(signalWaitWindow, ct);
+                    remaining = deadline - DateTimeOffset.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        await writer.WriteRunErrorAsync("StreamingProxy completion timed out.", CancellationToken.None);
+                        return;
+                    }
+
+                    await Task.Delay(remaining < signalWaitWindow ? remaining : signalWaitWindow, ct);
                     break;
             }
         }

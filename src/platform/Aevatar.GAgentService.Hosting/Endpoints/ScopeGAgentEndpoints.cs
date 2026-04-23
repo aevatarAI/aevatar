@@ -266,13 +266,14 @@ public static class ScopeGAgentEndpoints
         string scopeId,
         GAgentDraftRunHttpRequest request,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentDraftRunActorPreparationPort actorPreparationPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints");
         var writer = new AGUISseWriter(http.Response);
         var responseStarted = false;
+        GAgentDraftRunPreparedActor? preparedActor = null;
 
         try
         {
@@ -287,6 +288,29 @@ public static class ScopeGAgentEndpoints
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
             }
+
+            var preparation = await actorPreparationPort.PrepareAsync(
+                new GAgentDraftRunPreparationRequest(
+                    scopeId,
+                    request.ActorTypeName,
+                    request.PreferredActorId),
+                ct);
+            if (!preparation.Succeeded)
+            {
+                if (preparation.Error == GAgentDraftRunStartError.UnknownActorType)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await WriteJsonErrorAsync(
+                        http.Response,
+                        "UNKNOWN_GAGENT_TYPE",
+                        $"GAgent type '{request.ActorTypeName}' could not be resolved.",
+                        ct);
+                }
+
+                return;
+            }
+
+            preparedActor = preparation.PreparedActor;
 
             async Task EnsureSseStartedAsync(CancellationToken token)
             {
@@ -310,8 +334,6 @@ public static class ScopeGAgentEndpoints
             async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
             {
                 http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
-                await actorStore.AddActorAsync(scopeId, receipt.ActorTypeName, receipt.ActorId, token);
-
                 await EnsureSseStartedAsync(token);
                 await writer.WriteAsync(
                     new AGUIEvent
@@ -349,9 +371,9 @@ public static class ScopeGAgentEndpoints
 
             var command = new GAgentDraftRunCommand(
                 ScopeId: scopeId,
-                ActorTypeName: request.ActorTypeName.Trim(),
+                ActorTypeName: preparedActor!.ActorTypeName,
                 Prompt: request.Prompt.Trim(),
-                PreferredActorId: string.IsNullOrWhiteSpace(request.PreferredActorId) ? null : request.PreferredActorId.Trim(),
+                PreferredActorId: preparedActor.ActorId,
                 SessionId: string.IsNullOrWhiteSpace(request.SessionId) ? null : request.SessionId.Trim(),
                 NyxIdAccessToken: bearerToken,
                 ModelOverride: defaultModel,
@@ -369,6 +391,9 @@ public static class ScopeGAgentEndpoints
 
             if (!interaction.Succeeded)
             {
+                if (preparedActor.RequiresRollbackOnFailure)
+                    await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
+
                 if (interaction.Error == GAgentDraftRunStartError.UnknownActorType)
                 {
                     http.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -376,6 +401,15 @@ public static class ScopeGAgentEndpoints
                         http.Response,
                         "UNKNOWN_GAGENT_TYPE",
                         $"GAgent type '{request.ActorTypeName}' could not be resolved.",
+                        ct);
+                }
+                else if (interaction.Error == GAgentDraftRunStartError.ActorTypeMismatch)
+                {
+                    http.Response.StatusCode = StatusCodes.Status409Conflict;
+                    await WriteJsonErrorAsync(
+                        http.Response,
+                        "GAGENT_ACTOR_TYPE_MISMATCH",
+                        $"Actor '{preparedActor.ActorId}' is not compatible with requested type '{preparedActor.ActorTypeName}'.",
                         ct);
                 }
 
@@ -387,6 +421,9 @@ public static class ScopeGAgentEndpoints
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            if (preparedActor?.RequiresRollbackOnFailure == true && !responseStarted)
+                await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
+
             try
             {
                 await EnsureTimeoutErrorAsync(writer, http.Response, responseStarted, ct: CancellationToken.None);
@@ -403,6 +440,9 @@ public static class ScopeGAgentEndpoints
         }
         catch (Exception ex)
         {
+            if (preparedActor?.RequiresRollbackOnFailure == true && !responseStarted)
+                await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
+
             logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
             var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
 
@@ -485,9 +525,6 @@ public static class ScopeGAgentEndpoints
     /// </summary>
     private static Google.Protobuf.WellKnownTypes.Struct BuildToolApprovalStruct(Any payload)
         => ScopeGAgentAguiEventMapper.BuildToolApprovalStruct(payload);
-
-    internal static Type? ResolveAgentType(string typeName)
-        => ScopeGAgentActorTypeResolver.Resolve(typeName);
 
     // ─── Actor CRUD (chrono-storage) ───
 

@@ -7,6 +7,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -59,11 +60,14 @@ public sealed class ScopeGAgentEndpointsTests
     {
         var interactionService = new FakeGAgentDraftRunInteractionService
         {
-            ResultFactory = (_, _, _) => Task.FromResult(
+            ResultFactory = (_, _, _, _) => Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
                     GAgentDraftRunStartError.UnknownActorType))
         };
-        var actorStore = new RecordingGAgentActorStore();
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType)
+        };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
 
@@ -74,7 +78,7 @@ public sealed class ScopeGAgentEndpointsTests
                 "Aevatar.IamNotReal, Aevatar.IamNotReal",
                 "hello"),
             interactionService,
-            actorStore,
+            actorPreparationPort,
             logger,
             CancellationToken.None);
 
@@ -89,7 +93,7 @@ public sealed class ScopeGAgentEndpointsTests
     {
         var interactionService = new FakeGAgentDraftRunInteractionService
         {
-            ResultFactory = async (_, _, ct) =>
+            ResultFactory = async (_, _, _, ct) =>
             {
                 var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 using var registration = ct.Register(() => pending.TrySetCanceled(ct));
@@ -99,7 +103,11 @@ public sealed class ScopeGAgentEndpointsTests
                     new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.Unknown, false));
             }
         };
-        var actorStore = new RecordingGAgentActorStore();
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Success(
+                new GAgentDraftRunPreparedActor("scope-a", "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core", "existing-actor", false))
+        };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
 
@@ -112,7 +120,7 @@ public sealed class ScopeGAgentEndpointsTests
                 PreferredActorId: "existing-actor",
                 TimeoutMs: 1),
             interactionService,
-            actorStore,
+            actorPreparationPort,
             logger,
             CancellationToken.None);
 
@@ -127,7 +135,7 @@ public sealed class ScopeGAgentEndpointsTests
     {
         var interactionService = new FakeGAgentDraftRunInteractionService
         {
-            ResultFactory = async (emitAsync, onAcceptedAsync, ct) =>
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
             {
                 var receipt = new GAgentDraftRunAcceptedReceipt("existing-actor", "RoleGAgent", "cmd-123", "corr-123");
                 if (onAcceptedAsync != null)
@@ -154,7 +162,11 @@ public sealed class ScopeGAgentEndpointsTests
                     new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.RunFinished, true));
             }
         };
-        var actorStore = new RecordingGAgentActorStore();
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Success(
+                new GAgentDraftRunPreparedActor("scope-a", "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core", "existing-actor", false))
+        };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext("Bearer token-abc");
 
@@ -167,14 +179,12 @@ public sealed class ScopeGAgentEndpointsTests
                 PreferredActorId: "existing-actor",
                 TimeoutMs: 200),
             interactionService,
-            actorStore,
+            actorPreparationPort,
             logger,
             CancellationToken.None);
 
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
         context.Response.Headers["X-Correlation-Id"].ToString().Should().Be("corr-123");
-        actorStore.AddedActors.Should().ContainSingle()
-            .Which.Should().Be(("scope-a", "RoleGAgent", "existing-actor"));
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("runStarted");
         body.Should().Contain("runFinished");
@@ -184,7 +194,7 @@ public sealed class ScopeGAgentEndpointsTests
     public async Task HandleDraftRunAsync_ShouldRejectBlankActorTypeAndPrompt()
     {
         var interactionService = new FakeGAgentDraftRunInteractionService();
-        var actorStore = new RecordingGAgentActorStore();
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort();
         var logger = LoggerFactory.Create(_ => { });
 
         var missingTypeContext = CreateDraftRunContext();
@@ -193,7 +203,7 @@ public sealed class ScopeGAgentEndpointsTests
             "scope-a",
             new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(" ", "hello"),
             interactionService,
-            actorStore,
+            actorPreparationPort,
             logger,
             CancellationToken.None);
         missingTypeContext.Response.StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
@@ -206,7 +216,7 @@ public sealed class ScopeGAgentEndpointsTests
                 "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 " "),
             interactionService,
-            actorStore,
+            actorPreparationPort,
             logger,
             CancellationToken.None);
         missingPromptContext.Response.StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
@@ -217,7 +227,7 @@ public sealed class ScopeGAgentEndpointsTests
     {
         var interactionService = new FakeGAgentDraftRunInteractionService
         {
-            ResultFactory = async (_, onAcceptedAsync, ct) =>
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
             {
                 var receipt = new GAgentDraftRunAcceptedReceipt("auth-actor", "RoleGAgent", "cmd-auth", "corr-auth");
                 if (onAcceptedAsync != null)
@@ -226,7 +236,11 @@ public sealed class ScopeGAgentEndpointsTests
                 throw new NyxIdAuthenticationRequiredException("sign in");
             }
         };
-        var actorStore = new RecordingGAgentActorStore();
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Success(
+                new GAgentDraftRunPreparedActor("scope-a", "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core", "auth-actor", false))
+        };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
 
@@ -239,13 +253,11 @@ public sealed class ScopeGAgentEndpointsTests
                 PreferredActorId: "auth-actor",
                 TimeoutMs: 50),
             interactionService,
-            actorStore,
+            actorPreparationPort,
             logger,
             CancellationToken.None);
 
         var body = await ReadResponseBodyAsync(context);
-        actorStore.AddedActors.Should().ContainSingle()
-            .Which.Should().Be(("scope-a", "RoleGAgent", "auth-actor"));
         body.Should().Contain("authentication_required");
         body.Should().Contain("NyxID authentication required");
     }
@@ -253,10 +265,12 @@ public sealed class ScopeGAgentEndpointsTests
     [Fact]
     public async Task HandleDraftRunAsync_ShouldFail_WhenActorRegistrationFails()
     {
+        var executed = false;
         var interactionService = new FakeGAgentDraftRunInteractionService
         {
-            ResultFactory = async (_, onAcceptedAsync, ct) =>
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
             {
+                executed = true;
                 var receipt = new GAgentDraftRunAcceptedReceipt("actor-1", "RoleGAgent", "cmd-1", "corr-1");
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
@@ -266,7 +280,10 @@ public sealed class ScopeGAgentEndpointsTests
                     new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.RunFinished, true));
             }
         };
-        var actorStore = new RecordingGAgentActorStore { ThrowOnAdd = new InvalidOperationException("persist failed") };
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            ThrowOnPrepare = new InvalidOperationException("persist failed")
+        };
         var logger = LoggerFactory.Create(_ => { });
         var context = CreateDraftRunContext();
 
@@ -277,12 +294,12 @@ public sealed class ScopeGAgentEndpointsTests
                 "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
                 "hello"),
             interactionService,
-            actorStore,
+            actorPreparationPort,
             logger,
             CancellationToken.None);
 
+        executed.Should().BeFalse();
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.InternalServerError);
-        context.Response.Headers["X-Correlation-Id"].ToString().Should().Be("corr-1");
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("GAGENT_DRAFT_RUN_FAILED");
         body.Should().Contain("persist failed");
@@ -290,10 +307,138 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
+    public async Task HandleDraftRunAsync_ShouldReturnConflict_WhenInteractionReportsActorTypeMismatch()
+    {
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
+                    GAgentDraftRunStartError.ActorTypeMismatch))
+        };
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Success(
+                new GAgentDraftRunPreparedActor("scope-a", typeof(FakeAgent).AssemblyQualifiedName!, "existing-actor", false))
+        };
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext();
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "hello",
+                PreferredActorId: "existing-actor"),
+            interactionService,
+            actorPreparationPort,
+            logger,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.Conflict);
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("GAGENT_ACTOR_TYPE_MISMATCH");
+        body.Should().Contain("existing-actor");
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_ShouldPreRegisterGeneratedActorId_ForNewActors()
+    {
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = async (command, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new GAgentDraftRunAcceptedReceipt(
+                    command.PreferredActorId ?? string.Empty,
+                    command.ActorTypeName,
+                    "cmd-new",
+                    "corr-new");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                await emitAsync(new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent
+                    {
+                        ThreadId = receipt.ActorId,
+                        RunId = receipt.CommandId,
+                    },
+                }, ct);
+
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                    receipt,
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.RunFinished, true));
+            }
+        };
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Success(
+                new GAgentDraftRunPreparedActor("scope-a", typeof(FakeAgent).AssemblyQualifiedName!, "generated-actor", true))
+        };
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext();
+        var actorTypeName = typeof(FakeAgent).AssemblyQualifiedName!;
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                actorTypeName,
+                "hello"),
+            interactionService,
+            actorPreparationPort,
+            logger,
+            CancellationToken.None);
+
+        actorPreparationPort.PrepareCalls.Should().ContainSingle();
+        actorPreparationPort.PrepareCalls[0].ActorTypeName.Should().Be(actorTypeName);
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_ShouldRollbackPreRegisteredActor_WhenInteractionFailsBeforeResponseStarts()
+    {
+        var preparedActor = new GAgentDraftRunPreparedActor(
+            "scope-a",
+            typeof(FakeAgent).AssemblyQualifiedName!,
+            "generated-actor",
+            true);
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                throw new InvalidOperationException("dispatch failed");
+            }
+        };
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Success(preparedActor)
+        };
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext();
+        var actorTypeName = typeof(FakeAgent).AssemblyQualifiedName!;
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                actorTypeName,
+                "hello"),
+            interactionService,
+            actorPreparationPort,
+            logger,
+            CancellationToken.None);
+
+        actorPreparationPort.RollbackCalls.Should().ContainSingle();
+        actorPreparationPort.RollbackCalls[0].Should().Be(preparedActor);
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.InternalServerError);
+    }
+
+    [Fact]
     public void ResolveAgentType_ShouldFindAndNotFindTypes()
     {
-        ScopeGAgentEndpoints.ResolveAgentType("Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core").Should().NotBeNull();
-        ScopeGAgentEndpoints.ResolveAgentType("Aevatar.IamNotReal, Aevatar.IamNotReal").Should().BeNull();
+        ScopeGAgentActorTypeResolver.Resolve("Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core").Should().NotBeNull();
+        ScopeGAgentActorTypeResolver.Resolve("Aevatar.IamNotReal, Aevatar.IamNotReal").Should().BeNull();
     }
 
     [Fact]
@@ -346,7 +491,8 @@ public sealed class ScopeGAgentEndpointsTests
             IsDestructive = true,
             TimeoutSeconds = 30,
         }));
-        approval.Custom.Should().NotBeNull();
+        approval.Should().NotBeNull();
+        approval!.Custom.Should().NotBeNull();
         approval.Custom!.Name.Should().Be("TOOL_APPROVAL_REQUEST");
         approval.Custom.Payload.Should().NotBeNull();
         var approvalStruct = approval.Custom.Payload!.Unpack<Struct>();
@@ -358,7 +504,8 @@ public sealed class ScopeGAgentEndpointsTests
         {
             TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent { MessageId = "m2" }
         }));
-        agui.TextMessageEnd.Should().NotBeNull();
+        agui.Should().NotBeNull();
+        agui!.TextMessageEnd.Should().NotBeNull();
 
         var none = TryMap(new EventEnvelope());
         none.Should().BeNull();
@@ -632,7 +779,7 @@ public sealed class ScopeGAgentEndpointsTests
         var method = typeof(ScopeGAgentEndpoints).GetMethod(
             "HandleRemoveActorAsync",
             BindingFlags.NonPublic | BindingFlags.Static);
-        return await (Task<IResult>)method!.Invoke(null, new object[]
+        return await (Task<IResult>)method!.Invoke(null, new object?[]
         {
             scopeId,
             actorId,
@@ -648,7 +795,7 @@ public sealed class ScopeGAgentEndpointsTests
         string scopeId,
         ScopeGAgentEndpoints.GAgentDraftRunHttpRequest request,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
-        IGAgentActorStore actorStore,
+        IGAgentDraftRunActorPreparationPort actorPreparationPort,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -663,7 +810,7 @@ public sealed class ScopeGAgentEndpointsTests
                 scopeId,
                 request,
                 interactionService,
-                actorStore,
+                actorPreparationPort,
                 loggerFactory,
                 ct,
             })!;
@@ -705,6 +852,7 @@ public sealed class ScopeGAgentEndpointsTests
         : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
     {
         public Func<
+            GAgentDraftRunCommand,
             Func<AGUIEvent, CancellationToken, ValueTask>,
             Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>?,
             CancellationToken,
@@ -724,7 +872,38 @@ public sealed class ScopeGAgentEndpointsTests
                         new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.Unknown, false)));
             }
 
-            return ResultFactory(emitAsync, onAcceptedAsync, ct);
+            return ResultFactory(command, emitAsync, onAcceptedAsync, ct);
+        }
+    }
+
+    private sealed class FakeGAgentDraftRunActorPreparationPort : IGAgentDraftRunActorPreparationPort
+    {
+        public List<GAgentDraftRunPreparationRequest> PrepareCalls { get; } = [];
+        public List<GAgentDraftRunPreparedActor> RollbackCalls { get; } = [];
+        public GAgentDraftRunPreparationResult Result { get; init; } =
+            GAgentDraftRunPreparationResult.Success(
+                new GAgentDraftRunPreparedActor("scope-a", "RoleGAgent", "actor-default", false));
+        public Exception? ThrowOnPrepare { get; init; }
+
+        public Task<GAgentDraftRunPreparationResult> PrepareAsync(
+            GAgentDraftRunPreparationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            PrepareCalls.Add(request);
+            if (ThrowOnPrepare is not null)
+                throw ThrowOnPrepare;
+
+            return Task.FromResult(Result);
+        }
+
+        public Task RollbackAsync(
+            GAgentDraftRunPreparedActor preparedActor,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            RollbackCalls.Add(preparedActor);
+            return Task.CompletedTask;
         }
     }
 
@@ -802,6 +981,7 @@ public sealed class ScopeGAgentEndpointsTests
     {
         private readonly Func<string, IActor?> _getAsync;
         private readonly IActor _createdActor;
+        public List<string> DestroyedActorIds { get; } = [];
 
         public FakeActorRuntime(Func<string, IActor?> getAsync, IActor? createdActor = null)
         {
@@ -825,6 +1005,7 @@ public sealed class ScopeGAgentEndpointsTests
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            DestroyedActorIds.Add(id);
             return Task.CompletedTask;
         }
 
