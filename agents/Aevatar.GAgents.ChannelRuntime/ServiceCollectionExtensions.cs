@@ -192,6 +192,11 @@ public static class ServiceCollectionExtensions
             client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
         });
         services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<LarkChannelNativeMessageProducer>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
+            sp => sp.GetRequiredService<LarkMessageComposer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
         services.TryAddSingleton<ConversationDispatchMiddleware>();
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, LarkConversationTurnRunner>());

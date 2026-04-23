@@ -23,10 +23,10 @@ public static class LarkChannelServiceCollectionExtensions
             sp.GetRequiredService<LarkPayloadRedactor>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LarkChannelAdapter>>(),
             sp.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(LarkChannelDefaults.HttpClientName)));
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer>(
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
             sp => sp.GetRequiredService<LarkMessageComposer>()));
         services.TryAddSingleton<IMessageComposer<LarkOutboundMessage>>(sp => sp.GetRequiredService<LarkMessageComposer>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer>(
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddSingleton<IChannelTransport>(sp => sp.GetRequiredService<LarkChannelAdapter>());
         services.TryAddSingleton<IChannelOutboundPort>(sp => sp.GetRequiredService<LarkChannelAdapter>());

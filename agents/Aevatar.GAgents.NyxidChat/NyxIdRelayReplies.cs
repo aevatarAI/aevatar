@@ -91,7 +91,7 @@ internal static class NyxIdRelayReplies
         NyxIdApiClient nyxClient,
         IConfiguration? configuration,
         ILogger logger,
-        IInteractiveReplyCollector? interactiveReplyCollector = null,
+        MessageContent? interactiveIntent = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null,
         ChannelId? channel = null)
     {
@@ -152,14 +152,14 @@ internal static class NyxIdRelayReplies
 
         using var deliveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        var interactiveIntent = relayOptions.InteractiveRepliesEnabled
-            ? interactiveReplyCollector?.TryTake()
+        var effectiveInteractiveIntent = relayOptions.InteractiveRepliesEnabled
+            ? interactiveIntent
             : null;
 
-        if (interactiveIntent is not null && interactiveReplyDispatcher is not null && channel is not null)
+        if (effectiveInteractiveIntent is not null && interactiveReplyDispatcher is not null && channel is not null)
         {
-            if (string.IsNullOrWhiteSpace(interactiveIntent.Text) && !string.IsNullOrWhiteSpace(replyText))
-                interactiveIntent.Text = replyText;
+            if (string.IsNullOrWhiteSpace(effectiveInteractiveIntent.Text) && !string.IsNullOrWhiteSpace(replyText))
+                effectiveInteractiveIntent.Text = replyText;
 
             var context = new ComposeContext
             {
@@ -169,27 +169,29 @@ internal static class NyxIdRelayReplies
                 channel,
                 messageId,
                 relayToken,
-                interactiveIntent,
+                effectiveInteractiveIntent,
                 context,
                 deliveryCts.Token);
-            if (!dispatch.Succeeded)
+            if (dispatch.Succeeded)
             {
-                logger.LogError(
-                    "Relay interactive reply delivery failed: session={SessionId}, messageId={MessageId}, detail={Detail}",
+                logger.LogInformation(
+                    "Relay interactive reply delivered: session={SessionId}, messageId={MessageId}, platformMessageId={PlatformMessageId}, capability={Capability}, fallback={Fallback}",
                     sessionId,
-                    messageId,
-                    dispatch.Detail);
+                    dispatch.MessageId,
+                    dispatch.PlatformMessageId,
+                    dispatch.Capability,
+                    dispatch.FellBackToText);
                 return;
             }
 
-            logger.LogInformation(
-                "Relay interactive reply delivered: session={SessionId}, messageId={MessageId}, platformMessageId={PlatformMessageId}, capability={Capability}, fallback={Fallback}",
+            // Card-specific dispatch failure (for example, adapter rejected the card shape).
+            // Fall through to the plain-text delivery below so the user still receives the
+            // reply — dropping the entire turn because the card layer broke would be worse UX.
+            logger.LogWarning(
+                "Relay interactive reply delivery failed; falling back to text: session={SessionId}, messageId={MessageId}, detail={Detail}",
                 sessionId,
-                dispatch.MessageId,
-                dispatch.PlatformMessageId,
-                dispatch.Capability,
-                dispatch.FellBackToText);
-            return;
+                messageId,
+                dispatch.Detail);
         }
 
         var delivery = await nyxClient.SendChannelRelayTextReplyAsync(relayToken, messageId, replyText, deliveryCts.Token);

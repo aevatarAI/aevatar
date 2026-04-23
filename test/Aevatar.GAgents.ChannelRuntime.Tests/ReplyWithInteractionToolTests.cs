@@ -113,4 +113,18 @@ public sealed class ReplyWithInteractionToolTests
 
         result.Should().Contain("invalid_arguments");
     }
+
+    [Fact]
+    public async Task ExecuteAsync_without_active_scope_returns_error_not_queued_status()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        // deliberately NO BeginScope — the tool is invoked from a non-relay turn
+        var tool = new ReplyWithInteractionTool(collector);
+
+        var result = await tool.ExecuteAsync("""{"body":"hello"}""");
+
+        result.Should().Contain("no_active_interactive_scope");
+        result.Should().NotContain("\"status\":\"queued\"");
+        collector.TryTake().Should().BeNull();
+    }
 }

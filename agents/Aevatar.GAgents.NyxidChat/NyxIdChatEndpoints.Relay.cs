@@ -274,13 +274,27 @@ public static partial class NyxIdChatEndpoints
                 },
             };
 
-            await actor.HandleEventAsync(envelope, ct);
-
-            var configuration = http.RequestServices.GetService<IConfiguration>();
+            // Interactive reply collector scope must wrap the actor dispatch so that tool calls
+            // fired inside the turn (e.g. reply_with_interaction) see an active AsyncLocal scope.
+            // After dispatch returns we drain synchronously into a local and dispose the scope;
+            // the captured intent is passed by value into the background FinalizeReplyAsync so
+            // the post-dispatch lifetime of the scope does not matter.
             var interactiveReplyCollector = http.RequestServices.GetService<IInteractiveReplyCollector>();
             var interactiveReplyDispatcher = http.RequestServices.GetService<IInteractiveReplyDispatcher>();
             var relayChannel = ResolveRelayChannel(platform);
+            MessageContent? capturedIntent = null;
             var replyScope = interactiveReplyCollector?.BeginScope();
+            try
+            {
+                await actor.HandleEventAsync(envelope, ct);
+                capturedIntent = interactiveReplyCollector?.TryTake();
+            }
+            finally
+            {
+                replyScope?.Dispose();
+            }
+
+            var configuration = http.RequestServices.GetService<IConfiguration>();
             _ = NyxIdRelayReplies.FinalizeReplyAsync(
                     subscription,
                     responseTcs,
@@ -293,19 +307,12 @@ public static partial class NyxIdChatEndpoints
                     nyxClient,
                     configuration,
                     logger,
-                    interactiveReplyCollector,
+                    capturedIntent,
                     interactiveReplyDispatcher,
                     relayChannel)
                 .ContinueWith(
-                    task =>
-                    {
-                        replyScope?.Dispose();
-                        if (task.Exception is not null)
-                        {
-                            logger.LogError(task.Exception, "Relay background reply pipeline failed for session {SessionId}", sessionId);
-                        }
-                    },
-                    TaskContinuationOptions.ExecuteSynchronously);
+                    task => logger.LogError(task.Exception, "Relay background reply pipeline failed for session {SessionId}", sessionId),
+                    TaskContinuationOptions.OnlyOnFaulted);
 
             return Results.Accepted(value: new
             {

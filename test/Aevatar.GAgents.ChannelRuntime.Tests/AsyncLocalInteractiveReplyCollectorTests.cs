@@ -15,23 +15,25 @@ public sealed class AsyncLocalInteractiveReplyCollectorTests
     }
 
     [Fact]
-    public void Capture_without_scope_is_silently_dropped()
+    public void Capture_without_scope_returns_false_and_drops_intent()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
 
-        collector.Capture(new MessageContent { Text = "hello" });
+        var captured = collector.Capture(new MessageContent { Text = "hello" });
 
+        captured.Should().BeFalse();
         collector.TryTake().Should().BeNull();
     }
 
     [Fact]
-    public void Capture_inside_scope_is_taken_once()
+    public void Capture_inside_scope_returns_true_and_intent_taken_once()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         using var scope = collector.BeginScope();
 
-        collector.Capture(new MessageContent { Text = "hello" });
+        var captured = collector.Capture(new MessageContent { Text = "hello" });
 
+        captured.Should().BeTrue();
         var first = collector.TryTake();
         first.Should().NotBeNull();
         first!.Text.Should().Be("hello");

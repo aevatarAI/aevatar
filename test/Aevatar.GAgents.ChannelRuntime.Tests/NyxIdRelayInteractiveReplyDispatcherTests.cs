@@ -116,6 +116,89 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_without_producer_synthesizes_fallback_text_from_cards()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK,
+            JsonSerializer.Serialize(new { message_id = "mid", platform_message_id = "pmid" }));
+        var client = CreateClient(handler);
+        var registry = new ChannelMessageComposerRegistry(
+            Array.Empty<IMessageComposer>(),
+            Array.Empty<IChannelNativeMessageProducer>());
+        var dispatcher = new NyxIdRelayInteractiveReplyDispatcher(
+            registry,
+            client,
+            NullLogger<NyxIdRelayInteractiveReplyDispatcher>.Instance);
+
+        var intent = new MessageContent();
+        var card = new CardBlock { Title = "Daily Report", Text = "3 PRs merged" };
+        card.Fields.Add(new CardField { Title = "Commits", Text = "42" });
+        intent.Cards.Add(card);
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "detail",
+            Label = "Open details",
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            ChannelId.From("telegram"),
+            "msg-5",
+            "relay-token",
+            intent,
+            new ComposeContext());
+
+        result.Succeeded.Should().BeTrue();
+        result.FellBackToText.Should().BeTrue();
+        handler.LastRequestBody.Should().NotBeNull();
+        handler.LastRequestBody!.Should().Contain("Daily Report");
+        handler.LastRequestBody.Should().Contain("3 PRs merged");
+        handler.LastRequestBody.Should().Contain("Commits: 42");
+        handler.LastRequestBody.Should().Contain("Open details");
+        handler.LastRequestBody.Should().NotContain("(no content)");
+    }
+
+    [Fact]
+    public void BuildTextFallback_card_only_intent_flattens_title_text_fields_actions()
+    {
+        var intent = new MessageContent();
+        var card = new CardBlock { Title = "Title", Text = "Body" };
+        card.Fields.Add(new CardField { Title = "Key", Text = "Value" });
+        intent.Cards.Add(card);
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "confirm",
+            Label = "Confirm",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = "comment",
+            Label = "Comment",
+        });
+
+        var fallback = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(intent);
+
+        fallback.Should().Contain("Title");
+        fallback.Should().Contain("Body");
+        fallback.Should().Contain("Key: Value");
+        fallback.Should().Contain("• Confirm");
+        fallback.Should().NotContain("Comment", "text input labels should not appear in text fallback");
+    }
+
+    [Fact]
+    public void BuildTextFallback_prefers_existing_text_over_card_synthesis()
+    {
+        var intent = new MessageContent { Text = "explicit text" };
+        var card = new CardBlock { Title = "ignored-card-title" };
+        intent.Cards.Add(card);
+
+        var fallback = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(intent);
+
+        fallback.Should().Be("explicit text");
+    }
+
+    [Fact]
     public async Task DispatchAsync_transport_failure_surfaces_detail()
     {
         var handler = new RecordingHandler(

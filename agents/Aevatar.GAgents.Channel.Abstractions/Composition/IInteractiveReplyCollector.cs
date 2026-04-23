@@ -18,9 +18,12 @@ public interface IInteractiveReplyCollector
 
     /// <summary>
     /// Captures the supplied intent into the currently active scope.
-    /// No-op when no scope is active.
     /// </summary>
-    void Capture(MessageContent intent);
+    /// <returns>
+    /// <c>true</c> when a scope was active and the intent was captured; <c>false</c> when no
+    /// scope is active so the caller can surface the condition instead of silently succeeding.
+    /// </returns>
+    bool Capture(MessageContent intent);
 
     /// <summary>
     /// Consumes the captured intent for the active scope, returning <c>null</c>

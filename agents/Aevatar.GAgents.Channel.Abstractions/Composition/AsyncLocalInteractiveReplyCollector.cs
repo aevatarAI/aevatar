@@ -17,15 +17,16 @@ public sealed class AsyncLocalInteractiveReplyCollector : IInteractiveReplyColle
     }
 
     /// <inheritdoc />
-    public void Capture(MessageContent intent)
+    public bool Capture(MessageContent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
 
         var scope = _current.Value;
         if (scope is null)
-            return;
+            return false;
 
         scope.Intent = intent.Clone();
+        return true;
     }
 
     /// <inheritdoc />

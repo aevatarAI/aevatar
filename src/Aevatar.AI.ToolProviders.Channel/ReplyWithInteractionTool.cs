@@ -62,7 +62,15 @@ public sealed class ReplyWithInteractionTool : IAgentTool
         if (string.IsNullOrWhiteSpace(intent.Text) && intent.Actions.Count == 0 && intent.Cards.Count == 0)
             return Task.FromResult("""{"error":"empty_interaction"}""");
 
-        _collector.Capture(intent);
+        if (!_collector.Capture(intent))
+        {
+            // Tool was invoked outside an active collector scope (for example, a non-relay
+            // chat turn). Surface this so the LLM can retry with a plain-text reply instead
+            // of silently losing the response.
+            return Task.FromResult(
+                """{"error":"no_active_interactive_scope","detail":"reply_with_interaction is only available on channel relay turns. Reply with plain text instead."}""");
+        }
+
         return Task.FromResult("""{"status":"queued"}""");
     }
 
