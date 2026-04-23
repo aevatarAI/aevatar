@@ -282,7 +282,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 confirmedApiKey.Id,
                 credentialRef,
                 confirmedBot.Id,
-                confirmedRoute?.Id ?? string.Empty,
+                confirmedRoute.Id,
                 ct);
 
             return new NyxLarkMirrorRepairResult(
@@ -291,7 +291,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 RegistrationId: registrationId,
                 NyxChannelBotId: confirmedBot.Id,
                 NyxAgentApiKeyId: confirmedApiKey.Id,
-                NyxConversationRouteId: confirmedRoute?.Id ?? string.Empty,
+                NyxConversationRouteId: confirmedRoute.Id,
                 WebhookUrl: confirmedBot.WebhookUrl,
                 Note: "Existing Nyx relay resources were verified, the existing relay credential reference was preserved, and the local Aevatar mirror command was accepted. If registrations remain empty, the local projection/read model is unhealthy.");
         }
@@ -493,7 +493,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         }
     }
 
-    private async Task<ConfirmedConversationRoute?> ResolveConfirmedConversationRouteAsync(
+    private async Task<ConfirmedConversationRoute> ResolveConfirmedConversationRouteAsync(
         string accessToken,
         string requestedRouteId,
         string expectedChannelBotId,
@@ -519,7 +519,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 string.Equals(route.AgentApiKeyId, expectedApiKeyId, StringComparison.Ordinal))
             .ToList();
         if (matches.Count == 0)
-            return null;
+            throw new InvalidOperationException("missing_matching_nyx_conversation_route");
         if (matches.Count == 1)
             return matches[0];
 
