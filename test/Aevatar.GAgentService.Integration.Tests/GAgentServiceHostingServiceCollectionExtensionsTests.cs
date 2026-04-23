@@ -268,6 +268,31 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddGAgentServiceProjectionReadModelProviders_ShouldRejectPartialRegistrationFromDifferentProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddGAgentServiceProjection();
+        services.AddInMemoryDocumentProjectionStore<ServiceCatalogReadModel, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        var act = () => services.AddGAgentServiceProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ServiceCatalogReadModel*different provider*");
+    }
+
+    [Fact]
     public void AddGAgentServiceProjectionReadModelProviders_ShouldRegisterElasticsearchStores_WhenConfigured()
     {
         var services = new ServiceCollection();

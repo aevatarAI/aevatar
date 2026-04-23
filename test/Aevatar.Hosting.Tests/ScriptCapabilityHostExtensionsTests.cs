@@ -131,6 +131,32 @@ public class ScriptCapabilityHostExtensionsTests
     }
 
     [Fact]
+    public void AddScriptingProjectionReadModelProviders_ShouldRejectPartialRegistrationFromDifferentProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        var act = () => services.AddScriptingProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ScriptReadModelDocument*different provider*");
+    }
+
+    [Fact]
     public void AddScriptingCapabilityBundle_ShouldMapEvolutionAndReadModelEndpoints()
     {
         var builder = WebApplication.CreateBuilder();

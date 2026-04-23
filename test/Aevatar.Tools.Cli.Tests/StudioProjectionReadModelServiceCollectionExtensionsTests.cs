@@ -192,6 +192,28 @@ public sealed class StudioProjectionReadModelServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddStudioProjectionReadModelProviders_WhenPartialRegistrationUsesDifferentProvider_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+        });
+
+        services.AddInMemoryDocumentProjectionStore<RoleCatalogCurrentStateDocument, string>(
+            keySelector: static readModel => readModel.ActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        Action act = () => services.AddStudioProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*RoleCatalogCurrentStateDocument*different provider*");
+    }
+
+    [Fact]
     public void AddStudioProjectionReadModelProviders_WhenElasticsearchEnabled_ShouldNotRegisterInMemoryStore()
     {
         var services = new ServiceCollection();

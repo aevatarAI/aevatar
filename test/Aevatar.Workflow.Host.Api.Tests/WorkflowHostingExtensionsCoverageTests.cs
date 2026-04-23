@@ -382,6 +382,33 @@ public sealed class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldRejectPartialRegistrationFromDifferentProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
+
+        var act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*WorkflowExecutionCurrentStateDocument*different provider*");
+    }
+
+    [Fact]
     public async Task AddWorkflowProjectionReadModelProviders_ShouldResolveWorkflowActorBindingDocumentStore()
     {
         var services = new ServiceCollection();
