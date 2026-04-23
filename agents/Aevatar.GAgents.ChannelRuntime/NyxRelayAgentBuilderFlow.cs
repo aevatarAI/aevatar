@@ -40,11 +40,11 @@ internal static class NyxRelayAgentBuilderFlow
         {
             case DailyReportCommand:
             case DailyReportAlias:
-                return TryResolveDailyReport(tokens, out decision);
+                return TryResolveDailyReport(tokens, evt.ConversationId, out decision);
 
             case SocialMediaCommand:
             case SocialMediaAlias:
-                return TryResolveSocialMedia(tokens, out decision);
+                return TryResolveSocialMedia(tokens, evt.ConversationId, out decision);
 
             case ListTemplatesCommand:
                 decision = AgentBuilderFlowDecision.ToolCall("list_templates", """{"action":"list_templates"}""");
@@ -103,6 +103,7 @@ internal static class NyxRelayAgentBuilderFlow
 
     private static bool TryResolveDailyReport(
         IReadOnlyList<string> tokens,
+        string? conversationId,
         out AgentBuilderFlowDecision? decision)
     {
         decision = null;
@@ -113,7 +114,9 @@ internal static class NyxRelayAgentBuilderFlow
         }
 
         var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
-        if (!TryGetRequired(args, "github_username", out var githubUsername))
+        var githubUsername = GetOptional(args, "github_username")
+                             ?? FirstPositionalArgument(tokens);
+        if (string.IsNullOrWhiteSpace(githubUsername))
         {
             decision = AgentBuilderFlowDecision.DirectReply(
                 "github_username is required.\n\n" + BuildDailyReportHelpText());
@@ -139,12 +142,14 @@ internal static class NyxRelayAgentBuilderFlow
                 schedule_cron = scheduleCron,
                 schedule_timezone = scheduleTimezone,
                 run_immediately = runImmediately,
+                conversation_id = NormalizeOptional(conversationId),
             }));
         return true;
     }
 
     private static bool TryResolveSocialMedia(
         IReadOnlyList<string> tokens,
+        string? conversationId,
         out AgentBuilderFlowDecision? decision)
     {
         decision = null;
@@ -155,7 +160,8 @@ internal static class NyxRelayAgentBuilderFlow
         }
 
         var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
-        if (!TryGetRequired(args, "topic", out var topic))
+        var topic = GetOptional(args, "topic") ?? FirstPositionalArgument(tokens);
+        if (string.IsNullOrWhiteSpace(topic))
         {
             decision = AgentBuilderFlowDecision.DirectReply(
                 "topic is required.\n\n" + BuildSocialMediaHelpText());
@@ -180,8 +186,23 @@ internal static class NyxRelayAgentBuilderFlow
                 schedule_cron = scheduleCron,
                 schedule_timezone = scheduleTimezone,
                 run_immediately = ResolveRunImmediately(args),
+                conversation_id = NormalizeOptional(conversationId),
             }));
         return true;
+    }
+
+    private static string? FirstPositionalArgument(IReadOnlyList<string> tokens)
+    {
+        for (var i = 1; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (string.IsNullOrWhiteSpace(token))
+                continue;
+            if (token.IndexOf('=', StringComparison.Ordinal) >= 0)
+                continue;
+            return token.Trim();
+        }
+        return null;
     }
 
     private static bool TryResolveSimpleAgentAction(
@@ -448,15 +469,6 @@ internal static class NyxRelayAgentBuilderFlow
     {
         var raw = GetOptional(args, "run_immediately");
         return !bool.TryParse(raw, out var parsed) || parsed;
-    }
-
-    private static bool TryGetRequired(
-        IReadOnlyDictionary<string, string> args,
-        string key,
-        out string value)
-    {
-        value = GetOptional(args, key) ?? string.Empty;
-        return value.Length > 0;
     }
 
     private static string? GetOptional(IReadOnlyDictionary<string, string> args, string key)

@@ -63,6 +63,7 @@ public class NyxLarkProvisioningServiceTests
 
         handler.Requests.Should().HaveCount(3);
         handler.Requests[0].Body.Should().Contain("\"callback_url\":\"https://aevatar.example.com/api/webhooks/nyxid-relay\"");
+        handler.Requests[0].Body.Should().Contain("\"platform\":\"generic\"");
         handler.Requests[1].Body.Should().Contain("\"bot_token\":\"__unused_for_lark__\"");
         handler.Requests[1].Body.Should().Contain("\"app_id\":\"cli_a1b2c3\"");
         handler.Requests[2].Body.Should().Contain("\"default_agent\":true");
