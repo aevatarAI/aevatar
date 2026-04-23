@@ -47,6 +47,10 @@ import {
 } from '@/shared/ui/proComponents';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { describeError } from '@/shared/ui/errorText';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_PRESSABLE_CARD_CLASS,
+} from '@/shared/ui/interactionStandards';
 
 type QueryState<T> = {
   readonly isLoading: boolean;
@@ -919,6 +923,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             {executionTrace?.logs?.length ? (
               <button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={panelIconButtonStyle}
                 title="复制全部执行日志"
@@ -948,6 +953,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   {selectedExecutionActorId}
                 </code>
                 <button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   type="button"
                   style={panelIconButtonStyle}
                   title="复制 Actor ID"
@@ -967,6 +973,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             {selectedExecutionDetail?.executionId && !fullscreen ? (
               <button
+                aria-pressed={logsDetached}
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={{
                   ...panelIconButtonStyle,
@@ -983,6 +991,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             {fullscreen ? (
               <button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={panelIconButtonStyle}
                 title="关闭窗口"
@@ -1161,6 +1170,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           ) : executionTrace?.logs?.length ? (
             executionTrace.logs.map((log, index) => (
               <button
+                className={AEVATAR_PRESSABLE_CARD_CLASS}
                 key={`${log.timestamp}-${log.stepId || 'run'}-${log.title}`}
                 type="button"
                 onClick={() => void handleExecutionLogClick(log, index)}

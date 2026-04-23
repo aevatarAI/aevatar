@@ -9,6 +9,7 @@ import {
   AevatarInspectorEmpty,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_PRESSABLE_CARD_CLASS } from "@/shared/ui/interactionStandards";
 import {
   CompactFactValue,
   DetailPill,
@@ -111,6 +112,7 @@ const TeamAssetsTab: React.FC<TeamAssetsTabProps> = ({
               {workflowRows.map((row) => (
                 <button
                   aria-label={`打开 workflow ${row.title}`}
+                  className={AEVATAR_PRESSABLE_CARD_CLASS}
                   key={row.key}
                   onClick={() => onOpenWorkflowAsset(row.key)}
                   style={{
@@ -187,6 +189,7 @@ const TeamAssetsTab: React.FC<TeamAssetsTabProps> = ({
               {scriptRows.map((row) => (
                 <button
                   aria-label={`打开 script ${row.title}`}
+                  className={AEVATAR_PRESSABLE_CARD_CLASS}
                   key={row.key}
                   onClick={() => onOpenScriptAsset(row.key)}
                   style={{

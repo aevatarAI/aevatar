@@ -21,6 +21,7 @@ import {
   type AevatarStatusDomain,
   type AevatarThemeSurfaceToken,
 } from '@/shared/ui/aevatarWorkbench';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 
 export type AevatarLayoutMode = 'viewport' | 'document';
 
@@ -63,6 +64,7 @@ type AevatarPanelProps = {
   layoutMode?: AevatarLayoutMode;
   minHeight?: number | string;
   padding?: number | string;
+  style?: React.CSSProperties;
   title?: React.ReactNode;
   titleHelp?: React.ReactNode;
 };
@@ -206,6 +208,7 @@ export const AevatarHelpTooltip: React.FC<{
     >
       <button
         aria-label="Show help"
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         style={{ ...helpTriggerButtonStyle, color: token.colorTextDescription }}
         type="button"
       >
@@ -365,6 +368,7 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
   layoutMode,
   minHeight,
   padding = 16,
+  style,
   title,
   titleHelp,
 }) => {
@@ -397,12 +401,15 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
       style={
         ghost
           ? undefined
-          : buildAevatarPanelStyle(token as AevatarThemeSurfaceToken, {
-              minHeight: resolvedPanelMinHeight,
-              overflow:
-                resolvedLayoutMode === 'document' ? 'visible' : 'hidden',
-              padding,
-            })
+          : {
+              ...buildAevatarPanelStyle(token as AevatarThemeSurfaceToken, {
+                minHeight: resolvedPanelMinHeight,
+                overflow:
+                  resolvedLayoutMode === 'document' ? 'visible' : 'hidden',
+                padding,
+              }),
+              ...style,
+            }
       }
     >
       <div style={panelInnerStyle}>

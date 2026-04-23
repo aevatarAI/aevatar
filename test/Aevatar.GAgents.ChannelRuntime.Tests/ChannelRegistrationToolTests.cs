@@ -168,11 +168,13 @@ public sealed class ChannelRegistrationToolTests
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-            {
-                Id = "reg-1",
-                Platform = "lark",
-            }));
+            .Returns(
+                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                }),
+                Task.FromResult<ChannelBotRegistrationEntry?>(null));
 
         EventEnvelope? capturedEnvelope = null;
         var actor = Substitute.For<IActor>();
@@ -192,10 +194,47 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
+        using var doc = JsonDocument.Parse(json);
 
-        json.Should().Contain("\"status\":\"deleted\"");
+        doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_WithConfirm_ReturnsAccepted_WhenProjectionStillShowsRegistration()
+    {
+        var registration = new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            Platform = "lark",
+        };
+
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
+        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(actorRuntime)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("note").GetString().Should().Contain("projection not yet confirmed");
     }
 
     private static IDisposable PushNyxToken()

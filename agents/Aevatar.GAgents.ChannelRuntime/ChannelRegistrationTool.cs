@@ -226,6 +226,25 @@ public sealed class ChannelRegistrationTool : IAgentTool
         };
 
         await actor.HandleEventAsync(envelope);
-        return JsonSerializer.Serialize(new { status = "deleted", registration_id = registrationId });
+
+        var confirmed = false;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(500, ct);
+
+            if (await queryPort.GetAsync(registrationId, ct) == null)
+            {
+                confirmed = true;
+                break;
+            }
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            status = confirmed ? "deleted" : "accepted",
+            registration_id = registrationId,
+            note = confirmed ? string.Empty : "Delete submitted but projection not yet confirmed. Try 'list' after a few seconds.",
+        });
     }
 }

@@ -10,9 +10,12 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.Relay;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -609,6 +612,126 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchWorkflowResume_ForRelayCardAction()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-card", relayApiKeyId: "scope-card");
+        var payload = """
+            {
+              "message_id":"msg-card-1",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-card"},
+              "conversation":{"id":"conv-card-1","platform_id":"oc_chat_1"},
+              "content":{
+                "type":"card_action",
+                "text":"{\"tag\":\"button\",\"value\":{\"actor_id\":\"workflow-actor-1\",\"run_id\":\"run-1\",\"step_id\":\"approval-1\",\"approved\":false},\"form_value\":{\"user_input\":\"Need stronger hook\"},\"open_message_id\":\"om_123\"}"
+              }
+            }
+            """;
+        var dispatchService = new RecordingWorkflowResumeDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("workflow-actor-1", "run-1", "cmd-card-1", "corr-card-1")),
+        };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(dispatchService)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var store = new StubGAgentActorStore();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            store,
+            new NyxIdRelayOptions(),
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("workflow_resume_accepted");
+        dispatchService.Commands.Should().ContainSingle();
+        dispatchService.Commands[0].ActorId.Should().Be("workflow-actor-1");
+        dispatchService.Commands[0].RunId.Should().Be("run-1");
+        dispatchService.Commands[0].StepId.Should().Be("approval-1");
+        dispatchService.Commands[0].Approved.Should().BeFalse();
+        dispatchService.Commands[0].Feedback.Should().Be("Need stronger hook");
+        runtime.Actors.Should().BeEmpty();
+        store.AddedActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchWorkflowResume_ForRelayCardActionContentTypeField()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-card", relayApiKeyId: "scope-card");
+        var payload = """
+            {
+              "message_id":"msg-card-2",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-card"},
+              "conversation":{"id":"conv-card-2","platform_id":"oc_chat_2"},
+              "content":{
+                "content_type":"card_action",
+                "text":"{\"tag\":\"button\",\"value\":{\"actor_id\":\"workflow-actor-2\",\"run_id\":\"run-2\",\"step_id\":\"approval-2\",\"approved\":true},\"form_value\":{\"edited_content\":\"Ship it\"},\"open_message_id\":\"om_456\"}"
+              }
+            }
+            """;
+        var dispatchService = new RecordingWorkflowResumeDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("workflow-actor-2", "run-2", "cmd-card-2", "corr-card-2")),
+        };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(dispatchService)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var store = new StubGAgentActorStore();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            store,
+            new NyxIdRelayOptions(),
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("workflow_resume_accepted");
+        dispatchService.Commands.Should().ContainSingle();
+        dispatchService.Commands[0].ActorId.Should().Be("workflow-actor-2");
+        dispatchService.Commands[0].RunId.Should().Be("run-2");
+        dispatchService.Commands[0].StepId.Should().Be("approval-2");
+        dispatchService.Commands[0].Approved.Should().BeTrue();
+        dispatchService.Commands[0].UserInput.Should().Be("Ship it");
+        dispatchService.Commands[0].EditedContent.Should().Be("Ship it");
+        dispatchService.Commands[0].Feedback.Should().BeNull();
+        runtime.Actors.Should().BeEmpty();
+        store.AddedActors.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldRejectWhenUserTokenMissing()
     {
         var relay = CreateRelayInvocationDependencies();
@@ -698,13 +821,69 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldInjectUserConfigMetadata_FromRelayScope()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-relay", relayApiKeyId: "scope-relay");
+        var payload = """
+            {
+              "message_id":"msg-config",
+              "platform":"slack",
+              "agent":{"api_key_id":"scope-relay"},
+              "conversation":{"platform_id":"room-config"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "relay-route", 9))
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider
+            {
+                Messages =
+                {
+                    new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+                },
+            },
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+
+        var actor = runtime.Actors["nyxid-relay-slack-room-config"].Should().BeOfType<StubActor>().Subject;
+        var chatRequest = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.ScopeId.Should().Be("scope-relay");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be(relay.Token);
+        chatRequest.Metadata["scope_id"].Should().Be("scope-relay");
+        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("relay-model");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("relay-route");
+        chatRequest.Metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("9");
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldReuseActorAndSessionId_ForDuplicateDailyReportWebhook()
     {
         const string scopeId = "scope-daily";
         const string conversationId = "conv-daily";
         const string messageId = "msg-daily-1";
         const string dailyReportPrompt =
-            "/daily-report github_username=alice schedule_time=09:00 repositories=owner/repo";
+            "/daily github_username=alice schedule_time=09:00 repositories=owner/repo";
 
         var relay = CreateRelayInvocationDependencies(scopeId: scopeId, relayApiKeyId: scopeId);
         var payload = """
@@ -713,7 +892,7 @@ public class NyxIdChatEndpointsCoverageTests
               "platform":"lark",
               "agent":{"api_key_id":"scope-daily"},
               "conversation":{"id":"conv-daily","platform_id":"chat-daily"},
-              "content":{"text":"/daily-report github_username=alice schedule_time=09:00 repositories=owner/repo"}
+              "content":{"text":"/daily github_username=alice schedule_time=09:00 repositories=owner/repo"}
             }
             """;
 
@@ -784,6 +963,218 @@ public class NyxIdChatEndpointsCoverageTests
         requests.Select(request => request.Prompt).Should().OnlyContain(prompt => prompt == dailyReportPrompt);
         requests.Select(request => request.SessionId).Should().OnlyContain(sessionId => sessionId == $"{conversationId}-{messageId}");
     }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldInterceptSlashCommand_WhenDayOneBridgeOwns()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-bridge", relayApiKeyId: "scope-bridge");
+        var payload = """
+            {
+              "message_id":"msg-slash",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-bridge"},
+              "conversation":{"id":"conv-1","platform_id":"chat-1","type":"private"},
+              "sender":{"platform_id":"sender-1","display_name":"Sender"},
+              "content":{"text":"/daily alice"}
+            }
+            """;
+        var bridge = new StubDayOneBridge { ShouldHandleResult = true, ReplyText = "stub reply" };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxRelayDayOneBridge>(bridge)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("day_one_command");
+        response.Body.Should().Contain("msg-slash");
+
+        var captured = bridge.ShouldHandleCalls.Should().ContainSingle().Subject;
+        captured.Text.Should().Be("/daily alice");
+        captured.ConversationType.Should().Be("private");
+        captured.ScopeId.Should().Be("scope-bridge");
+        captured.NyxIdAccessToken.Should().Be(relay.Token);
+
+        runtime.CreateCalls.Should().BeEmpty(
+            because: "bridge-owned slash commands must not allocate a chat actor");
+        runtime.Actors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchToActor_WhenDayOneBridgeDefers()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-defer", relayApiKeyId: "scope-defer");
+        var payload = """
+            {
+              "message_id":"msg-freetext",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-defer"},
+              "conversation":{"id":"conv-1","platform_id":"chat-1","type":"private"},
+              "content":{"text":"hello there"}
+            }
+            """;
+        var bridge = new StubDayOneBridge { ShouldHandleResult = false };
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxRelayDayOneBridge>(bridge)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider(),
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().NotContain("day_one_command");
+
+        bridge.ShouldHandleCalls.Should().ContainSingle();
+        bridge.HandleCalls.Should().BeEmpty(
+            because: "bridge defers free-text to the LLM path");
+        runtime.Actors.Should().ContainKey("nyxid-relay-conv-1");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDedupeBridgeSideEffects_UnderConcurrentRetries()
+    {
+        const string scopeId = "scope-dedupe";
+        const string messageId = "msg-dedupe-1";
+        const int concurrentDeliveries = 8;
+        var relay = CreateRelayInvocationDependencies(scopeId: scopeId, relayApiKeyId: scopeId);
+        var payload = $$"""
+            {
+              "message_id":"{{messageId}}",
+              "platform":"lark",
+              "agent":{"api_key_id":"{{scopeId}}"},
+              "conversation":{"id":"conv-d","platform_id":"chat-d","type":"private"},
+              "content":{"text":"/daily alice"}
+            }
+            """;
+        var bridge = new StubDayOneBridge { ShouldHandleResult = true };
+        var guard = new NyxRelayBridgeIdempotencyGuard();
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<INyxRelayDayOneBridge>(bridge)
+            .AddSingleton<INyxRelayBridgeIdempotencyGuard>(guard)
+            .BuildServiceProvider();
+
+        DefaultHttpContext BuildContext()
+        {
+            var context = new DefaultHttpContext { RequestServices = services };
+            context.Request.ContentType = "application/json";
+            context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+            context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+            return context;
+        }
+
+        // Release all deliveries simultaneously so every thread observes the dedupe key as
+        // absent in the same time window — this is exactly the race the sequential test
+        // could not surface.
+        using var releaseGate = new ManualResetEventSlim(false);
+        async Task<(int Status, string Body)> FireOnceAsync()
+        {
+            await Task.Yield();
+            releaseGate.Wait();
+            var result = await InvokeResultAsync(
+                "HandleRelayWebhookAsync",
+                BuildContext(),
+                new StubActorRuntime(),
+                new StubSubscriptionProvider(),
+                new StubGAgentActorStore(),
+                new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+                relay.Validator,
+                relay.Client,
+                NullLoggerFactory.Instance,
+                CancellationToken.None);
+            return await ExecuteResultAsync(result);
+        }
+
+        var deliveryTasks = Enumerable
+            .Range(0, concurrentDeliveries)
+            .Select(_ => Task.Run(FireOnceAsync))
+            .ToArray();
+        releaseGate.Set();
+        var responses = await Task.WhenAll(deliveryTasks);
+
+        // Wait for the winner's fire-and-forget HandleAsync to record the call so the
+        // count assertion is deterministic (no polling wait).
+        await bridge.FirstHandleStarted;
+
+        responses.Should().OnlyContain(r => r.Status == StatusCodes.Status202Accepted);
+        responses.Count(r => r.Body.Contains("\"dedupe\":\"duplicate\"", StringComparison.Ordinal))
+            .Should().Be(concurrentDeliveries - 1,
+                because: "exactly one concurrent delivery wins the atomic claim, the rest must be reported as duplicates");
+        responses.Count(r => !r.Body.Contains("\"dedupe\":\"duplicate\"", StringComparison.Ordinal))
+            .Should().Be(1);
+
+        bridge.ShouldHandleCalls.Should().HaveCount(concurrentDeliveries,
+            because: "every delivery enters the bridge gate before the dedupe check");
+        bridge.HandleCalls.Should().ContainSingle(
+            because: "only the winning delivery should fire AgentBuilder side effects");
+    }
+
+    private sealed class StubDayOneBridge : INyxRelayDayOneBridge
+    {
+        // ConcurrentBag is used so the concurrent-retry test can safely record overlapping
+        // calls from many threads without lock contention skewing the race we are testing.
+        private readonly System.Collections.Concurrent.ConcurrentBag<NyxRelayBridgeRequest> _shouldHandleCalls = new();
+        private readonly System.Collections.Concurrent.ConcurrentBag<NyxRelayBridgeRequest> _handleCalls = new();
+        private readonly TaskCompletionSource _firstHandleStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool ShouldHandleResult { get; set; } = true;
+        public string ReplyText { get; set; } = "stub reply";
+        public IReadOnlyCollection<NyxRelayBridgeRequest> ShouldHandleCalls => _shouldHandleCalls;
+        public IReadOnlyCollection<NyxRelayBridgeRequest> HandleCalls => _handleCalls;
+        public Task FirstHandleStarted => _firstHandleStarted.Task;
+
+        public bool ShouldHandle(NyxRelayBridgeRequest request)
+        {
+            _shouldHandleCalls.Add(request);
+            return ShouldHandleResult;
+        }
+
+        public Task<string> HandleAsync(NyxRelayBridgeRequest request, CancellationToken ct)
+        {
+            _handleCalls.Add(request);
+            _firstHandleStarted.TrySetResult();
+            return Task.FromResult(ReplyText);
+        }
+    }
+
 
     [Fact]
     public async Task HandleRelayWebhookAsync_ShouldRejectMismatchedRelayApiKeyId()
@@ -1019,7 +1410,6 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public void BuildRelayDiagnostic_ShouldUseServerDefaultsAndTokenFlag()
     {
-        var method = EndpointsType.GetMethod("BuildRelayDiagnostic", BindingFlags.NonPublic | BindingFlags.Static)!;
         var metadata = new MapField<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdRoutePreference] = "direct",
@@ -1034,12 +1424,9 @@ public class NyxIdChatEndpointsCoverageTests
             })
             .Build();
 
-        var diag = method.Invoke(null, [metadata, configuration, "LLM request failed: timeout"])!.Should()
-            .NotBeNull()
-            .And.BeOfType<string>()
-            .Subject;
+        var diag = NyxIdRelayReplies.BuildDiagnostic(metadata, configuration, "LLM request failed: timeout");
 
-        diag.Should().Contain("Model: deepseek-chat (from config.json)");
+        diag.Should().Contain("Model: deepseek-chat (from user config)");
         diag.Should().Contain("Route: direct");
         diag.Should().Contain("Scope: scope-a");
         diag.Should().Contain("Token: present");
@@ -1714,6 +2101,22 @@ public class NyxIdChatEndpointsCoverageTests
 
         public Task<string> BuildPromptSectionAsync(int maxChars = 2000, CancellationToken ct = default) =>
             Task.FromResult(promptSection);
+    }
+
+    private sealed class RecordingWorkflowResumeDispatchService
+        : ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+    {
+        public required CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> Result { get; init; }
+
+        public List<WorkflowResumeCommand> Commands { get; } = [];
+
+        public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowResumeCommand command,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            return Task.FromResult(Result);
+        }
     }
 
     private sealed class NoopDisposable : IAsyncDisposable

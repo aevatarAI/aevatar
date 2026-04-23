@@ -1,5 +1,10 @@
 import { CheckOutlined, DownOutlined } from "@ant-design/icons";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  joinInteractiveClassNames,
+} from "@/shared/ui/interactionStandards";
 
 export type AevatarHeaderSelectOption = {
   value: string;
@@ -153,6 +158,7 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-label={ariaLabel}
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
         title={selectedOption?.label || placeholder}
@@ -271,6 +277,10 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
             >
               {menuAction ? (
                 <button
+                  className={joinInteractiveClassNames(
+                    AEVATAR_INTERACTIVE_BUTTON_CLASS,
+                    AEVATAR_INTERACTIVE_CHIP_CLASS,
+                  )}
                   onClick={() => {
                     setOpen(false);
                     menuAction.onClick();
@@ -302,6 +312,10 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
             return (
               <button
                 aria-selected={active}
+                className={joinInteractiveClassNames(
+                  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+                  AEVATAR_INTERACTIVE_CHIP_CLASS,
+                )}
                 disabled={option.disabled}
                 key={option.value}
                 onClick={() => {

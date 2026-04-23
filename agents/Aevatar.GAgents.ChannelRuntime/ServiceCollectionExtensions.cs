@@ -9,6 +9,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Lark;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.GAgents.NyxidChat.Relay;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -193,10 +194,10 @@ public static class ServiceCollectionExtensions
             .Use<ConversationDispatchMiddleware>()));
         services.TryAddSingleton<ChannelPipeline>(sp => sp.GetRequiredService<MiddlewarePipelineBuilder>().Build(sp));
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+        services.TryAddSingleton<INyxRelayDayOneBridge, NyxRelayDayOneBridge>();
         services.TryAddSingleton<LarkConversationInboxRuntime>();
         services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService>(sp =>
-            sp.GetRequiredService<LarkConversationInboxRuntime>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, LarkConversationInboxHostedService>());
 
         return services;
     }

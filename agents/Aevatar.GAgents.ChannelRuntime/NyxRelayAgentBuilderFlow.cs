@@ -7,8 +7,7 @@ namespace Aevatar.GAgents.ChannelRuntime;
 internal static class NyxRelayAgentBuilderFlow
 {
     private const string PrivateChatType = "p2p";
-    private const string DailyReportCommand = "/daily-report";
-    private const string DailyReportAlias = "/create-daily-report";
+    private const string DailyCommand = "/daily";
     private const string SocialMediaCommand = "/social-media";
     private const string SocialMediaAlias = "/create-social-media";
     private const string ListTemplatesCommand = "/templates";
@@ -25,53 +24,31 @@ internal static class NyxRelayAgentBuilderFlow
         ArgumentNullException.ThrowIfNull(evt);
         decision = null;
 
-        if (!string.Equals(evt.ChatType, PrivateChatType, StringComparison.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(evt.Text))
-        {
+        if (string.IsNullOrWhiteSpace(evt.Text))
             return false;
-        }
 
-        var tokens = ChannelTextCommandParser.Tokenize(evt.Text);
+        var trimmedText = evt.Text.TrimStart();
+        if (!trimmedText.StartsWith('/'))
+            return false;
+
+        var tokens = ChannelTextCommandParser.Tokenize(trimmedText);
         if (tokens.Count == 0)
             return false;
 
         var command = tokens[0];
-        switch (command)
+        if (!IsKnownCommand(command))
         {
-            case DailyReportCommand:
-            case DailyReportAlias:
-                return TryResolveDailyReport(tokens, out decision);
-
-            case SocialMediaCommand:
-            case SocialMediaAlias:
-                return TryResolveSocialMedia(tokens, out decision);
-
-            case ListTemplatesCommand:
-                decision = AgentBuilderFlowDecision.ToolCall("list_templates", """{"action":"list_templates"}""");
-                return true;
-
-            case ListAgentsCommand:
-                decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
-                return true;
-
-            case AgentStatusCommand:
-                return TryResolveSimpleAgentAction(tokens, "agent_status", "Usage: /agent-status <agent_id>", out decision);
-
-            case RunAgentCommand:
-                return TryResolveSimpleAgentAction(tokens, "run_agent", "Usage: /run-agent <agent_id>", out decision);
-
-            case DisableAgentCommand:
-                return TryResolveSimpleAgentAction(tokens, "disable_agent", "Usage: /disable-agent <agent_id>", out decision);
-
-            case EnableAgentCommand:
-                return TryResolveSimpleAgentAction(tokens, "enable_agent", "Usage: /enable-agent <agent_id>", out decision);
-
-            case DeleteAgentCommand:
-                return TryResolveDeleteAgent(tokens, out decision);
-
-            default:
-                return false;
+            decision = AgentBuilderFlowDecision.DirectReply(BuildUnknownCommandReply(command));
+            return true;
         }
+
+        if (!IsPrivateChat(evt.ChatType))
+        {
+            decision = AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command));
+            return true;
+        }
+
+        return TryResolveKnownCommand(command, tokens, evt.ConversationId, out decision);
     }
 
     public static string FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
@@ -101,8 +78,67 @@ internal static class NyxRelayAgentBuilderFlow
         }
     }
 
+    private static bool IsKnownCommand(string command) =>
+        command is DailyCommand
+            or SocialMediaCommand or SocialMediaAlias
+            or ListTemplatesCommand
+            or ListAgentsCommand
+            or AgentStatusCommand
+            or RunAgentCommand
+            or DisableAgentCommand
+            or EnableAgentCommand
+            or DeleteAgentCommand;
+
+    private static bool IsPrivateChat(string? chatType) =>
+        string.Equals(chatType, PrivateChatType, StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryResolveKnownCommand(
+        string command,
+        IReadOnlyList<string> tokens,
+        string? conversationId,
+        out AgentBuilderFlowDecision? decision)
+    {
+        switch (command)
+        {
+            case DailyCommand:
+                return TryResolveDailyReport(tokens, conversationId, out decision);
+
+            case SocialMediaCommand:
+            case SocialMediaAlias:
+                return TryResolveSocialMedia(tokens, conversationId, out decision);
+
+            case ListTemplatesCommand:
+                decision = AgentBuilderFlowDecision.ToolCall("list_templates", """{"action":"list_templates"}""");
+                return true;
+
+            case ListAgentsCommand:
+                decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
+                return true;
+
+            case AgentStatusCommand:
+                return TryResolveSimpleAgentAction(tokens, "agent_status", "Usage: /agent-status <agent_id>", out decision);
+
+            case RunAgentCommand:
+                return TryResolveSimpleAgentAction(tokens, "run_agent", "Usage: /run-agent <agent_id>", out decision);
+
+            case DisableAgentCommand:
+                return TryResolveSimpleAgentAction(tokens, "disable_agent", "Usage: /disable-agent <agent_id>", out decision);
+
+            case EnableAgentCommand:
+                return TryResolveSimpleAgentAction(tokens, "enable_agent", "Usage: /enable-agent <agent_id>", out decision);
+
+            case DeleteAgentCommand:
+                return TryResolveDeleteAgent(tokens, out decision);
+
+            default:
+                decision = null;
+                return false;
+        }
+    }
+
     private static bool TryResolveDailyReport(
         IReadOnlyList<string> tokens,
+        string? conversationId,
         out AgentBuilderFlowDecision? decision)
     {
         decision = null;
@@ -113,7 +149,9 @@ internal static class NyxRelayAgentBuilderFlow
         }
 
         var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
-        if (!TryGetRequired(args, "github_username", out var githubUsername))
+        var githubUsername = GetOptional(args, "github_username")
+                             ?? FirstPositionalArgument(tokens);
+        if (string.IsNullOrWhiteSpace(githubUsername))
         {
             decision = AgentBuilderFlowDecision.DirectReply(
                 "github_username is required.\n\n" + BuildDailyReportHelpText());
@@ -139,12 +177,14 @@ internal static class NyxRelayAgentBuilderFlow
                 schedule_cron = scheduleCron,
                 schedule_timezone = scheduleTimezone,
                 run_immediately = runImmediately,
+                conversation_id = NormalizeOptional(conversationId),
             }));
         return true;
     }
 
     private static bool TryResolveSocialMedia(
         IReadOnlyList<string> tokens,
+        string? conversationId,
         out AgentBuilderFlowDecision? decision)
     {
         decision = null;
@@ -155,7 +195,8 @@ internal static class NyxRelayAgentBuilderFlow
         }
 
         var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
-        if (!TryGetRequired(args, "topic", out var topic))
+        var topic = GetOptional(args, "topic") ?? FirstPositionalArgument(tokens);
+        if (string.IsNullOrWhiteSpace(topic))
         {
             decision = AgentBuilderFlowDecision.DirectReply(
                 "topic is required.\n\n" + BuildSocialMediaHelpText());
@@ -180,8 +221,23 @@ internal static class NyxRelayAgentBuilderFlow
                 schedule_cron = scheduleCron,
                 schedule_timezone = scheduleTimezone,
                 run_immediately = ResolveRunImmediately(args),
+                conversation_id = NormalizeOptional(conversationId),
             }));
         return true;
+    }
+
+    private static string? FirstPositionalArgument(IReadOnlyList<string> tokens)
+    {
+        for (var i = 1; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (string.IsNullOrWhiteSpace(token))
+                continue;
+            if (token.IndexOf('=', StringComparison.Ordinal) >= 0)
+                continue;
+            return token.Trim();
+        }
+        return null;
     }
 
     private static bool TryResolveSimpleAgentAction(
@@ -253,7 +309,7 @@ internal static class NyxRelayAgentBuilderFlow
                       ?? ReadString(root, "auth_url")
                       ?? ReadString(root, "url")
                       ?? ReadString(root, "documentation_url");
-            var note = ReadString(root, "note") ?? "Finish the GitHub authorization step, then run /daily-report again.";
+            var note = ReadString(root, "note") ?? "Finish the GitHub authorization step, then run /daily again.";
 
             return BuildTextBlock(
                 string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase)
@@ -284,7 +340,7 @@ internal static class NyxRelayAgentBuilderFlow
             $"Workflow ID: {ReadString(root, "workflow_id") ?? "pending"}",
             $"Next scheduled run: {ReadString(root, "next_scheduled_run") ?? "pending"}",
             NormalizeOptional(ReadString(root, "note")),
-            "Approvals will arrive as text instructions in this chat. Use /approve or /reject exactly as shown.",
+            "Approvals will arrive as interactive cards in this chat. Text commands such as /approve and /reject still work as fallback.",
             "Next commands: /agents, /agent-status <agent_id>, /run-agent <agent_id>");
     }
 
@@ -450,15 +506,6 @@ internal static class NyxRelayAgentBuilderFlow
         return !bool.TryParse(raw, out var parsed) || parsed;
     }
 
-    private static bool TryGetRequired(
-        IReadOnlyDictionary<string, string> args,
-        string key,
-        out string value)
-    {
-        value = GetOptional(args, key) ?? string.Empty;
-        return value.Length > 0;
-    }
-
     private static string? GetOptional(IReadOnlyDictionary<string, string> args, string key)
     {
         if (!args.TryGetValue(key, out var raw))
@@ -503,10 +550,27 @@ internal static class NyxRelayAgentBuilderFlow
             "Optional: audience=\"Developers\" style=\"Confident and concise\" schedule_timezone=Asia/Singapore run_immediately=false");
 
     private static string BuildDailyReportCommandExample() =>
-        "/daily-report github_username=alice schedule_time=09:00 repositories=owner/repo";
+        "/daily github_username=alice schedule_time=09:00 repositories=owner/repo";
 
     private static string BuildSocialMediaCommandExample() =>
         "/social-media topic=\"Launch update\" schedule_time=10:30 audience=\"Developers\" style=\"Confident and concise\"";
+
+    private static string BuildUnknownCommandReply(string command) =>
+        BuildTextBlock(
+            $"Unknown command: {command}",
+            "Supported commands:",
+            BuildDailyReportCommandExample(),
+            BuildSocialMediaCommandExample(),
+            "/templates",
+            "/agents",
+            "/agent-status <agent_id>",
+            "/run-agent <agent_id>",
+            "/disable-agent <agent_id>",
+            "/enable-agent <agent_id>",
+            "/delete-agent <agent_id> confirm");
+
+    private static string BuildPrivateChatRestrictionReply(string command) =>
+        $"`{command}` only works in a private chat with this bot. Please DM me and run `{command}` again.";
 
     private static string BuildTextBlock(params string?[] lines)
     {

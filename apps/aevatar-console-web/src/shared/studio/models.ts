@@ -553,8 +553,11 @@ export interface StudioRuntimeTestResult {
 
 export interface StudioUserConfig {
   readonly defaultModel: string;
-  readonly preferredLlmRoute?: string;
-  readonly runtimeBaseUrl: string;
+  readonly preferredLlmRoute?: string | null;
+  readonly runtimeMode?: string | null;
+  readonly localRuntimeBaseUrl?: string | null;
+  readonly remoteRuntimeBaseUrl?: string | null;
+  readonly maxToolRounds?: number | null;
 }
 
 export interface StudioUserConfigProviderStatus {

@@ -82,6 +82,42 @@ public sealed class LarkConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteCardActionResume_WhenCardPayloadContainsWorkflowIds()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var dispatchService = new RecordingWorkflowResumeDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "cmd-card-1", "corr-card-1")),
+        };
+        var services = new ServiceCollection()
+            .AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(dispatchService)
+            .BuildServiceProvider();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildCardActionActivity(
+                "evt-card-1",
+                ("actor_id", "actor-1"),
+                ("run_id", "run-1"),
+                ("step_id", "approval-1"),
+                ("approved", "false"),
+                ("user_input", "Need stronger hook")),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("workflow-resume:cmd-card-1");
+        adapter.Replies.Should().BeEmpty();
+        dispatchService.Commands.Should().ContainSingle();
+        dispatchService.Commands[0].ActorId.Should().Be("actor-1");
+        dispatchService.Commands[0].RunId.Should().Be("run-1");
+        dispatchService.Commands[0].StepId.Should().Be("approval-1");
+        dispatchService.Commands[0].Approved.Should().BeFalse();
+        dispatchService.Commands[0].Feedback.Should().Be("Need stronger hook");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldMapWorkflowResumeValidationErrors()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -104,6 +140,31 @@ public sealed class LarkConversationTurnRunnerTests
         result.ErrorCode.Should().Be("invalid_step_id");
         result.ErrorSummary.Should().Contain("stepId");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRouteSlashCommand_WhenRegistrationHasNoRelayApiKey()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var replyGenerator = new StubReplyGenerator("llm-fallback-should-not-fire");
+        var runner = CreateRunner(registrationQueryPort, adapter, replyGenerator: replyGenerator);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/daily alice",
+                "msg-slash-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:msg-slash-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("Create daily report agent failed");
+        adapter.Replies[0].ReplyText.Should().Contain("No NyxID access token available");
+        replyGenerator.GeneratedActivities.Should().BeEmpty(
+            because: "deterministic slash flow must not fall through to the LLM reply generator");
     }
 
     [Fact]
@@ -207,6 +268,41 @@ public sealed class LarkConversationTurnRunnerTests
             Content = new MessageContent
             {
                 Text = text,
+            },
+        };
+    }
+
+    private static ChatActivity BuildCardActionActivity(string eventId, params (string Key, string Value)[] fields)
+    {
+        var cardAction = new CardActionSubmission
+        {
+            SourceMessageId = "om-card-1",
+        };
+
+        foreach (var (key, value) in fields)
+            cardAction.FormFields[key] = value;
+
+        return new ChatActivity
+        {
+            Id = eventId,
+            Type = ActivityType.CardAction,
+            ChannelId = ChannelId.From("lark"),
+            Bot = BotInstanceId.From("reg-1"),
+            Conversation = ConversationReference.Create(
+                ChannelId.From("lark"),
+                BotInstanceId.From("reg-1"),
+                ConversationScope.DirectMessage,
+                partition: "oc_chat_1",
+                "dm",
+                "ou_user_1"),
+            From = new ParticipantRef
+            {
+                CanonicalId = "ou_user_1",
+                DisplayName = "User One",
+            },
+            Content = new MessageContent
+            {
+                CardAction = cardAction,
             },
         };
     }

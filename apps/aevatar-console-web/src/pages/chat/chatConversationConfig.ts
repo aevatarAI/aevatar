@@ -320,7 +320,9 @@ export function buildConversationModelGroups(input: {
   const fallbackGroups =
     explicitGroups.length > 0
       ? []
-      : buildFallbackModelGroups(input.models?.supportedModels ?? [], routeProviders);
+      : input.effectiveRoute === USER_LLM_ROUTE_GATEWAY
+        ? buildFallbackModelGroups(input.models?.supportedModels ?? [], routeProviders)
+        : [];
 
   const groups = [...explicitGroups, ...fallbackGroups];
   const selectedModel =

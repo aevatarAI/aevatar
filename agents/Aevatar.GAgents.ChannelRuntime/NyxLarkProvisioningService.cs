@@ -37,6 +37,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
 {
     private const string DefaultNyxProviderSlug = "api-lark-bot";
     private const string LarkBotTokenPlaceholder = "__unused_for_lark__";
+    private const string NyxRelayApiKeyPlatform = "generic";
 
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
@@ -149,7 +150,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
             {
                 name = $"aevatar-lark-relay-{registrationId[..12]}",
                 scopes = "read write",
-                platform = "lark",
+                platform = NyxRelayApiKeyPlatform,
                 callback_url = relayCallbackUrl,
             }),
             ct);
