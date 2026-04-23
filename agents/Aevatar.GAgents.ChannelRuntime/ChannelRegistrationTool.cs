@@ -28,7 +28,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
         "Manage Aevatar ChannelRuntime registrations for the supported Nyx-backed Lark relay flow. " +
         "Actions: list, register_lark_via_nyx, rebuild_projection, repair_lark_mirror, delete. " +
         "Use register_lark_via_nyx for first-time provisioning, rebuild_projection to re-materialize the local registration read model from the authoritative actor state, and repair_lark_mirror when Nyx relay resources already exist but the local Aevatar mirror is missing. " +
-        "Legacy direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials.";
+        "Legacy direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials. " +
+        "Repair requires verified Nyx bot/api-key state plus an existing relay credential reference that still resolves in the local secrets store.";
 
     public string ParametersSchema => """
         {
@@ -79,6 +80,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Existing Nyx conversation route ID (optional for repair_lark_mirror, but strongly recommended)"
             },
+            "credential_ref": {
+              "type": "string",
+              "description": "Existing local relay credential reference to preserve during repair_lark_mirror (optional when registration_id still points at a stored relay secret)"
+            },
             "reason": {
               "type": "string",
               "description": "Optional operator reason for rebuild_projection"
@@ -107,26 +112,38 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         return action switch
         {
-            "list" => await ExecuteWithRuntimeAsync((queryPort, _) => ListAsync(queryPort, ct)),
+            "list" => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
-            "rebuild_projection" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) => RebuildProjectionAsync(queryPort, actorRuntime, root, ct)),
+            "rebuild_projection" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => RebuildProjectionAsync(queryPort, actorRuntime, dispatchPort, root, ct)),
             "repair_lark_mirror" => await RepairLarkMirrorAsync(root, ct),
-            "delete" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) => DeleteAsync(queryPort, actorRuntime, root, ct)),
+            "delete" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => DeleteAsync(queryPort, actorRuntime, dispatchPort, root, ct)),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
-            _ => await ExecuteWithRuntimeAsync((queryPort, _) => ListAsync(queryPort, ct)),
+            _ => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
         };
     }
 
-    private async Task<string> ExecuteWithRuntimeAsync(
-        Func<IChannelBotRegistrationQueryPort, IActorRuntime, Task<string>> operation)
+    private async Task<string> ExecuteWithQueryAsync(Func<IChannelBotRegistrationQueryPort, Task<string>> operation)
+    {
+        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
+        if (queryPort is null)
+            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort is not registered in DI."}""";
+
+        return await operation(queryPort);
+    }
+
+    private async Task<string> ExecuteWithStoreAsync(
+        Func<IChannelBotRegistrationQueryPort, IActorRuntime, IActorDispatchPort, Task<string>> operation)
     {
         var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
-        if (queryPort is null || actorRuntime is null)
-            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort or IActorRuntime not registered in DI."}""";
+        var dispatchPort = _serviceProvider.GetService<IActorDispatchPort>();
+        if (queryPort is null || actorRuntime is null || dispatchPort is null)
+        {
+            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort, IActorRuntime, or IActorDispatchPort is not registered in DI."}""";
+        }
 
-        return await operation(queryPort, actorRuntime);
+        return await operation(queryPort, actorRuntime, dispatchPort);
     }
 
     private static string? GetStr(JsonElement element, string propertyName) =>
@@ -270,12 +287,15 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         var result = await provisioningService.RepairLocalMirrorAsync(
             new NyxLarkMirrorRepairRequest(
+                AccessToken: AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken) ?? string.Empty,
                 RequestedRegistrationId: GetStr(args, "registration_id")?.Trim() ?? string.Empty,
                 ScopeId: GetStr(args, "scope_id")?.Trim() ?? string.Empty,
                 NyxProviderSlug: ResolveNyxProviderSlug(args),
+                WebhookBaseUrl: GetStr(args, "webhook_base_url")?.Trim() ?? string.Empty,
                 NyxChannelBotId: nyxChannelBotId,
                 NyxAgentApiKeyId: nyxAgentApiKeyId,
-                NyxConversationRouteId: nyxConversationRouteId),
+                NyxConversationRouteId: nyxConversationRouteId,
+                CredentialRef: GetStr(args, "credential_ref")?.Trim() ?? string.Empty),
             ct);
 
         return SerializeLarkRegistrationPayload(
@@ -294,21 +314,33 @@ public sealed class ChannelRegistrationTool : IAgentTool
     private async Task<string> RebuildProjectionAsync(
         IChannelBotRegistrationQueryPort queryPort,
         IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort,
         JsonElement args,
         CancellationToken ct)
     {
-        var registrations = await queryPort.QueryAllAsync(ct);
         await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
             actorRuntime,
+            dispatchPort,
             GetStr(args, "reason")?.Trim() ?? "tool_manual_rebuild",
             ct);
+
+        int? observedRegistrationsBeforeRebuild = null;
+        var note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.";
+        try
+        {
+            observedRegistrationsBeforeRebuild = (await queryPort.QueryAllAsync(ct)).Count;
+        }
+        catch
+        {
+            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side observation is currently unavailable; registrations may still refresh asynchronously.";
+        }
 
         return JsonSerializer.Serialize(new
         {
             status = "accepted",
             actor_id = ChannelBotRegistrationGAgent.WellKnownId,
-            observed_registrations_before_rebuild = registrations.Count,
-            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.",
+            observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
+            note,
         });
     }
 
@@ -331,6 +363,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
     private async Task<string> DeleteAsync(
         IChannelBotRegistrationQueryPort queryPort,
         IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort,
         JsonElement args,
         CancellationToken ct)
     {
@@ -362,6 +395,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
             actorRuntime,
+            dispatchPort,
             registrationId,
             ct);
 

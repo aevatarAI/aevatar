@@ -71,7 +71,6 @@ public sealed class ChannelRegistrationToolTests
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(Substitute.For<IActorRuntime>())
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -139,17 +138,19 @@ public sealed class ChannelRegistrationToolTests
 
         EventEnvelope? capturedEnvelope = null;
         var actor = Substitute.For<IActor>();
-        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
-        actor.HandleEventAsync(Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(actor));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
             .AddSingleton(actorRuntime)
+            .AddSingleton((IActorDispatchPort)actorRuntime)
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -161,6 +162,40 @@ public sealed class ChannelRegistrationToolTests
         doc.RootElement.GetProperty("observed_registrations_before_rebuild").GetInt32().Should().Be(1);
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RebuildProjection_DispatchesEvenWhenQueryObservationFails()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(new InvalidOperationException("projection reader unavailable")));
+
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(actorRuntime)
+            .AddSingleton((IActorDispatchPort)actorRuntime)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug"}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("observed_registrations_before_rebuild").ValueKind.Should().Be(JsonValueKind.Null);
+        doc.RootElement.GetProperty("note").GetString().Should().Contain("observation is currently unavailable");
+        capturedEnvelope.Should().NotBeNull();
     }
 
     [Fact]
@@ -189,17 +224,20 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
+            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","credential_ref":"vault://channels/lark/registrations/reg-restore-1/relay-hmac","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-restore-1");
         await provisioningService.Received(1).RepairLocalMirrorAsync(
             Arg.Is<NyxLarkMirrorRepairRequest>(request =>
+                request.AccessToken == "test-token" &&
                 request.RequestedRegistrationId == "reg-restore-1" &&
+                request.WebhookBaseUrl == "https://aevatar.example.com" &&
                 request.NyxChannelBotId == "bot-1" &&
                 request.NyxAgentApiKeyId == "key-1" &&
-                request.NyxConversationRouteId == "route-1"),
+                request.NyxConversationRouteId == "route-1" &&
+                request.CredentialRef == "vault://channels/lark/registrations/reg-restore-1/relay-hmac"),
             Arg.Any<CancellationToken>());
     }
 
@@ -231,9 +269,11 @@ public sealed class ChannelRegistrationToolTests
                 NyxConversationRouteId = "route-1",
             }));
 
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(Substitute.For<IActorRuntime>())
+            .AddSingleton(actorRuntime)
+            .AddSingleton((IActorDispatchPort)actorRuntime)
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -259,18 +299,19 @@ public sealed class ChannelRegistrationToolTests
                 Task.FromResult<ChannelBotRegistrationEntry?>(null));
 
         EventEnvelope? capturedEnvelope = null;
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
-        actor.HandleEventAsync(Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
             .AddSingleton(actorRuntime)
+            .AddSingleton((IActorDispatchPort)actorRuntime)
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -296,18 +337,19 @@ public sealed class ChannelRegistrationToolTests
         queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
 
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
-        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
             .AddSingleton(actorRuntime)
+            .AddSingleton((IActorDispatchPort)actorRuntime)
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 

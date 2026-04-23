@@ -170,18 +170,21 @@ public sealed class ChannelCallbackEndpointsTests
 
         EventEnvelope? capturedEnvelope = null;
         var actor = Substitute.For<IActor>();
-        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
-        actor.HandleEventAsync(Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(actor));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
 
         var result = await InvokeAsync(
             "HandleRebuildRegistrationsAsync",
             actorRuntime,
+            (IActorDispatchPort)actorRuntime,
             queryPort,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
@@ -190,6 +193,39 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("\"observed_registrations_before_rebuild\":1");
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
+    }
+
+    [Fact]
+    public async Task HandleRebuildRegistrationsAsync_DispatchesRefreshCommand_WhenQuerySideIsUnavailable()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(new InvalidOperationException("projection reader unavailable")));
+
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var result = await InvokeAsync(
+            "HandleRebuildRegistrationsAsync",
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime,
+            queryPort,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("\"status\":\"accepted\"");
+        response.Body.Should().Contain("\"observed_registrations_before_rebuild\":null");
+        response.Body.Should().Contain("Query-side observation is currently unavailable");
+        capturedEnvelope.Should().NotBeNull();
     }
 
     [Fact]
@@ -204,16 +240,16 @@ public sealed class ChannelCallbackEndpointsTests
             }));
 
         EventEnvelope? capturedEnvelope = null;
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
-        actor.HandleEventAsync(Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope), Arg.Any<CancellationToken>())
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
-
-        var result = await InvokeAsync("HandleDeleteRegistrationAsync", "reg-1", actorRuntime, queryPort, CancellationToken.None);
+        var result = await InvokeAsync("HandleDeleteRegistrationAsync", "reg-1", actorRuntime, (IActorDispatchPort)actorRuntime, queryPort, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -229,8 +265,8 @@ public sealed class ChannelCallbackEndpointsTests
         queryPort.GetAsync("missing", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
 
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        var result = await InvokeAsync("HandleDeleteRegistrationAsync", "missing", actorRuntime, queryPort, CancellationToken.None);
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var result = await InvokeAsync("HandleDeleteRegistrationAsync", "missing", actorRuntime, (IActorDispatchPort)actorRuntime, queryPort, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status404NotFound);

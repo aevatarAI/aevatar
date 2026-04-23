@@ -4,7 +4,6 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
@@ -20,12 +19,15 @@ public sealed record NyxLarkProvisioningRequest(
     string NyxProviderSlug);
 
 public sealed record NyxLarkMirrorRepairRequest(
+    string AccessToken,
     string RequestedRegistrationId,
     string ScopeId,
     string NyxProviderSlug,
+    string WebhookBaseUrl,
     string NyxChannelBotId,
     string NyxAgentApiKeyId,
-    string NyxConversationRouteId);
+    string NyxConversationRouteId,
+    string CredentialRef);
 
 public sealed record NyxLarkProvisioningResult(
     bool Succeeded,
@@ -104,21 +106,27 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IAevatarSecretsStore _secretsStore;
     private readonly ILogger<NyxLarkProvisioningService> _logger;
 
     private sealed record RelayApiKeyCredentials(string Id, string Hash);
+    private sealed record ConfirmedRelayApiKey(string Id, string CallbackUrl);
+    private sealed record ConfirmedChannelBot(string Id, string Platform, string WebhookUrl);
+    private sealed record ConfirmedConversationRoute(string Id, string ChannelBotId, string AgentApiKeyId, bool DefaultAgent);
 
     public NyxLarkProvisioningService(
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
         IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort,
         IAevatarSecretsStore secretsStore,
         ILogger<NyxLarkProvisioningService> logger)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _secretsStore = secretsStore ?? throw new ArgumentNullException(nameof(secretsStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -228,6 +236,10 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        if (string.IsNullOrWhiteSpace(request.AccessToken))
+            return MirrorFailure("missing_access_token");
+        if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
+            return MirrorFailure("missing_webhook_base_url");
         if (string.IsNullOrWhiteSpace(request.NyxChannelBotId))
             return MirrorFailure("missing_nyx_channel_bot_id");
         if (string.IsNullOrWhiteSpace(request.NyxAgentApiKeyId))
@@ -238,34 +250,50 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         var registrationId = string.IsNullOrWhiteSpace(request.RequestedRegistrationId)
             ? Guid.NewGuid().ToString("N")
             : request.RequestedRegistrationId.Trim();
-        var nyxBaseUrl = _nyxOptions.BaseUrl.TrimEnd('/');
         var nyxProviderSlug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
             ? DefaultNyxProviderSlug
             : request.NyxProviderSlug.Trim();
-        var webhookUrl = $"{nyxBaseUrl}/api/v1/webhooks/channel/lark/{Uri.EscapeDataString(request.NyxChannelBotId.Trim())}";
+        var relayCallbackUrl = $"{request.WebhookBaseUrl.Trim().TrimEnd('/')}/api/webhooks/nyxid-relay";
 
         try
         {
+            var confirmedApiKey = await GetConfirmedRelayApiKeyAsync(
+                request.AccessToken,
+                request.NyxAgentApiKeyId.Trim(),
+                relayCallbackUrl,
+                ct);
+            var confirmedBot = await GetConfirmedLarkChannelBotAsync(
+                request.AccessToken,
+                request.NyxChannelBotId.Trim(),
+                ct);
+            var confirmedRoute = await ResolveConfirmedConversationRouteAsync(
+                request.AccessToken,
+                request.NyxConversationRouteId?.Trim() ?? string.Empty,
+                confirmedBot.Id,
+                confirmedApiKey.Id,
+                ct);
+            var credentialRef = ResolveExistingCredentialRef(request, registrationId);
+
             await RegisterLocalMirrorAsync(
                 registrationId,
                 nyxProviderSlug,
-                webhookUrl,
+                confirmedBot.WebhookUrl,
                 request.ScopeId?.Trim() ?? string.Empty,
-                request.NyxAgentApiKeyId.Trim(),
-                string.Empty,
-                request.NyxChannelBotId.Trim(),
-                request.NyxConversationRouteId?.Trim() ?? string.Empty,
+                confirmedApiKey.Id,
+                credentialRef,
+                confirmedBot.Id,
+                confirmedRoute?.Id ?? string.Empty,
                 ct);
 
             return new NyxLarkMirrorRepairResult(
                 Succeeded: true,
                 Status: "accepted",
                 RegistrationId: registrationId,
-                NyxChannelBotId: request.NyxChannelBotId.Trim(),
-                NyxAgentApiKeyId: request.NyxAgentApiKeyId.Trim(),
-                NyxConversationRouteId: request.NyxConversationRouteId?.Trim() ?? string.Empty,
-                WebhookUrl: webhookUrl,
-                Note: "Existing Nyx relay resources were reused and the local Aevatar mirror command was accepted. If registrations remain empty, the local projection/read model is unhealthy.");
+                NyxChannelBotId: confirmedBot.Id,
+                NyxAgentApiKeyId: confirmedApiKey.Id,
+                NyxConversationRouteId: confirmedRoute?.Id ?? string.Empty,
+                WebhookUrl: confirmedBot.WebhookUrl,
+                Note: "Existing Nyx relay resources were verified, the existing relay credential reference was preserved, and the local Aevatar mirror command was accepted. If registrations remain empty, the local projection/read model is unhealthy.");
         }
         catch (Exception ex)
         {
@@ -383,9 +411,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string routeId,
         CancellationToken ct)
     {
-        var actor = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-                    ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(ChannelBotRegistrationGAgent.WellKnownId);
-
         var cmd = new ChannelBotRegisterCommand
         {
             RequestedId = registrationId,
@@ -399,19 +424,255 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             NyxConversationRouteId = routeId,
         };
 
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(cmd),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(envelope, ct);
+        await ChannelBotRegistrationStoreCommands.DispatchRegisterAsync(
+            _actorRuntime,
+            _dispatchPort,
+            cmd,
+            ct);
     }
+
+    private async Task<ConfirmedRelayApiKey> GetConfirmedRelayApiKeyAsync(
+        string accessToken,
+        string apiKeyId,
+        string expectedCallbackUrl,
+        CancellationToken ct)
+    {
+        var response = await _nyxClient.GetApiKeyAsync(accessToken, apiKeyId, ct);
+        if (LooksLikeErrorEnvelope(response))
+            throw new InvalidOperationException($"api_key_lookup_failed {ExtractErrorDetail(response)}");
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var confirmedId = ExtractRequiredString(root, "id", "api_key");
+            var callbackUrl = ExtractRequiredString(root, "callback_url", "api_key");
+            if (!string.Equals(NormalizeUrl(callbackUrl), NormalizeUrl(expectedCallbackUrl), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"api_key_callback_url_mismatch expected={NormalizeUrl(expectedCallbackUrl)} actual={NormalizeUrl(callbackUrl)}");
+            }
+
+            return new ConfirmedRelayApiKey(confirmedId, callbackUrl.Trim());
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("invalid_json_in_api_key_lookup_response", ex);
+        }
+    }
+
+    private async Task<ConfirmedChannelBot> GetConfirmedLarkChannelBotAsync(
+        string accessToken,
+        string channelBotId,
+        CancellationToken ct)
+    {
+        var response = await _nyxClient.GetChannelBotAsync(accessToken, channelBotId, ct);
+        if (LooksLikeErrorEnvelope(response))
+            throw new InvalidOperationException($"channel_bot_lookup_failed {ExtractErrorDetail(response)}");
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var confirmedId = ExtractRequiredString(root, "id", "channel_bot");
+            var platform = ExtractOptionalString(root, "platform") ?? PlatformId;
+            if (!string.Equals(platform, PlatformId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"unsupported_channel_bot_platform {platform}");
+
+            var webhookUrl = ExtractOptionalString(root, "webhook_url");
+            if (string.IsNullOrWhiteSpace(webhookUrl))
+            {
+                webhookUrl = $"{_nyxOptions.BaseUrl!.Trim().TrimEnd('/')}/api/v1/webhooks/channel/lark/{Uri.EscapeDataString(confirmedId)}";
+            }
+
+            return new ConfirmedChannelBot(confirmedId, platform, webhookUrl.Trim());
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("invalid_json_in_channel_bot_lookup_response", ex);
+        }
+    }
+
+    private async Task<ConfirmedConversationRoute?> ResolveConfirmedConversationRouteAsync(
+        string accessToken,
+        string requestedRouteId,
+        string expectedChannelBotId,
+        string expectedApiKeyId,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedRouteId))
+        {
+            var response = await _nyxClient.GetConversationRouteAsync(accessToken, requestedRouteId, ct);
+            if (LooksLikeErrorEnvelope(response))
+                throw new InvalidOperationException($"channel_route_lookup_failed {ExtractErrorDetail(response)}");
+
+            return ParseConfirmedConversationRoute(response, expectedChannelBotId, expectedApiKeyId, "channel_route_lookup");
+        }
+
+        var listResponse = await _nyxClient.ListConversationRoutesAsync(accessToken, expectedChannelBotId, ct);
+        if (LooksLikeErrorEnvelope(listResponse))
+            throw new InvalidOperationException($"channel_route_list_failed {ExtractErrorDetail(listResponse)}");
+
+        var matches = ParseConversationRoutes(listResponse)
+            .Where(route =>
+                string.Equals(route.ChannelBotId, expectedChannelBotId, StringComparison.Ordinal) &&
+                string.Equals(route.AgentApiKeyId, expectedApiKeyId, StringComparison.Ordinal))
+            .ToList();
+        if (matches.Count == 0)
+            return null;
+        if (matches.Count == 1)
+            return matches[0];
+
+        var defaultMatches = matches.Where(static route => route.DefaultAgent).ToList();
+        if (defaultMatches.Count == 1)
+            return defaultMatches[0];
+
+        throw new InvalidOperationException("ambiguous_matching_nyx_conversation_route");
+    }
+
+    private string ResolveExistingCredentialRef(NyxLarkMirrorRepairRequest request, string registrationId)
+    {
+        var explicitCredentialRef = NormalizeOptional(request.CredentialRef);
+        if (explicitCredentialRef is not null)
+        {
+            if (NormalizeOptional(_secretsStore.Get(explicitCredentialRef)) is null)
+                throw new InvalidOperationException("credential_ref_not_found_in_secrets_store");
+            return explicitCredentialRef;
+        }
+
+        var derivedRef = BuildRelayCredentialRef(registrationId);
+        if (NormalizeOptional(_secretsStore.Get(derivedRef)) is not null)
+            return derivedRef;
+
+        throw new InvalidOperationException(
+            "missing_relay_credential_ref provide credential_ref or reuse a registration_id whose relay-hmac secret still exists");
+    }
+
+    private static ConfirmedConversationRoute ParseConfirmedConversationRoute(
+        string response,
+        string expectedChannelBotId,
+        string expectedApiKeyId,
+        string responseName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            return ParseConversationRoute(document.RootElement, expectedChannelBotId, expectedApiKeyId, responseName);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException($"invalid_json_in_{responseName}_response", ex);
+        }
+    }
+
+    private static IReadOnlyList<ConfirmedConversationRoute> ParseConversationRoutes(string response)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var routes = new List<ConfirmedConversationRoute>();
+            foreach (var item in EnumerateObjects(document.RootElement, "routes", "channel_conversations", "items", "data"))
+            {
+                routes.Add(ParseConversationRoute(item, null, null, "channel_route_list"));
+            }
+
+            return routes;
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("invalid_json_in_channel_route_list_response", ex);
+        }
+    }
+
+    private static ConfirmedConversationRoute ParseConversationRoute(
+        JsonElement element,
+        string? expectedChannelBotId,
+        string? expectedApiKeyId,
+        string responseName)
+    {
+        var routeId = ExtractRequiredString(element, "id", responseName);
+        var channelBotId = ExtractRequiredString(element, "channel_bot_id", responseName);
+        var apiKeyId = ExtractRequiredString(element, "agent_api_key_id", responseName);
+        var defaultAgent = ExtractOptionalBoolean(element, "default_agent") ?? false;
+
+        if (expectedChannelBotId is not null &&
+            !string.Equals(channelBotId, expectedChannelBotId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"channel_route_bot_mismatch expected={expectedChannelBotId} actual={channelBotId}");
+        }
+
+        if (expectedApiKeyId is not null &&
+            !string.Equals(apiKeyId, expectedApiKeyId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"channel_route_api_key_mismatch expected={expectedApiKeyId} actual={apiKeyId}");
+        }
+
+        return new ConfirmedConversationRoute(routeId, channelBotId, apiKeyId, defaultAgent);
+    }
+
+    private static IEnumerable<JsonElement> EnumerateObjects(JsonElement root, params string[] propertyNames)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+                if (item.ValueKind == JsonValueKind.Object)
+                    yield return item;
+            yield break;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+            yield break;
+
+        foreach (var propertyName in propertyNames)
+        {
+            if (!root.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var item in array.EnumerateArray())
+                if (item.ValueKind == JsonValueKind.Object)
+                    yield return item;
+            yield break;
+        }
+    }
+
+    private static string ExtractRequiredString(JsonElement element, string propertyName, string responseName)
+    {
+        var value = ExtractOptionalString(element, propertyName);
+        if (value is null)
+            throw new InvalidOperationException($"missing_{propertyName}_in_{responseName}_response");
+        return value;
+    }
+
+    private static string? ExtractOptionalString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
+            return null;
+
+        return NormalizeOptional(property.GetString());
+    }
+
+    private static bool? ExtractOptionalBoolean(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+            return null;
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static string NormalizeUrl(string value) => value.Trim().TrimEnd('/');
 
     private async Task TryRollbackAsync(Func<Task<string>> rollback, string resourceType, string resourceId)
     {

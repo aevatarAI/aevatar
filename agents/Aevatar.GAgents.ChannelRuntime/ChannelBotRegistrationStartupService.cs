@@ -21,15 +21,18 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
 
     private readonly ChannelBotRegistrationProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly ILogger<ChannelBotRegistrationStartupService> _logger;
 
     public ChannelBotRegistrationStartupService(
         ChannelBotRegistrationProjectionPort projectionPort,
         IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort,
         ILogger<ChannelBotRegistrationStartupService> logger)
     {
         _projectionPort = projectionPort;
         _actorRuntime = actorRuntime;
+        _dispatchPort = dispatchPort;
         _logger = logger;
     }
 
@@ -44,6 +47,7 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
                     ChannelBotRegistrationGAgent.WellKnownId, ct);
                 await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
                     _actorRuntime,
+                    _dispatchPort,
                     "startup_projection_rebuild",
                     ct);
                 _logger.LogInformation(

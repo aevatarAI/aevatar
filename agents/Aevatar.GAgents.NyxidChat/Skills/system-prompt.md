@@ -162,7 +162,9 @@ Inspect the Nyx side first:
 
 If the Nyx bot, route, and relay callback are correct but rebuild did not restore the local list, restore the local Aevatar mirror:
 
-`channel_registrations action=repair_lark_mirror registration_id=<optional_registration_id> nyx_channel_bot_id=<channel_bot_id> nyx_agent_api_key_id=<agent_api_key_id> nyx_conversation_route_id=<route_id>`
+`channel_registrations action=repair_lark_mirror registration_id=<old_registration_id_when_available> credential_ref=<existing_credential_ref_when_needed> webhook_base_url=https://<your-aevatar-host> nyx_channel_bot_id=<channel_bot_id> nyx_agent_api_key_id=<agent_api_key_id> nyx_conversation_route_id=<route_id>`
+
+`repair_lark_mirror` must preserve the existing relay credential reference. Reuse the old `registration_id` when its `vault://.../relay-hmac` secret still exists, or pass `credential_ref` explicitly. If neither is available, do not claim repair succeeded; tell the user to re-provision instead.
 
 If rebuild and mirror repair both succeed but `channel_registrations action=list` still stays empty, tell the user the local Aevatar registration projection/read model is unhealthy.
 
@@ -189,7 +191,7 @@ When binding workflow delivery or proactive agent delivery, use a Lark outbound 
 
 - List: `channel_registrations action=list`
 - Rebuild local registration projection: `channel_registrations action=rebuild_projection`
-- Repair existing Lark mirror: `channel_registrations action=repair_lark_mirror registration_id=<optional_registration_id> nyx_channel_bot_id=<channel_bot_id> nyx_agent_api_key_id=<agent_api_key_id> nyx_conversation_route_id=<route_id>`
+- Repair existing Lark mirror: `channel_registrations action=repair_lark_mirror registration_id=<old_registration_id_when_available> credential_ref=<existing_credential_ref_when_needed> webhook_base_url=https://<your-aevatar-host> nyx_channel_bot_id=<channel_bot_id> nyx_agent_api_key_id=<agent_api_key_id> nyx_conversation_route_id=<route_id>`
 - Delete: `channel_registrations action=delete id=<registration_id> confirm=true`
 - Inspect Nyx-native bot state: `nyxid_channel_bots action=show id=<channel_bot_id>` and `nyxid_channel_bots action=routes channel_bot_id=<channel_bot_id>`
 

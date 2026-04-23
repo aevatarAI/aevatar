@@ -183,27 +183,43 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleRebuildRegistrationsAsync(
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var registrations = await queryPort.QueryAllAsync(ct);
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
         await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
             actorRuntime,
+            dispatchPort,
             "http_api_manual_rebuild",
             ct);
+
+        int? observedRegistrationsBeforeRebuild = null;
+        var note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.";
+        try
+        {
+            observedRegistrationsBeforeRebuild = (await queryPort.QueryAllAsync(ct)).Count;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Channel registration query failed after dispatching a manual rebuild");
+            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side observation is currently unavailable; registrations may still refresh asynchronously.";
+        }
 
         return Results.Accepted(value: new
         {
             status = "accepted",
             actor_id = ChannelBotRegistrationGAgent.WellKnownId,
-            observed_registrations_before_rebuild = registrations.Count,
-            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.",
+            observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
+            note,
         });
     }
 
     private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         CancellationToken ct)
     {
@@ -213,6 +229,7 @@ public static class ChannelCallbackEndpoints
 
         await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
             actorRuntime,
+            dispatchPort,
             registrationId,
             ct);
         return Results.Ok(new { status = "deleted" });
