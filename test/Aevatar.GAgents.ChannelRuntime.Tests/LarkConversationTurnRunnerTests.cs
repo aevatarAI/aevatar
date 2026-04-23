@@ -116,7 +116,7 @@ public sealed class LarkConversationTurnRunnerTests
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
-                "/daily-report alice",
+                "/daily alice",
                 "msg-slash-1",
                 ConversationScope.DirectMessage,
                 "oc_p2p_chat_1"),

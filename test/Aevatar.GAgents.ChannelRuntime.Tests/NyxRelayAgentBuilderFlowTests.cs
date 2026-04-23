@@ -12,7 +12,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         var inbound = new ChannelInboundEvent
         {
             ChatType = "p2p",
-            Text = "/daily-report",
+            Text = "/daily",
         };
 
         var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
@@ -21,7 +21,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
         decision.ReplyPayload.Should().Contain("Daily report agent command");
-        decision.ReplyPayload.Should().Contain("/daily-report github_username=alice");
+        decision.ReplyPayload.Should().Contain("/daily github_username=alice");
     }
 
     [Fact]
@@ -31,7 +31,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         {
             ChatType = "p2p",
             ConversationId = "oc_8a70aeefbdb4340e1fa5f575b4c794eb",
-            Text = "/daily-report eanzhao",
+            Text = "/daily eanzhao",
         };
 
         var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
@@ -49,8 +49,8 @@ public sealed class NyxRelayAgentBuilderFlowTests
     }
 
     [Theory]
-    [InlineData("/daily-report =broken")]
-    [InlineData("/daily-report github_username=")]
+    [InlineData("/daily =broken")]
+    [InlineData("/daily github_username=")]
     public void TryResolve_ShouldNotTreatMalformedKeyValueTokenAsPositional(string text)
     {
         var inbound = new ChannelInboundEvent
@@ -154,5 +154,88 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
         decision.ReplyPayload.Should().Contain("/delete-agent agent-1 confirm");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldReturnUnknownCommandUsage_ForUnknownSlash()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/daily_report alice",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("Unknown command: /daily_report");
+        decision.ReplyPayload.Should().Contain("/daily github_username=alice");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldReturnUnknownCommandUsage_ForNonsenseSlash()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/foobar",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("Unknown command: /foobar");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldReturnPrivateChatRestriction_ForKnownCommandInGroup()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "group",
+            Text = "/daily alice",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("private chat");
+        decision.ReplyPayload.Should().Contain("/daily");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldFallThrough_ForNonSlashText()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "hello there",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeFalse();
+        decision.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryResolve_ShouldFallThrough_ForEmptyText()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "   ",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeFalse();
+        decision.Should().BeNull();
     }
 }

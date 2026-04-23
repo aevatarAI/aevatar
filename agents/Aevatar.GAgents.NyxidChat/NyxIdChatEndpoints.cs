@@ -7,6 +7,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgents.NyxidChat.Relay;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -838,6 +839,80 @@ public static class NyxIdChatEndpoints
                 "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
                 platform, conversationId, message.Sender?.DisplayName);
 
+            // ─── Day One slash-command bridge ───
+            // Intercept known and unknown slash commands deterministically so they do
+            // not reach the LLM. Free-text still falls through to the actor/LLM path.
+            // Bridge reply delivery uses the current callback token only — no long-term
+            // state, no durable credential, no projection write.
+            var dayOneBridge = http.RequestServices.GetService<INyxRelayDayOneBridge>();
+            if (dayOneBridge is not null)
+            {
+                var bridgeRequest = new NyxRelayBridgeRequest(
+                    Text: message.Content?.Text ?? string.Empty,
+                    ConversationType: message.Conversation?.Type,
+                    ConversationId: conversationId,
+                    MessageId: message.MessageId,
+                    Platform: message.Platform,
+                    SenderId: message.Sender?.PlatformId,
+                    SenderName: message.Sender?.DisplayName,
+                    ScopeId: scopeId,
+                    NyxIdAccessToken: userToken);
+
+                if (dayOneBridge.ShouldHandle(bridgeRequest))
+                {
+                    // Dedupe at the Nyx-relay callback boundary so retried webhooks with the
+                    // same message_id do not double-fire AgentBuilderTool side effects (a single
+                    // `/daily` would otherwise create multiple agents + API keys on retry). The
+                    // LLM fallback path relies on the actor's serialized mailbox for equivalent
+                    // dedupe; the bridge skips the actor entirely, so it must use an atomic
+                    // first-writer-wins guard here — a non-atomic TryGet+Set pair would let
+                    // concurrent deliveries both observe the key as absent and both pass.
+                    var idempotencyGuard = http.RequestServices.GetService<INyxRelayBridgeIdempotencyGuard>();
+                    var dedupeKey = BuildBridgeDedupeKey(scopeId, message.MessageId!);
+                    var firstDelivery = idempotencyGuard is null
+                                        || idempotencyGuard.TryClaim(dedupeKey);
+                    if (!firstDelivery)
+                    {
+                        logger.LogInformation(
+                            "Relay Day One bridge duplicate callback suppressed: message_id={MessageId}, dedupe_key={DedupeKey}",
+                            message.MessageId,
+                            dedupeKey);
+                        return Results.Accepted(value: new
+                        {
+                            status = "accepted",
+                            bridge = "day_one_command",
+                            dedupe = "duplicate",
+                            message_id = message.MessageId,
+                        });
+                    }
+
+                    logger.LogInformation(
+                        "Relay Day One bridge owning message: platform={Platform}, conversation={ConversationId}, message_id={MessageId}",
+                        platform, conversationId, message.MessageId);
+
+                    _ = FinalizeDayOneBridgeReplyAsync(
+                            dayOneBridge,
+                            bridgeRequest,
+                            userToken,
+                            message.MessageId!,
+                            nyxClient,
+                            logger)
+                        .ContinueWith(
+                            task => logger.LogError(
+                                task.Exception,
+                                "Relay Day One bridge reply pipeline failed for message {MessageId}",
+                                message.MessageId),
+                            TaskContinuationOptions.OnlyOnFaulted);
+
+                    return Results.Accepted(value: new
+                    {
+                        status = "accepted",
+                        bridge = "day_one_command",
+                        message_id = message.MessageId,
+                    });
+                }
+            }
+
             // ─── Get or create actor ───
             // Relay follows the same strict lifecycle contract as create:
             // registry persistence via IGAgentActorStore is mandatory, and
@@ -1008,6 +1083,55 @@ public static class NyxIdChatEndpoints
         }
 
         return false;
+    }
+
+    private static string BuildBridgeDedupeKey(string scopeId, string messageId) =>
+        $"nyxid-relay-bridge:{scopeId}:{messageId}";
+
+    private static async Task FinalizeDayOneBridgeReplyAsync(
+        INyxRelayDayOneBridge bridge,
+        NyxRelayBridgeRequest request,
+        string relayToken,
+        string messageId,
+        NyxIdApiClient nyxClient,
+        ILogger logger)
+    {
+        string replyText;
+        try
+        {
+            replyText = await bridge.HandleAsync(request, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Relay Day One bridge handler threw: messageId={MessageId}",
+                messageId);
+            replyText = "Sorry, something went wrong while handling that command. Please try again.";
+        }
+
+        if (string.IsNullOrWhiteSpace(replyText))
+            replyText = "Sorry, I wasn't able to generate a response.";
+
+        using var deliveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var delivery = await nyxClient.SendChannelRelayTextReplyAsync(
+            relayToken,
+            messageId,
+            replyText,
+            deliveryCts.Token);
+        if (!delivery.Succeeded)
+        {
+            logger.LogError(
+                "Relay Day One bridge reply delivery failed: messageId={MessageId}, detail={Detail}",
+                messageId,
+                delivery.Detail);
+            return;
+        }
+
+        logger.LogInformation(
+            "Relay Day One bridge reply delivered: messageId={MessageId}, platformMessageId={PlatformMessageId}",
+            delivery.MessageId,
+            delivery.PlatformMessageId);
     }
 
     private static async Task FinalizeRelayReplyAsync(
