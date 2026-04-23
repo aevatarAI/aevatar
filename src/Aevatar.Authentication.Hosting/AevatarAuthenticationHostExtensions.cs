@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Encodings.Web;
@@ -17,7 +18,9 @@ public static class AevatarAuthenticationHostExtensions
     internal const string DisabledAuthenticationScheme = "AevatarDisabled";
 
     /// <summary>
-    /// Registers JWT Bearer authentication if <c>Aevatar:Authentication:Enabled</c> is true.
+    /// Registers JWT Bearer authentication by default.
+    /// An explicit <c>Aevatar:Authentication:Enabled=false</c> only disables authentication
+    /// when the host is running in Development.
     /// Provider-agnostic: uses OIDC discovery from the configured Authority.
     /// Requires an <see cref="IAevatarClaimsTransformer"/> to be registered by the provider package.
     /// </summary>
@@ -27,9 +30,12 @@ public static class AevatarAuthenticationHostExtensions
 
         var options = builder.Configuration
             .GetSection(AevatarAuthenticationOptions.SectionName)
-            .Get<AevatarAuthenticationOptions>();
+            .Get<AevatarAuthenticationOptions>() ?? new AevatarAuthenticationOptions();
+        var authenticationEnabled = ResolveAuthenticationEnabled(
+            builder.Configuration[AevatarAuthenticationOptions.SectionName + ":Enabled"],
+            builder.Environment);
 
-        if (options?.Enabled != true)
+        if (!authenticationEnabled)
         {
             builder.Services.AddAuthentication(DisabledAuthenticationScheme)
                 .AddScheme<AuthenticationSchemeOptions, DisabledAuthenticationHandler>(
@@ -53,6 +59,23 @@ public static class AevatarAuthenticationHostExtensions
         builder.Services.AddTransient<IClaimsTransformation, AevatarClaimsTransformation>();
 
         return builder;
+    }
+
+    internal static bool ResolveAuthenticationEnabled(string? configuredValue, IHostEnvironment environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return true;
+
+        if (!bool.TryParse(configuredValue, out var enabled))
+            throw new InvalidOperationException(
+                $"Invalid boolean value '{configuredValue}' for {AevatarAuthenticationOptions.SectionName}:Enabled.");
+
+        if (!enabled && !environment.IsDevelopment())
+            return true;
+
+        return enabled;
     }
 }
 

@@ -36,7 +36,7 @@ public sealed class WorkspaceController : ControllerBase
         CancellationToken cancellationToken)
     {
         var settings = await _workspaceService.GetSettingsAsync(cancellationToken);
-        var scopeResolution = ResolveScopeContext(scopeId);
+        var scopeResolution = ResolveReadScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -60,7 +60,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = ResolveScopeContext(scopeId);
+        var scopeResolution = ResolveMutationScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -83,7 +83,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = ResolveScopeContext(scopeId);
+        var scopeResolution = ResolveMutationScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -98,7 +98,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = ResolveScopeContext(scopeId);
+        var scopeResolution = ResolveReadScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -171,7 +171,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = ResolveScopeContext(scopeId);
+        var scopeResolution = ResolveReadScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -234,7 +234,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = ResolveScopeContext(scopeId);
+        var scopeResolution = ResolveMutationScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -323,7 +323,7 @@ public sealed class WorkspaceController : ControllerBase
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
     {
-        var scopeResolution = ResolveScopeContext(scopeId);
+        var scopeResolution = ResolveMutationScopeContext(scopeId);
         if (scopeResolution.Failure != null)
             return scopeResolution.Failure;
 
@@ -359,7 +359,22 @@ public sealed class WorkspaceController : ControllerBase
         }
     }
 
-    private (AppScopeContext? Context, ActionResult? Failure) ResolveScopeContext(string? requestedScopeId)
+    private (AppScopeContext? Context, ActionResult? Failure) ResolveReadScopeContext(string? requestedScopeId) =>
+        ResolveScopeContext(
+            requestedScopeId,
+            allowUnauthenticatedQueryFallback: _hostingOptions.AllowUnauthenticatedScopeQueryFallback,
+            unauthorizedMessage: "Studio authentication is required before accessing a scoped workflow workspace.");
+
+    private (AppScopeContext? Context, ActionResult? Failure) ResolveMutationScopeContext(string? requestedScopeId) =>
+        ResolveScopeContext(
+            requestedScopeId,
+            allowUnauthenticatedQueryFallback: false,
+            unauthorizedMessage: "Studio authentication is required before mutating a scoped workflow workspace.");
+
+    private (AppScopeContext? Context, ActionResult? Failure) ResolveScopeContext(
+        string? requestedScopeId,
+        bool allowUnauthenticatedQueryFallback,
+        string unauthorizedMessage)
     {
         var ambientScopeContext = _scopeResolver.Resolve(HttpContext);
         var normalizedRequestedScopeId = requestedScopeId?.Trim();
@@ -382,16 +397,16 @@ public sealed class WorkspaceController : ControllerBase
             }));
         }
 
-        if (!_hostingOptions.AllowUnauthenticatedScopeQueryFallback)
+        if (!allowUnauthenticatedQueryFallback)
         {
             return (null, Unauthorized(new
             {
-                message = "Studio authentication is required before accessing a scoped workflow workspace.",
+                message = unauthorizedMessage,
             }));
         }
 
         // This fallback is only for local debugging when auth is intentionally disabled.
-        // Once enabled it applies to the full scoped draft surface, including mutations.
+        // It only applies to scoped reads; mutations still require authenticated Studio scope.
         return (new AppScopeContext(normalizedRequestedScopeId, "query:scopeId"), null);
     }
 
@@ -403,7 +418,7 @@ public sealed class WorkspaceController : ControllerBase
     {
         try
         {
-            var scopeResolution = ResolveScopeContext(scopeId);
+            var scopeResolution = ResolveMutationScopeContext(scopeId);
             if (scopeResolution.Failure != null)
                 return scopeResolution.Failure;
 

@@ -50,8 +50,10 @@ public sealed class StreamingProxyChatSessionTerminalProjector
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var snapshot = new StreamingProxyChatSessionTerminalSnapshot
         {
+            // Id isolates each terminal session document; ActorId still points at the
+            // owning root actor so current-state readmodel semantics stay actor-scoped.
             Id = StreamingProxyChatSessionTerminalQueryPort.ComposeSnapshotId(context.RootActorId, terminal.SessionId),
-            ActorId = StreamingProxyChatSessionTerminalQueryPort.ComposeSnapshotId(context.RootActorId, terminal.SessionId),
+            ActorId = context.RootActorId,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),

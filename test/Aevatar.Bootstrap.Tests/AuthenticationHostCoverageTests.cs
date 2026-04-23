@@ -44,6 +44,7 @@ public class AuthenticationHostCoverageTests
             EnvironmentName = Environments.Development,
         });
 
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
         builder.AddAevatarAuthentication();
 
         using var app = builder.Build();
@@ -56,6 +57,49 @@ public class AuthenticationHostCoverageTests
         (await schemeProvider.GetDefaultChallengeSchemeAsync()).Should().NotBeNull();
         scope.ServiceProvider.GetServices<IClaimsTransformation>()
             .Should().NotContain(x => x.GetType().Name == "AevatarClaimsTransformation");
+    }
+
+    [Fact]
+    public async Task AddAevatarAuthentication_WhenEnabledFlagIsMissing_ShouldDefaultToJwtBearerAuthentication()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://id.example.com";
+
+        builder.AddAevatarAuthentication();
+
+        using var app = builder.Build();
+        using var scope = app.Services.CreateScope();
+        var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
+
+        (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be("Bearer");
+        (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be("Bearer");
+        scope.ServiceProvider.GetServices<IClaimsTransformation>()
+            .Should().ContainSingle(x => x.GetType().Name == "AevatarClaimsTransformation");
+    }
+
+    [Fact]
+    public async Task AddAevatarAuthentication_WhenDisabledOutsideDevelopment_ShouldStillUseJwtBearerAuthentication()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://id.example.com";
+
+        builder.AddAevatarAuthentication();
+
+        using var app = builder.Build();
+        using var scope = app.Services.CreateScope();
+        var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
+
+        (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be("Bearer");
+        (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be("Bearer");
     }
 
     [Fact]

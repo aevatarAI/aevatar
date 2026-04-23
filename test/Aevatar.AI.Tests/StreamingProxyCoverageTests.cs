@@ -477,7 +477,7 @@ public class StreamingProxyCoverageTests
         var snapshot = await queryPort.GetAsync("room-a", "session-1", CancellationToken.None);
 
         snapshot.Should().NotBeNull();
-        snapshot!.ActorId.Should().Be("room-a:session-1");
+        snapshot!.ActorId.Should().Be("room-a");
         snapshot.RootActorId.Should().Be("room-a");
         snapshot.SessionId.Should().Be("session-1");
         snapshot.StateVersion.Should().Be(12);
