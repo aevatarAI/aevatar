@@ -1,5 +1,5 @@
 using System.Runtime.CompilerServices;
-using Aevatar.GAgents.NyxidChat.Relay;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -14,15 +14,15 @@ public static class ServiceCollectionExtensions
 
         services.AddHttpClient();
         services.TryAddSingleton(BindRelayOptions(configuration));
-        services.TryAddSingleton<NyxRelayJwtValidator>();
-        services.TryAddSingleton<INyxRelayBridgeIdempotencyGuard, NyxRelayBridgeIdempotencyGuard>();
+        services.TryAddSingleton<NyxIdRelayTransport>();
+        services.TryAddSingleton<NyxIdRelayAuthValidator>();
 
         return services;
     }
 
-    private static NyxIdRelayOptions BindRelayOptions(IConfiguration? configuration)
+    private static Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions BindRelayOptions(IConfiguration? configuration)
     {
-        var options = new NyxIdRelayOptions();
+        var options = new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions();
         configuration?.GetSection("Aevatar:NyxId:Relay").Bind(options);
         return options;
     }

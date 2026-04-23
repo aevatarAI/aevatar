@@ -39,6 +39,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         StateTransitionMatcher
             .Match(current, evt)
             .On<ConversationTurnCompletedEvent>(ApplyTurnCompleted)
+            .On<NeedsLlmReplyEvent>(ApplyLlmReplyRequested)
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
             .On<ConversationContinueFailedEvent>(ApplyContinueFailed)
             .OrCurrent();
@@ -70,6 +71,17 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (result.LlmReplyRequest is not null)
+        {
+            await PersistDomainEventAsync(result.LlmReplyRequest);
+            await EnqueueDeferredLlmReplyAsync(result.LlmReplyRequest);
+            Logger.LogInformation(
+                "Accepted inbound activity for deferred LLM reply: activity={ActivityId} conversation={Key}",
+                activity.Id,
+                activity.Conversation?.CanonicalKey);
+            return;
+        }
+
         if (result.Success)
         {
             var completed = new ConversationTurnCompletedEvent
@@ -81,6 +93,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Conversation = activity.Conversation?.Clone() ?? new ConversationReference(),
                 Outbound = result.Outbound?.Clone() ?? new MessageContent(),
                 CompletedAtUnixMs = nowMs,
+                OutboundDelivery = result.OutboundDelivery?.Clone(),
             };
             await PersistDomainEventAsync(completed);
             Logger.LogInformation(
@@ -104,6 +117,66 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         Logger.LogWarning(
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
+    }
+
+    [EventHandler]
+    public async Task HandleLlmReplyReadyAsync(LlmReplyReadyEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var commandId = BuildLlmReplyCommandId(evt.CorrelationId);
+        if (State.ProcessedCommandIds.Contains(commandId))
+        {
+            Logger.LogInformation(
+                "Duplicate LLM reply ready event {CorrelationId} (conversation={Key}); skipping outbound",
+                evt.CorrelationId,
+                State.Conversation?.CanonicalKey);
+            return;
+        }
+
+        var runner = ResolveRunner();
+        var result = await runner.RunLlmReplyAsync(evt, CancellationToken.None);
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (result.Success)
+        {
+            var completed = new ConversationTurnCompletedEvent
+            {
+                ProcessedActivityId = string.Empty,
+                CausationCommandId = commandId,
+                SentActivityId = result.SentActivityId,
+                AuthPrincipal = string.IsNullOrWhiteSpace(result.AuthPrincipal) ? "bot" : result.AuthPrincipal,
+                Conversation = evt.Activity?.Conversation?.Clone() ?? State.Conversation?.Clone() ?? new ConversationReference(),
+                Outbound = result.Outbound?.Clone() ?? evt.Outbound?.Clone() ?? new MessageContent(),
+                CompletedAtUnixMs = nowMs,
+                OutboundDelivery = result.OutboundDelivery?.Clone(),
+            };
+            await PersistDomainEventAsync(completed);
+            Logger.LogInformation(
+                "Completed deferred LLM reply: correlation={CorrelationId} sent={SentId} conversation={Key}",
+                evt.CorrelationId,
+                result.SentActivityId,
+                completed.Conversation?.CanonicalKey);
+            return;
+        }
+
+        var failed = new ConversationContinueFailedEvent
+        {
+            CommandId = commandId,
+            CorrelationId = evt.CorrelationId,
+            CausationId = string.Empty,
+            Kind = result.FailureKind,
+            ErrorCode = result.ErrorCode,
+            ErrorSummary = result.ErrorSummary,
+            FailedAtUnixMs = nowMs,
+        };
+        AssignRetryPolicy(failed, result);
+        await PersistDomainEventAsync(failed);
+        Logger.LogWarning(
+            "Deferred LLM reply failed: correlation={CorrelationId} code={Code} kind={Kind}",
+            evt.CorrelationId,
+            result.ErrorCode,
+            result.FailureKind);
     }
 
     /// <summary>
@@ -146,6 +219,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Conversation = cmd.Conversation?.Clone() ?? new ConversationReference(),
                 Outbound = result.Outbound?.Clone() ?? (cmd.Payload?.Clone() ?? new MessageContent()),
                 CompletedAtUnixMs = nowMs,
+                OutboundDelivery = result.OutboundDelivery?.Clone(),
             };
             await PersistDomainEventAsync(completed);
             Logger.LogInformation(
@@ -193,6 +267,33 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             ? $"user:{cmd.OnBehalfOfUserId}"
             : "bot";
 
+    private static string BuildLlmReplyCommandId(string? correlationId) =>
+        $"llm:{correlationId?.Trim() ?? string.Empty}";
+
+    private async Task EnqueueDeferredLlmReplyAsync(NeedsLlmReplyEvent request)
+    {
+        var inbox = Services.GetService<IChannelLlmReplyInbox>();
+        if (inbox is null)
+        {
+            Logger.LogWarning(
+                "Deferred LLM reply inbox not registered; request remains persisted only: correlation={CorrelationId}",
+                request.CorrelationId);
+            return;
+        }
+
+        try
+        {
+            await inbox.EnqueueAsync(request, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Failed to enqueue deferred LLM reply request: correlation={CorrelationId}",
+                request.CorrelationId);
+        }
+    }
+
     private Task EmitRejectAsync(ConversationContinueRequestedEvent cmd, RejectReason reason, string detail)
     {
         var rejected = new ConversationContinueRejectedEvent
@@ -230,6 +331,26 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             next.Conversation = evt.Conversation.Clone();
         }
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
+        return next;
+    }
+
+    private static ConversationGAgentState ApplyLlmReplyRequested(
+        ConversationGAgentState current,
+        NeedsLlmReplyEvent evt)
+    {
+        var next = current.Clone();
+        var activityId = evt.Activity?.Id;
+        if (!string.IsNullOrWhiteSpace(activityId))
+        {
+            AppendBounded(next.ProcessedMessageIds, activityId, ProcessedIdsCap);
+        }
+
+        if (evt.Activity?.Conversation != null && next.Conversation == null)
+        {
+            next.Conversation = evt.Activity.Conversation.Clone();
+        }
+
+        next.LastUpdatedUnixMs = evt.RequestedAtUnixMs;
         return next;
     }
 

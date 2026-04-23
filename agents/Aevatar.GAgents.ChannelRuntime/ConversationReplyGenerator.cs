@@ -32,6 +32,8 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly SkillRegistry? _skillRegistry;
     private readonly NyxIdRelayOptions? _relayOptions;
+    private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
+    private readonly IUserMemoryStore? _userMemoryStore;
 
     public NyxIdConversationReplyGenerator(
         ILLMProviderFactory llmProviderFactory,
@@ -40,7 +42,9 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         SkillRegistry? skillRegistry = null,
-        NyxIdRelayOptions? relayOptions = null)
+        NyxIdRelayOptions? relayOptions = null,
+        INyxIdUserLlmPreferencesStore? preferencesStore = null,
+        IUserMemoryStore? userMemoryStore = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -49,6 +53,8 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _skillRegistry = skillRegistry;
         _relayOptions = relayOptions;
+        _preferencesStore = preferencesStore;
+        _userMemoryStore = userMemoryStore;
     }
 
     public async Task<string?> GenerateReplyAsync(
@@ -59,6 +65,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         ArgumentNullException.ThrowIfNull(activity);
         ArgumentNullException.ThrowIfNull(metadata);
 
+        var effectiveMetadata = await BuildEffectiveMetadataAsync(metadata, ct);
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
             MaxMessages = MaxHistoryMessages,
@@ -82,7 +89,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
                 [
                     ChatMessage.System(BuildSystemPrompt()),
                 ],
-                Metadata = new Dictionary<string, string>(metadata, StringComparer.Ordinal),
+                Metadata = new Dictionary<string, string>(effectiveMetadata, StringComparer.Ordinal),
                 Tools = FilterValidTools(tools),
             },
             agentMiddlewares: _agentMiddlewares,
@@ -96,7 +103,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
                            activity.Content.Text,
                            MaxToolRounds,
                            activity.Id,
-                           metadata,
+                           effectiveMetadata,
                            ct))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
@@ -104,6 +111,47 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         }
 
         return output.ToString();
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken ct)
+    {
+        var effective = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+
+        if (_preferencesStore is not null)
+        {
+            try
+            {
+                var preferences = await _preferencesStore.GetAsync(ct);
+                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
+                    effective[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
+                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
+                    effective[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
+                if (preferences.MaxToolRounds > 0)
+                    effective[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
+            }
+            catch
+            {
+                // User config is additive only; channel runtime falls back to server defaults on failure.
+            }
+        }
+
+        if (_userMemoryStore is not null)
+        {
+            try
+            {
+                var promptSection = await _userMemoryStore.BuildPromptSectionAsync(2000, ct);
+                if (!string.IsNullOrWhiteSpace(promptSection))
+                    effective[LLMRequestMetadataKeys.UserMemoryPrompt] = promptSection;
+            }
+            catch
+            {
+                // User memory is best-effort context and must not break the main reply path.
+            }
+        }
+
+        return effective;
     }
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)

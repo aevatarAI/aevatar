@@ -1,23 +1,28 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
-using System.Reflection;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Aevatar.AI.Tests;
 
-public sealed class NyxRelayJwtValidatorTests
+public sealed class NyxIdRelayAuthValidatorTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
     [Fact]
-    public async Task ValidateAsync_ShouldAcceptValidRelayJwt()
+    public async Task ValidateAsync_ShouldAcceptValidRelayCallback()
     {
         using var rsa = RSA.Create(2048);
         var key = CreateSigningKey(rsa, "kid-1");
@@ -26,12 +31,18 @@ public sealed class NyxRelayJwtValidatorTests
             () => CreateJwksJson(key));
         var validator = CreateValidator(handler, "https://nyx.example.com");
         var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.Subject.Should().Be("scope-123");
+        result.ScopeId.Should().Be("scope-123");
         result.RelayApiKeyId.Should().Be("api-key-123");
+        result.ReplyAccessToken.Should().Be(token);
         result.Principal.Should().NotBeNull();
     }
 
@@ -52,8 +63,13 @@ public sealed class NyxRelayJwtValidatorTests
             });
         var validator = CreateValidator(handler, "https://nyx.example.com");
         var token = CreateRelayJwt(freshKey, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         handler.JwksRequests.Should().Be(2);
@@ -69,15 +85,20 @@ public sealed class NyxRelayJwtValidatorTests
             () => CreateJwksJson(key));
         var validator = CreateValidator(handler, "https://nyx.example.com");
         var token = CreateRelayJwt(key, "https://nyx.example.com", "https://different-audience.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("invalid_audience");
+        result.ErrorCode.Should().Be("SecurityTokenInvalidAudienceException");
     }
 
     [Fact]
-    public async Task ValidateAsync_ShouldRejectMissingToken()
+    public async Task ValidateAsync_ShouldRejectMissingUserToken()
     {
         using var rsa = RSA.Create(2048);
         var key = CreateSigningKey(rsa, "kid-1");
@@ -85,11 +106,16 @@ public sealed class NyxRelayJwtValidatorTests
             CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
             () => CreateJwksJson(key));
         var validator = CreateValidator(handler, "https://nyx.example.com");
+        var request = CreateRelayRequest(userToken: null, agentApiKeyId: "api-key-123");
 
-        var result = await validator.ValidateAsync("   ", CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("missing_token");
+        result.ErrorCode.Should().Be("missing_user_token");
     }
 
     [Fact]
@@ -109,11 +135,16 @@ public sealed class NyxRelayJwtValidatorTests
             "api-key-123",
             notBeforeUtc: DateTime.UtcNow.AddMinutes(-10),
             expiresAtUtc: DateTime.UtcNow.AddMinutes(-5));
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("token_expired");
+        result.ErrorCode.Should().Be("SecurityTokenExpiredException");
     }
 
     [Fact]
@@ -131,11 +162,16 @@ public sealed class NyxRelayJwtValidatorTests
             "https://nyx.example.com",
             "scope-123",
             "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("invalid_issuer");
+        result.ErrorCode.Should().Be("SecurityTokenInvalidIssuerException");
     }
 
     [Fact]
@@ -154,11 +190,18 @@ public sealed class NyxRelayJwtValidatorTests
             "scope-123",
             "api-key-123",
             signingAlgorithm: SecurityAlgorithms.RsaSha512);
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(nameof(SecurityTokenInvalidSignatureException));
+        result.ErrorCode.Should().BeOneOf(
+            nameof(SecurityTokenInvalidAlgorithmException),
+            nameof(SecurityTokenInvalidSignatureException));
     }
 
     [Fact]
@@ -177,11 +220,16 @@ public sealed class NyxRelayJwtValidatorTests
             subject: "scope-123",
             relayApiKeyId: "api-key-123",
             includeSubject: false);
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("jwt_missing_sub");
+        result.ErrorCode.Should().Be("jwt_missing_sub");
     }
 
     [Fact]
@@ -200,11 +248,16 @@ public sealed class NyxRelayJwtValidatorTests
             subject: "scope-123",
             relayApiKeyId: "api-key-123",
             includeRelayApiKeyId: false);
+        var request = CreateRelayRequest(token, "api-key-123");
 
-        var result = await validator.ValidateAsync(token, CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("jwt_missing_relay_api_key_id");
+        result.ErrorCode.Should().Be("jwt_missing_relay_api_key_id");
     }
 
     [Fact]
@@ -216,11 +269,82 @@ public sealed class NyxRelayJwtValidatorTests
             CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
             () => CreateJwksJson(key));
         var validator = CreateValidator(handler, "https://nyx.example.com");
+        var request = CreateRelayRequest("not-a-jwt", "api-key-123");
 
-        var result = await validator.ValidateAsync("not-a-jwt", CancellationToken.None);
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(nameof(SecurityTokenMalformedException));
+        result.ErrorCode.Should().Be(nameof(SecurityTokenMalformedException));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectInvalidSignature()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123", overrideSignature: "bad-signature");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("invalid_signature");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectMessageIdMismatch()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123", headerMessageId: "msg-other");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("message_id_mismatch");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectRelayApiKeyMismatch()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-other");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_api_key_mismatch");
     }
 
     [Fact]
@@ -251,18 +375,71 @@ public sealed class NyxRelayJwtValidatorTests
         document.RootElement.GetProperty("reply").GetProperty("text").GetString().Should().Be("hello");
     }
 
-    private static NyxRelayJwtValidator CreateValidator(HttpMessageHandler handler, string baseUrl)
+    private static NyxIdRelayAuthValidator CreateValidator(HttpMessageHandler handler, string baseUrl, string hmacSecret = "relay-secret")
     {
         var factory = new NyxRelayTestHttpClientFactory(new HttpClient(handler));
-        return new NyxRelayJwtValidator(
+        return new NyxIdRelayAuthValidator(
             factory,
             new NyxIdToolOptions { BaseUrl = baseUrl },
             new NyxIdRelayOptions
             {
                 OidcCacheTtlSeconds = 60,
                 JwtClockSkewSeconds = 0,
+                HmacSecret = hmacSecret,
+                RequireMessageIdHeader = true,
             },
-            NullLogger<NyxRelayJwtValidator>.Instance);
+            NullLogger<NyxIdRelayAuthValidator>.Instance);
+    }
+
+    private static RelayRequest CreateRelayRequest(
+        string? userToken,
+        string agentApiKeyId,
+        string messageId = "msg-1",
+        string? headerMessageId = null,
+        string? overrideSignature = null)
+    {
+        var payload = new NyxIdRelayCallbackPayload
+        {
+            MessageId = messageId,
+            Platform = "lark",
+            Agent = new NyxIdRelayAgentPayload
+            {
+                ApiKeyId = agentApiKeyId,
+            },
+            Conversation = new NyxIdRelayConversationPayload
+            {
+                Id = "conv-1",
+                Type = "group",
+            },
+            Sender = new NyxIdRelaySenderPayload
+            {
+                PlatformId = "user-1",
+                DisplayName = "User One",
+            },
+            Content = new NyxIdRelayContentPayload
+            {
+                Type = "text",
+                Text = "hello",
+            },
+            Timestamp = "2026-04-23T12:00:00Z",
+        };
+
+        var body = JsonSerializer.Serialize(payload, JsonOptions);
+        var bodyBytes = Encoding.UTF8.GetBytes(body);
+        var http = new DefaultHttpContext();
+        if (!string.IsNullOrWhiteSpace(userToken))
+            http.Request.Headers["X-NyxID-User-Token"] = userToken;
+        http.Request.Headers["X-NyxID-Message-Id"] = headerMessageId ?? messageId;
+        http.Request.Headers["X-NyxID-Signature"] = overrideSignature ?? ComputeRelaySignature("relay-secret", bodyBytes);
+
+        return new RelayRequest(http, bodyBytes, payload);
+    }
+
+    private static string ComputeRelaySignature(string secret, byte[] bodyBytes)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var hash = hmac.ComputeHash(bodyBytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private static RsaSecurityKey CreateSigningKey(RSA rsa, string keyId) =>
@@ -323,6 +500,11 @@ public sealed class NyxRelayJwtValidatorTests
             keys = new[] { jsonWebKey },
         });
     }
+
+    private sealed record RelayRequest(
+        DefaultHttpContext HttpContext,
+        byte[] BodyBytes,
+        NyxIdRelayCallbackPayload Payload);
 
     private sealed class CaptureHandler : HttpMessageHandler
     {

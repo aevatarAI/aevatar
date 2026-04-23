@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.Channel.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public sealed record LarkOutboundMessage(
     string MessageType,

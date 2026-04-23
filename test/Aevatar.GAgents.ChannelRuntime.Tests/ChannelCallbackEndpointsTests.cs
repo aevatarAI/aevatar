@@ -38,17 +38,6 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleCallbackAsync_ReturnsGone_ForRetiredDirectCallbacks()
-    {
-        var result = await InvokeAsync("HandleCallbackAsync", CreateHttpContext(), "lark", "reg-1");
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status410Gone);
-        response.Body.Should().Contain("Direct platform callbacks are retired");
-        response.Body.Should().Contain("/api/webhooks/nyxid-relay");
-    }
-
-    [Fact]
     public async Task HandleRegisterAsync_RejectsUnsupportedPlatform()
     {
         var provisioningService = Substitute.For<INyxLarkProvisioningService>();

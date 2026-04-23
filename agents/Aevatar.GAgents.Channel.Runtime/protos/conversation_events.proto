@@ -18,6 +18,34 @@ message ConversationTurnCompletedEvent {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 5;
   aevatar.gagents.channel.abstractions.MessageContent outbound = 6;
   int64 completed_at_unix_ms = 7;
+  aevatar.gagents.channel.abstractions.OutboundDeliveryContext outbound_delivery = 8;
+}
+
+message NeedsLlmReplyEvent {
+  string correlation_id = 1;
+  string target_actor_id = 2;
+  string registration_id = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  map<string, string> metadata = 5;
+  int64 requested_at_unix_ms = 6;
+}
+
+enum LlmReplyTerminalState {
+  LLM_REPLY_TERMINAL_STATE_UNSPECIFIED = 0;
+  LLM_REPLY_TERMINAL_STATE_COMPLETED = 1;
+  LLM_REPLY_TERMINAL_STATE_FAILED = 2;
+}
+
+message LlmReplyReadyEvent {
+  string correlation_id = 1;
+  string registration_id = 2;
+  string source_actor_id = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  aevatar.gagents.channel.abstractions.MessageContent outbound = 5;
+  LlmReplyTerminalState terminal_state = 6;
+  string error_code = 7;
+  string error_summary = 8;
+  int64 ready_at_unix_ms = 9;
 }
 
 message ConversationContinueRequestedEvent {

@@ -26,6 +26,8 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IPlatformAdapter) &&
             descriptor.ImplementationType == typeof(LarkPlatformAdapter));
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
@@ -54,6 +56,8 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
     }

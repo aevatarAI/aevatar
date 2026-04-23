@@ -49,7 +49,7 @@ public sealed class ChannelRuntimeProtoTests
     }
 
     [Fact]
-    public void RuntimeReflections_ShouldExposeSevenSchemaMessages()
+    public void RuntimeReflections_ShouldExposeChannelRuntimeSchemaMessages()
     {
         var completed = new ConversationTurnCompletedEvent
         {
@@ -70,6 +70,11 @@ public sealed class ChannelRuntimeProtoTests
                 Disposition = MessageDisposition.Normal,
             },
             CompletedAtUnixMs = 123,
+            OutboundDelivery = new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-1",
+                ReplyAccessToken = "relay-token-1",
+            },
         };
         var registration = new ChannelBotRegistrationEntry
         {
@@ -91,12 +96,40 @@ public sealed class ChannelRuntimeProtoTests
         };
 
         completed.Clone().ShouldBe(completed);
+        completed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
         registration.Clone().ShouldBe(registration);
         registration.TransportBinding.Bot.RegistrationId.ShouldBe("bot-reg-1");
+        var llmRequested = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "activity-1",
+            TargetActorId = "conversation:actor",
+            RegistrationId = "bot-reg-1",
+            Activity = new ChatActivity
+            {
+                Id = "activity-1",
+                Conversation = completed.Conversation.Clone(),
+                Content = new MessageContent { Text = "hello" },
+            },
+            RequestedAtUnixMs = 42,
+        };
+        var llmReady = new LlmReplyReadyEvent
+        {
+            CorrelationId = "activity-1",
+            RegistrationId = "bot-reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = llmRequested.Activity.Clone(),
+            Outbound = new MessageContent { Text = "reply" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("transport_binding")!.FieldNumber.ShouldBe(1);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("is_deleted")!.FieldNumber.ShouldBe(4);
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ConversationTurnCompletedEvent));
+        ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(NeedsLlmReplyEvent));
+        ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(LlmReplyReadyEvent));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ChannelBotRegistrationEntry));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
@@ -107,5 +140,7 @@ public sealed class ChannelRuntimeProtoTests
             .ShouldContain(nameof(PreAckJournalEntry));
         PayloadQuarantineReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(PlatformQuarantineEnvelope));
+        llmRequested.Clone().ShouldBe(llmRequested);
+        llmReady.Clone().ShouldBe(llmReady);
     }
 }

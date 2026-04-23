@@ -479,7 +479,7 @@ message WorkflowAgentEnabledEvent {
 // ─── Relay / conversation normalization ───
 
 // Normalized inbound callback payload used by relay-aware channel flows
-// (for example deterministic builder/tool routing in LarkConversationTurnRunner).
+// (for example deterministic builder/tool routing in ChannelConversationTurnRunner).
 message ChannelInboundEvent {
   string text = 1;
   string sender_id = 2;
@@ -489,7 +489,7 @@ message ChannelInboundEvent {
   string chat_type = 6;
   string platform = 7;
   string registration_id = 8;
-  string registration_token = 9;      // fallback token from registration
+  string registration_token = 9;      // inbound-scoped token propagated to the LLM provider
   string registration_scope_id = 10;
   string nyx_provider_slug = 11;
   map<string, string> extra = 12;

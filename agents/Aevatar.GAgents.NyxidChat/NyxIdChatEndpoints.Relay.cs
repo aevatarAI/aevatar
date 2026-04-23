@@ -1,19 +1,12 @@
-using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.GAgents.NyxidChat.Relay;
-using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 
@@ -26,17 +19,15 @@ public static partial class NyxIdChatEndpoints
 
     /// <summary>
     /// Receives forwarded platform messages from NyxID Channel Bot Relay.
-    /// Validates the Nyx relay JWT, durably dispatches the inbound turn, returns 202,
-    /// and sends the platform reply asynchronously through Nyx channel-relay/reply.
+    /// Validates the Nyx relay token, dispatches the inbound turn into ConversationGAgent,
+    /// and returns 202 immediately. Workflow card actions still short-circuit through the
+    /// dedicated relay card handler because they are not message turns.
     /// </summary>
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] IGAgentActorStore actorStore,
-        [FromServices] NyxIdRelayOptions relayOptions,
-        [FromServices] NyxRelayJwtValidator relayJwtValidator,
-        [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] NyxIdRelayTransport relayTransport,
+        [FromServices] NyxIdRelayAuthValidator relayAuthValidator,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -44,10 +35,19 @@ public static partial class NyxIdChatEndpoints
 
         try
         {
-            RelayMessage? message;
+            byte[] bodyBytes;
+            await using (var body = new MemoryStream())
+            {
+                await http.Request.Body.CopyToAsync(body, ct);
+                bodyBytes = body.ToArray();
+            }
+
+            NyxIdRelayCallbackPayload? payload;
+            RelayMessage? relayMessage;
             try
             {
-                message = await http.Request.ReadFromJsonAsync<RelayMessage>(RelayJsonOptions, ct);
+                payload = JsonSerializer.Deserialize<NyxIdRelayCallbackPayload>(bodyBytes, RelayJsonOptions);
+                relayMessage = JsonSerializer.Deserialize<RelayMessage>(bodyBytes, RelayJsonOptions);
             }
             catch (JsonException ex)
             {
@@ -55,257 +55,106 @@ public static partial class NyxIdChatEndpoints
                 return Results.BadRequest(new { error = "invalid_relay_payload" });
             }
 
-            if (message is null)
+            if (payload is null)
                 return Results.BadRequest(new { error = "missing_relay_payload" });
-            if (string.IsNullOrWhiteSpace(message.MessageId))
+            if (string.IsNullOrWhiteSpace(payload.MessageId))
                 return Results.BadRequest(new { error = "missing_message_id" });
 
-            var contentType = NyxIdRelayPayloads.GetContentType(message.Content);
-            var contentText = NormalizeOptional(message.Content?.Text);
-            if (contentText is null)
-                return Results.Accepted(value: new { status = "ignored", reason = "empty_text" });
-
-            var userToken = http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(userToken))
-            {
-                logger.LogWarning("Relay callback missing X-NyxID-User-Token header");
-                return Results.Unauthorized();
-            }
-
-            var validation = await relayJwtValidator.ValidateAsync(userToken, ct);
-            if (!validation.Succeeded || validation.Principal is null || string.IsNullOrWhiteSpace(validation.Subject))
-            {
-                logger.LogWarning("Relay callback JWT validation failed: {Error}", validation.Error);
-                return Results.Unauthorized();
-            }
-
-            if (!string.IsNullOrWhiteSpace(message.Agent?.ApiKeyId) &&
-                !string.Equals(message.Agent.ApiKeyId, validation.RelayApiKeyId, StringComparison.Ordinal))
+            var validation = await relayAuthValidator.ValidateAsync(http, bodyBytes, payload, ct);
+            if (!validation.Succeeded || validation.Principal is null)
             {
                 logger.LogWarning(
-                    "Relay callback agent mismatch: payload_agent_api_key_id={PayloadApiKeyId}, token_agent_api_key_id={TokenApiKeyId}",
-                    message.Agent.ApiKeyId,
-                    validation.RelayApiKeyId);
+                    "Relay callback authentication failed: code={Code}, detail={Detail}",
+                    validation.ErrorCode,
+                    validation.ErrorSummary);
                 return Results.Unauthorized();
             }
 
             http.User = validation.Principal;
-            var scopeId = validation.Subject!;
 
-            // Relay callbacks reuse the same user-config projection path as Studio and web chat.
-            // After JWT validation we attach the relay principal to HttpContext.User so
-            // IAppScopeResolver can resolve the same scope from the validated subject.
-
+            var contentType = NyxIdRelayPayloads.NormalizeContentType(payload.Content?.ContentType ?? payload.Content?.Type);
             if (string.Equals(contentType, RelayCardActionContentType, StringComparison.Ordinal))
             {
-                if (await TryHandleRelayWorkflowCardActionAsync(http, message, logger, ct) is { } workflowResult)
+                relayMessage ??= BuildRelayMessage(payload);
+                if (await TryHandleRelayWorkflowCardActionAsync(http, relayMessage, logger, ct) is { } workflowResult)
                     return workflowResult;
 
                 logger.LogInformation(
                     "Ignored unsupported relay card action: message={MessageId}, conversation={ConversationId}",
-                    message.MessageId,
-                    message.Conversation?.Id ?? message.Conversation?.PlatformId);
+                    payload.MessageId,
+                    payload.Conversation?.Id ?? payload.Conversation?.PlatformId);
                 return Results.Accepted(value: new
                 {
                     status = "ignored",
                     reason = "unsupported_card_action",
-                    message_id = message.MessageId,
+                    message_id = payload.MessageId,
                 });
             }
 
-            var platform = message.Platform ?? "unknown";
-            var conversationPlatformId = message.Conversation?.PlatformId ?? "unknown";
-            var conversationId = message.Conversation?.Id;
-            if (string.IsNullOrWhiteSpace(conversationId))
-                conversationId = $"{platform}-{conversationPlatformId}";
-
-            var actorId = $"nyxid-relay-{conversationId}";
-
-            logger.LogInformation(
-                "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
-                platform, conversationId, message.Sender?.DisplayName);
-
-            // ─── Day One slash-command bridge ───
-            // Intercept known and unknown slash commands deterministically so they do
-            // not reach the LLM. Free-text still falls through to the actor/LLM path.
-            // Bridge reply delivery uses the current callback token only — no long-term
-            // state, no durable credential, no projection write.
-            var dayOneBridge = http.RequestServices.GetService<INyxRelayDayOneBridge>();
-            if (dayOneBridge is not null)
+            var parsed = relayTransport.Parse(bodyBytes);
+            if (!parsed.Success)
             {
-                var bridgeRequest = new NyxRelayBridgeRequest(
-                    Text: message.Content?.Text ?? string.Empty,
-                    ConversationType: message.Conversation?.Type,
-                    ConversationId: conversationId,
-                    MessageId: message.MessageId,
-                    Platform: message.Platform,
-                    SenderId: message.Sender?.PlatformId,
-                    SenderName: message.Sender?.DisplayName,
-                    ScopeId: scopeId,
-                    NyxIdAccessToken: userToken);
-
-                if (dayOneBridge.ShouldHandle(bridgeRequest))
+                if (parsed.Ignored)
                 {
-                    // Dedupe at the Nyx-relay callback boundary so retried webhooks with the
-                    // same message_id do not double-fire AgentBuilderTool side effects (a single
-                    // `/daily` would otherwise create multiple agents + API keys on retry). The
-                    // LLM fallback path relies on the actor's serialized mailbox for equivalent
-                    // dedupe; the bridge skips the actor entirely, so it must use an atomic
-                    // first-writer-wins guard here — a non-atomic TryGet+Set pair would let
-                    // concurrent deliveries both observe the key as absent and both pass.
-                    var idempotencyGuard = http.RequestServices.GetService<INyxRelayBridgeIdempotencyGuard>();
-                    var dedupeKey = BuildBridgeDedupeKey(scopeId, message.MessageId!);
-                    var firstDelivery = idempotencyGuard is null
-                                        || idempotencyGuard.TryClaim(dedupeKey);
-                    if (!firstDelivery)
-                    {
-                        logger.LogInformation(
-                            "Relay Day One bridge duplicate callback suppressed: message_id={MessageId}, dedupe_key={DedupeKey}",
-                            message.MessageId,
-                            dedupeKey);
-                        return Results.Accepted(value: new
-                        {
-                            status = "accepted",
-                            bridge = "day_one_command",
-                            dedupe = "duplicate",
-                            message_id = message.MessageId,
-                        });
-                    }
-
-                    logger.LogInformation(
-                        "Relay Day One bridge owning message: platform={Platform}, conversation={ConversationId}, message_id={MessageId}",
-                        platform, conversationId, message.MessageId);
-
-                    _ = FinalizeDayOneBridgeReplyAsync(
-                            dayOneBridge,
-                            bridgeRequest,
-                            userToken,
-                            message.MessageId!,
-                            nyxClient,
-                            logger)
-                        .ContinueWith(
-                            task => logger.LogError(
-                                task.Exception,
-                                "Relay Day One bridge reply pipeline failed for message {MessageId}",
-                                message.MessageId),
-                            TaskContinuationOptions.OnlyOnFaulted);
-
                     return Results.Accepted(value: new
                     {
-                        status = "accepted",
-                        bridge = "day_one_command",
-                        message_id = message.MessageId,
+                        status = "ignored",
+                        reason = parsed.ErrorCode,
+                        detail = parsed.ErrorSummary,
                     });
                 }
+
+                return Results.BadRequest(new
+                {
+                    error = parsed.ErrorCode,
+                    detail = parsed.ErrorSummary,
+                });
             }
 
-            var actor = await actorRuntime.GetAsync(actorId)
-                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-            await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
-
-            var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var relayReply = new RelayReplyAccumulator(relayOptions.MaxBufferedResponseChars);
-            var sessionId = !string.IsNullOrWhiteSpace(message.MessageId)
-                ? $"{conversationId}-{message.MessageId}"
-                : $"{conversationId}-{Guid.NewGuid():N}";
-
-            var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                envelope =>
-                {
-                    var payload = envelope.Payload;
-                    if (payload is null)
-                        return Task.CompletedTask;
-
-                    if (payload.Is(TextMessageContentEvent.Descriptor))
-                    {
-                        var evt = payload.Unpack<TextMessageContentEvent>();
-                        if (!string.Equals(evt.SessionId, sessionId, StringComparison.Ordinal))
-                            return Task.CompletedTask;
-                        relayReply.Append(evt.Delta);
-                    }
-                    else if (payload.Is(TextMessageEndEvent.Descriptor))
-                    {
-                        var evt = payload.Unpack<TextMessageEndEvent>();
-                        if (!string.Equals(evt.SessionId, sessionId, StringComparison.Ordinal))
-                            return Task.CompletedTask;
-
-                        if (TryExtractLlmError(evt.Content, out var extractedError))
-                        {
-                            relayReply.SetError(extractedError);
-                        }
-                        else if (relayReply.IsEmpty && !string.IsNullOrWhiteSpace(evt.Content))
-                        {
-                            relayReply.Append(evt.Content);
-                        }
-
-                        responseTcs.TrySetResult(relayReply.Snapshot());
-                    }
-
-                    return Task.CompletedTask;
-                },
-                CancellationToken.None);
-
-            var chatRequest = new ChatRequestEvent
+            var activity = parsed.Activity!.Clone();
+            if (string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
             {
-                Prompt = contentText,
-                SessionId = sessionId,
-                ScopeId = scopeId,
-            };
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
-            if (TryExtractRefreshToken(http) is { } refreshToken)
-                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRefreshToken] = refreshToken;
-            chatRequest.Metadata["scope_id"] = scopeId;
-            chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
-            chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";
-            chatRequest.Metadata["relay.message_id"] = message.MessageId ?? "";
-            await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
-            await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
+                return Results.BadRequest(new
+                {
+                    error = "conversation_key_missing",
+                    detail = "Relay payload did not resolve to a canonical conversation key.",
+                });
+            }
 
-            var envelope = new EventEnvelope
+            activity.OutboundDelivery ??= new OutboundDeliveryContext();
+            activity.OutboundDelivery.ReplyAccessToken = validation.ReplyAccessToken ?? string.Empty;
+
+            var actorId = ConversationGAgent.BuildActorId(activity.Conversation.CanonicalKey);
+            var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
+            var command = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
+                Payload = Any.Pack(activity),
                 Route = new EnvelopeRoute
                 {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
+                    Direct = new DirectRoute { TargetActorId = actorId },
                 },
             };
 
-            await actor.HandleEventAsync(envelope, ct);
+            await actor.HandleEventAsync(command, ct);
 
-            var configuration = http.RequestServices.GetService<IConfiguration>();
-            _ = NyxIdRelayReplies.FinalizeReplyAsync(
-                    subscription,
-                    responseTcs,
-                    relayReply,
-                    sessionId,
-                    message.MessageId!,
-                    userToken,
-                    chatRequest.Metadata,
-                    relayOptions,
-                    nyxClient,
-                    configuration,
-                    logger)
-                .ContinueWith(
-                    task => logger.LogError(task.Exception, "Relay background reply pipeline failed for session {SessionId}", sessionId),
-                    TaskContinuationOptions.OnlyOnFaulted);
+            logger.LogInformation(
+                "Accepted relay callback into channel conversation backbone: message={MessageId}, actor={ActorId}, platform={Platform}",
+                activity.Id,
+                actorId,
+                activity.ChannelId?.Value);
 
             return Results.Accepted(value: new
             {
                 status = "accepted",
-                session_id = sessionId,
-                message_id = message.MessageId,
+                message_id = activity.Id,
+                actor_id = actorId,
             });
         }
         catch (OperationCanceledException)
         {
             return Results.StatusCode(499);
-        }
-        catch (InvalidOperationException)
-        {
-            throw;
         }
         catch (Exception ex)
         {
@@ -314,12 +163,6 @@ public static partial class NyxIdChatEndpoints
         }
     }
 
-    /// <summary>Classify a technical LLM error into a user-friendly message.</summary>
-    private static string ClassifyError(string error) => NyxIdRelayReplies.ClassifyError(error);
-
-    private static bool TryExtractLlmError(string? content, out string error) =>
-        NyxIdRelayReplies.TryExtractLlmError(content, out error);
-
     private static async Task<IResult?> TryHandleRelayWorkflowCardActionAsync(
         HttpContext http,
         RelayMessage message,
@@ -327,62 +170,41 @@ public static partial class NyxIdChatEndpoints
         CancellationToken ct) =>
         await NyxIdRelayWorkflowCards.TryHandleAsync(http, message, logger, ct);
 
-    private static string BuildBridgeDedupeKey(string scopeId, string messageId) =>
-        $"nyxid-relay-bridge:{scopeId}:{messageId}";
-
-    private static async Task FinalizeDayOneBridgeReplyAsync(
-        INyxRelayDayOneBridge bridge,
-        NyxRelayBridgeRequest request,
-        string relayToken,
-        string messageId,
-        NyxIdApiClient nyxClient,
-        ILogger logger)
-    {
-        string replyText;
-        try
+    private static RelayMessage BuildRelayMessage(NyxIdRelayCallbackPayload payload) =>
+        new()
         {
-            replyText = await bridge.HandleAsync(request, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "Relay Day One bridge handler threw: messageId={MessageId}",
-                messageId);
-            replyText = "Sorry, something went wrong while handling that command. Please try again.";
-        }
-
-        if (string.IsNullOrWhiteSpace(replyText))
-            replyText = "Sorry, I wasn't able to generate a response.";
-
-        using var deliveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var delivery = await nyxClient.SendChannelRelayTextReplyAsync(
-            relayToken,
-            messageId,
-            replyText,
-            deliveryCts.Token);
-        if (!delivery.Succeeded)
-        {
-            logger.LogError(
-                "Relay Day One bridge reply delivery failed: messageId={MessageId}, detail={Detail}",
-                messageId,
-                delivery.Detail);
-            return;
-        }
-
-        logger.LogInformation(
-            "Relay Day One bridge reply delivered: messageId={MessageId}, platformMessageId={PlatformMessageId}",
-            delivery.MessageId,
-            delivery.PlatformMessageId);
-    }
-
-    private static string? NormalizeOptional(string? value) =>
-        NyxIdRelayPayloads.NormalizeOptional(value);
-
-    private sealed class RelayReplyAccumulator : NyxIdRelayReplyAccumulator
-    {
-        public RelayReplyAccumulator(int maxChars) : base(maxChars)
-        {
-        }
-    }
+            MessageId = payload.MessageId,
+            Platform = payload.Platform,
+            Agent = payload.Agent is null
+                ? null
+                : new RelayAgent
+                {
+                    ApiKeyId = payload.Agent.ApiKeyId,
+                    Name = payload.Agent.Name,
+                },
+            Conversation = payload.Conversation is null
+                ? null
+                : new RelayConversation
+                {
+                    Id = payload.Conversation.Id,
+                    PlatformId = payload.Conversation.PlatformId,
+                    Type = payload.Conversation.Type ?? payload.Conversation.ConversationType,
+                },
+            Sender = payload.Sender is null
+                ? null
+                : new RelaySender
+                {
+                    PlatformId = payload.Sender.PlatformId,
+                    DisplayName = payload.Sender.DisplayName,
+                },
+            Content = payload.Content is null
+                ? null
+                : new RelayContent
+                {
+                    ContentType = payload.Content.ContentType,
+                    Type = payload.Content.Type,
+                    Text = payload.Content.Text,
+                },
+            Timestamp = payload.Timestamp,
+        };
 }

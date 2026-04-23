@@ -19,11 +19,6 @@ public static class ChannelCallbackEndpoints
     {
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
-        // Platform callback — receives webhooks directly from platforms. These are invoked by
-        // external services (Lark, Telegram, …) without our JWT, so they must remain anonymous
-        // even after the host applies an authenticated-by-default fallback policy.
-        group.MapPost("/{platform}/callback/{registrationId}", HandleCallbackAsync).AllowAnonymous();
-
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
@@ -46,31 +41,6 @@ public static class ChannelCallbackEndpoints
     {
         return await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(ChannelBotRegistrationGAgent.WellKnownId);
-    }
-
-    /// <summary>
-    /// Receives a platform webhook callback directly.
-    /// 1. Handles verification challenges (returns immediately).
-    /// 2. Parses inbound message.
-    /// 3. Returns 200 OK immediately (platforms have short timeouts).
-    /// 4. Fires background task: dispatch to actor, collect response, send reply via Nyx provider.
-    /// </summary>
-    private static Task<IResult> HandleCallbackAsync(
-        HttpContext http,
-        string platform,
-        string registrationId)
-    {
-        var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
-        RecordDiagnostic(diagnostics, "Callback:retired", platform, registrationId, "direct_callback_retired");
-        return Task.FromResult<IResult>(Results.Json(
-            new
-            {
-                error = "Direct platform callbacks are retired. ChannelRuntime now accepts only Nyx relay ingress for supported platforms.",
-                registration_id = registrationId,
-                platform,
-                supported_ingress = "/api/webhooks/nyxid-relay",
-            },
-            statusCode: StatusCodes.Status410Gone));
     }
 
     // ─── Registration CRUD ───

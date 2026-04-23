@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
@@ -6,10 +7,10 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.GAgents.Channel.Lark;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
-using Aevatar.GAgents.NyxidChat.Relay;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -97,6 +98,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelPlatformReplyService>();
@@ -184,9 +186,10 @@ public static class ServiceCollectionExtensions
             client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
         });
         services.TryAddSingleton<LarkMessageComposer>();
-        services.TryAddSingleton<LarkPayloadRedactor>();
+        services.TryAddSingleton<NyxIdRelayOutboundPort>();
         services.TryAddSingleton<ConversationDispatchMiddleware>();
-        services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, LarkConversationTurnRunner>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, ChannelContextMiddleware>());
+        services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
         services.Replace(ServiceDescriptor.Singleton(_ => new MiddlewarePipelineBuilder()
             .Use<TracingMiddleware>()
             .Use<LoggingMiddleware>()
@@ -194,7 +197,9 @@ public static class ServiceCollectionExtensions
             .Use<ConversationDispatchMiddleware>()));
         services.TryAddSingleton<ChannelPipeline>(sp => sp.GetRequiredService<MiddlewarePipelineBuilder>().Build(sp));
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
-        services.TryAddSingleton<INyxRelayDayOneBridge, NyxRelayDayOneBridge>();
+        services.TryAddSingleton<ChannelLlmReplyInboxRuntime>();
+        services.TryAddSingleton<IChannelLlmReplyInbox>(sp => sp.GetRequiredService<ChannelLlmReplyInboxRuntime>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ChannelLlmReplyInboxHostedService>());
         services.TryAddSingleton<LarkConversationInboxRuntime>();
         services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, LarkConversationInboxHostedService>());

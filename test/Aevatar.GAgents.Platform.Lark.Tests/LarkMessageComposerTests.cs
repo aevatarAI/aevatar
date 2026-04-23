@@ -1,10 +1,10 @@
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Channel.Lark;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Channel.Testing;
 using Shouldly;
 
-namespace Aevatar.GAgents.Channel.Lark.Tests;
+namespace Aevatar.GAgents.Platform.Lark.Tests;
 
 public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMessageComposer>
 {

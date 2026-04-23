@@ -1,6 +1,9 @@
+using System.Net;
+using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -13,26 +16,80 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class LarkConversationTurnRunnerTests
+public sealed class ChannelConversationTurnRunnerTests
 {
     [Fact]
-    public async Task RunInboundAsync_ShouldGenerateAndSendReply_ForNormalMessage()
+    public async Task RunInboundAsync_ShouldRequestDeferredLlmReply_ForNormalMessage()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
-        var replyGenerator = new StubReplyGenerator("reply-1");
-        var runner = CreateRunner(registrationQueryPort, adapter, replyGenerator: replyGenerator);
+        var runner = CreateRunner(registrationQueryPort, adapter);
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity("hello", "msg-1", ConversationScope.Group, "oc_group_chat_1"),
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        result.SentActivityId.Should().Be("direct-reply:msg-1");
-        adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Be("reply-1");
-        adapter.Replies[0].Inbound.ConversationId.Should().Be("oc_group_chat_1");
-        replyGenerator.GeneratedActivities.Should().ContainSingle(activity => activity.Id == "msg-1");
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.CorrelationId.Should().Be("msg-1");
+        result.LlmReplyRequest.TargetActorId.Should().Be("channel-conversation:lark:group:oc_group_chat_1");
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.ChatType].Should().Be("group");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldResolveRegistrationByNyxAgentApiKeyId_WhenBotIdDoesNotMatch()
+    {
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync("missing-reg", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(BuildRegistrationEntry()));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-nyx-1",
+                botId: "missing-reg",
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxMessageId = "nyx-msg-1",
+                    NyxPlatform = "lark",
+                    NyxConversationId = "nyx-conv-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-1");
+        result.LlmReplyRequest.Activity.TransportExtras?.NyxAgentApiKeyId.Should().Be("nyx-key-1");
+        await registrationByNyxIdentityPort.Received(1)
+            .GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive()
+            .GetAsync("missing-reg", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldMapChannelScopeChatTypeExhaustively()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("announce", "msg-channel-1", ConversationScope.Channel, "oc_channel_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata[ChannelMetadataKeys.ChatType].Should().Be("channel");
     }
 
     [Fact]
@@ -147,8 +204,7 @@ public sealed class LarkConversationTurnRunnerTests
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
-        var replyGenerator = new StubReplyGenerator("llm-fallback-should-not-fire");
-        var runner = CreateRunner(registrationQueryPort, adapter, replyGenerator: replyGenerator);
+        var runner = CreateRunner(registrationQueryPort, adapter);
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
@@ -163,8 +219,70 @@ public sealed class LarkConversationTurnRunnerTests
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("Create daily report agent failed");
         adapter.Replies[0].ReplyText.Should().Contain("No NyxID access token available");
-        replyGenerator.GeneratedActivities.Should().BeEmpty(
-            because: "deterministic slash flow must not fall through to the LLM reply generator");
+    }
+
+    [Theory]
+    [InlineData("/daily_report")]
+    [InlineData("/foobar")]
+    [InlineData("/")]
+    public async Task RunInboundAsync_ShouldShortCircuitUnknownSlashCommand_WithUsage(string command)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(command, "msg-unknown", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain($"Unknown command: {command}");
+        adapter.Replies[0].ReplyText.Should().Contain("Supported commands:");
+    }
+
+    [Fact]
+    public async Task RunLlmReplyAsync_ShouldSendRelayReply_WhenReadyEventArrives()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-1"}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, relayHandler: relayHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-1",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-1",
+                ReplyAccessToken = "relay-token-1",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+            });
+
+        var result = await runner.RunLlmReplyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-relay-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = activity,
+            Outbound = new MessageContent { Text = "relay reply" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 42,
+        }, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("reply-1");
+        result.OutboundDelivery?.ReplyMessageId.Should().Be("relay-msg-1");
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-1");
+        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"relay-msg-1\"");
+        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"relay reply\"");
     }
 
     [Fact]
@@ -225,41 +343,68 @@ public sealed class LarkConversationTurnRunnerTests
         adapter.Replies[0].Inbound.ChatType.Should().Be("group");
     }
 
-    private static LarkConversationTurnRunner CreateRunner(
+    private static ChannelConversationTurnRunner CreateRunner(
         IChannelBotRegistrationQueryPort registrationQueryPort,
         RecordingPlatformAdapter adapter,
         IServiceProvider? services = null,
-        IConversationReplyGenerator? replyGenerator = null)
+        IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort = null,
+        RecordingJsonHandler? relayHandler = null)
     {
         services ??= new ServiceCollection().BuildServiceProvider();
-        return new LarkConversationTurnRunner(
+        relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
+        var relayClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://example.com" },
+            new HttpClient(relayHandler)
+            {
+                BaseAddress = new Uri("https://example.com"),
+            },
+            NullLogger<NyxIdApiClient>.Instance);
+        var relayOutboundPort = new NyxIdRelayOutboundPort(
+            relayClient,
+            NullLogger<NyxIdRelayOutboundPort>.Instance);
+
+        return new ChannelConversationTurnRunner(
             services,
             registrationQueryPort,
+            registrationQueryByNyxIdentityPort,
             [adapter],
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://example.com" }),
-            replyGenerator ?? new StubReplyGenerator(),
-            NullLogger<LarkConversationTurnRunner>.Instance);
+            relayOutboundPort,
+            NullLogger<ChannelConversationTurnRunner>.Instance);
     }
 
     private static ChatActivity BuildInboundActivity(
         string text,
         string messageId,
         ConversationScope scope = ConversationScope.Group,
-        string? partition = "oc_group_chat_1")
+        string? partition = "oc_group_chat_1",
+        OutboundDeliveryContext? outboundDelivery = null,
+        TransportExtras? transportExtras = null,
+        string botId = "reg-1")
     {
         return new ChatActivity
         {
             Id = messageId,
             Type = ActivityType.Message,
             ChannelId = ChannelId.From("lark"),
-            Bot = BotInstanceId.From("reg-1"),
+            Bot = BotInstanceId.From(botId),
             Conversation = ConversationReference.Create(
                 ChannelId.From("lark"),
-                BotInstanceId.From("reg-1"),
+                BotInstanceId.From(botId),
                 scope,
                 partition,
-                scope == ConversationScope.Group ? "group" : "dm",
-                scope == ConversationScope.Group ? "oc_group_chat_1" : "ou_user_1"),
+                scope switch
+                {
+                    ConversationScope.Group => "group",
+                    ConversationScope.Channel => "channel",
+                    _ => "dm",
+                },
+                scope switch
+                {
+                    ConversationScope.Group => "oc_group_chat_1",
+                    ConversationScope.Channel => "oc_channel_1",
+                    _ => "ou_user_1",
+                }),
             From = new ParticipantRef
             {
                 CanonicalId = "ou_user_1",
@@ -269,6 +414,8 @@ public sealed class LarkConversationTurnRunnerTests
             {
                 Text = text,
             },
+            OutboundDelivery = outboundDelivery?.Clone(),
+            TransportExtras = transportExtras?.Clone(),
         };
     }
 
@@ -309,20 +456,22 @@ public sealed class LarkConversationTurnRunnerTests
 
     private static IChannelBotRegistrationQueryPort BuildRegistrationQueryPort()
     {
-        var registration = new ChannelBotRegistrationEntry
-        {
-            Id = "reg-1",
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        };
-
+        var registration = BuildRegistrationEntry();
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync(registration.Id, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
         return queryPort;
     }
+
+    private static ChannelBotRegistrationEntry BuildRegistrationEntry(string id = "reg-1") =>
+        new()
+        {
+            Id = id,
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
 
     private sealed class RecordingPlatformAdapter : IPlatformAdapter
     {
@@ -348,20 +497,6 @@ public sealed class LarkConversationTurnRunnerTests
         }
     }
 
-    private sealed class StubReplyGenerator(string? reply = "unused") : IConversationReplyGenerator
-    {
-        public List<ChatActivity> GeneratedActivities { get; } = [];
-
-        public Task<string?> GenerateReplyAsync(
-            ChatActivity activity,
-            IReadOnlyDictionary<string, string> metadata,
-            CancellationToken ct)
-        {
-            GeneratedActivities.Add(activity);
-            return Task.FromResult(reply);
-        }
-    }
-
     private sealed class RecordingWorkflowResumeDispatchService
         : ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
     {
@@ -375,6 +510,24 @@ public sealed class LarkConversationTurnRunnerTests
         {
             Commands.Add(command);
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingJsonHandler(string body) : HttpMessageHandler
+    {
+        public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add((
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Headers.Authorization?.ToString(),
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
         }
     }
 }

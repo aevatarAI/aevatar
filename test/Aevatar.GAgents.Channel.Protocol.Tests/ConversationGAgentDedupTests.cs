@@ -125,6 +125,88 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_PersistsOutboundDeliveryContext_OnCompletedEvent()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.Sent(
+                "sent:act-relay",
+                new MessageContent { Text = "ack" },
+                "bot",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-1",
+                    ReplyAccessToken = "relay-token-1",
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-relay");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-relay", "conv:slack:C1"));
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events[0].EventData.Value);
+        completed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
+        completed.OutboundDelivery.ReplyAccessToken.ShouldBe("relay-token-1");
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_WhenRunnerRequestsDeferredReply_PersistsNeedsLlmReplyEvent()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-llm-request");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-llm", "conv:slack:C1"));
+
+        agent.State.ProcessedMessageIds.ShouldContain("act-llm");
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(NeedsLlmReplyEvent));
+        var parsed = NeedsLlmReplyEvent.Parser.ParseFrom(events[0].EventData.Value);
+        parsed.CorrelationId.ShouldBe("act-llm");
+        parsed.Activity.Id.ShouldBe("act-llm");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenDuplicateCorrelationId_CollapsesToSingleOutboundCommit()
+    {
+        var runner = new RecordingTurnRunner();
+        var (agent, store) = CreateAgent(runner, "conv-llm-ready");
+        await agent.HandleInboundActivityAsync(CreateActivity("act-llm-ready", "conv:slack:C1"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-llm-ready",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = CreateActivity("act-llm-ready", "conv:slack:C1"),
+            Outbound = new MessageContent { Text = "reply-from-llm" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+
+        await agent.HandleLlmReplyReadyAsync(ready);
+        await agent.HandleLlmReplyReadyAsync(ready.Clone());
+
+        runner.LlmReplyCount.ShouldBe(1);
+        agent.State.ProcessedCommandIds.ShouldContain("llm:act-llm-ready");
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(2);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+    }
+
+    [Fact]
     public async Task HandleContinueCommandAsync_TransientFailure_LeavesCommandRetriable()
     {
         // Retriable continue failures (retry_after_ms) must NOT mark the command id as processed —
@@ -278,8 +360,10 @@ public sealed class ConversationGAgentDedupTests
     private sealed class RecordingTurnRunner : IConversationTurnRunner
     {
         public int InboundCount;
+        public int LlmReplyCount;
         public int ContinueCount;
         public Func<ChatActivity, ConversationTurnResult>? InboundResultFactory { get; set; }
+        public Func<LlmReplyReadyEvent, ConversationTurnResult>? LlmReplyResultFactory { get; set; }
         public Func<ConversationContinueRequestedEvent, ConversationTurnResult>? ContinueResultFactory { get; set; }
 
         public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct)
@@ -288,6 +372,19 @@ public sealed class ConversationGAgentDedupTests
             var result = InboundResultFactory is null
                 ? ConversationTurnResult.Sent("sent:" + activity.Id, new MessageContent { Text = "ack" }, "bot")
                 : InboundResultFactory(activity);
+            return Task.FromResult(result);
+        }
+
+        public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct)
+        {
+            Interlocked.Increment(ref LlmReplyCount);
+            var result = LlmReplyResultFactory is null
+                ? ConversationTurnResult.Sent(
+                    "sent:llm:" + reply.CorrelationId,
+                    reply.Outbound?.Clone() ?? new MessageContent { Text = "ack" },
+                    "bot",
+                    reply.Activity?.OutboundDelivery?.Clone())
+                : LlmReplyResultFactory(reply);
             return Task.FromResult(result);
         }
 

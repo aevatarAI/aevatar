@@ -167,13 +167,16 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.ReplyPayload.Should().Contain("/delete-agent agent-1 confirm");
     }
 
-    [Fact]
-    public void TryResolve_ShouldReturnUnknownCommandUsage_ForUnknownSlash()
+    [Theory]
+    [InlineData("/daily_report alice", "Unknown command: /daily_report")]
+    [InlineData("/foobar", "Unknown command: /foobar")]
+    [InlineData("/", "Unknown command: /")]
+    public void TryResolve_ShouldReturnUnknownCommandUsage_ForUnknownSlash(string text, string expected)
     {
         var inbound = new ChannelInboundEvent
         {
             ChatType = "p2p",
-            Text = "/daily_report alice",
+            Text = text,
         };
 
         var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
@@ -181,25 +184,8 @@ public sealed class NyxRelayAgentBuilderFlowTests
         matched.Should().BeTrue();
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
-        decision.ReplyPayload.Should().Contain("Unknown command: /daily_report");
+        decision.ReplyPayload.Should().Contain(expected);
         decision.ReplyPayload.Should().Contain("/daily github_username=alice");
-    }
-
-    [Fact]
-    public void TryResolve_ShouldReturnUnknownCommandUsage_ForNonsenseSlash()
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            Text = "/foobar",
-        };
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeFalse();
-        decision.ReplyPayload.Should().Contain("Unknown command: /foobar");
     }
 
     [Fact]
@@ -220,13 +206,15 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.ReplyPayload.Should().Contain("/daily");
     }
 
-    [Fact]
-    public void TryResolve_ShouldFallThrough_ForNonSlashText()
+    [Theory]
+    [InlineData("hello there")]
+    [InlineData("现在就是私聊")]
+    public void TryResolve_ShouldFallThrough_ForNonSlashText(string text)
     {
         var inbound = new ChannelInboundEvent
         {
             ChatType = "p2p",
-            Text = "hello there",
+            Text = text,
         };
 
         var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
