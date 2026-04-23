@@ -698,6 +698,62 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldInjectUserConfigMetadata_FromRelayScope()
+    {
+        var relay = CreateRelayInvocationDependencies(scopeId: "scope-relay", relayApiKeyId: "scope-relay");
+        var payload = """
+            {
+              "message_id":"msg-config",
+              "platform":"slack",
+              "agent":{"api_key_id":"scope-relay"},
+              "conversation":{"platform_id":"room-config"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "relay-route", 9))
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            new StubSubscriptionProvider
+            {
+                Messages =
+                {
+                    new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+                },
+            },
+            new StubGAgentActorStore(),
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            relay.Validator,
+            relay.Client,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+
+        var actor = runtime.Actors["nyxid-relay-slack-room-config"].Should().BeOfType<StubActor>().Subject;
+        var chatRequest = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.ScopeId.Should().Be("scope-relay");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be(relay.Token);
+        chatRequest.Metadata["scope_id"].Should().Be("scope-relay");
+        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("relay-model");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("relay-route");
+        chatRequest.Metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("9");
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldReuseActorAndSessionId_ForDuplicateDailyReportWebhook()
     {
         const string scopeId = "scope-daily";
@@ -1039,7 +1095,7 @@ public class NyxIdChatEndpointsCoverageTests
             .And.BeOfType<string>()
             .Subject;
 
-        diag.Should().Contain("Model: deepseek-chat (from config.json)");
+        diag.Should().Contain("Model: deepseek-chat (from user config)");
         diag.Should().Contain("Route: direct");
         diag.Should().Contain("Scope: scope-a");
         diag.Should().Contain("Token: present");
