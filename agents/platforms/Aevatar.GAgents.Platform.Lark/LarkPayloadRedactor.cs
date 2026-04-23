@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.GAgents.Channel.Abstractions;
 
-namespace Aevatar.GAgents.Channel.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public sealed class LarkPayloadRedactor : IPayloadRedactor
 {

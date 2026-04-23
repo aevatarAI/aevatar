@@ -11,7 +11,7 @@
     <Project Path="agents\Aevatar.GAgents.ChatbotClassifier\Aevatar.GAgents.ChatbotClassifier.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
-    <Project Path="agents\channels\Aevatar.GAgents.Channel.Lark\Aevatar.GAgents.Channel.Lark.csproj" />
+    <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
@@ -171,7 +171,7 @@
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Sdk.Tests\Aevatar.Workflow.Sdk.Tests.csproj" />
     <Project Path="test\Aevatar.Architecture.Tests\Aevatar.Architecture.Tests.csproj" />
-    <Project Path="test\Aevatar.GAgents.Channel.Lark.Tests\Aevatar.GAgents.Channel.Lark.Tests.csproj" />
+    <Project Path="test\Aevatar.GAgents.Platform.Lark.Tests\Aevatar.GAgents.Platform.Lark.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Channel.Protocol.Tests\Aevatar.GAgents.Channel.Protocol.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Channel.Testing\Aevatar.GAgents.Channel.Testing.csproj" />
     <Project Path="test\Aevatar.GAgents.ChannelRuntime.Tests\Aevatar.GAgents.ChannelRuntime.Tests.csproj" />

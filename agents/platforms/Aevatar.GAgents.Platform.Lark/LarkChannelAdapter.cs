@@ -9,7 +9,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using FoundationCredentialProvider = Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider;
 
-namespace Aevatar.GAgents.Channel.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public sealed class LarkChannelAdapter : IChannelTransport, IChannelOutboundPort
 {

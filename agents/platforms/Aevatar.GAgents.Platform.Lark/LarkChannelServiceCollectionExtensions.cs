@@ -2,7 +2,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace Aevatar.GAgents.Channel.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public static class LarkChannelServiceCollectionExtensions
 {

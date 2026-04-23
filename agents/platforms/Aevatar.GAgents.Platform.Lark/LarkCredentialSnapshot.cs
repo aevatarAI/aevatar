@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Aevatar.GAgents.Channel.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 internal sealed record LarkCredentialSnapshot(
     string AccessToken,

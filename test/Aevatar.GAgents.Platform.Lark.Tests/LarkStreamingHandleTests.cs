@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Shouldly;
 
-namespace Aevatar.GAgents.Channel.Lark.Tests;
+namespace Aevatar.GAgents.Platform.Lark.Tests;
 
 public sealed class LarkStreamingHandleTests
 {

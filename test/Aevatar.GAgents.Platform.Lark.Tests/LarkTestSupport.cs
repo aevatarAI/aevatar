@@ -8,7 +8,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.GAgents.Channel.Lark.Tests;
+namespace Aevatar.GAgents.Platform.Lark.Tests;
 
 internal sealed class LarkAdapterHarness
 {

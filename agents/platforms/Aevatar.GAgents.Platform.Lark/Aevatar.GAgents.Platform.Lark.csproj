@@ -3,11 +3,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.GAgents.Channel.Lark</AssemblyName>
-    <RootNamespace>Aevatar.GAgents.Channel.Lark</RootNamespace>
+    <AssemblyName>Aevatar.GAgents.Platform.Lark</AssemblyName>
+    <RootNamespace>Aevatar.GAgents.Platform.Lark</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="Aevatar.GAgents.Channel.Lark.Tests" />
+    <InternalsVisibleTo Include="Aevatar.GAgents.Platform.Lark.Tests" />
     <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
   </ItemGroup>
   <ItemGroup>

@@ -1,6 +1,6 @@
 using Aevatar.GAgents.Channel.Abstractions;
 
-namespace Aevatar.GAgents.Channel.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 internal sealed class LarkStreamingHandle : StreamingHandle
 {
