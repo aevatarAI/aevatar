@@ -508,7 +508,7 @@ public static class NyxIdChatEndpoints
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Failed to load user config from chrono-storage — falling back to server defaults");
+            logger?.LogWarning(ex, "Failed to load user config from the projection read model; falling back to server defaults");
         }
     }
 
@@ -821,10 +821,9 @@ public static class NyxIdChatEndpoints
             http.User = validation.Principal;
             var scopeId = validation.Subject!;
 
-            // Note: config.json in chrono-storage cannot be read in relay flow because
-            // ChronoStorageCatalogBlobClient reads the Bearer token from Authorization header,
-            // which is not present on relay callbacks (token is in X-NyxID-User-Token instead).
-            // InjectUserConfigMetadataAsync will silently fall back to server defaults.
+            // Relay callbacks reuse the same user-config projection path as Studio and web chat.
+            // After JWT validation we attach the relay principal to HttpContext.User so
+            // IAppScopeResolver can resolve the same scope from the validated subject.
 
             // ─── Resolve conversation ───
             var platform = message.Platform ?? "unknown";
@@ -1115,7 +1114,7 @@ public static class NyxIdChatEndpoints
         var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
 
         var model = !string.IsNullOrWhiteSpace(modelOverride)
-            ? $"{modelOverride} (from config.json)"
+            ? $"{modelOverride} (from user config)"
             : $"server-default={serverDefault}";
 
         var error = errorMessage.Length > 300 ? errorMessage[..300] + "..." : errorMessage;
