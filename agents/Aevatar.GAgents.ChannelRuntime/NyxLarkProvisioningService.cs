@@ -571,7 +571,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         {
             using var document = JsonDocument.Parse(response);
             var routes = new List<ConfirmedConversationRoute>();
-            foreach (var item in EnumerateObjects(document.RootElement, "routes", "channel_conversations", "items", "data"))
+            foreach (var item in EnumerateObjects(document.RootElement, "conversations", "routes", "channel_conversations", "items", "data"))
             {
                 routes.Add(ParseConversationRoute(item, null, null, "channel_route_list"));
             }

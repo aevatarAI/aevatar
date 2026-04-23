@@ -241,6 +241,64 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Fact]
+    public async Task RepairLocalMirrorAsync_DiscoversDefaultRouteFromNyxConversationList()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue(HttpMethod.Get, "/api/v1/api-keys/key-123", """{"id":"key-123","callback_url":"https://aevatar.example.com/api/webhooks/nyxid-relay"}""");
+        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots/bot-456", """{"id":"bot-456","platform":"lark","webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456"}""");
+        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-conversations", """{"conversations":[{"id":"route-789","channel_bot_id":"bot-456","agent_api_key_id":"key-123","default_agent":true}],"total":1}""");
+        var secretsStore = new InMemorySecretsStore();
+        secretsStore.Set("vault://channels/lark/registrations/reg-restore-1/relay-hmac", "hashed-secret");
+
+        EventEnvelope? capturedEnvelope = null;
+        var actor = Substitute.For<IActor>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(actor));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime,
+            secretsStore,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.RepairLocalMirrorAsync(
+            new NyxLarkMirrorRepairRequest(
+                AccessToken: "user-token",
+                RequestedRegistrationId: "reg-restore-1",
+                ScopeId: "scope-1",
+                NyxProviderSlug: "api-lark-bot",
+                WebhookBaseUrl: "https://aevatar.example.com",
+                NyxChannelBotId: "bot-456",
+                NyxAgentApiKeyId: "key-123",
+                NyxConversationRouteId: string.Empty,
+                CredentialRef: string.Empty),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.NyxConversationRouteId.Should().Be("route-789");
+        handler.Requests.Should().HaveCount(3);
+
+        capturedEnvelope.Should().NotBeNull();
+        capturedEnvelope!.Payload.Is(ChannelBotRegisterCommand.Descriptor).Should().BeTrue();
+        MatchesLocalMirror(
+                capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>(),
+                "reg-restore-1",
+                "vault://channels/lark/registrations/reg-restore-1/relay-hmac")
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
     public async Task RepairLocalMirrorAsync_ShouldReject_WhenRelayCredentialCannotBeRecovered()
     {
         var handler = new RecordingHandler();
@@ -328,7 +386,7 @@ public class NyxLarkProvisioningServiceTests
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Get, "/api/v1/api-keys/key-123", """{"id":"key-123","callback_url":"https://aevatar.example.com/api/webhooks/nyxid-relay"}""");
         handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots/bot-456", """{"id":"bot-456","platform":"lark","webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-conversations", """{"routes":[]}""");
+        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-conversations", """{"conversations":[],"total":0}""");
         var secretsStore = new InMemorySecretsStore();
         secretsStore.Set("vault://channels/lark/registrations/reg-restore-1/relay-hmac", "hashed-secret");
 
