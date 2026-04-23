@@ -127,6 +127,11 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceRolloutReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ServiceRolloutCommandObservationReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceRolloutCommandObservationReadModel>>().Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ServiceTrafficViewReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>>().Metadata,
@@ -157,6 +162,10 @@ public static class ServiceCollectionExtensions
                 keyFormatter: key => key,
                 defaultSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceRolloutReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                defaultSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<ServiceRolloutCommandObservationReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
                 defaultSortSelector: readModel => readModel.UpdatedAt);
