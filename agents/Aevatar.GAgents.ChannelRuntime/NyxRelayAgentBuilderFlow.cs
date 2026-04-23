@@ -198,9 +198,9 @@ internal static class NyxRelayAgentBuilderFlow
             var token = tokens[i];
             if (string.IsNullOrWhiteSpace(token))
                 continue;
-            var separator = token.IndexOf('=');
-            if (separator <= 0 || separator == token.Length - 1)
-                return token.Trim();
+            if (token.IndexOf('=', StringComparison.Ordinal) >= 0)
+                continue;
+            return token.Trim();
         }
         return null;
     }

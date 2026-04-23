@@ -48,6 +48,26 @@ public sealed class NyxRelayAgentBuilderFlowTests
         body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_8a70aeefbdb4340e1fa5f575b4c794eb");
     }
 
+    [Theory]
+    [InlineData("/daily-report =broken")]
+    [InlineData("/daily-report github_username=")]
+    public void TryResolve_ShouldNotTreatMalformedKeyValueTokenAsPositional(string text)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_chat_xyz",
+            Text = text,
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("github_username is required");
+    }
+
     [Fact]
     public void TryResolve_ShouldAcceptPositionalSocialMediaTopic()
     {
