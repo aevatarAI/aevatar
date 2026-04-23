@@ -28,11 +28,20 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// </remarks>
 public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
 {
+    private static readonly TimeSpan InitialDeferredLlmDispatchDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan DeferredLlmDispatchRetryDelay = TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
     /// catching typical redelivery windows (seconds to minutes).
     /// </summary>
     public const int ProcessedIdsCap = 10000;
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        await SchedulePendingLlmReplyDispatchesAsync(ct);
+    }
 
     /// <inheritdoc />
     protected override ConversationGAgentState TransitionState(ConversationGAgentState current, IMessage evt) =>
@@ -74,7 +83,10 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (result.LlmReplyRequest is not null)
         {
             await PersistDomainEventAsync(result.LlmReplyRequest);
-            await EnqueueDeferredLlmReplyAsync(result.LlmReplyRequest);
+            await ScheduleDeferredLlmReplyDispatchAsync(
+                result.LlmReplyRequest,
+                InitialDeferredLlmDispatchDelay,
+                CancellationToken.None);
             Logger.LogInformation(
                 "Accepted inbound activity for deferred LLM reply: activity={ActivityId} conversation={Key}",
                 activity.Id,
@@ -120,11 +132,56 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     }
 
     [EventHandler]
+    public async Task HandleDeferredLlmReplyDispatchRequestedAsync(DeferredLlmReplyDispatchRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var pendingRequest = FindPendingLlmReplyRequest(evt.CorrelationId);
+        if (pendingRequest is null)
+        {
+            Logger.LogDebug(
+                "Ignoring deferred LLM dispatch trigger without pending request: correlation={CorrelationId}",
+                evt.CorrelationId);
+            return;
+        }
+
+        var inbox = Services.GetService<IChannelLlmReplyInbox>();
+        if (inbox is null)
+        {
+            Logger.LogWarning(
+                "Deferred LLM reply inbox not registered; rescheduling dispatch: correlation={CorrelationId}",
+                evt.CorrelationId);
+            await ScheduleDeferredLlmReplyDispatchAsync(
+                pendingRequest,
+                DeferredLlmDispatchRetryDelay,
+                CancellationToken.None);
+            return;
+        }
+
+        try
+        {
+            await inbox.EnqueueAsync(pendingRequest.Clone(), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Failed to enqueue deferred LLM reply request; rescheduling dispatch: correlation={CorrelationId}",
+                evt.CorrelationId);
+            await ScheduleDeferredLlmReplyDispatchAsync(
+                pendingRequest,
+                DeferredLlmDispatchRetryDelay,
+                CancellationToken.None);
+        }
+    }
+
+    [EventHandler]
     public async Task HandleLlmReplyReadyAsync(LlmReplyReadyEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
 
         var commandId = BuildLlmReplyCommandId(evt.CorrelationId);
+        var pendingRequest = FindPendingLlmReplyRequest(evt.CorrelationId);
         if (State.ProcessedCommandIds.Contains(commandId))
         {
             Logger.LogInformation(
@@ -172,6 +229,17 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         };
         AssignRetryPolicy(failed, result);
         await PersistDomainEventAsync(failed);
+        if (failed.RetryPolicyCase != ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable &&
+            pendingRequest is not null)
+        {
+            var retryAfter = failed.RetryAfterMs > 0
+                ? TimeSpan.FromMilliseconds(failed.RetryAfterMs)
+                : DeferredLlmDispatchRetryDelay;
+            await ScheduleDeferredLlmReplyDispatchAsync(
+                pendingRequest,
+                retryAfter,
+                CancellationToken.None);
+        }
         Logger.LogWarning(
             "Deferred LLM reply failed: correlation={CorrelationId} code={Code} kind={Kind}",
             evt.CorrelationId,
@@ -270,27 +338,33 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private static string BuildLlmReplyCommandId(string? correlationId) =>
         $"llm:{correlationId?.Trim() ?? string.Empty}";
 
-    private async Task EnqueueDeferredLlmReplyAsync(NeedsLlmReplyEvent request)
-    {
-        var inbox = Services.GetService<IChannelLlmReplyInbox>();
-        if (inbox is null)
-        {
-            Logger.LogWarning(
-                "Deferred LLM reply inbox not registered; request remains persisted only: correlation={CorrelationId}",
-                request.CorrelationId);
-            return;
-        }
+    private static string BuildDeferredLlmReplyCallbackId(string? correlationId) =>
+        $"conversation-llm-dispatch:{correlationId?.Trim() ?? string.Empty}";
 
-        try
+    private async Task ScheduleDeferredLlmReplyDispatchAsync(
+        NeedsLlmReplyEvent request,
+        TimeSpan dueTime,
+        CancellationToken ct)
+    {
+        await ScheduleSelfDurableTimeoutAsync(
+            BuildDeferredLlmReplyCallbackId(request.CorrelationId),
+            dueTime <= TimeSpan.Zero ? InitialDeferredLlmDispatchDelay : dueTime,
+            new DeferredLlmReplyDispatchRequestedEvent
+            {
+                CorrelationId = request.CorrelationId,
+                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            ct: ct);
+    }
+
+    private async Task SchedulePendingLlmReplyDispatchesAsync(CancellationToken ct)
+    {
+        foreach (var request in State.PendingLlmReplyRequests)
         {
-            await inbox.EnqueueAsync(request, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(
-                ex,
-                "Failed to enqueue deferred LLM reply request: correlation={CorrelationId}",
-                request.CorrelationId);
+            await ScheduleDeferredLlmReplyDispatchAsync(
+                request,
+                InitialDeferredLlmDispatchDelay,
+                ct);
         }
     }
 
@@ -325,6 +399,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (!string.IsNullOrEmpty(evt.CausationCommandId))
         {
             AppendBounded(next.ProcessedCommandIds, evt.CausationCommandId, ProcessedIdsCap);
+            RemovePendingLlmReplyRequest(next.PendingLlmReplyRequests, ExtractLlmReplyCorrelationId(evt.CausationCommandId));
         }
         if (evt.Conversation != null && next.Conversation == null)
         {
@@ -350,6 +425,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             next.Conversation = evt.Activity.Conversation.Clone();
         }
 
+        UpsertPendingLlmReplyRequest(next.PendingLlmReplyRequests, evt);
         next.LastUpdatedUnixMs = evt.RequestedAtUnixMs;
         return next;
     }
@@ -384,9 +460,55 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             && evt.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
         {
             AppendBounded(next.ProcessedCommandIds, evt.CommandId, ProcessedIdsCap);
+            RemovePendingLlmReplyRequest(next.PendingLlmReplyRequests, ExtractLlmReplyCorrelationId(evt.CommandId));
         }
         next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
         return next;
+    }
+
+    private NeedsLlmReplyEvent? FindPendingLlmReplyRequest(string? correlationId)
+    {
+        var normalizedCorrelationId = NormalizeOptional(correlationId);
+        if (normalizedCorrelationId is null)
+            return null;
+
+        return State.PendingLlmReplyRequests.FirstOrDefault(request =>
+            string.Equals(request.CorrelationId, normalizedCorrelationId, StringComparison.Ordinal));
+    }
+
+    private static void UpsertPendingLlmReplyRequest(
+        Google.Protobuf.Collections.RepeatedField<NeedsLlmReplyEvent> field,
+        NeedsLlmReplyEvent request)
+    {
+        RemovePendingLlmReplyRequest(field, request.CorrelationId);
+        field.Add(request.Clone());
+    }
+
+    private static void RemovePendingLlmReplyRequest(
+        Google.Protobuf.Collections.RepeatedField<NeedsLlmReplyEvent> field,
+        string? correlationId)
+    {
+        var normalizedCorrelationId = NormalizeOptional(correlationId);
+        if (normalizedCorrelationId is null)
+            return;
+
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(field[i].CorrelationId, normalizedCorrelationId, StringComparison.Ordinal))
+                field.RemoveAt(i);
+        }
+    }
+
+    private static string? ExtractLlmReplyCorrelationId(string? commandId)
+    {
+        var normalizedCommandId = NormalizeOptional(commandId);
+        if (normalizedCommandId is null ||
+            !normalizedCommandId.StartsWith("llm:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return NormalizeOptional(normalizedCommandId["llm:".Length..]);
     }
 
     private static void AppendBounded(
@@ -397,5 +519,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         field.Add(value);
         while (field.Count > cap)
             field.RemoveAt(0);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 }

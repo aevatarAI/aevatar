@@ -187,6 +187,14 @@ public static class ServiceCollectionExtensions
         });
         services.TryAddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
+        services.TryAddSingleton<INyxIdRelayRegistrationCredentialResolver, NyxIdRelayRegistrationCredentialResolver>();
+        services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>
+        {
+            var relayOptions = sp.GetService<NyxIdRelayOptions>() ?? new NyxIdRelayOptions();
+            return new NyxIdRelayReplayGuard(
+                TimeSpan.FromSeconds(Math.Max(1, relayOptions.ReplayWindowSeconds)),
+                TimeProvider.System);
+        });
         services.TryAddSingleton<ConversationDispatchMiddleware>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, ChannelContextMiddleware>());
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());

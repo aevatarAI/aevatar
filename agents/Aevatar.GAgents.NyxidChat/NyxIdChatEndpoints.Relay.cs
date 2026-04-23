@@ -122,7 +122,8 @@ public static partial class NyxIdChatEndpoints
             }
 
             activity.OutboundDelivery ??= new OutboundDeliveryContext();
-            activity.OutboundDelivery.ReplyAccessToken = validation.ReplyAccessToken ?? string.Empty;
+            activity.TransportExtras ??= new TransportExtras();
+            activity.TransportExtras.NyxUserAccessToken = validation.UserAccessToken ?? string.Empty;
 
             var actorId = ConversationGAgent.BuildActorId(activity.Conversation.CanonicalKey);
             var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
@@ -207,4 +208,6 @@ public static partial class NyxIdChatEndpoints
                 },
             Timestamp = payload.Timestamp,
         };
+
+    private static string ClassifyError(string error) => NyxIdRelayReplies.ClassifyError(error);
 }

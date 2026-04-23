@@ -274,6 +274,8 @@ message TransportExtras {
   string nyx_platform = 3;
   // The Nyx relay conversation id observed on ingress.
   string nyx_conversation_id = 4;
+  // The short-lived Nyx user access token carried by the relay callback for downstream proxy calls.
+  string nyx_user_access_token = 5;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

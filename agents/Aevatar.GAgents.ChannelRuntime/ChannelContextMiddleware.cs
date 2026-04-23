@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Microsoft.Extensions.Logging;
@@ -66,7 +67,7 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
     private static string BuildChannelContextSection(IReadOnlyDictionary<string, string> metadata)
     {
         static string Resolve(IReadOnlyDictionary<string, string> values, string key) =>
-            values.TryGetValue(key, out var value) ? value : string.Empty;
+            values.TryGetValue(key, out var value) ? JsonSerializer.Serialize(value ?? string.Empty) : "\"\"";
 
         return string.Join(
             "\n",

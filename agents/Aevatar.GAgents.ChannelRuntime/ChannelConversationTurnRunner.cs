@@ -52,7 +52,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
 
-        var inboundEvent = ToInboundEvent(activity, registration, inbound);
+        var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, ct) is { } agentBuilderResult)
             return agentBuilderResult;
@@ -162,12 +162,13 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         AgentBuilderFlowDecision? decision = null;
         var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(inboundEvent, out decision);
-        if (!relayDecisionMatched)
+        if (!relayDecisionMatched &&
+            ((decision = await AgentBuilderCardFlow.TryResolveAsync(
+                    inboundEvent,
+                    _services.GetService<IUserConfigQueryPort>(),
+                    ct)) is null))
         {
-            decision = await AgentBuilderCardFlow.TryResolveAsync(
-                inboundEvent,
-                _services.GetService<IUserConfigQueryPort>(),
-                ct);
+            // No slash-command/card flow matched.
         }
 
         if (decision is null)
@@ -179,7 +180,10 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             var previousMetadata = AgentToolRequestContext.CurrentMetadata;
             try
             {
-                AgentToolRequestContext.CurrentMetadata = BuildAgentBuilderMetadata(activity, inboundEvent);
+                AgentToolRequestContext.CurrentMetadata = BuildAgentBuilderMetadata(
+                    activity,
+                    inboundEvent,
+                    ResolveUserAccessToken(activity));
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_services);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
                 replyPayload = relayDecisionMatched
@@ -236,7 +240,11 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     : emit.SentActivityId,
                 outbound: new MessageContent { Text = replyText },
                 authPrincipal: "bot",
-                outboundDelivery: relayDelivery);
+                outboundDelivery: new OutboundDeliveryContext
+                {
+                    ReplyMessageId = relayDelivery.ReplyMessageId,
+                    ReplyAccessToken = relayDelivery.ReplyAccessToken,
+                });
         }
 
         if (registration is null)
@@ -394,8 +402,6 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = inboundEvent.RegistrationToken,
-            [LLMRequestMetadataKeys.NyxIdOrgToken] = inboundEvent.RegistrationToken,
             ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
             [ChannelMetadataKeys.SenderId] = inboundEvent.SenderId,
@@ -408,12 +414,18 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static IReadOnlyDictionary<string, string> BuildAgentBuilderMetadata(
         ChatActivity activity,
-        ChannelInboundEvent inboundEvent)
+        ChannelInboundEvent inboundEvent,
+        string? userAccessToken)
     {
         var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent), StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
+        if (!string.IsNullOrWhiteSpace(userAccessToken))
+        {
+            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken.Trim();
+            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken.Trim();
+        }
         return metadata;
     }
 
@@ -460,7 +472,8 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static ChannelInboundEvent ToInboundEvent(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
-        InboundMessage inbound)
+        InboundMessage inbound,
+        string? userAccessToken)
     {
         var inboundEvent = new ChannelInboundEvent
         {
@@ -472,7 +485,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = activity.OutboundDelivery?.ReplyAccessToken ?? string.Empty,
+            RegistrationToken = userAccessToken ?? string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
@@ -549,9 +562,17 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static bool HasRelayDelivery(InboundMessage inbound) =>
         inbound.OutboundDelivery is
         {
-            ReplyAccessToken.Length: > 0,
             ReplyMessageId.Length: > 0,
         };
+
+    private static string? ResolveUserAccessToken(ChatActivity activity) =>
+        NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     private static string ResolveRelayPlatform(InboundMessage inbound, ConversationReference? conversation)
     {

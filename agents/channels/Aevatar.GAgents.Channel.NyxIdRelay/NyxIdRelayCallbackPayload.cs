@@ -10,6 +10,9 @@ public sealed class NyxIdRelayCallbackPayload
     [JsonPropertyName("platform")]
     public string? Platform { get; set; }
 
+    [JsonPropertyName("reply_token")]
+    public string? ReplyToken { get; set; }
+
     [JsonPropertyName("agent")]
     public NyxIdRelayAgentPayload? Agent { get; set; }
 

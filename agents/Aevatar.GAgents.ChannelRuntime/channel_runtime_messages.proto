@@ -22,6 +22,7 @@ message ChannelBotRegistrationEntry {
   string nyx_channel_bot_id = 9;
   string nyx_agent_api_key_id = 10;
   string nyx_conversation_route_id = 11;
+  string nyx_agent_api_key_hash = 12;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -115,6 +116,7 @@ message ChannelBotRegisterCommand {
   string nyx_channel_bot_id = 6;
   string nyx_agent_api_key_id = 7;
   string nyx_conversation_route_id = 8;
+  string nyx_agent_api_key_hash = 9;
 }
 
 message ChannelBotUnregisterCommand {
@@ -144,6 +146,7 @@ message ChannelBotRegistrationDocument {
   string nyx_channel_bot_id = 10;
   string nyx_agent_api_key_id = 11;
   string nyx_conversation_route_id = 12;
+  string nyx_agent_api_key_hash = 13;
 }
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───

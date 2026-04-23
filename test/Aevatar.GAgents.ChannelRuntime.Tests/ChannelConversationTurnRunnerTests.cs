@@ -247,7 +247,10 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-1"}""");
-        var runner = CreateRunner(registrationQueryPort, adapter, relayHandler: relayHandler);
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
         var activity = BuildInboundActivity(
             "hello",
             "msg-relay-1",
@@ -261,6 +264,7 @@ public sealed class ChannelConversationTurnRunnerTests
             new TransportExtras
             {
                 NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
             });
 
         var result = await runner.RunLlmReplyAsync(new LlmReplyReadyEvent

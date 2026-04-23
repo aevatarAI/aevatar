@@ -124,7 +124,7 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_ShouldRollbackRemoteResources_WhenLocalMirrorRegistrationFails()
     {
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123"}""");
+        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-conversations/route-789", """{"ok":true}""");

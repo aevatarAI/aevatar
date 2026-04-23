@@ -73,5 +73,4 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
             GithubUsername = evt.GithubUsername,
         };
     }
-
 }

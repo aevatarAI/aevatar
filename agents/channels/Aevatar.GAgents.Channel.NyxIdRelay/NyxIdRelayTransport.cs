@@ -84,6 +84,7 @@ public sealed class NyxIdRelayTransport
             OutboundDelivery = new OutboundDeliveryContext
             {
                 ReplyMessageId = payload.MessageId.Trim(),
+                ReplyAccessToken = payload.ReplyToken?.Trim() ?? string.Empty,
             },
             TransportExtras = new TransportExtras
             {

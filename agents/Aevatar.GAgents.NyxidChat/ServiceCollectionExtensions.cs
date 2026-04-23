@@ -13,16 +13,18 @@ public static class ServiceCollectionExtensions
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
 
         services.AddHttpClient();
-        services.TryAddSingleton(BindRelayOptions(configuration));
+        services.TryAddSingleton(provider => BindRelayOptions(configuration));
+        services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
+            provider => provider.GetRequiredService<NyxIdRelayOptions>());
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
 
         return services;
     }
 
-    private static Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions BindRelayOptions(IConfiguration? configuration)
+    private static NyxIdRelayOptions BindRelayOptions(IConfiguration? configuration)
     {
-        var options = new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions();
+        var options = new NyxIdRelayOptions();
         configuration?.GetSection("Aevatar:NyxId:Relay").Bind(options);
         return options;
     }

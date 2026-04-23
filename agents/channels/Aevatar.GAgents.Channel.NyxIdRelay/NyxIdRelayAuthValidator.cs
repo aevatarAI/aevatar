@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -16,7 +17,7 @@ public sealed record NyxIdRelayAuthenticationResult(
     ClaimsPrincipal? Principal = null,
     string? ScopeId = null,
     string? RelayApiKeyId = null,
-    string? ReplyAccessToken = null,
+    string? UserAccessToken = null,
     string? ErrorCode = null,
     string? ErrorSummary = null);
 
@@ -32,6 +33,8 @@ public sealed class NyxIdRelayAuthValidator
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly NyxIdRelayOptions _relayOptions;
+    private readonly INyxIdRelayRegistrationCredentialResolver? _registrationCredentialResolver;
+    private readonly INyxIdRelayReplayGuard? _replayGuard;
     private readonly ILogger<NyxIdRelayAuthValidator> _logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private CachedOidcConfiguration? _cachedConfiguration;
@@ -40,11 +43,15 @@ public sealed class NyxIdRelayAuthValidator
         IHttpClientFactory httpClientFactory,
         NyxIdToolOptions nyxOptions,
         NyxIdRelayOptions relayOptions,
-        ILogger<NyxIdRelayAuthValidator>? logger = null)
+        ILogger<NyxIdRelayAuthValidator>? logger = null,
+        INyxIdRelayRegistrationCredentialResolver? registrationCredentialResolver = null,
+        INyxIdRelayReplayGuard? replayGuard = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _relayOptions = relayOptions ?? throw new ArgumentNullException(nameof(relayOptions));
+        _registrationCredentialResolver = registrationCredentialResolver;
+        _replayGuard = replayGuard;
         _logger = logger ?? NullLogger<NyxIdRelayAuthValidator>.Instance;
     }
 
@@ -69,7 +76,7 @@ public sealed class NyxIdRelayAuthValidator
 
         var jwtValidation = await ValidateJwtAsync(userToken, ct);
         if (!jwtValidation.Succeeded)
-            return jwtValidation with { ReplyAccessToken = null };
+            return jwtValidation with { UserAccessToken = null };
 
         if (!string.IsNullOrWhiteSpace(payload.Agent?.ApiKeyId) &&
             !string.Equals(payload.Agent.ApiKeyId.Trim(), jwtValidation.RelayApiKeyId, StringComparison.Ordinal))
@@ -80,16 +87,8 @@ public sealed class NyxIdRelayAuthValidator
                 ErrorSummary: "Relay callback agent api_key_id does not match validated relay token.");
         }
 
-        if (!ValidateSignature(http, bodyBytes))
-        {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "invalid_signature",
-                ErrorSummary: "Relay callback signature verification failed.");
-        }
-
-        var headerMessageId = http.Request.Headers["X-NyxID-Message-Id"].FirstOrDefault()?.Trim();
-        if (_relayOptions.RequireMessageIdHeader && string.IsNullOrWhiteSpace(headerMessageId))
+        var headerMessageId = NormalizeOptional(http.Request.Headers["X-NyxID-Message-Id"].FirstOrDefault());
+        if (_relayOptions.RequireMessageIdHeader && headerMessageId is null)
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
@@ -97,8 +96,8 @@ public sealed class NyxIdRelayAuthValidator
                 ErrorSummary: "Relay callback is missing X-NyxID-Message-Id.");
         }
 
-        if (!string.IsNullOrWhiteSpace(headerMessageId) &&
-            !string.Equals(headerMessageId, payload.MessageId?.Trim(), StringComparison.Ordinal))
+        if (headerMessageId is not null &&
+            !string.Equals(headerMessageId, NormalizeOptional(payload.MessageId), StringComparison.Ordinal))
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
@@ -106,10 +105,56 @@ public sealed class NyxIdRelayAuthValidator
                 ErrorSummary: "Relay callback header message id does not match payload message_id.");
         }
 
-        return jwtValidation with { ReplyAccessToken = userToken };
+        if (!TryValidateTimestamp(http, out var observedAtUtc, out var timestampErrorCode, out var timestampErrorSummary))
+        {
+            return new NyxIdRelayAuthenticationResult(
+                false,
+                ErrorCode: timestampErrorCode,
+                ErrorSummary: timestampErrorSummary);
+        }
+
+        NyxIdRelayRegistrationCredential? registrationCredential = null;
+        try
+        {
+            registrationCredential = await ResolveRegistrationCredentialAsync(jwtValidation.RelayApiKeyId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Nyx relay registration credential resolution failed for relay_api_key_id={RelayApiKeyId}",
+                jwtValidation.RelayApiKeyId);
+            return new NyxIdRelayAuthenticationResult(
+                false,
+                ErrorCode: "registration_credential_resolution_failed",
+                ErrorSummary: "Relay callback registration credential lookup failed.");
+        }
+
+        if (!ValidateSignature(http, bodyBytes, registrationCredential))
+        {
+            return new NyxIdRelayAuthenticationResult(
+                false,
+                ErrorCode: "invalid_signature",
+                ErrorSummary: "Relay callback signature verification failed.");
+        }
+
+        if (headerMessageId is not null &&
+            _replayGuard is not null &&
+            !_replayGuard.TryClaim(headerMessageId, observedAtUtc))
+        {
+            return new NyxIdRelayAuthenticationResult(
+                false,
+                ErrorCode: "replay_detected",
+                ErrorSummary: "Relay callback replay was rejected.");
+        }
+
+        return jwtValidation with { UserAccessToken = userToken };
     }
 
-    public bool ValidateSignature(HttpContext http, byte[] bodyBytes)
+    public bool ValidateSignature(
+        HttpContext http,
+        byte[] bodyBytes,
+        NyxIdRelayRegistrationCredential? registrationCredential = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(bodyBytes);
@@ -117,7 +162,9 @@ public sealed class NyxIdRelayAuthValidator
         if (_relayOptions.SkipSignatureVerification)
             return true;
 
-        if (string.IsNullOrWhiteSpace(_relayOptions.HmacSecret))
+        var signingSecret = NormalizeOptional(registrationCredential?.RelayApiKeyHash)
+                            ?? NormalizeOptional(_relayOptions.HmacSecret);
+        if (signingSecret is null)
             return false;
 
         if (!http.Request.Headers.TryGetValue("X-NyxID-Signature", out var signatureHeader) ||
@@ -126,7 +173,7 @@ public sealed class NyxIdRelayAuthValidator
             return false;
         }
 
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_relayOptions.HmacSecret));
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(signingSecret));
         var computedHash = hmac.ComputeHash(bodyBytes);
         var computedSignature = Convert.ToHexString(computedHash).ToLowerInvariant();
         return CryptographicOperations.FixedTimeEquals(
@@ -281,6 +328,69 @@ public sealed class NyxIdRelayAuthValidator
             throw new InvalidOperationException("NyxID base URL is not configured.");
 
         return baseUrl;
+    }
+
+    private async Task<NyxIdRelayRegistrationCredential?> ResolveRegistrationCredentialAsync(
+        string? relayApiKeyId,
+        CancellationToken ct)
+    {
+        var normalizedRelayApiKeyId = NormalizeOptional(relayApiKeyId);
+        if (normalizedRelayApiKeyId is null || _registrationCredentialResolver is null)
+            return null;
+
+        return await _registrationCredentialResolver.ResolveAsync(normalizedRelayApiKeyId, ct);
+    }
+
+    private bool TryValidateTimestamp(
+        HttpContext http,
+        out DateTimeOffset observedAtUtc,
+        out string errorCode,
+        out string errorSummary)
+    {
+        observedAtUtc = DateTimeOffset.UtcNow;
+        errorCode = string.Empty;
+        errorSummary = string.Empty;
+
+        var headerTimestamp = NormalizeOptional(http.Request.Headers["X-NyxID-Timestamp"].FirstOrDefault());
+        if (headerTimestamp is null)
+        {
+            if (_relayOptions.RequireTimestampHeader)
+            {
+                errorCode = "missing_timestamp_header";
+                errorSummary = "Relay callback is missing X-NyxID-Timestamp.";
+                return false;
+            }
+
+            return true;
+        }
+
+        if (!DateTimeOffset.TryParse(
+                headerTimestamp,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out observedAtUtc))
+        {
+            errorCode = "invalid_timestamp_header";
+            errorSummary = "Relay callback X-NyxID-Timestamp is not a valid ISO 8601 timestamp.";
+            return false;
+        }
+
+        var replayWindow = TimeSpan.FromSeconds(Math.Max(1, _relayOptions.ReplayWindowSeconds));
+        var now = DateTimeOffset.UtcNow;
+        if ((now - observedAtUtc).Duration() > replayWindow)
+        {
+            errorCode = "timestamp_outside_replay_window";
+            errorSummary = "Relay callback timestamp is outside the allowed replay window.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static string RequireString(JsonElement element, string propertyName)

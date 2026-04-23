@@ -214,7 +214,7 @@ public sealed class NyxIdApiClient
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/proxy/services", ct);
+        GetAsync(token, "/api/v1/proxy/services?per_page=100", ct);
 
     // ─── API Keys (additions) ───
 

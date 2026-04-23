@@ -7,7 +7,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxRelayAgentBuilderFlowTests
 {
     [Fact]
-    public void TryResolve_ShouldBuildToolCall_ForDailyReportWithoutArguments()
+    public void TryResolve_ShouldBuildDailyReportToolCall_ForDailyWithoutArguments()
     {
         var inbound = new ChannelInboundEvent
         {
@@ -185,7 +185,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
         decision.ReplyPayload.Should().Contain(expected);
-        decision.ReplyPayload.Should().Contain("/daily github_username=alice");
+        decision.ReplyPayload.Should().Contain("/daily [github_username]");
     }
 
     [Fact]

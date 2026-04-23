@@ -48,6 +48,11 @@ message LlmReplyReadyEvent {
   int64 ready_at_unix_ms = 9;
 }
 
+message DeferredLlmReplyDispatchRequestedEvent {
+  string correlation_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
 message ConversationContinueRequestedEvent {
   string command_id = 1;
   string correlation_id = 2;

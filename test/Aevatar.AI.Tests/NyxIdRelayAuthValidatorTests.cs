@@ -42,7 +42,7 @@ public sealed class NyxIdRelayAuthValidatorTests
         result.Succeeded.Should().BeTrue();
         result.ScopeId.Should().Be("scope-123");
         result.RelayApiKeyId.Should().Be("api-key-123");
-        result.ReplyAccessToken.Should().Be(token);
+        result.UserAccessToken.Should().Be(token);
         result.Principal.Should().NotBeNull();
     }
 
@@ -348,6 +348,58 @@ public sealed class NyxIdRelayAuthValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_ShouldRejectMissingTimestampHeader()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123");
+        request.HttpContext.Request.Headers.Remove("X-NyxID-Timestamp");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("missing_timestamp_header");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRejectReplayWithinWindow()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var validator = CreateValidator(handler, "https://nyx.example.com");
+        var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var firstRequest = CreateRelayRequest(token, "api-key-123", messageId: "msg-replay");
+        var secondRequest = CreateRelayRequest(token, "api-key-123", messageId: "msg-replay");
+
+        var first = await validator.ValidateAsync(
+            firstRequest.HttpContext,
+            firstRequest.BodyBytes,
+            firstRequest.Payload,
+            CancellationToken.None);
+        var second = await validator.ValidateAsync(
+            secondRequest.HttpContext,
+            secondRequest.BodyBytes,
+            secondRequest.Payload,
+            CancellationToken.None);
+
+        first.Succeeded.Should().BeTrue();
+        second.Succeeded.Should().BeFalse();
+        second.ErrorCode.Should().Be("replay_detected");
+    }
+
+    [Fact]
     public async Task SendChannelRelayTextReplyAsync_ShouldPostExpectedBody()
     {
         var handler = new CaptureHandler(
@@ -385,10 +437,12 @@ public sealed class NyxIdRelayAuthValidatorTests
             {
                 OidcCacheTtlSeconds = 60,
                 JwtClockSkewSeconds = 0,
-                HmacSecret = hmacSecret,
                 RequireMessageIdHeader = true,
+                RequireTimestampHeader = true,
             },
-            NullLogger<NyxIdRelayAuthValidator>.Instance);
+            NullLogger<NyxIdRelayAuthValidator>.Instance,
+            new StaticRegistrationCredentialResolver(hmacSecret),
+            new NyxIdRelayReplayGuard());
     }
 
     private static RelayRequest CreateRelayRequest(
@@ -431,6 +485,7 @@ public sealed class NyxIdRelayAuthValidatorTests
             http.Request.Headers["X-NyxID-User-Token"] = userToken;
         http.Request.Headers["X-NyxID-Message-Id"] = headerMessageId ?? messageId;
         http.Request.Headers["X-NyxID-Signature"] = overrideSignature ?? ComputeRelaySignature("relay-secret", bodyBytes);
+        http.Request.Headers["X-NyxID-Timestamp"] = DateTimeOffset.UtcNow.ToString("O");
 
         return new RelayRequest(http, bodyBytes, payload);
     }
@@ -505,6 +560,20 @@ public sealed class NyxIdRelayAuthValidatorTests
         DefaultHttpContext HttpContext,
         byte[] BodyBytes,
         NyxIdRelayCallbackPayload Payload);
+
+    private sealed class StaticRegistrationCredentialResolver : INyxIdRelayRegistrationCredentialResolver
+    {
+        private readonly string _apiKeyHash;
+
+        public StaticRegistrationCredentialResolver(string apiKeyHash)
+        {
+            _apiKeyHash = apiKeyHash;
+        }
+
+        public Task<NyxIdRelayRegistrationCredential?> ResolveAsync(string relayApiKeyId, CancellationToken ct = default) =>
+            Task.FromResult<NyxIdRelayRegistrationCredential?>(
+                new NyxIdRelayRegistrationCredential("reg-1", relayApiKeyId, _apiKeyHash));
+    }
 
     private sealed class CaptureHandler : HttpMessageHandler
     {

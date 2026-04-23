@@ -26,4 +26,8 @@ public class NyxIdRelayOptions
     public bool SkipSignatureVerification { get; set; }
 
     public bool RequireMessageIdHeader { get; set; } = true;
+
+    public bool RequireTimestampHeader { get; set; } = true;
+
+    public int ReplayWindowSeconds { get; set; } = 300;
 }

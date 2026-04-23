@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -87,9 +88,10 @@ internal sealed class ChannelLlmReplyInboxRuntime :
 
         try
         {
+            var effectiveMetadata = BuildEffectiveMetadata(request);
             replyText = await _replyGenerator.GenerateReplyAsync(
                 request.Activity,
-                request.Metadata,
+                effectiveMetadata,
                 CancellationToken.None) ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(replyText))
@@ -138,6 +140,18 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         };
 
         await actor.HandleEventAsync(envelope, CancellationToken.None);
+    }
+
+    private IReadOnlyDictionary<string, string> BuildEffectiveMetadata(NeedsLlmReplyEvent request)
+    {
+        var metadata = new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
+        var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
+        if (string.IsNullOrWhiteSpace(userAccessToken))
+            return metadata;
+
+        metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
+        metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
+        return metadata;
     }
 }
 
