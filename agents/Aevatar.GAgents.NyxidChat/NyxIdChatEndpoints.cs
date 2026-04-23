@@ -6,7 +6,6 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat.Relay;
 using Google.Protobuf.WellKnownTypes;
@@ -864,12 +863,14 @@ public static class NyxIdChatEndpoints
                     // Dedupe at the Nyx-relay callback boundary so retried webhooks with the
                     // same message_id do not double-fire AgentBuilderTool side effects (a single
                     // `/daily` would otherwise create multiple agents + API keys on retry). The
-                    // LLM fallback path relies on the actor's session for equivalent dedupe; the
-                    // bridge skips the actor entirely, so it must guard itself here.
-                    var deduplicator = http.RequestServices.GetService<IEventDeduplicator>();
+                    // LLM fallback path relies on the actor's serialized mailbox for equivalent
+                    // dedupe; the bridge skips the actor entirely, so it must use an atomic
+                    // first-writer-wins guard here — a non-atomic TryGet+Set pair would let
+                    // concurrent deliveries both observe the key as absent and both pass.
+                    var idempotencyGuard = http.RequestServices.GetService<INyxRelayBridgeIdempotencyGuard>();
                     var dedupeKey = BuildBridgeDedupeKey(scopeId, message.MessageId!);
-                    var firstDelivery = deduplicator is null
-                                        || await deduplicator.TryRecordAsync(dedupeKey);
+                    var firstDelivery = idempotencyGuard is null
+                                        || idempotencyGuard.TryClaim(dedupeKey);
                     if (!firstDelivery)
                     {
                         logger.LogInformation(
