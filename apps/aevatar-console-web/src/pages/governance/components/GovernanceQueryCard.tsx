@@ -37,15 +37,25 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
   onLoad,
   onReset,
 }) => {
+  const normalizedTenantId = draft.tenantId.trim();
+  const normalizedAppId = draft.appId.trim();
+  const normalizedNamespace = draft.namespace.trim();
+  const normalizedServiceId = draft.serviceId.trim();
+  const normalizedRevisionId = draft.revisionId.trim();
   const selectedScopeSegments = useMemo(
     () =>
       [
-        draft.tenantId.trim(),
-        draft.appId.trim(),
-        draft.namespace.trim(),
-        draft.serviceId.trim(),
+        normalizedTenantId,
+        normalizedAppId,
+        normalizedNamespace,
+        normalizedServiceId,
       ].filter(Boolean),
-    [draft],
+    [
+      normalizedAppId,
+      normalizedNamespace,
+      normalizedServiceId,
+      normalizedTenantId,
+    ],
   );
   const selectedServiceOption = useMemo(
     () => findGovernanceServiceOption(serviceOptions, draft),
@@ -74,6 +84,37 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
 
     onChange(nextDraft);
   }, [draft, onChange, selectedServiceOption]);
+
+  const loadDisabledReason = useMemo(() => {
+    if (!normalizedTenantId || !normalizedNamespace) {
+      return '先填写治理范围';
+    }
+
+    if (!serviceSearchEnabled) {
+      return '当前范围还不能加载服务';
+    }
+
+    if (!normalizedServiceId) {
+      return serviceOptions.length === 0 ? '当前范围没有可用服务' : '先选择服务';
+    }
+
+    if (includeRevision && !normalizedRevisionId) {
+      return revisionOptionsLoading ? '正在加载版本' : '先选择版本';
+    }
+
+    return '';
+  }, [
+    includeRevision,
+    normalizedNamespace,
+    normalizedRevisionId,
+    normalizedServiceId,
+    normalizedTenantId,
+    revisionOptionsLoading,
+    serviceOptions.length,
+    serviceSearchEnabled,
+  ]);
+
+  const loadDisabled = loadDisabledReason.length > 0;
 
   return (
     <div
@@ -235,6 +276,9 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
             style={{ width: '100%' }}
             options={serviceOptions}
             disabled={!serviceSearchEnabled}
+            notFoundContent={
+              serviceSearchEnabled ? '当前范围没有服务' : '先填写团队、应用和命名空间'
+            }
             value={selectedServiceOption?.value}
             filterOption={(input, option) => {
               const normalizedInput = input.trim().toLowerCase();
@@ -324,12 +368,37 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
           display: 'flex',
           flexWrap: 'wrap',
           gap: 10,
-          justifyContent: 'flex-end',
+          justifyContent: 'space-between',
         }}
       >
+        <span
+          style={{
+            color: 'var(--ant-color-text-secondary)',
+            fontSize: 12,
+            minHeight: 18,
+          }}
+        >
+          {loadDisabledReason}
+        </span>
         <Space size={10}>
           {onReset ? <Button onClick={onReset}>重置</Button> : null}
-          <Button type="primary" onClick={onLoad}>
+          <Button
+            aria-disabled={loadDisabled}
+            disabled={loadDisabled}
+            style={
+              loadDisabled
+                ? {
+                    background: 'var(--ant-color-fill-tertiary)',
+                    borderColor: 'var(--ant-color-border-secondary)',
+                    boxShadow: 'none',
+                    color: 'var(--ant-color-text-tertiary)',
+                    cursor: 'not-allowed',
+                  }
+                : undefined
+            }
+            type={loadDisabled ? 'default' : 'primary'}
+            onClick={onLoad}
+          >
             {loadLabel}
           </Button>
         </Space>
