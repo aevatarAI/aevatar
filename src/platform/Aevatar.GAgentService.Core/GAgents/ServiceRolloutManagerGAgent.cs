@@ -80,7 +80,10 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
         EnsureActiveRollout(command.Identity, command.RolloutId);
         var currentStatus = State.Status;
         if (currentStatus != ServiceRolloutStatus.InProgress)
+        {
+            await PersistCommandObservationAsync(command.Identity, command.RolloutId ?? string.Empty, wasNoOp: true, CancellationToken.None);
             return;
+        }
 
         await PersistDomainEventAsync(new ServiceRolloutPausedEvent
         {
@@ -89,6 +92,7 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
             Reason = command.Reason ?? string.Empty,
             OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await PersistCommandObservationAsync(command.Identity, command.RolloutId ?? string.Empty, wasNoOp: false, CancellationToken.None);
     }
 
     [EventHandler]
@@ -98,7 +102,10 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
         EnsureActiveRollout(command.Identity, command.RolloutId);
         var currentStatus = State.Status;
         if (currentStatus != ServiceRolloutStatus.Paused)
+        {
+            await PersistCommandObservationAsync(command.Identity, command.RolloutId ?? string.Empty, wasNoOp: true, CancellationToken.None);
             return;
+        }
 
         await PersistDomainEventAsync(new ServiceRolloutResumedEvent
         {
@@ -106,6 +113,7 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
             RolloutId = command.RolloutId ?? string.Empty,
             OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await PersistCommandObservationAsync(command.Identity, command.RolloutId ?? string.Empty, wasNoOp: false, CancellationToken.None);
     }
 
     [EventHandler]
@@ -115,7 +123,10 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
         EnsureActiveRollout(command.Identity, command.RolloutId);
         var currentStatus = State.Status;
         if (currentStatus is ServiceRolloutStatus.Completed or ServiceRolloutStatus.RolledBack)
+        {
+            await PersistCommandObservationAsync(command.Identity, command.RolloutId ?? string.Empty, wasNoOp: true, CancellationToken.None);
             return;
+        }
 
         var rolloutId = State.RolloutId;
         var baselineTargets = State.BaselineTargets.Select(CloneTarget).ToArray();
@@ -134,6 +145,7 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
             Reason = command.Reason ?? string.Empty,
             OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await PersistCommandObservationAsync(command.Identity, command.RolloutId ?? string.Empty, wasNoOp: false, CancellationToken.None);
     }
 
     protected override ServiceRolloutExecutionState TransitionState(ServiceRolloutExecutionState current, IMessage evt) =>
@@ -258,6 +270,30 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
     private bool HasActiveRollout() =>
         !string.IsNullOrWhiteSpace(State.RolloutId) &&
         State.Status is ServiceRolloutStatus.InProgress or ServiceRolloutStatus.Paused;
+
+    private Task PersistCommandObservationAsync(
+        ServiceIdentity? identity,
+        string rolloutId,
+        bool wasNoOp,
+        CancellationToken ct)
+    {
+        var inboundEnvelope = ActiveInboundEnvelope;
+        if (inboundEnvelope == null || string.IsNullOrWhiteSpace(inboundEnvelope.Id))
+            return Task.CompletedTask;
+
+        return PersistDomainEventAsync(
+            new ServiceRolloutCommandObservedEvent
+            {
+                Identity = identity?.Clone() ?? State.Identity?.Clone(),
+                RolloutId = rolloutId ?? string.Empty,
+                CommandId = inboundEnvelope.Id,
+                CorrelationId = inboundEnvelope.Propagation?.CorrelationId ?? string.Empty,
+                Status = State.Status,
+                WasNoOp = wasNoOp,
+                ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            },
+            ct);
+    }
 
     private void EnsureIdentity(ServiceIdentity? identity, bool allowInitialize)
     {

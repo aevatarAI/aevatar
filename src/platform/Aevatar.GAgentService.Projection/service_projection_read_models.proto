@@ -114,6 +114,20 @@ message ServiceRolloutStageReadModel {
   repeated ServiceServingTargetReadModel target_entries = 3;
 }
 
+message ServiceRolloutCommandObservationReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  string service_key = 5;
+  string rollout_id = 6;
+  string command_id = 7;
+  string correlation_id = 8;
+  int32 status = 9;
+  bool was_no_op = 10;
+  google.protobuf.Timestamp observed_at_utc_value = 11;
+}
+
 // --- ServiceServingSetReadModel ---
 
 message ServiceServingSetReadModel {

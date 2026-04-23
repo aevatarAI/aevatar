@@ -139,6 +139,21 @@ public sealed partial class ServiceRolloutStageReadModel
     }
 }
 
+public sealed partial class ServiceRolloutCommandObservationReadModel : IProjectionReadModel<ServiceRolloutCommandObservationReadModel>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset ObservedAt
+    {
+        get => UpdatedAt;
+        set => UpdatedAt = value;
+    }
+}
+
 public sealed partial class ServiceServingTargetReadModel
 {
     public IList<string> EnabledEndpointIds
