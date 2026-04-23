@@ -40,6 +40,7 @@
   <Folder Name="/src/">
     <Project Path="src/Aevatar.AI.ToolProviders.Binding/Aevatar.AI.ToolProviders.Binding.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.Channel/Aevatar.AI.ToolProviders.Channel.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Lark/Aevatar.AI.ToolProviders.Lark.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.NyxId/Aevatar.AI.ToolProviders.NyxId.csproj" />
     <Project Path="src/Aevatar.CQRS.Projection.Runtime.Abstractions/Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />

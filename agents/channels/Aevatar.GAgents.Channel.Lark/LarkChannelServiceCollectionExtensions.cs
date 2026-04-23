@@ -16,14 +16,18 @@ public static class LarkChannelServiceCollectionExtensions
         });
         services.TryAddSingleton<LarkPayloadRedactor>();
         services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<LarkChannelNativeMessageProducer>();
         services.TryAddSingleton<LarkChannelAdapter>(sp => new LarkChannelAdapter(
             sp.GetRequiredService<Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider>(),
             sp.GetRequiredService<LarkMessageComposer>(),
             sp.GetRequiredService<LarkPayloadRedactor>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LarkChannelAdapter>>(),
             sp.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient(LarkChannelDefaults.HttpClientName)));
-        services.TryAddSingleton<IMessageComposer>(sp => sp.GetRequiredService<LarkMessageComposer>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer>(
+            sp => sp.GetRequiredService<LarkMessageComposer>()));
         services.TryAddSingleton<IMessageComposer<LarkOutboundMessage>>(sp => sp.GetRequiredService<LarkMessageComposer>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddSingleton<IChannelTransport>(sp => sp.GetRequiredService<LarkChannelAdapter>());
         services.TryAddSingleton<IChannelOutboundPort>(sp => sp.GetRequiredService<LarkChannelAdapter>());
 

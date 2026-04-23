@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -6,9 +8,11 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Lark;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.GAgents.ChannelRuntime.Outbound;
 using Aevatar.GAgents.NyxidChat.Relay;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
@@ -176,6 +180,10 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
+
+        // interactive reply composer registry, collector, dispatcher, and LLM-facing tool
+        services.AddChannelInteractiveReplyTools();
+        services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
         services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
         services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
 

@@ -51,4 +51,11 @@ public sealed class NyxIdRelayOptions
     /// When set, prompts can render the concrete Nyx relay callback URL for the current environment.
     /// </summary>
     public string? WebhookBaseUrl { get; set; }
+
+    /// <summary>
+    /// When enabled, the relay finalize path drains the interactive reply collector and
+    /// dispatches card replies produced by LLM tool calls. When disabled the path always
+    /// sends plain text, preserving legacy behaviour.
+    /// </summary>
+    public bool InteractiveRepliesEnabled { get; set; } = true;
 }

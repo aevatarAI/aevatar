@@ -1,6 +1,7 @@
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -89,7 +90,10 @@ internal static class NyxIdRelayReplies
         NyxIdRelayOptions relayOptions,
         NyxIdApiClient nyxClient,
         IConfiguration? configuration,
-        ILogger logger)
+        ILogger logger,
+        IInteractiveReplyCollector? interactiveReplyCollector = null,
+        IInteractiveReplyDispatcher? interactiveReplyDispatcher = null,
+        ChannelId? channel = null)
     {
         await using var ownedSubscription = subscription;
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(relayOptions.ResponseTimeoutSeconds));
@@ -147,6 +151,47 @@ internal static class NyxIdRelayReplies
         }
 
         using var deliveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var interactiveIntent = relayOptions.InteractiveRepliesEnabled
+            ? interactiveReplyCollector?.TryTake()
+            : null;
+
+        if (interactiveIntent is not null && interactiveReplyDispatcher is not null && channel is not null)
+        {
+            if (string.IsNullOrWhiteSpace(interactiveIntent.Text) && !string.IsNullOrWhiteSpace(replyText))
+                interactiveIntent.Text = replyText;
+
+            var context = new ComposeContext
+            {
+                Capabilities = new ChannelCapabilities(),
+            };
+            var dispatch = await interactiveReplyDispatcher.DispatchAsync(
+                channel,
+                messageId,
+                relayToken,
+                interactiveIntent,
+                context,
+                deliveryCts.Token);
+            if (!dispatch.Succeeded)
+            {
+                logger.LogError(
+                    "Relay interactive reply delivery failed: session={SessionId}, messageId={MessageId}, detail={Detail}",
+                    sessionId,
+                    messageId,
+                    dispatch.Detail);
+                return;
+            }
+
+            logger.LogInformation(
+                "Relay interactive reply delivered: session={SessionId}, messageId={MessageId}, platformMessageId={PlatformMessageId}, capability={Capability}, fallback={Fallback}",
+                sessionId,
+                dispatch.MessageId,
+                dispatch.PlatformMessageId,
+                dispatch.Capability,
+                dispatch.FellBackToText);
+            return;
+        }
+
         var delivery = await nyxClient.SendChannelRelayTextReplyAsync(relayToken, messageId, replyText, deliveryCts.Token);
         if (!delivery.Succeeded)
         {

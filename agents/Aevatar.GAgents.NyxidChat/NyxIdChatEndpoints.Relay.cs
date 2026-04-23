@@ -6,6 +6,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.NyxidChat.Relay;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -276,6 +277,10 @@ public static partial class NyxIdChatEndpoints
             await actor.HandleEventAsync(envelope, ct);
 
             var configuration = http.RequestServices.GetService<IConfiguration>();
+            var interactiveReplyCollector = http.RequestServices.GetService<IInteractiveReplyCollector>();
+            var interactiveReplyDispatcher = http.RequestServices.GetService<IInteractiveReplyDispatcher>();
+            var relayChannel = ResolveRelayChannel(platform);
+            var replyScope = interactiveReplyCollector?.BeginScope();
             _ = NyxIdRelayReplies.FinalizeReplyAsync(
                     subscription,
                     responseTcs,
@@ -287,10 +292,20 @@ public static partial class NyxIdChatEndpoints
                     relayOptions,
                     nyxClient,
                     configuration,
-                    logger)
+                    logger,
+                    interactiveReplyCollector,
+                    interactiveReplyDispatcher,
+                    relayChannel)
                 .ContinueWith(
-                    task => logger.LogError(task.Exception, "Relay background reply pipeline failed for session {SessionId}", sessionId),
-                    TaskContinuationOptions.OnlyOnFaulted);
+                    task =>
+                    {
+                        replyScope?.Dispose();
+                        if (task.Exception is not null)
+                        {
+                            logger.LogError(task.Exception, "Relay background reply pipeline failed for session {SessionId}", sessionId);
+                        }
+                    },
+                    TaskContinuationOptions.ExecuteSynchronously);
 
             return Results.Accepted(value: new
             {
@@ -329,6 +344,18 @@ public static partial class NyxIdChatEndpoints
 
     private static string BuildBridgeDedupeKey(string scopeId, string messageId) =>
         $"nyxid-relay-bridge:{scopeId}:{messageId}";
+
+    private static ChannelId ResolveRelayChannel(string platform)
+    {
+        if (string.IsNullOrWhiteSpace(platform) ||
+            string.Equals(platform, "unknown", StringComparison.OrdinalIgnoreCase))
+            return ChannelId.From("unknown");
+
+        var normalized = string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase)
+            ? "lark"
+            : platform.ToLowerInvariant();
+        return ChannelId.From(normalized);
+    }
 
     private static async Task FinalizeDayOneBridgeReplyAsync(
         INyxRelayDayOneBridge bridge,
