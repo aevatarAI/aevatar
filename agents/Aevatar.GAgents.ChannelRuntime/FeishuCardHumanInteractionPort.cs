@@ -30,15 +30,15 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         ArgumentNullException.ThrowIfNull(request);
 
         var target = await ResolveTargetAsync(deliveryTargetId, cancellationToken);
-        await SendTextMessageAsync(
+        await SendInteractiveCardMessageAsync(
             target,
-            BuildSuspensionText(request),
-            "Feishu human interaction delivery returned empty response.",
-            "Feishu human interaction delivery failed",
+            BuildCardJson(request),
+            "Feishu human interaction card delivery returned empty response.",
+            "Feishu human interaction card delivery failed",
             cancellationToken);
 
         _logger.LogInformation(
-            "Delivered human interaction instructions: target={DeliveryTargetId}, run={RunId}, step={StepId}",
+            "Delivered human interaction card: target={DeliveryTargetId}, run={RunId}, step={StepId}",
             deliveryTargetId,
             request.RunId,
             request.StepId);
@@ -167,6 +167,19 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 },
             });
         }
+        else
+        {
+            elements.Add(new
+            {
+                tag = "form",
+                name = "human_interaction_form",
+                elements = new object[]
+                {
+                    BuildLegacyInput("user_input", "Response", "Enter your response"),
+                    BuildLegacySubmitButton("Submit", "primary", request),
+                },
+            });
+        }
 
         return JsonSerializer.Serialize(new
         {
@@ -211,13 +224,42 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         string text,
         string emptyResponseMessage,
         string failurePrefix,
+        CancellationToken cancellationToken) =>
+        await SendMessageAsync(
+            target,
+            "text",
+            JsonSerializer.Serialize(new { text }),
+            emptyResponseMessage,
+            failurePrefix,
+            cancellationToken);
+
+    private async Task SendInteractiveCardMessageAsync(
+        UserAgentCatalogEntry target,
+        string cardJson,
+        string emptyResponseMessage,
+        string failurePrefix,
+        CancellationToken cancellationToken)
+        => await SendMessageAsync(
+            target,
+            "interactive",
+            cardJson,
+            emptyResponseMessage,
+            failurePrefix,
+            cancellationToken);
+
+    private async Task SendMessageAsync(
+        UserAgentCatalogEntry target,
+        string messageType,
+        string contentJson,
+        string emptyResponseMessage,
+        string failurePrefix,
         CancellationToken cancellationToken)
     {
         var body = JsonSerializer.Serialize(new
         {
             receive_id = target.ConversationId,
-            msg_type = "text",
-            content = JsonSerializer.Serialize(new { text }),
+            msg_type = messageType,
+            content = contentJson,
         });
 
         var result = await _nyxIdApiClient.ProxyRequestAsync(
@@ -288,6 +330,26 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 run_id = request.RunId,
                 step_id = request.StepId,
                 approved,
+            },
+        };
+
+    private static object BuildLegacySubmitButton(string label, string style, HumanInteractionRequest request) =>
+        new
+        {
+            tag = "button",
+            type = style,
+            name = "submit",
+            form_action_type = "submit",
+            text = new
+            {
+                tag = "plain_text",
+                content = label,
+            },
+            value = new
+            {
+                actor_id = request.ActorId,
+                run_id = request.RunId,
+                step_id = request.StepId,
             },
         };
 

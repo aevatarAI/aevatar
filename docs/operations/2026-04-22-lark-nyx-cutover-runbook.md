@@ -46,6 +46,8 @@ Operationally:
 2. Deploy Aevatar with the Nyx relay ingress and reply path already live.
 3. Provision or verify the Lark bot through the Nyx-backed registration flow.
 4. In the Lark Developer Console, change the event callback URL to the returned Nyx `webhook_url`.
+   - Enable `im.message.receive_v1`
+   - Enable `card.action.trigger`
 5. Observe:
    - Nyx -> Aevatar relay callback success
    - Aevatar -> Nyx `channel-relay/reply` success
@@ -62,6 +64,6 @@ Operationally:
 - ChannelRuntime registration queries return only non-secret routing/identity/status handles.
 - ChannelRuntime no longer requires `ICredentialProvider` / `SecretsStoreCredentialProvider` composition for channel registration or reply delivery.
 - Telegram is not part of the supported production contract until it can satisfy the same external credential-authority boundary.
-- Lark workflow approvals and `social_media` review steps are text-driven through `/approve`, `/reject`, and `/submit`; they do not rely on `card.action.trigger`.
+- Lark workflow approvals and `social_media` review steps can use interactive cards through `card.action.trigger`; `/approve`, `/reject`, and `/submit` remain fallback commands.
 - Nyx-backed Lark registrations must not use retired direct-callback diagnostics.
 - public `UserAgentCatalog` queries no longer expose `NyxApiKey`.

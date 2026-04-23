@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class FeishuCardHumanInteractionPortTests
 {
     [Fact]
-    public async Task DeliverSuspensionAsync_ShouldSendTextInstructionsThroughNyxProxy()
+    public async Task DeliverSuspensionAsync_ShouldSendInteractiveCardThroughNyxProxy()
     {
         var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
@@ -42,13 +42,19 @@ public sealed class FeishuCardHumanInteractionPortTests
 
         using var body = JsonDocument.Parse(handler.LastBody!);
         body.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_chat_1");
-        body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
 
         using var content = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
-        var text = content.RootElement.GetProperty("text").GetString();
-        text.Should().Contain("Approval required.");
-        text.Should().Contain("/approve actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1");
-        text.Should().Contain("/reject actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1 feedback=\"what should change\"");
+        content.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
+        content.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Approval required.");
+        var bodyElements = content.RootElement.GetProperty("body").GetProperty("elements");
+        bodyElements.GetArrayLength().Should().BeGreaterThan(1);
+        bodyElements[1].GetProperty("tag").GetString().Should().Be("form");
+        var formElements = bodyElements[1].GetProperty("elements");
+        formElements[2].GetProperty("text").GetProperty("content").GetString().Should().Be("Approve");
+        formElements[3].GetProperty("text").GetProperty("content").GetString().Should().Be("Reject");
+        formElements[2].GetProperty("value").GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
     }
 
     [Fact]
@@ -213,6 +219,31 @@ public sealed class FeishuCardHumanInteractionPortTests
 
         text.Should().Contain("Input required.");
         text.Should().Contain("/submit actor_id=workflow-actor-2 run_id=run-2 step_id=input-1 user_input=\"your response here\"");
+    }
+
+    [Fact]
+    public void BuildCardJson_ShouldRenderSubmitForm_ForHumanInput()
+    {
+        var cardJson = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        {
+            ActorId = "workflow-actor-2",
+            RunId = "run-2",
+            StepId = "input-1",
+            SuspensionType = "human_input",
+            Prompt = "Provide more context",
+            Content = "Current summary",
+            Options = ["submit"],
+        });
+
+        using var document = JsonDocument.Parse(cardJson);
+        document.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Input required.");
+        var form = document.RootElement.GetProperty("body").GetProperty("elements")[1];
+        form.GetProperty("tag").GetString().Should().Be("form");
+        var formElements = form.GetProperty("elements");
+        formElements[0].GetProperty("name").GetString().Should().Be("user_input");
+        formElements[1].GetProperty("text").GetProperty("content").GetString().Should().Be("Submit");
+        formElements[1].GetProperty("value").GetProperty("run_id").GetString().Should().Be("run-2");
     }
 
     [Fact]

@@ -62,15 +62,11 @@ is tracked separately in ADR-0012 / issue `#308`.
 
 ## Current Nyx Boundaries
 
-These are explicit current limitations, not hidden assumptions:
+These are explicit current boundaries, not hidden assumptions:
 
 - Lark webhook URL still must be configured manually in the Lark Developer Console
-- Nyx forwards `im.message.receive_v1`, but not `card.action.trigger`
-
-Because of that:
-
-- `social_media` and approval-style interactions now use text commands such as `/approve`, `/reject`, and `/submit` instead of `card.action.trigger`
-- supported interactive pattern is `open_url` / deep-link or text-driven interaction
+- Nyx forwards both `im.message.receive_v1` and `card.action.trigger`
+- relay-triggered interactive cards are supported only for card-aware Aevatar flows; generic chat replies remain text unless the sender explicitly emits a card payload
 
 ## Cutover Order
 
@@ -88,7 +84,7 @@ The required order is:
 - public read models do not persist `NyxApiKey`; runtime-only Nyx credential material lives in a separate runtime projection used only by host-side delivery ports
 - callback-edge cryptographic verification shifts to JWT-via-JWKS
 - HMAC callback signature remains defense-in-depth only under the current zero-secret constraint
-- Lark approval and `social_media` relay UX are text-driven; card-action callbacks are no longer part of the supported approval path
+- Lark approval and `social_media` relay UX can use interactive cards again; `/approve`, `/reject`, and `/submit` remain fallback commands
 - no rollback-window contract remains for direct `Lark -> Aevatar` ingress
 - ADR-0012 extends the same ownership rule to the remaining ChannelRuntime surface:
   no local channel credential ownership, no `update_token`, and no direct-callback production contract

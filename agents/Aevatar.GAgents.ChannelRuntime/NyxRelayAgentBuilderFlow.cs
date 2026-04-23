@@ -284,7 +284,7 @@ internal static class NyxRelayAgentBuilderFlow
             $"Workflow ID: {ReadString(root, "workflow_id") ?? "pending"}",
             $"Next scheduled run: {ReadString(root, "next_scheduled_run") ?? "pending"}",
             NormalizeOptional(ReadString(root, "note")),
-            "Approvals will arrive as text instructions in this chat. Use /approve or /reject exactly as shown.",
+            "Approvals will arrive as interactive cards in this chat. Text commands such as /approve and /reject still work as fallback.",
             "Next commands: /agents, /agent-status <agent_id>, /run-agent <agent_id>");
     }
 

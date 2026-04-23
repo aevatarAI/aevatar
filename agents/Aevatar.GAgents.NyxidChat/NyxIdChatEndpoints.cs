@@ -5,8 +5,10 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -22,6 +24,8 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static class NyxIdChatEndpoints
 {
+    private const string RelayCardActionContentType = "card_action";
+
     public static IEndpointRouteBuilder MapNyxIdChatEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("NyxIdChat");
@@ -790,7 +794,9 @@ public static class NyxIdChatEndpoints
                 return Results.BadRequest(new { error = "missing_relay_payload" });
             if (string.IsNullOrWhiteSpace(message.MessageId))
                 return Results.BadRequest(new { error = "missing_message_id" });
-            if (string.IsNullOrWhiteSpace(message.Content?.Text))
+            var contentType = NormalizeRelayContentType(message.Content?.Type);
+            var contentText = NormalizeOptional(message.Content?.Text);
+            if (contentText is null)
                 return Results.Accepted(value: new { status = "ignored", reason = "empty_text" });
 
             // ─── Auth ───
@@ -820,6 +826,23 @@ public static class NyxIdChatEndpoints
 
             http.User = validation.Principal;
             var scopeId = validation.Subject!;
+
+            if (string.Equals(contentType, RelayCardActionContentType, StringComparison.Ordinal))
+            {
+                if (await TryHandleRelayWorkflowCardActionAsync(http, message, logger, ct) is { } workflowResult)
+                    return workflowResult;
+
+                logger.LogInformation(
+                    "Ignored unsupported relay card action: message={MessageId}, conversation={ConversationId}",
+                    message.MessageId,
+                    message.Conversation?.Id ?? message.Conversation?.PlatformId);
+                return Results.Accepted(value: new
+                {
+                    status = "ignored",
+                    reason = "unsupported_card_action",
+                    message_id = message.MessageId,
+                });
+            }
 
             // Note: config.json in chrono-storage cannot be read in relay flow because
             // ChronoStorageCatalogBlobClient reads the Bearer token from Authorization header,
@@ -895,7 +918,7 @@ public static class NyxIdChatEndpoints
             // NOT conversationId (which is per-chat and would collide across messages).
             var chatRequest = new ChatRequestEvent
             {
-                Prompt = message.Content.Text,
+                Prompt = contentText,
                 SessionId = sessionId,
                 ScopeId = scopeId,
             };
@@ -1121,6 +1144,297 @@ public static class NyxIdChatEndpoints
         var error = errorMessage.Length > 300 ? errorMessage[..300] + "..." : errorMessage;
 
         return $"Model: {model}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}\nError: {error}";
+    }
+
+    private static async Task<IResult?> TryHandleRelayWorkflowCardActionAsync(
+        HttpContext http,
+        RelayMessage message,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (!TryBuildRelayWorkflowResumeCommand(message, out var command))
+            return null;
+
+        var dispatchService = http.RequestServices.GetService<
+            ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        if (dispatchService is null)
+        {
+            logger.LogError(
+                "Workflow resume service unavailable for relay card action: message={MessageId}",
+                message.MessageId);
+            return Results.Json(
+                new
+                {
+                    error = "workflow_resume_service_unavailable",
+                    message = "Workflow resume service unavailable.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        var dispatch = await dispatchService.DispatchAsync(command!, ct);
+        if (!dispatch.Succeeded || dispatch.Receipt is null)
+        {
+            var error = dispatch.Error;
+            if (error is null)
+            {
+                return Results.Json(
+                    new
+                    {
+                        error = "workflow_resume_dispatch_failed",
+                        message = "Workflow control dispatch failed.",
+                    },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return error.Code switch
+            {
+                WorkflowRunControlStartErrorCode.InvalidActorId => Results.Json(
+                    new { error = "invalid_actor_id", message = "actorId is required." },
+                    statusCode: StatusCodes.Status400BadRequest),
+                WorkflowRunControlStartErrorCode.InvalidRunId => Results.Json(
+                    new { error = "invalid_run_id", message = "runId is required." },
+                    statusCode: StatusCodes.Status400BadRequest),
+                WorkflowRunControlStartErrorCode.InvalidStepId => Results.Json(
+                    new { error = "invalid_step_id", message = "stepId is required." },
+                    statusCode: StatusCodes.Status400BadRequest),
+                WorkflowRunControlStartErrorCode.ActorNotFound => Results.Json(
+                    new { error = "actor_not_found", message = $"Actor '{error.ActorId}' not found." },
+                    statusCode: StatusCodes.Status404NotFound),
+                WorkflowRunControlStartErrorCode.ActorNotWorkflowRun => Results.Json(
+                    new
+                    {
+                        error = "actor_not_workflow_run",
+                        message = $"Actor '{error.ActorId}' is not a workflow run actor.",
+                    },
+                    statusCode: StatusCodes.Status409Conflict),
+                WorkflowRunControlStartErrorCode.RunBindingMissing => Results.Json(
+                    new
+                    {
+                        error = "run_binding_missing",
+                        message = $"Actor '{error.ActorId}' does not have a bound run id.",
+                    },
+                    statusCode: StatusCodes.Status409Conflict),
+                WorkflowRunControlStartErrorCode.RunBindingMismatch => Results.Json(
+                    new
+                    {
+                        error = "run_binding_mismatch",
+                        message =
+                            $"Actor '{error.ActorId}' is bound to run '{error.BoundRunId}', not '{error.RequestedRunId}'.",
+                    },
+                    statusCode: StatusCodes.Status409Conflict),
+                _ => Results.Json(
+                    new
+                    {
+                        error = "workflow_resume_dispatch_failed",
+                        message = "Workflow control dispatch failed.",
+                    },
+                    statusCode: StatusCodes.Status503ServiceUnavailable),
+            };
+        }
+
+        return Results.Accepted(value: new
+        {
+            status = "workflow_resume_accepted",
+            message_id = message.MessageId,
+            command_id = dispatch.Receipt.CommandId,
+        });
+    }
+
+    private static bool TryBuildRelayWorkflowResumeCommand(
+        RelayMessage message,
+        out WorkflowResumeCommand? command)
+    {
+        command = null;
+
+        if (!string.Equals(
+                NormalizeRelayContentType(message.Content?.Type),
+                RelayCardActionContentType,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var payload = NormalizeOptional(message.Content?.Text);
+        if (payload is null)
+            return false;
+
+        Dictionary<string, string> values;
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            values = ExtractRelayCardActionValues(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        if (!TryGetRequiredRelayValue(values, "actor_id", out var actorId) ||
+            !TryGetRequiredRelayValue(values, "run_id", out var runId) ||
+            !TryGetRequiredRelayValue(values, "step_id", out var stepId))
+        {
+            return false;
+        }
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.platform"] = NormalizeOptional(message.Platform) ?? string.Empty,
+            ["channel.conversation_id"] = NormalizeOptional(message.Conversation?.PlatformId)
+                                          ?? NormalizeOptional(message.Conversation?.Id)
+                                          ?? string.Empty,
+        };
+        if (NormalizeOptional(message.MessageId) is { } messageId)
+            metadata["channel.message_id"] = messageId;
+
+        var approved = ResolveRelayApproved(values);
+        command = new WorkflowResumeCommand(
+            actorId,
+            runId,
+            stepId,
+            NormalizeOptional(message.MessageId),
+            approved,
+            ResolveRelayUserInput(values, approved),
+            metadata,
+            ResolveRelayEditedContent(values),
+            ResolveRelayFeedback(values, approved));
+        return true;
+    }
+
+    private static Dictionary<string, string> ExtractRelayCardActionValues(JsonElement root)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        CopyRelayCardActionValues(root, values);
+
+        if (root.TryGetProperty("value", out var actionValue))
+            CopyRelayCardActionValues(actionValue, values);
+        if (root.TryGetProperty("form_value", out var formValue))
+            CopyRelayCardActionValues(formValue, values);
+
+        return values;
+    }
+
+    private static void CopyRelayCardActionValues(JsonElement element, IDictionary<string, string> values)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var property in element.EnumerateObject())
+        {
+            switch (property.Value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    values[property.Name] = property.Value.GetString() ?? string.Empty;
+                    break;
+                case JsonValueKind.Number:
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    values[property.Name] = property.Value.ToString();
+                    break;
+            }
+        }
+    }
+
+    private static bool TryGetRequiredRelayValue(
+        IReadOnlyDictionary<string, string> values,
+        string key,
+        out string value)
+    {
+        value = string.Empty;
+        if (!values.TryGetValue(key, out var raw))
+            return false;
+
+        value = (raw ?? string.Empty).Trim();
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool ResolveRelayApproved(IReadOnlyDictionary<string, string> values)
+    {
+        if (values.TryGetValue("approved", out var rawApproved) &&
+            bool.TryParse(rawApproved, out var approved))
+        {
+            return approved;
+        }
+
+        if (values.TryGetValue("action", out var rawAction))
+            return ResolveRelayDecisionLikeValue(rawAction);
+
+        if (values.TryGetValue("decision", out var rawDecision))
+            return ResolveRelayDecisionLikeValue(rawDecision);
+
+        return true;
+    }
+
+    private static bool ResolveRelayDecisionLikeValue(string? raw)
+    {
+        var normalized = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "reject" or "rejected" or "deny" or "denied" or "cancel" => false,
+            _ => true,
+        };
+    }
+
+    private static string? ResolveRelayUserInput(
+        IReadOnlyDictionary<string, string> values,
+        bool approved)
+    {
+        var preferredKeys = approved
+            ? new[] { "edited_content", "user_input", "input", "comment" }
+            : new[] { "user_input", "comment", "input", "edited_content" };
+
+        foreach (var key in preferredKeys)
+        {
+            if (values.TryGetValue(key, out var raw))
+            {
+                var normalized = NormalizeOptional(raw);
+                if (normalized is not null)
+                    return normalized;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ResolveRelayEditedContent(IReadOnlyDictionary<string, string> values)
+    {
+        if (!values.TryGetValue("edited_content", out var raw))
+            return null;
+
+        return NormalizeOptional(raw);
+    }
+
+    private static string? ResolveRelayFeedback(
+        IReadOnlyDictionary<string, string> values,
+        bool approved)
+    {
+        if (approved)
+        {
+            if (values.TryGetValue("user_input", out var approvedRaw))
+                return NormalizeOptional(approvedRaw);
+
+            return null;
+        }
+
+        foreach (var key in new[] { "user_input", "comment", "input", "edited_content" })
+        {
+            if (values.TryGetValue(key, out var raw))
+            {
+                var normalized = NormalizeOptional(raw);
+                if (normalized is not null)
+                    return normalized;
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeRelayContentType(string? contentType) =>
+        NormalizeOptional(contentType)?.ToLowerInvariant() ?? string.Empty;
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return normalized.Length == 0 ? null : normalized;
     }
 
     private static IResult FriendlyReply(string text) =>
