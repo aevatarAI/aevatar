@@ -2,16 +2,19 @@ import {
   LogoutOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Avatar, Button, Empty, Space, Typography } from "antd";
+import { Avatar, Button, Empty, Space, Typography, theme } from "antd";
 import React, { useMemo } from "react";
 import {
   clearStoredAuthSession,
   loadRestorableAuthSession,
 } from "@/shared/auth/session";
 import { AevatarCompactText } from "@/shared/ui/compactText";
-import { summaryFieldGridStyle, summaryMetricGridStyle } from "@/shared/ui/proComponents";
 import { AevatarPanel } from "@/shared/ui/aevatarPageShells";
-import { SettingsPageShell, SummaryField, SummaryMetric } from "./shared";
+import {
+  summaryFieldGridStyle,
+  summaryMetricGridStyle,
+} from "@/shared/ui/proComponents";
+import { buildSettingsPanelStyle, SummaryField, SummaryMetric } from "./shared";
 
 function formatSessionExpiry(value?: number): string {
   if (!value) {
@@ -24,7 +27,15 @@ function formatSessionExpiry(value?: number): string {
   }).format(value);
 }
 
-const AccountSettingsPage: React.FC = () => {
+type AccountSettingsContentProps = {
+  readonly showInlineSignOut?: boolean;
+};
+
+const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
+  showInlineSignOut = true,
+}) => {
+  const { token } = theme.useToken();
+  const settingsPanelStyle = buildSettingsPanelStyle(token);
   const authSession = useMemo(() => loadRestorableAuthSession(), []);
 
   const accountDisplayName = useMemo(
@@ -51,17 +62,18 @@ const AccountSettingsPage: React.FC = () => {
   };
 
   return (
-    <SettingsPageShell
-      extra={
-        authSession ? (
-          <Button danger icon={<LogoutOutlined />} onClick={handleSignOut}>
-            Sign out
-          </Button>
-        ) : null
-      }
-      title="Account Settings"
-    >
-      <AevatarPanel title="Profile">
+    <>
+      <AevatarPanel
+        extra={
+          authSession && showInlineSignOut ? (
+            <Button danger icon={<LogoutOutlined />} onClick={handleSignOut}>
+              Sign out
+            </Button>
+          ) : null
+        }
+        style={settingsPanelStyle}
+        title="Profile"
+      >
         {authSession ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <Space align="start" size={14}>
@@ -71,7 +83,10 @@ const AccountSettingsPage: React.FC = () => {
                 src={authSession.user.picture}
               />
               <div style={{ minWidth: 0 }}>
-                <Typography.Text strong style={{ display: "block", fontSize: 18 }}>
+                <Typography.Text
+                  strong
+                  style={{ display: "block", fontSize: 18 }}
+                >
                   {accountDisplayName}
                 </Typography.Text>
                 <Typography.Text type="secondary">
@@ -81,15 +96,13 @@ const AccountSettingsPage: React.FC = () => {
             </Space>
 
             <div style={summaryMetricGridStyle}>
-              <SummaryMetric
-                label="Session"
-                tone="success"
-                value="Active"
-              />
+              <SummaryMetric label="Session" tone="success" value="Active" />
               <SummaryMetric
                 label="Email"
                 tone={authSession.user.email_verified ? "success" : "warning"}
-                value={authSession.user.email_verified ? "Verified" : "Needs review"}
+                value={
+                  authSession.user.email_verified ? "Verified" : "Needs review"
+                }
               />
             </div>
 
@@ -116,14 +129,17 @@ const AccountSettingsPage: React.FC = () => {
             description="This browser does not have a restorable sign-in session."
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           >
-            <Button type="primary" onClick={() => window.location.replace("/login")}>
+            <Button
+              type="primary"
+              onClick={() => window.location.replace("/login")}
+            >
               Sign in
             </Button>
           </Empty>
         )}
       </AevatarPanel>
 
-      <AevatarPanel title="Authentication">
+      <AevatarPanel style={settingsPanelStyle} title="Authentication">
         <div style={summaryFieldGridStyle}>
           <SummaryField
             label="Access token expires"
@@ -139,12 +155,14 @@ const AccountSettingsPage: React.FC = () => {
           />
           <SummaryField
             label="Refresh token"
-            value={authSession?.tokens.refreshToken ? "Available" : "Unavailable"}
+            value={
+              authSession?.tokens.refreshToken ? "Available" : "Unavailable"
+            }
           />
         </div>
       </AevatarPanel>
-    </SettingsPageShell>
+    </>
   );
 };
 
-export default AccountSettingsPage;
+export default AccountSettingsContent;

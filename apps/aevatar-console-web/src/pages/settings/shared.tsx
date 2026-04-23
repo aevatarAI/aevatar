@@ -19,6 +19,74 @@ type SettingsPageShellProps = {
   title?: string;
 };
 
+export function buildSettingsSurfaceStyle(
+  token: AevatarThemeSurfaceToken,
+): React.CSSProperties {
+  return {
+    background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorBgLayout} 100%)`,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: 16,
+    boxShadow: token.boxShadowSecondary,
+  };
+}
+
+export function buildSettingsPanelStyle(
+  token: AevatarThemeSurfaceToken,
+): React.CSSProperties {
+  return {
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: 12,
+    boxShadow: token.boxShadowSecondary,
+  };
+}
+
+export function buildSettingsInsetCardStyle(
+  token: AevatarThemeSurfaceToken,
+): React.CSSProperties {
+  return {
+    background: token.colorFillTertiary,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: 12,
+    padding: 14,
+  };
+}
+
+export function buildSettingsSwitchRailStyle(
+  token: AevatarThemeSurfaceToken,
+): React.CSSProperties {
+  return {
+    alignSelf: "flex-start",
+    alignItems: "center",
+    background: token.colorFillTertiary,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: 999,
+    display: "inline-flex",
+    gap: 6,
+    maxWidth: "100%",
+    padding: 3,
+    width: "fit-content",
+  };
+}
+
+export function buildSettingsSwitchButtonStyle(
+  token: AevatarThemeSurfaceToken,
+  active: boolean,
+): React.CSSProperties {
+  return {
+    background: active ? token.colorBgContainer : "transparent",
+    border: "none",
+    borderRadius: 999,
+    boxShadow: active ? token.boxShadowSecondary : "none",
+    color: active ? token.colorTextHeading : token.colorTextSecondary,
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 700,
+    lineHeight: 1,
+    padding: "9px 14px",
+    transition: "all 160ms ease",
+  };
+}
+
 type SummaryFieldProps = {
   label: string;
   value: React.ReactNode;
@@ -58,10 +126,14 @@ export const SummaryMetric: React.FC<SummaryMetricProps> = ({
 
   return (
     <div
-      style={buildAevatarMetricCardStyle(
-        token as AevatarThemeSurfaceToken,
-        tone,
-      )}
+      style={{
+        ...buildAevatarMetricCardStyle(
+          token as AevatarThemeSurfaceToken,
+          tone,
+        ),
+        borderRadius: 12,
+        boxShadow: (token as AevatarThemeSurfaceToken).boxShadowSecondary,
+      }}
     >
       <Typography.Text style={{ ...summaryFieldLabelStyle, color: visual.labelColor }}>
         {label}
@@ -78,15 +150,33 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
   content,
   extra,
   title = "Account Settings",
-}) => (
-  <ConsoleMenuPageShell
-    breadcrumb="Aevatar / Settings"
-    description={content}
-    extra={extra}
-    title={title}
-  >
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {children}
-    </div>
-  </ConsoleMenuPageShell>
-);
+}) => {
+  const { token } = theme.useToken();
+
+  return (
+    <ConsoleMenuPageShell
+      breadcrumb="Aevatar / Settings"
+      description={content}
+      extra={
+        extra ? (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              paddingTop: 26,
+            }}
+          >
+            {extra}
+          </div>
+        ) : undefined
+      }
+      surfacePadding={20}
+      surfaceStyle={buildSettingsSurfaceStyle(token as AevatarThemeSurfaceToken)}
+      title={title}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {children}
+      </div>
+    </ConsoleMenuPageShell>
+  );
+};
