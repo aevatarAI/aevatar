@@ -58,6 +58,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
     }
 
     [Fact]
@@ -262,6 +265,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionWriteDispatcher<ServiceRevisionCatalogReadModel>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceCatalogReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
     }
 
     [Fact]
