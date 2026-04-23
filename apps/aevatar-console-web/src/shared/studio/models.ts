@@ -55,6 +55,8 @@ export interface StudioAuthSession {
   readonly providerDisplayName?: string;
   readonly loginUrl?: string;
   readonly logoutUrl?: string;
+  readonly invokeAuthMode?: "studio-session" | "bearer-token" | "anonymous";
+  readonly externalCallerHint?: string;
   readonly name?: string;
   readonly email?: string;
   readonly picture?: string;

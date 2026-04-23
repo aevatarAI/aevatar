@@ -189,6 +189,62 @@ describe("scopeRuntimeApi", () => {
     expect(input).toBe("/api/scopes/scope-a/services/default/revisions");
   });
 
+  it("loads endpoint invoke contract details for Bind surfaces", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: "scope-a",
+        serviceId: "default",
+        endpointId: "chat",
+        invokePath: "/api/scopes/scope-a/services/default/invoke/chat:stream",
+        method: "POST",
+        requestContentType: "application/json",
+        responseContentType: "text/event-stream",
+        requestTypeUrl: "type.googleapis.com/Aevatar.AI.Abstractions.ChatRequestEvent",
+        responseTypeUrl: "type.googleapis.com/Aevatar.AI.Abstractions.ChatResponseEvent",
+        supportsSse: true,
+        supportsWebSocket: false,
+        supportsAguiFrames: false,
+        streamFrameFormat: "workflow-run-event",
+        smokeTestSupported: true,
+        defaultSmokeInputMode: "prompt",
+        defaultSmokePrompt: "Hello from Studio Bind.",
+        sampleRequestJson: null,
+        deploymentStatus: "Active",
+        revisionId: "rev-chat",
+        curlExample: "curl -N ...",
+        fetchExample: "const response = await fetch(...)",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scopeRuntimeApi.getServiceEndpointContract("scope-a", "default", "chat"),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        endpointId: "chat",
+        invokePath: "/api/scopes/scope-a/services/default/invoke/chat:stream",
+        supportsSse: true,
+        supportsAguiFrames: false,
+        defaultSmokeInputMode: "prompt",
+        defaultSmokePrompt: "Hello from Studio Bind.",
+        revisionId: "rev-chat",
+      }),
+    );
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe(
+      "/api/scopes/scope-a/services/default/endpoints/chat/contract",
+    );
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer access-token",
+    );
+  });
+
   it("loads run audit for a scope-scoped service run", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -288,5 +344,37 @@ describe("scopeRuntimeApi", () => {
     expect(input).toBe(
       "/api/scopes/scope-a/services/default/runs/run-42/audit?actorId=actor%3A%2F%2Fscope-a%2Fdefault",
     );
+  });
+
+  it("retires a scope-scoped service revision", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: "scope-a",
+        serviceId: "default",
+        revisionId: "rev-2",
+        status: "retired",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scopeRuntimeApi.retireServiceRevision("scope-a", "default", "rev-2"),
+    ).resolves.toEqual({
+      scopeId: "scope-a",
+      serviceId: "default",
+      revisionId: "rev-2",
+      status: "retired",
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe(
+      "/api/scopes/scope-a/services/default/revisions/rev-2:retire",
+    );
+    expect(init?.method).toBe("POST");
   });
 });

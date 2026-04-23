@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Aevatar.Authentication.Abstractions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -55,7 +56,14 @@ public static class AevatarAuthenticationHostExtensions
                 jwt.TokenValidationParameters.ValidateAudience = !string.IsNullOrWhiteSpace(options.Audience);
             });
 
-        builder.Services.AddAuthorization();
+        // When authentication is enabled, endpoints default to requiring an authenticated caller.
+        // Public endpoints must opt out with [AllowAnonymous] / .AllowAnonymous().
+        builder.Services.AddAuthorization(authorization =>
+        {
+            authorization.FallbackPolicy = new AuthorizationPolicyBuilder(JwtBearerDefaults.AuthenticationScheme)
+                .RequireAuthenticatedUser()
+                .Build();
+        });
         builder.Services.AddTransient<IClaimsTransformation, AevatarClaimsTransformation>();
 
         return builder;

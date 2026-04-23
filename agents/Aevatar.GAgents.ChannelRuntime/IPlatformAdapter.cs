@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Http;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Adapter for a bot platform (Lark, Telegram, Discord, etc.).
+/// Adapter for a bot platform (Lark, Discord, etc.).
 /// Each platform implements inbound parsing, verification handling, and outbound reply.
 /// </summary>
 public interface IPlatformAdapter
@@ -37,8 +37,7 @@ public interface IPlatformAdapter
         CancellationToken ct);
 }
 
-// Today only Permanent changes ChannelUserGAgent completion behavior.
-// Transient and None both keep the session open for the normal timeout retry path.
+// Permanent marks a failure that should not be retried on the same delivery path.
 public enum PlatformReplyFailureKind
 {
     None = 0,

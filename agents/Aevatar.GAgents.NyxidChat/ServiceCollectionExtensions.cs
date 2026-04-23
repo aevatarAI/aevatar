@@ -11,7 +11,9 @@ public static class ServiceCollectionExtensions
     {
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
 
+        services.AddHttpClient();
         services.TryAddSingleton(BindRelayOptions(configuration));
+        services.TryAddSingleton<NyxRelayJwtValidator>();
 
         return services;
     }

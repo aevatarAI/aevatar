@@ -1800,7 +1800,7 @@ describe("ChatPage", () => {
     expect(screen.getByText("TEXT_MESSAGE_CONTENT")).toBeTruthy();
   });
 
-  it("opens a blank Studio draft when Create is clicked", async () => {
+  it("opens Studio without creating an implicit draft when Create is clicked", async () => {
     renderWithQueryClient(React.createElement(ChatPage));
 
     fireEvent.click(await screen.findByLabelText("Chat service"));
@@ -1810,7 +1810,7 @@ describe("ChatPage", () => {
       expect(window.location.pathname).toBe("/studio");
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("studio");
-      expect(searchParams.get("draft")).toBe("new");
+      expect(searchParams.get("draft")).toBeNull();
     });
   });
 });

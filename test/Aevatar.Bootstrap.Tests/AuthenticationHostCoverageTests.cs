@@ -5,10 +5,13 @@ using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Bootstrap.Tests;
 
@@ -37,6 +40,27 @@ public class AuthenticationHostCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAuthentication_WhenEnabled_ShouldSetFallbackPolicyRequiringAuthenticatedUser()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://id.example.com";
+
+        builder.AddAevatarAuthentication();
+        using var app = builder.Build();
+
+        using var scope = app.Services.CreateScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<AuthorizationOptions>>().Value;
+        options.FallbackPolicy.Should().NotBeNull();
+        options.FallbackPolicy!.AuthenticationSchemes.Should().Contain(JwtBearerDefaults.AuthenticationScheme);
+        options.FallbackPolicy!.Requirements.OfType<DenyAnonymousAuthorizationRequirement>().Should().NotBeEmpty();
+    }
+
+    [Fact]
     public async Task AddAevatarAuthentication_WhenDisabled_ShouldRegisterFallbackAuthenticationSchemeWithoutClaimsTransformation()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -53,8 +77,8 @@ public class AuthenticationHostCoverageTests
         using var scope = provider.CreateScope();
         scope.ServiceProvider.GetService<IAuthenticationService>().Should().NotBeNull();
         var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
-        (await schemeProvider.GetDefaultAuthenticateSchemeAsync()).Should().NotBeNull();
-        (await schemeProvider.GetDefaultChallengeSchemeAsync()).Should().NotBeNull();
+        (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be(DisabledAuthenticationScheme);
+        (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be(DisabledAuthenticationScheme);
         scope.ServiceProvider.GetServices<IClaimsTransformation>()
             .Should().NotContain(x => x.GetType().Name == "AevatarClaimsTransformation");
     }
@@ -100,6 +124,23 @@ public class AuthenticationHostCoverageTests
 
         (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be("Bearer");
         (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be("Bearer");
+    }
+
+    [Fact]
+    public void AddAevatarAuthentication_WhenDisabled_ShouldNotSetFallbackPolicy()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
+        builder.AddAevatarAuthentication();
+        using var app = builder.Build();
+
+        using var scope = app.Services.CreateScope();
+        var options = scope.ServiceProvider.GetService<IOptions<AuthorizationOptions>>()?.Value;
+        options?.FallbackPolicy.Should().BeNull();
     }
 
     [Fact]
@@ -168,4 +209,9 @@ public class AuthenticationHostCoverageTests
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims));
         return transformer.TransformClaims(principal).ToList();
     }
+
+    private static string DisabledAuthenticationScheme =>
+        (string)typeof(AevatarAuthenticationHostExtensions)
+            .GetField("DisabledAuthenticationScheme", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetValue(null)!;
 }

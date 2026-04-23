@@ -6,11 +6,14 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.Channel.Lark;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -24,8 +27,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddChannelRuntime(
         this IServiceCollection services, IConfiguration? configuration = null)
     {
-        // Memory cache for webhook dedup
-        services.AddMemoryCache();
+        Aevatar.GAgents.Channel.Runtime.ChannelRuntimeServiceCollectionExtensions.AddChannelRuntime(services);
+
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, EventStoreProjectionScopeWatermarkQueryPort>();
@@ -93,7 +96,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
+        services.TryAddSingleton<ChannelPlatformReplyService>();
+        services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)
@@ -124,9 +130,15 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
             UserAgentCatalogProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            UserAgentCatalogMaterializationContext,
+            UserAgentCatalogNyxCredentialProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
             UserAgentCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
+            UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
+        services.TryAddSingleton<IUserAgentCatalogRuntimeQueryPort, UserAgentCatalogRuntimeQueryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
         services.AddHostedService<UserAgentCatalogStartupService>();
 
@@ -137,16 +149,22 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
         }
         else
         {
             services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
                 static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
+                static doc => doc.Id, static key => key);
         }
 
         // Register platform adapters
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, TelegramPlatformAdapter>());
 
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
 
@@ -159,6 +177,25 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
         services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
         services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
+
+        services.AddHttpClient(LarkConversationHostDefaults.HttpClientName, client =>
+        {
+            client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
+        });
+        services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<LarkPayloadRedactor>();
+        services.TryAddSingleton<ConversationDispatchMiddleware>();
+        services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, LarkConversationTurnRunner>());
+        services.Replace(ServiceDescriptor.Singleton(_ => new MiddlewarePipelineBuilder()
+            .Use<TracingMiddleware>()
+            .Use<LoggingMiddleware>()
+            .Use<ConversationResolverMiddleware>()
+            .Use<ConversationDispatchMiddleware>()));
+        services.TryAddSingleton<ChannelPipeline>(sp => sp.GetRequiredService<MiddlewarePipelineBuilder>().Build(sp));
+        services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+        services.TryAddSingleton<LarkConversationInboxRuntime>();
+        services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, LarkConversationInboxHostedService>());
 
         return services;
     }
