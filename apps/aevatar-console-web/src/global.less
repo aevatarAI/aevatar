@@ -269,6 +269,58 @@ body.aevatar-studio-host
   z-index: 140;
 }
 
+.aevatar-interactive-button,
+.aevatar-interactive-chip,
+.aevatar-pressable-card {
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.14s ease;
+}
+
+.aevatar-interactive-button:not(:disabled):not([aria-disabled='true']):hover,
+.aevatar-interactive-chip:not(:disabled):not([aria-disabled='true']):hover,
+.aevatar-pressable-card:not([aria-disabled='true']):hover {
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.aevatar-interactive-button:not(:disabled):not([aria-disabled='true']):active,
+.aevatar-interactive-chip:not(:disabled):not([aria-disabled='true']):active,
+.aevatar-pressable-card:not([aria-disabled='true']):active {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+  transform: translateY(0) scale(0.985);
+}
+
+.aevatar-interactive-button:focus-visible,
+.aevatar-interactive-chip:focus-visible,
+.aevatar-pressable-card:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
+}
+
+.aevatar-interactive-button:disabled,
+.aevatar-interactive-button[aria-disabled='true'],
+.aevatar-interactive-chip:disabled,
+.aevatar-interactive-chip[aria-disabled='true'] {
+  box-shadow: none !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+
+.aevatar-pressable-card[aria-disabled='true'] {
+  box-shadow: none !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+
+.ant-btn.aevatar-interactive-button.ant-btn-loading {
+  pointer-events: none;
+}
+
 body.aevatar-studio-host
   .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
   .ant-pro-sider-collapsed-button:hover {

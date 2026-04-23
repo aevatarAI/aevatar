@@ -91,6 +91,7 @@ export type RuntimeEventAccumulator = {
   commandId: string;
   errorText: string;
   events: RuntimeEvent[];
+  finalOutput: string;
   pendingApproval?: RuntimeToolApprovalRequestInfo;
   pendingRunIntervention?: RuntimeRunInterventionInfo;
   runId: string;
@@ -168,6 +169,21 @@ export function extractStepCompleted(
 
 export function extractStepCompletedOutput(event: RuntimeEvent): string | null {
   return extractStepCompleted(event)?.output ?? null;
+}
+
+export function extractRunFinishedOutput(event: RuntimeEvent): string | null {
+  if (event.type !== AGUIEventType.RUN_FINISHED) {
+    return null;
+  }
+
+  const result = (event as unknown as JsonRecord).result;
+  if (typeof result === "string") {
+    return result.trim() || null;
+  }
+
+  const record = asRecord(result);
+  const candidate = readOptionalString(record, "output", "Output", "message", "text");
+  return candidate || null;
 }
 
 export function extractReasoningDelta(event: RuntimeEvent): string | null {
@@ -425,6 +441,7 @@ export function createRuntimeEventAccumulator(input?: {
     commandId: "",
     errorText: "",
     events: [],
+    finalOutput: "",
     pendingApproval: undefined,
     pendingRunIntervention: undefined,
     runId: "",
@@ -456,6 +473,17 @@ export function applyRuntimeEvent(
 
   if (event.type === AGUIEventType.TEXT_MESSAGE_CONTENT) {
     accumulator.assistantText += String(event.delta || "");
+  }
+
+  if (event.type === AGUIEventType.TEXT_MESSAGE_END) {
+    const finalText = String(
+      (event as unknown as JsonRecord).message ||
+        (event as unknown as JsonRecord).delta ||
+        "",
+    ).trim();
+    if (finalText) {
+      accumulator.finalOutput = finalText;
+    }
   }
 
   if (event.type === AGUIEventType.STEP_STARTED) {
@@ -519,6 +547,13 @@ export function applyRuntimeEvent(
     ).trim();
   }
 
+  if (event.type === AGUIEventType.RUN_FINISHED) {
+    const finalOutput = extractRunFinishedOutput(event);
+    if (finalOutput) {
+      accumulator.finalOutput = finalOutput;
+    }
+  }
+
   const runContext = extractRunContext(event);
   if (runContext) {
     accumulator.actorId = runContext.actorId || accumulator.actorId;
@@ -567,6 +602,10 @@ export function applyRuntimeEvent(
         startedAt: event.timestamp || Date.now(),
         status: completedStep.success === false ? "error" : "done",
       });
+    }
+
+    if (completedStep.output?.trim()) {
+      accumulator.finalOutput = completedStep.output.trim();
     }
   }
 

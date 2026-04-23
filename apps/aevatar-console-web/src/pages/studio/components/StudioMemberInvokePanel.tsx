@@ -38,6 +38,7 @@ import {
 } from '@/shared/studio/models';
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
+import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 
 type InvokeDockTab = 'chat' | 'events' | 'output';
 
@@ -1348,6 +1349,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                       const isFocused = entry.id === focusedHistoryId;
                       return (
                         <button
+                          aria-pressed={isFocused}
+                          className={AEVATAR_PRESSABLE_CARD_CLASS}
                           key={entry.id}
                           type="button"
                           onClick={() => handleRestoreRequest(entry)}

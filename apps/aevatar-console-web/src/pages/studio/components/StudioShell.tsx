@@ -8,6 +8,11 @@ import {
 } from '@ant-design/icons';
 import { Popover, Typography } from 'antd';
 import React from 'react';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  AEVATAR_PRESSABLE_CARD_CLASS,
+} from '@/shared/ui/interactionStandards';
 
 export type StudioShellMemberKind =
   | 'workflow'
@@ -309,6 +314,7 @@ const InlineInfoButton: React.FC<InlineInfoButtonProps> = ({
   >
     <button
       aria-label={ariaLabel}
+      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
       onClick={(event) => event.stopPropagation()}
       style={{ ...inlineInfoButtonStyle, ...buttonStyle }}
       type="button"
@@ -516,6 +522,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   <button
                     key={option.key}
                     aria-pressed={active}
+                    className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                     onClick={() => setMemberFilter(option.key)}
                     style={{
                       ...railFilterButtonStyle,
@@ -563,6 +570,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                     key={member.key}
                     aria-current={isSelected ? 'true' : undefined}
                     aria-disabled={member.disabled ? 'true' : undefined}
+                    className={AEVATAR_PRESSABLE_CARD_CLASS}
                     onClick={() => {
                       if (!member.disabled) {
                         onSelectMember?.(member.key);
@@ -775,6 +783,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                     ) : null}
                     <button
                       aria-current={isActive ? 'step' : undefined}
+                      className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                       disabled={step.disabled}
                       onClick={() => onSelectLifecycleStep?.(step.key)}
                       title={step.description}

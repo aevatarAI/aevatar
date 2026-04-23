@@ -4,6 +4,7 @@ import {
   AevatarInspectorEmpty,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_PRESSABLE_CARD_CLASS } from "@/shared/ui/interactionStandards";
 import {
   CompactFactValue,
   DetailPill,
@@ -149,6 +150,7 @@ const TeamBindingsTab: React.FC<TeamBindingsTabProps> = ({
               {catalogCards.map((binding) => (
                 <button
                   aria-label={`选择绑定 ${binding.name}`}
+                  className={AEVATAR_PRESSABLE_CARD_CLASS}
                   key={binding.key}
                   onClick={() => onSelectBinding(binding.key)}
                   style={{
