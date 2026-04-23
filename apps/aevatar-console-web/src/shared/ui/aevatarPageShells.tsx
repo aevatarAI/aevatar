@@ -63,6 +63,7 @@ type AevatarPanelProps = {
   layoutMode?: AevatarLayoutMode;
   minHeight?: number | string;
   padding?: number | string;
+  style?: React.CSSProperties;
   title?: React.ReactNode;
   titleHelp?: React.ReactNode;
 };
@@ -365,6 +366,7 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
   layoutMode,
   minHeight,
   padding = 16,
+  style,
   title,
   titleHelp,
 }) => {
@@ -397,12 +399,15 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
       style={
         ghost
           ? undefined
-          : buildAevatarPanelStyle(token as AevatarThemeSurfaceToken, {
-              minHeight: resolvedPanelMinHeight,
-              overflow:
-                resolvedLayoutMode === 'document' ? 'visible' : 'hidden',
-              padding,
-            })
+          : {
+              ...buildAevatarPanelStyle(token as AevatarThemeSurfaceToken, {
+                minHeight: resolvedPanelMinHeight,
+                overflow:
+                  resolvedLayoutMode === 'document' ? 'visible' : 'hidden',
+                padding,
+              }),
+              ...style,
+            }
       }
     >
       <div style={panelInnerStyle}>
