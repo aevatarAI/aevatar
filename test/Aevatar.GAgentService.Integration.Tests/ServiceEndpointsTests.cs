@@ -849,6 +849,47 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task InvokeAsync_WhenAuthenticatedIdentityConflictsWithBody_ShouldIgnoreSpoofedCallerIdentity()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        var payload = Convert.ToBase64String([8, 9, 10]);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders/invoke/run")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.InvokeServiceHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                "cmd-6",
+                "corr-6",
+                "type.googleapis.com/demo.Run",
+                payload,
+                "tenant-claim/app-claim/ns-claim/allowed-caller",
+                "spoof-caller-tenant",
+                "spoof-caller-app")),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant-claim",
+            AppId = "app-claim",
+            Namespace = "ns-claim",
+            ServiceId = "orders",
+        });
+        host.InvocationPort.LastRequest.Caller.ServiceKey.Should().BeEmpty();
+        host.InvocationPort.LastRequest.Caller.TenantId.Should().Be("tenant-claim");
+        host.InvocationPort.LastRequest.Caller.AppId.Should().Be("app-claim");
+    }
+
+    [Fact]
     public async Task CreateServiceAsync_ShouldMapMultipleEndpoints()
     {
         await using var host = await EndpointTestHost.StartAsync();

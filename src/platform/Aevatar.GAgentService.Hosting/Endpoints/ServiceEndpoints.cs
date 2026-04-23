@@ -381,14 +381,34 @@ public static partial class ServiceEndpoints
             Payload = ServiceJsonPayloads.PackBase64(
                 request.PayloadTypeUrl ?? string.Empty,
                 request.PayloadBase64),
-            Caller = new ServiceInvocationCaller
-            {
-                ServiceKey = request.CallerServiceKey ?? string.Empty,
-                TenantId = request.CallerTenantId ?? string.Empty,
-                AppId = request.CallerAppId ?? string.Empty,
-            },
+            Caller = ResolveInvocationCaller(identityResolver, request),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}", receipt);
+    }
+
+    private static ServiceInvocationCaller ResolveInvocationCaller(
+        IServiceIdentityContextResolver identityResolver,
+        InvokeServiceHttpRequest request)
+    {
+        var authenticatedContext = identityResolver.Resolve();
+        if (authenticatedContext is null)
+        {
+            return new ServiceInvocationCaller
+            {
+                ServiceKey = request.CallerServiceKey?.Trim() ?? string.Empty,
+                TenantId = request.CallerTenantId?.Trim() ?? string.Empty,
+                AppId = request.CallerAppId?.Trim() ?? string.Empty,
+            };
+        }
+
+        return new ServiceInvocationCaller
+        {
+            // Authenticated /api/services callers do not currently carry a
+            // verifiable caller service id/service key contract.
+            ServiceKey = string.Empty,
+            TenantId = authenticatedContext.TenantId,
+            AppId = authenticatedContext.AppId,
+        };
     }
 
     private static IResult JsonOrNull<T>(T? value) =>

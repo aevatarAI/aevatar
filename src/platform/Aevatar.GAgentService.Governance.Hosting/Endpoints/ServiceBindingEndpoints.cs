@@ -34,15 +34,20 @@ internal static class ServiceBindingEndpoints
                 request.TenantId,
                 request.AppId,
                 request.Namespace,
-                out _,
+                out var ownerContext,
                 out var denied) == false)
         {
             return denied;
         }
 
+        var authenticatedContext = identityResolver.Resolve();
+        var bindingKind = ParseBindingKind(request.BindingKind);
+        if (TryValidateBoundServiceIdentity(bindingKind, request, authenticatedContext) is { } invalid)
+            return invalid;
+
         var receipt = await commandPort.CreateBindingAsync(new CreateServiceBindingCommand
         {
-            Spec = ToSpec(serviceId, request, request.BindingId ?? string.Empty, identityResolver),
+            Spec = ToSpec(serviceId, request, request.BindingId ?? string.Empty, bindingKind, ownerContext, authenticatedContext),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/bindings/{request.BindingId}", receipt);
     }
@@ -61,15 +66,20 @@ internal static class ServiceBindingEndpoints
                 request.TenantId,
                 request.AppId,
                 request.Namespace,
-                out _,
+                out var ownerContext,
                 out var denied) == false)
         {
             return denied;
         }
 
+        var authenticatedContext = identityResolver.Resolve();
+        var bindingKind = ParseBindingKind(request.BindingKind);
+        if (TryValidateBoundServiceIdentity(bindingKind, request, authenticatedContext) is { } invalid)
+            return invalid;
+
         var receipt = await commandPort.UpdateBindingAsync(new UpdateServiceBindingCommand
         {
-            Spec = ToSpec(serviceId, request, bindingId, identityResolver),
+            Spec = ToSpec(serviceId, request, bindingId, bindingKind, ownerContext, authenticatedContext),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/bindings/{bindingId}", receipt);
     }
@@ -130,27 +140,22 @@ internal static class ServiceBindingEndpoints
         string serviceId,
         ServiceBindingHttpRequest request,
         string bindingId,
-        IServiceIdentityContextResolver identityResolver)
+        ServiceBindingKind bindingKind,
+        ServiceIdentityContext ownerContext,
+        ServiceIdentityContext? authenticatedContext)
     {
-        var resolvedContext = identityResolver.Resolve();
-        var ownerContext = resolvedContext ?? new ServiceIdentityContext(
-            request.TenantId?.Trim() ?? string.Empty,
-            request.AppId?.Trim() ?? string.Empty,
-            request.Namespace?.Trim() ?? string.Empty,
-            "request");
-
         var spec = new ServiceBindingSpec
         {
             Identity = GAgentServiceGovernanceEndpointModels.ToIdentity(ownerContext.TenantId, ownerContext.AppId, ownerContext.Namespace, serviceId),
             BindingId = bindingId,
             DisplayName = request.DisplayName ?? string.Empty,
-            BindingKind = ParseBindingKind(request.BindingKind),
+            BindingKind = bindingKind,
         };
         spec.PolicyIds.Add(request.PolicyIds ?? []);
         switch (spec.BindingKind)
         {
             case ServiceBindingKind.Service:
-                var boundServiceContext = resolvedContext ?? new ServiceIdentityContext(
+                var boundServiceContext = authenticatedContext ?? new ServiceIdentityContext(
                     request.Service?.TenantId?.Trim() ?? request.TenantId?.Trim() ?? string.Empty,
                     request.Service?.AppId?.Trim() ?? request.AppId?.Trim() ?? string.Empty,
                     request.Service?.Namespace?.Trim() ?? request.Namespace?.Trim() ?? string.Empty,
@@ -184,6 +189,36 @@ internal static class ServiceBindingEndpoints
 
         return spec;
     }
+
+    private static IResult? TryValidateBoundServiceIdentity(
+        ServiceBindingKind bindingKind,
+        ServiceBindingHttpRequest request,
+        ServiceIdentityContext? authenticatedContext)
+    {
+        if (bindingKind != ServiceBindingKind.Service ||
+            authenticatedContext is null ||
+            request.Service is null)
+        {
+            return null;
+        }
+
+        if (!MatchesAuthenticatedValue(request.Service.TenantId, authenticatedContext.TenantId) ||
+            !MatchesAuthenticatedValue(request.Service.AppId, authenticatedContext.AppId) ||
+            !MatchesAuthenticatedValue(request.Service.Namespace, authenticatedContext.Namespace))
+        {
+            return Results.BadRequest(new
+            {
+                code = "BOUND_SERVICE_IDENTITY_CONFLICT",
+                message = "Authenticated service identity does not allow overriding service tenantId, appId, or namespace.",
+            });
+        }
+
+        return null;
+    }
+
+    private static bool MatchesAuthenticatedValue(string? requestedValue, string expectedValue) =>
+        string.IsNullOrWhiteSpace(requestedValue) ||
+        string.Equals(requestedValue.Trim(), expectedValue, StringComparison.Ordinal);
 
     private static IResult JsonOrNull<T>(T? value) =>
         value is null
