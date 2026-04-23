@@ -33,6 +33,7 @@ import {
   embeddedPanelStyle,
   stretchColumnStyle,
 } from '@/shared/ui/proComponents';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import StudioFilesDetailPane from './StudioFilesDetailPane';
 
 type QueryState<T> = {
@@ -210,6 +211,7 @@ const TreeRow: React.FC<{
   onClick?: () => void;
 }> = ({ active, count, icon, indent = false, label, meta, onClick }) => (
   <button
+    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
     type="button"
     onClick={onClick}
     style={{
@@ -238,7 +240,12 @@ const FolderToggle: React.FC<{
   open: boolean;
   onToggle: () => void;
 }> = ({ count, label, open, onToggle }) => (
-  <button type="button" onClick={onToggle} style={treeButtonStyle}>
+  <button
+    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+    type="button"
+    onClick={onToggle}
+    style={treeButtonStyle}
+  >
     <span style={{ alignItems: 'center', display: 'flex', gap: 10 }}>
       {open ? <DownOutlined /> : <RightOutlined />}
       <FolderOpenOutlined />

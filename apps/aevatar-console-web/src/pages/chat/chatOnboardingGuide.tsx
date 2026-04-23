@@ -1,6 +1,7 @@
 import { Alert, Button, Input, Space, Tag, Typography } from "antd";
 import React from "react";
 import type { StudioProviderType } from "@/shared/studio/models";
+import { AEVATAR_PRESSABLE_CARD_CLASS } from "@/shared/ui/interactionStandards";
 import type { OnboardingState } from "./onboarding";
 
 type ChatOnboardingGuideProps = {
@@ -171,6 +172,7 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
               {providerTypes.map((providerType) => (
                 <button
                   aria-label={providerType.displayName}
+                  className={AEVATAR_PRESSABLE_CARD_CLASS}
                   key={providerType.id}
                   onClick={() => onSelectProvider(providerType.id)}
                   style={providerCardStyle}

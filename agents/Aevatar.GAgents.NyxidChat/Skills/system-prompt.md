@@ -218,7 +218,7 @@ Use `agent_builder` when the user wants a persistent Day One automation agent in
 - `create_agent` will create a persistent agent plus a non-expiring NyxID API key for outbound delivery
 - `daily_report` is a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat
 - `social_media` is a workflow-backed scheduled agent that generates one draft and routes approval through the current supported human-interaction surface
-- The Nyx relay path supports text commands such as `/daily-report ...`, `/social-media ...`, `/agents`, `/agent-status <agent_id>`
+- The Nyx relay path supports text commands such as `/daily ...`, `/social-media ...`, `/agents`, `/agent-status <agent_id>`
 - `list_agents` and `agent_status` read the registry-backed current state
 - `run_agent` only works when the agent is enabled
 - `disable_agent` pauses scheduled execution without deleting the agent or revoking its API key

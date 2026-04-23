@@ -30,6 +30,11 @@ import {
 import { studioApi } from "@/shared/studio/api";
 import { AevatarContextDrawer } from "@/shared/ui/aevatarPageShells";
 import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  AEVATAR_PRESSABLE_CARD_CLASS,
+} from "@/shared/ui/interactionStandards";
+import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
   isRawObserved,
@@ -273,7 +278,12 @@ function createResultPanel(
       >
         <Typography.Text strong>{label}</Typography.Text>
         {onCopy ? (
-          <button onClick={onCopy} style={actionButtonStyle("secondary")} type="button">
+          <button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            onClick={onCopy}
+            style={actionButtonStyle("secondary")}
+            type="button"
+          >
             Copy
           </button>
         ) : null}
@@ -1219,6 +1229,7 @@ export function ChatAdvancedConsole({
                         <button
                           aria-label={flow.label}
                           aria-pressed={active}
+                          className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                           key={flow.id}
                           onClick={() => setActiveTab(flow.id)}
                           style={{
@@ -1340,6 +1351,8 @@ export function ChatAdvancedConsole({
                 >
                   {queryTargets.map((target) => (
                     <button
+                      aria-pressed={queryTarget === target.id}
+                      className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                       key={target.id}
                       onClick={() => {
                         setQueryTarget(target.id);
@@ -1397,6 +1410,7 @@ export function ChatAdvancedConsole({
 
                 <div>
                   <button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     disabled={
                       queryLoading ||
                       (queryTarget === "actor" && !queryActorId.trim())
@@ -1511,6 +1525,7 @@ export function ChatAdvancedConsole({
 
                   <Space wrap>
                     <button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       disabled={
                         executeStatus === "running" ||
                         !activeExecuteService ||
@@ -1528,6 +1543,7 @@ export function ChatAdvancedConsole({
                       {executeStatus === "running" ? "Running..." : "Run"}
                     </button>
                     <button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       disabled={executeStatus !== "running"}
                       onClick={() => executeAbortRef.current?.abort()}
                       style={actionButtonStyle(
@@ -1551,6 +1567,7 @@ export function ChatAdvancedConsole({
                   <Typography.Text strong>Execution Metadata</Typography.Text>
                   <Space wrap>
                     <button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       onClick={handleOpenRuns}
                       style={actionButtonStyle("secondary")}
                       type="button"
@@ -1558,6 +1575,7 @@ export function ChatAdvancedConsole({
                       Open Runs
                     </button>
                     <button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       disabled={!executeActorId && !executeRunId}
                       onClick={handleOpenExplorer}
                       style={actionButtonStyle(
@@ -1569,6 +1587,7 @@ export function ChatAdvancedConsole({
                       Open Explorer
                     </button>
                     <button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       disabled={!executeRunId || executeAuditLoading}
                       onClick={() => void handleLoadAudit()}
                       style={actionButtonStyle(
@@ -1820,6 +1839,7 @@ export function ChatAdvancedConsole({
 
                 <Space wrap>
                   <button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     disabled={!effectiveTimelineActorId || timelineLoading}
                     onClick={() => setTimelineRefreshTick((current) => current + 1)}
                     style={actionButtonStyle(
@@ -1831,6 +1851,7 @@ export function ChatAdvancedConsole({
                     {timelineLoading ? "Refreshing..." : "Refresh Timeline"}
                   </button>
                   <button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     disabled={!executeRunId || executeAuditLoading}
                     onClick={() => void handleLoadAudit()}
                     style={actionButtonStyle(
@@ -1846,6 +1867,7 @@ export function ChatAdvancedConsole({
                         : "Load Audit for Timeline"}
                   </button>
                   <button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     disabled={!effectiveTimelineActorId}
                     onClick={handleOpenExplorer}
                     style={actionButtonStyle(
@@ -1857,6 +1879,7 @@ export function ChatAdvancedConsole({
                     Open Explorer
                   </button>
                   <button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     disabled={!executeLaunchContext}
                     onClick={handleOpenRuns}
                     style={actionButtonStyle("secondary", !executeLaunchContext)}
@@ -2199,6 +2222,7 @@ export function ChatAdvancedConsole({
                   <Space wrap>
                     {timelineBlockingSummary.kind === "wait_signal" ? (
                       <button
+                        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                         disabled={
                           timelineActionLoading ||
                           !executeRunId ||
@@ -2218,6 +2242,7 @@ export function ChatAdvancedConsole({
                     ) : (
                       <>
                         <button
+                          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                           disabled={
                             timelineActionLoading ||
                             !executeRunId ||
@@ -2250,6 +2275,7 @@ export function ChatAdvancedConsole({
                         </button>
                         {timelineBlockingSummary.kind === "human_approval" ? (
                           <button
+                            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                             disabled={
                               timelineActionLoading ||
                               !executeRunId ||
@@ -2390,6 +2416,7 @@ export function ChatAdvancedConsole({
 
                         return (
                           <button
+                            className={AEVATAR_PRESSABLE_CARD_CLASS}
                             key={row.key}
                             onClick={() => setTimelineSelectedKey(row.key)}
                             style={{
@@ -2581,6 +2608,7 @@ export function ChatAdvancedConsole({
                 <Space wrap>
                   {rawShortcuts.map((shortcut) => (
                     <button
+                      className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                       key={`${shortcut.method}-${shortcut.path}`}
                       onClick={() => {
                         setRawMethod(shortcut.method);
@@ -2639,6 +2667,7 @@ export function ChatAdvancedConsole({
 
                 <div>
                   <button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     disabled={rawLoading || !rawPath.trim()}
                     onClick={() => void handleRawSubmit()}
                     style={actionButtonStyle(
@@ -2666,6 +2695,7 @@ export function ChatAdvancedConsole({
                       Response · {rawResult.status} {rawResult.statusText}
                     </Typography.Text>
                     <button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       onClick={() => handleCopy(rawResult.body)}
                       style={actionButtonStyle("secondary")}
                       type="button"
