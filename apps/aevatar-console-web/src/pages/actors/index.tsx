@@ -934,16 +934,20 @@ export const TopologyExplorerPage: React.FC<{
     [previewActorId],
   );
 
-  const handleOpenRuns = useCallback(() => {
-    if (!selectedActorId) {
+  const handleOpenRuns = useCallback((targetActorId?: string, workflowName?: string) => {
+    const nextActorId = (targetActorId ?? selectedActorId).trim();
+    if (!nextActorId) {
       return;
     }
 
     history.push(
       buildRuntimeRunsHref({
-        actorId: selectedActorId,
+        actorId: nextActorId,
+        route: workflowName?.trim() || undefined,
+        scopeId: initialRouteRef.current.scopeId || undefined,
+        serviceId: initialRouteRef.current.serviceId || undefined,
         returnTo: buildRuntimeExplorerHref({
-          actorId: selectedActorId || undefined,
+          actorId: nextActorId || undefined,
           runId: initialRouteRef.current.runId || undefined,
           scopeId: initialRouteRef.current.scopeId || undefined,
           serviceId: initialRouteRef.current.serviceId || undefined,
@@ -1627,7 +1631,16 @@ export const TopologyExplorerPage: React.FC<{
                 <Button onClick={() => handleEnterWorkbench()} type="primary">
                   进入追查工作台
                 </Button>
-                <Button icon={<RadarChartOutlined />} onClick={handleOpenRuns}>
+                <Button
+                  icon={<RadarChartOutlined />}
+                  onClick={() =>
+                    handleOpenRuns(
+                      previewActorId,
+                      previewSnapshot?.workflowName ||
+                        previewDisplayActor?.workflowName,
+                    )
+                  }
+                >
                   查看运行
                 </Button>
               </Space>
@@ -1646,7 +1659,16 @@ export const TopologyExplorerPage: React.FC<{
               selectedActorId ? (
                 <Space size={8} wrap>
                   <Tag color="blue">当前焦点</Tag>
-                  <Button icon={<RadarChartOutlined />} onClick={handleOpenRuns}>
+                  <Button
+                    icon={<RadarChartOutlined />}
+                    onClick={() =>
+                      handleOpenRuns(
+                        selectedActorId,
+                        selectedSnapshot?.workflowName ||
+                          selectedDisplayActor?.workflowName,
+                      )
+                    }
+                  >
                     查看运行
                   </Button>
                 </Space>
