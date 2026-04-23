@@ -24,6 +24,7 @@ public static partial class ServiceEndpoints
         group.MapPost("/{serviceId}/rollouts/{rolloutId}:resume", HandleResumeRolloutAsync);
         group.MapPost("/{serviceId}/rollouts/{rolloutId}:rollback", HandleRollbackRolloutAsync);
         group.MapGet("/{serviceId}/rollouts", HandleGetRolloutAsync);
+        group.MapGet("/{serviceId}/rollouts/commands/{commandId}", HandleGetRolloutCommandObservationAsync);
         group.MapGet("/{serviceId}/traffic", HandleGetTrafficViewAsync);
         return group;
     }
@@ -251,7 +252,7 @@ public static partial class ServiceEndpoints
             RolloutId = rolloutId ?? string.Empty,
             Reason = request.Reason ?? string.Empty,
         }, ct);
-        return Results.Accepted($"/api/services/{serviceId}/rollouts/{rolloutId}", receipt);
+        return Results.Accepted($"/api/services/{serviceId}/rollouts/commands/{receipt.CommandId}", receipt);
     }
 
     private static async Task<IResult> HandleResumeRolloutAsync(
@@ -280,7 +281,7 @@ public static partial class ServiceEndpoints
             Identity = identity,
             RolloutId = rolloutId ?? string.Empty,
         }, ct);
-        return Results.Accepted($"/api/services/{serviceId}/rollouts/{rolloutId}", receipt);
+        return Results.Accepted($"/api/services/{serviceId}/rollouts/commands/{receipt.CommandId}", receipt);
     }
 
     private static async Task<IResult> HandleRollbackRolloutAsync(
@@ -310,7 +311,7 @@ public static partial class ServiceEndpoints
             RolloutId = rolloutId ?? string.Empty,
             Reason = request.Reason ?? string.Empty,
         }, ct);
-        return Results.Accepted($"/api/services/{serviceId}/rollouts/{rolloutId}", receipt);
+        return Results.Accepted($"/api/services/{serviceId}/rollouts/commands/{receipt.CommandId}", receipt);
     }
 
     private static async Task<IResult> HandleGetRolloutAsync(
@@ -334,6 +335,30 @@ public static partial class ServiceEndpoints
         }
 
         return JsonOrNull(await queryPort.GetServiceRolloutAsync(identity, ct));
+    }
+
+    private static async Task<IResult> HandleGetRolloutCommandObservationAsync(
+        HttpContext http,
+        string serviceId,
+        string commandId,
+        [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
+        [FromServices] IServiceServingQueryPort queryPort,
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        return JsonOrNull(await queryPort.GetServiceRolloutCommandObservationAsync(identity, commandId, ct));
     }
 
     private static async Task<IResult> HandleGetTrafficViewAsync(

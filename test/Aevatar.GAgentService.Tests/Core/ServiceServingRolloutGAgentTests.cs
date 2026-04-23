@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -396,6 +397,97 @@ public sealed class ServiceServingRolloutGAgentTests
         }))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*already finalized*");
+    }
+
+    [Fact]
+    public async Task ServiceRolloutManager_ShouldPersistCommandObservation_AfterHandledPause()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateRolloutAgent(eventStore, new RecordingDispatchPort(), identity);
+        await agent.ActivateAsync();
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = CreateRolloutPlan(
+                "rollout-observed",
+                CreateStage("stage-a", CreateTarget("dep-a", "r1", "actor-a", 100, "run")),
+                CreateStage("stage-b", CreateTarget("dep-b", "r2", "actor-b", 100, "run"))),
+            BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
+        });
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "cmd-pause-rollout",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new PauseServiceRolloutCommand
+            {
+                Identity = identity.Clone(),
+                RolloutId = "rollout-observed",
+                Reason = "hold",
+            }),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-pause-rollout",
+            },
+        });
+
+        var persisted = await eventStore.GetEventsAsync(ServiceActorIds.Rollout(identity));
+        persisted.Should().Contain(x => x.EventData.Is(ServiceRolloutPausedEvent.Descriptor));
+        var observation = persisted
+            .Where(x => x.EventData.Is(ServiceRolloutCommandObservedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<ServiceRolloutCommandObservedEvent>())
+            .Single();
+        observation.CommandId.Should().Be("cmd-pause-rollout");
+        observation.CorrelationId.Should().Be("corr-pause-rollout");
+        observation.Status.Should().Be(ServiceRolloutStatus.Paused);
+        observation.WasNoOp.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ServiceRolloutManager_ShouldPersistNoOpObservation_ForCompletedPause()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateRolloutAgent(eventStore, new RecordingDispatchPort(), identity);
+        await agent.ActivateAsync();
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = CreateRolloutPlan(
+                "rollout-complete-observed",
+                CreateStage("stage-a", CreateTarget("dep-a", "r1", "actor-a", 100, "run"))),
+            BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
+        });
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "cmd-pause-noop",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new PauseServiceRolloutCommand
+            {
+                Identity = identity.Clone(),
+                RolloutId = "rollout-complete-observed",
+                Reason = "ignored",
+            }),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-pause-noop",
+            },
+        });
+
+        var persisted = await eventStore.GetEventsAsync(ServiceActorIds.Rollout(identity));
+        var pausedEvents = persisted.Where(x => x.EventData.Is(ServiceRolloutPausedEvent.Descriptor)).ToList();
+        pausedEvents.Should().BeEmpty();
+        var observation = persisted
+            .Where(x => x.EventData.Is(ServiceRolloutCommandObservedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<ServiceRolloutCommandObservedEvent>())
+            .Single();
+        observation.CommandId.Should().Be("cmd-pause-noop");
+        observation.Status.Should().Be(ServiceRolloutStatus.Completed);
+        observation.WasNoOp.Should().BeTrue();
     }
 
     [Fact]

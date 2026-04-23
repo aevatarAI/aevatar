@@ -45,10 +45,20 @@ public sealed class ApplicationServiceGuardTests
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort());
+        Action nullTrafficProjection = () => new ServiceCommandApplicationService(
+            new NoOpActorDispatchPort(),
+            new NoOpServiceCommandTargetProvisioner(),
+            new NoOpCatalogProjectionPort(),
+            new NoOpRevisionProjectionPort(),
+            new NoOpProjectionPort(),
+            new NoOpProjectionPort(),
+            new NoOpProjectionPort(),
+            null!);
 
         nullDispatch.Should().Throw<ArgumentNullException>();
         nullProvisioner.Should().Throw<ArgumentNullException>();
         nullCatalogProjection.Should().Throw<ArgumentNullException>();
+        nullTrafficProjection.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -100,13 +110,21 @@ public sealed class ApplicationServiceGuardTests
         Action nullServingReader = () => new ServiceServingQueryApplicationService(
             null!,
             new NoOpRolloutQueryReader(),
+            new NoOpRolloutCommandObservationQueryReader(),
+            new NoOpTrafficViewQueryReader());
+        Action nullObservationReader = () => new ServiceServingQueryApplicationService(
+            new NoOpServingSetQueryReader(),
+            new NoOpRolloutQueryReader(),
+            null!,
             new NoOpTrafficViewQueryReader());
         Action nullTrafficReader = () => new ServiceServingQueryApplicationService(
             new NoOpServingSetQueryReader(),
             new NoOpRolloutQueryReader(),
+            new NoOpRolloutCommandObservationQueryReader(),
             null!);
 
         nullServingReader.Should().Throw<ArgumentNullException>();
+        nullObservationReader.Should().Throw<ArgumentNullException>();
         nullTrafficReader.Should().Throw<ArgumentNullException>();
     }
 
@@ -274,6 +292,12 @@ public sealed class ApplicationServiceGuardTests
     {
         public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+    }
+
+    private sealed class NoOpRolloutCommandObservationQueryReader : IServiceRolloutCommandObservationQueryReader
+    {
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetAsync(string commandId, CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
     }
 
     private sealed class NoOpCatalogProjectionPort : IServiceCatalogProjectionPort
