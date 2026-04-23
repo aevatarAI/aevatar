@@ -10,6 +10,10 @@ import "chat_activity.proto";
 import "channel_contracts.proto";
 import "schedule.proto";
 
+message OutboundDeliveryReceipt {
+  string reply_message_id = 1;
+}
+
 message ConversationTurnCompletedEvent {
   string processed_activity_id = 1;
   string causation_command_id = 2;
@@ -18,6 +22,39 @@ message ConversationTurnCompletedEvent {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 5;
   aevatar.gagents.channel.abstractions.MessageContent outbound = 6;
   int64 completed_at_unix_ms = 7;
+  OutboundDeliveryReceipt outbound_delivery = 8;
+}
+
+message NeedsLlmReplyEvent {
+  string correlation_id = 1;
+  string target_actor_id = 2;
+  string registration_id = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  map<string, string> metadata = 5;
+  int64 requested_at_unix_ms = 6;
+}
+
+enum LlmReplyTerminalState {
+  LLM_REPLY_TERMINAL_STATE_UNSPECIFIED = 0;
+  LLM_REPLY_TERMINAL_STATE_COMPLETED = 1;
+  LLM_REPLY_TERMINAL_STATE_FAILED = 2;
+}
+
+message LlmReplyReadyEvent {
+  string correlation_id = 1;
+  string registration_id = 2;
+  string source_actor_id = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  aevatar.gagents.channel.abstractions.MessageContent outbound = 5;
+  LlmReplyTerminalState terminal_state = 6;
+  string error_code = 7;
+  string error_summary = 8;
+  int64 ready_at_unix_ms = 9;
+}
+
+message DeferredLlmReplyDispatchRequestedEvent {
+  string correlation_id = 1;
+  int64 requested_at_unix_ms = 2;
 }
 
 message ConversationContinueRequestedEvent {

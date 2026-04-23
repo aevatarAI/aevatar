@@ -38,6 +38,25 @@ public class NyxIdProxyToolDualTokenTests
     }
 
     [Fact]
+    public void ParseServiceSlugs_PaginatedProxyResponse_ExtractsBothServiceGroups()
+    {
+        using var doc = JsonDocument.Parse("""
+            {
+              "services":[{"slug":"api-github"}],
+              "custom_services":[{"slug":"api-lark-bot"}],
+              "total":2,
+              "page":1,
+              "per_page":100
+            }
+            """);
+
+        var slugs = NyxIdProxyTool.ParseServiceSlugs(doc);
+
+        slugs.Should().Contain("api-github");
+        slugs.Should().Contain("api-lark-bot");
+    }
+
+    [Fact]
     public void ParseServiceSlugs_NonArrayRoot_ReturnsEmpty()
     {
         using var doc = JsonDocument.Parse("""{"error":"unauthorized"}""");

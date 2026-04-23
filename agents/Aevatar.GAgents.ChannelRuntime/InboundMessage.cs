@@ -1,3 +1,5 @@
+using Aevatar.GAgents.Channel.Abstractions;
+
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
@@ -12,5 +14,7 @@ public sealed class InboundMessage
     public required string Text { get; init; }
     public string? MessageId { get; init; }
     public string? ChatType { get; init; }
+    public OutboundDeliveryContext? OutboundDelivery { get; init; }
+    public TransportExtras? TransportExtras { get; init; }
     public IReadOnlyDictionary<string, string> Extra { get; init; } = new Dictionary<string, string>();
 }

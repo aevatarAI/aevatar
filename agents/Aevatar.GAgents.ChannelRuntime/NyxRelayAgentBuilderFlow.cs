@@ -160,7 +160,7 @@ internal static class NyxRelayAgentBuilderFlow
             {
                 action = "create_agent",
                 template = "daily_report",
-                github_username = githubUsername,
+                github_username = NormalizeOptional(githubUsername),
                 repositories,
                 schedule_cron = scheduleCron,
                 schedule_timezone = scheduleTimezone,
@@ -529,7 +529,7 @@ internal static class NyxRelayAgentBuilderFlow
             "GitHub username can be passed explicitly, or omitted to reuse a saved preference when available.",
             "Schedule defaults to 09:00 if schedule_time and schedule_cron are both omitted.",
             $"Example: {BuildDailyReportCommandExample()}",
-            "Optional: repositories=owner/repo,owner/repo schedule_timezone=Asia/Singapore run_immediately=false");
+            "Optional: github_username (otherwise uses your saved preference or connected GitHub login), repositories=owner/repo,owner/repo schedule_timezone=Asia/Singapore run_immediately=false");
 
     private static string BuildSocialMediaHelpText() =>
         BuildTextBlock(
@@ -539,7 +539,7 @@ internal static class NyxRelayAgentBuilderFlow
             "Optional: audience=\"Developers\" style=\"Confident and concise\" schedule_timezone=Asia/Singapore run_immediately=false");
 
     private static string BuildDailyReportCommandExample() =>
-        "/daily github_username=alice schedule_time=09:00 repositories=owner/repo";
+        "/daily [github_username] schedule_time=09:00 repositories=owner/repo";
 
     private static string BuildSocialMediaCommandExample() =>
         "/social-media topic=\"Launch update\" schedule_time=10:30 audience=\"Developers\" style=\"Confident and concise\"";

@@ -1,0 +1,74 @@
+using System.Text;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using FluentAssertions;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests;
+
+public sealed class NyxIdRelayTransportTests
+{
+    private readonly NyxIdRelayTransport _transport = new();
+
+    [Theory]
+    [InlineData("private", ConversationScope.DirectMessage, false)]
+    [InlineData("group", ConversationScope.Group, false)]
+    [InlineData("channel", ConversationScope.Channel, false)]
+    [InlineData("device", ConversationScope.Unspecified, true)]
+    public void Parse_ShouldMapConversationTypeIntoChatActivity(
+        string conversationType,
+        ConversationScope expectedScope,
+        bool expectIgnored)
+    {
+        var body = $$"""
+            {
+              "message_id": "msg-1",
+              "platform": "slack",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "type": "{{conversationType}}" },
+              "sender": { "platform_id": "user-1", "display_name": "User One" },
+              "content": { "type": "text", "text": "hello" },
+              "timestamp": "2026-04-23T12:00:00Z"
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Ignored.Should().Be(expectIgnored);
+        if (expectIgnored)
+        {
+            parsed.Success.Should().BeFalse();
+            parsed.ErrorCode.Should().Be("unsupported_conversation_type");
+            return;
+        }
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity.Should().NotBeNull();
+        parsed.Activity!.Conversation.Scope.Should().Be(expectedScope);
+        parsed.Activity.ChannelId.Value.Should().Be("slack");
+        parsed.Activity.TransportExtras.NyxAgentApiKeyId.Should().Be("api-key-1");
+        parsed.Activity.TransportExtras.NyxPlatform.Should().Be("slack");
+        parsed.Activity.OutboundDelivery.ReplyMessageId.Should().Be("msg-1");
+        parsed.Activity.RawPayloadBlobRef.Should().StartWith("slack-raw:");
+    }
+
+    [Fact]
+    public void Parse_ShouldUseSenderIdAsDirectMessageCanonicalTail()
+    {
+        var body = """
+            {
+              "message_id": "msg-dm-1",
+              "platform": "discord",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-dm-1", "type": "private" },
+              "sender": { "platform_id": "user-42", "display_name": "User Forty Two" },
+              "content": { "type": "text", "text": "hello" }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Conversation.CanonicalKey.Should().Be("discord:dm:user-42");
+        parsed.Activity.TransportExtras.NyxConversationId.Should().Be("conv-dm-1");
+    }
+}
