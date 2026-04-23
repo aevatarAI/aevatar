@@ -11,10 +11,19 @@ public sealed record NyxLarkProvisioningRequest(
     string AccessToken,
     string AppId,
     string AppSecret,
+    string VerificationToken,
     string WebhookBaseUrl,
     string ScopeId,
     string Label,
     string NyxProviderSlug);
+
+public sealed record NyxLarkMirrorRepairRequest(
+    string RequestedRegistrationId,
+    string ScopeId,
+    string NyxProviderSlug,
+    string NyxChannelBotId,
+    string NyxAgentApiKeyId,
+    string NyxConversationRouteId);
 
 public sealed record NyxLarkProvisioningResult(
     bool Succeeded,
@@ -28,9 +37,21 @@ public sealed record NyxLarkProvisioningResult(
     string? Error = null,
     string? Note = null);
 
+public sealed record NyxLarkMirrorRepairResult(
+    bool Succeeded,
+    string Status,
+    string? RegistrationId = null,
+    string? NyxChannelBotId = null,
+    string? NyxAgentApiKeyId = null,
+    string? NyxConversationRouteId = null,
+    string? WebhookUrl = null,
+    string? Error = null,
+    string? Note = null);
+
 public interface INyxLarkProvisioningService
 {
     Task<NyxLarkProvisioningResult> ProvisionAsync(NyxLarkProvisioningRequest request, CancellationToken ct);
+    Task<NyxLarkMirrorRepairResult> RepairLocalMirrorAsync(NyxLarkMirrorRepairRequest request, CancellationToken ct);
 }
 
 public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
@@ -89,7 +110,13 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         try
         {
             apiKeyId = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
-            channelBotId = await RegisterChannelBotAsync(request.AccessToken, request.AppId, request.AppSecret, label, ct);
+            channelBotId = await RegisterChannelBotAsync(
+                request.AccessToken,
+                request.AppId,
+                request.AppSecret,
+                request.VerificationToken,
+                label,
+                ct);
             routeId = await CreateDefaultRouteAsync(request.AccessToken, channelBotId, apiKeyId, ct);
 
             var webhookUrl = $"{nyxBaseUrl}/api/v1/webhooks/channel/lark/{Uri.EscapeDataString(channelBotId)}";
@@ -138,6 +165,62 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         }
     }
 
+    public async Task<NyxLarkMirrorRepairResult> RepairLocalMirrorAsync(NyxLarkMirrorRepairRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(request.NyxChannelBotId))
+            return MirrorFailure("missing_nyx_channel_bot_id");
+        if (string.IsNullOrWhiteSpace(request.NyxAgentApiKeyId))
+            return MirrorFailure("missing_nyx_agent_api_key_id");
+        if (string.IsNullOrWhiteSpace(_nyxOptions.BaseUrl))
+            return MirrorFailure("nyx_base_url_not_configured");
+
+        var registrationId = string.IsNullOrWhiteSpace(request.RequestedRegistrationId)
+            ? Guid.NewGuid().ToString("N")
+            : request.RequestedRegistrationId.Trim();
+        var nyxBaseUrl = _nyxOptions.BaseUrl.TrimEnd('/');
+        var nyxProviderSlug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
+            ? DefaultNyxProviderSlug
+            : request.NyxProviderSlug.Trim();
+        var webhookUrl = $"{nyxBaseUrl}/api/v1/webhooks/channel/lark/{Uri.EscapeDataString(request.NyxChannelBotId.Trim())}";
+
+        try
+        {
+            await RegisterLocalMirrorAsync(
+                registrationId,
+                nyxProviderSlug,
+                webhookUrl,
+                request.ScopeId?.Trim() ?? string.Empty,
+                request.NyxAgentApiKeyId.Trim(),
+                request.NyxChannelBotId.Trim(),
+                request.NyxConversationRouteId?.Trim() ?? string.Empty,
+                ct);
+
+            return new NyxLarkMirrorRepairResult(
+                Succeeded: true,
+                Status: "accepted",
+                RegistrationId: registrationId,
+                NyxChannelBotId: request.NyxChannelBotId.Trim(),
+                NyxAgentApiKeyId: request.NyxAgentApiKeyId.Trim(),
+                NyxConversationRouteId: request.NyxConversationRouteId?.Trim() ?? string.Empty,
+                WebhookUrl: webhookUrl,
+                Note: "Existing Nyx relay resources were reused and the local Aevatar mirror command was accepted. If registrations remain empty, the local projection/read model is unhealthy.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Nyx-backed Lark local mirror repair failed: registration={RegistrationId}, botId={ChannelBotId}, apiKeyId={ApiKeyId}, routeId={RouteId}",
+                registrationId,
+                request.NyxChannelBotId,
+                request.NyxAgentApiKeyId,
+                request.NyxConversationRouteId);
+
+            return MirrorFailure(ex.Message);
+        }
+    }
+
     private async Task<string> CreateRelayApiKeyAsync(
         string accessToken,
         string relayCallbackUrl,
@@ -162,19 +245,25 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
         string accessToken,
         string appId,
         string appSecret,
+        string verificationToken,
         string label,
         CancellationToken ct)
     {
+        var payload = new Dictionary<string, object?>
+        {
+            ["platform"] = "lark",
+            ["bot_token"] = LarkBotTokenPlaceholder,
+            ["label"] = label,
+            ["app_id"] = appId.Trim(),
+            ["app_secret"] = appSecret.Trim(),
+        };
+
+        if (!string.IsNullOrWhiteSpace(verificationToken))
+            payload["verification_token"] = verificationToken.Trim();
+
         var response = await _nyxClient.RegisterChannelBotAsync(
             accessToken,
-            JsonSerializer.Serialize(new
-            {
-                platform = "lark",
-                bot_token = LarkBotTokenPlaceholder,
-                label,
-                app_id = appId.Trim(),
-                app_secret = appSecret.Trim(),
-            }),
+            JsonSerializer.Serialize(payload),
             ct);
 
         return ExtractRequiredId(response, "channel_bot_id");
@@ -333,6 +422,12 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService
     }
 
     private static NyxLarkProvisioningResult Failure(string error) =>
+        new(
+            Succeeded: false,
+            Status: "error",
+            Error: string.IsNullOrWhiteSpace(error) ? "unknown_error" : error.Trim());
+
+    private static NyxLarkMirrorRepairResult MirrorFailure(string error) =>
         new(
             Succeeded: false,
             Status: "error",

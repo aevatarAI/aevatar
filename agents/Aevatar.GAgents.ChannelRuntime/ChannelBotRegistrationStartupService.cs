@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -5,13 +6,13 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
 /// Activates the projection scope for the channel bot registration store
-/// at application startup. Without this, the scope agent never subscribes
-/// to the actor's event stream after a restart, and old registrations
-/// are lost from the InMemory store.
+/// at application startup, then re-emits the authoritative state root so the
+/// query-side read model can be rebuilt after a restart.
 ///
 /// StartAsync awaits the activation with retries so the host does not
-/// accept HTTP requests until the registration projection binder is active.
-/// Request paths must not activate or prime this projection themselves.
+/// accept HTTP requests until the registration projection binder is active and
+/// the refresh command has been accepted. Request paths must not activate or
+/// prime this projection themselves.
 /// </summary>
 public sealed class ChannelBotRegistrationStartupService : IHostedService
 {
@@ -19,13 +20,16 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
 
     private readonly ChannelBotRegistrationProjectionPort _projectionPort;
+    private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<ChannelBotRegistrationStartupService> _logger;
 
     public ChannelBotRegistrationStartupService(
         ChannelBotRegistrationProjectionPort projectionPort,
+        IActorRuntime actorRuntime,
         ILogger<ChannelBotRegistrationStartupService> logger)
     {
         _projectionPort = projectionPort;
+        _actorRuntime = actorRuntime;
         _logger = logger;
     }
 
@@ -38,8 +42,12 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
             {
                 await _projectionPort.EnsureProjectionForActorAsync(
                     ChannelBotRegistrationGAgent.WellKnownId, ct);
+                await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
+                    _actorRuntime,
+                    "startup_projection_rebuild",
+                    ct);
                 _logger.LogInformation(
-                    "Channel bot registration projection scope activated for {ActorId} (attempt {Attempt})",
+                    "Channel bot registration projection scope activated and rebuild dispatched for {ActorId} (attempt {Attempt})",
                     ChannelBotRegistrationGAgent.WellKnownId, attempt);
                 return;
             }
@@ -50,7 +58,7 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "Failed to activate channel bot registration projection scope (attempt {Attempt}/{MaxRetries})",
+                    "Failed to activate or rebuild channel bot registration projection scope (attempt {Attempt}/{MaxRetries})",
                     attempt, MaxRetries);
 
                 if (attempt < MaxRetries)
@@ -60,11 +68,12 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
         }
 
         // All retries exhausted — let the host start in degraded mode.
-        // Registrations may appear missing until the projection binder is
-        // re-activated by a later host restart or operator intervention.
+        // Registrations may appear missing until the projection binder and
+        // authoritative refresh are re-triggered by a later host restart or
+        // operator intervention.
         _logger.LogError(
-            "Channel bot registration projection scope activation failed after {MaxRetries} attempts — " +
-            "registrations may not be visible until the projection binder is re-activated",
+            "Channel bot registration projection activation/rebuild failed after {MaxRetries} attempts — " +
+            "registrations may not be visible until the refresh path is re-triggered",
             MaxRetries);
     }
 

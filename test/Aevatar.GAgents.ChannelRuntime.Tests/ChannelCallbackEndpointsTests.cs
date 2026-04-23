@@ -81,7 +81,7 @@ public sealed class ChannelCallbackEndpointsTests
                 WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
 
         var http = CreateJsonHttpContext(
-            """{"platform":"lark","app_id":"cli_123","app_secret":"secret","webhook_base_url":"https://aevatar.example.com"}""");
+            """{"platform":"lark","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","webhook_base_url":"https://aevatar.example.com"}""");
         http.Request.Headers.Authorization = "Bearer test-token";
 
         var result = await InvokeAsync(
@@ -100,6 +100,7 @@ public sealed class ChannelCallbackEndpointsTests
                 request.AccessToken == "test-token" &&
                 request.AppId == "cli_123" &&
                 request.AppSecret == "secret" &&
+                request.VerificationToken == "verify-123" &&
                 request.WebhookBaseUrl == "https://aevatar.example.com"),
             Arg.Any<CancellationToken>());
     }
@@ -154,6 +155,44 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"registration_mode\":\"nyx_relay_webhook\"");
         response.Body.Should().Contain("\"callback_url\":\"\"");
+    }
+
+    [Fact]
+    public async Task HandleRebuildRegistrationsAsync_DispatchesRefreshCommand()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                },
+            ]));
+
+        EventEnvelope? capturedEnvelope = null;
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
+        actor.HandleEventAsync(Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var result = await InvokeAsync(
+            "HandleRebuildRegistrationsAsync",
+            actorRuntime,
+            queryPort,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("\"status\":\"accepted\"");
+        response.Body.Should().Contain("\"observed_registrations_before_rebuild\":1");
+        capturedEnvelope.Should().NotBeNull();
+        capturedEnvelope!.Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
     }
 
     [Fact]

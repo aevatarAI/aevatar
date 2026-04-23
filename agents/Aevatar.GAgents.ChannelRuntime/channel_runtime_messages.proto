@@ -121,8 +121,17 @@ message ChannelBotUnregisterCommand {
   string registration_id = 1;
 }
 
+message ChannelBotRebuildProjectionCommand {
+  string reason = 1;
+}
+
 message ChannelBotCompactTombstonesCommand {
   int64 safe_state_version = 1;
+}
+
+message ChannelBotProjectionRebuildRequestedEvent {
+  string reason = 1;
+  google.protobuf.Timestamp requested_at = 2;
 }
 
 message ChannelBotTombstonesCompactedEvent {

@@ -124,6 +124,29 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         _agent.State.Registrations.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleRebuildProjection_PersistsRefreshEvent_WithoutMutatingState()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            RequestedId = "reg-1",
+            NyxAgentApiKeyId = "key-1",
+        });
+
+        var beforeState = _agent.State.Clone();
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRebuildProjection(new ChannelBotRebuildProjectionCommand
+        {
+            Reason = "test-rebuild",
+        });
+
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
+        _agent.State.Should().BeEquivalentTo(beforeState);
+    }
+
     private sealed class InMemoryEventStore : IEventStore
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);

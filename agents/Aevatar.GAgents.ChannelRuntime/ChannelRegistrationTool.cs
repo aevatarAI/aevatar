@@ -14,6 +14,7 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
+    private const string DefaultNyxProviderSlug = "api-lark-bot";
     private readonly IServiceProvider _serviceProvider;
 
     public ChannelRegistrationTool(IServiceProvider serviceProvider)
@@ -24,9 +25,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
     public string Name => "channel_registrations";
 
     public string Description =>
-        "Manage ChannelRuntime registrations for the supported Nyx-backed Lark relay flow. " +
-        "Actions: list, register_lark_via_nyx, delete. " +
-        "Direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials.";
+        "Manage Aevatar ChannelRuntime registrations for the supported Nyx-backed Lark relay flow. " +
+        "Actions: list, register_lark_via_nyx, rebuild_projection, repair_lark_mirror, delete. " +
+        "Use register_lark_via_nyx for first-time provisioning, rebuild_projection to re-materialize the local registration read model from the authoritative actor state, and repair_lark_mirror when Nyx relay resources already exist but the local Aevatar mirror is missing. " +
+        "Legacy direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials.";
 
     public string ParametersSchema => """
         {
@@ -34,7 +36,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "register_lark_via_nyx", "delete"],
+              "enum": ["list", "register_lark_via_nyx", "rebuild_projection", "repair_lark_mirror", "delete"],
               "description": "Action to perform (default: list)."
             },
             "nyx_provider_slug": {
@@ -57,13 +59,33 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Lark app secret (required for register_lark_via_nyx)"
             },
+            "verification_token": {
+              "type": "string",
+              "description": "Lark verification token (optional for register_lark_via_nyx, but pass it through when the backend requires it)"
+            },
             "label": {
               "type": "string",
               "description": "Human-readable label for the Nyx channel bot (optional)"
             },
+            "nyx_channel_bot_id": {
+              "type": "string",
+              "description": "Existing Nyx channel bot ID (required for repair_lark_mirror)"
+            },
+            "nyx_agent_api_key_id": {
+              "type": "string",
+              "description": "Existing Nyx relay API key ID whose callback points at Aevatar (required for repair_lark_mirror)"
+            },
+            "nyx_conversation_route_id": {
+              "type": "string",
+              "description": "Existing Nyx conversation route ID (optional for repair_lark_mirror, but strongly recommended)"
+            },
+            "reason": {
+              "type": "string",
+              "description": "Optional operator reason for rebuild_projection"
+            },
             "registration_id": {
               "type": "string",
-              "description": "Registration ID (for delete)"
+              "description": "Registration ID (for delete, or optional requested ID for repair_lark_mirror)"
             },
             "confirm": {
               "type": "boolean",
@@ -87,6 +109,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             "list" => await ExecuteWithRuntimeAsync((queryPort, _) => ListAsync(queryPort, ct)),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
+            "rebuild_projection" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) => RebuildProjectionAsync(queryPort, actorRuntime, root, ct)),
+            "repair_lark_mirror" => await RepairLarkMirrorAsync(root, ct),
             "delete" => await ExecuteWithRuntimeAsync((queryPort, actorRuntime) => DeleteAsync(queryPort, actorRuntime, root, ct)),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
@@ -110,11 +134,43 @@ public sealed class ChannelRegistrationTool : IAgentTool
             ? value.GetString()
             : null;
 
+    private static string ResolveNyxProviderSlug(JsonElement args)
+    {
+        var slug = GetStr(args, "nyx_provider_slug")?.Trim();
+        return string.IsNullOrWhiteSpace(slug) ? DefaultNyxProviderSlug : slug;
+    }
+
     private static string RetiredActionError(string message) =>
         JsonSerializer.Serialize(new
         {
             error_code = "retired_action",
             error = message,
+        });
+
+    private static string SerializeLarkRegistrationPayload(
+        string status,
+        string registrationId,
+        string nyxProviderSlug,
+        string nyxChannelBotId,
+        string nyxAgentApiKeyId,
+        string nyxConversationRouteId,
+        string relayCallbackUrl,
+        string webhookUrl,
+        string error,
+        string note) =>
+        JsonSerializer.Serialize(new
+        {
+            status,
+            registration_id = registrationId,
+            platform = "lark",
+            nyx_provider_slug = nyxProviderSlug,
+            nyx_channel_bot_id = nyxChannelBotId,
+            nyx_agent_api_key_id = nyxAgentApiKeyId,
+            nyx_conversation_route_id = nyxConversationRouteId,
+            relay_callback_url = relayCallbackUrl,
+            webhook_url = webhookUrl,
+            error,
+            note,
         });
 
     private async Task<string> ListAsync(IChannelBotRegistrationQueryPort queryPort, CancellationToken ct)
@@ -153,28 +209,123 @@ public sealed class ChannelRegistrationTool : IAgentTool
                 AccessToken: accessToken,
                 AppId: GetStr(args, "app_id")?.Trim() ?? string.Empty,
                 AppSecret: GetStr(args, "app_secret")?.Trim() ?? string.Empty,
+                VerificationToken: GetStr(args, "verification_token")?.Trim() ?? string.Empty,
                 WebhookBaseUrl: GetStr(args, "webhook_base_url")?.Trim() ?? string.Empty,
                 ScopeId: GetStr(args, "scope_id")?.Trim() ?? string.Empty,
                 Label: GetStr(args, "label")?.Trim() ?? string.Empty,
                 NyxProviderSlug: GetStr(args, "nyx_provider_slug")?.Trim() ?? string.Empty),
             ct);
 
+        return SerializeLarkRegistrationPayload(
+            status: result.Status,
+            registrationId: result.RegistrationId ?? string.Empty,
+            nyxProviderSlug: ResolveNyxProviderSlug(args),
+            nyxChannelBotId: result.NyxChannelBotId ?? string.Empty,
+            nyxAgentApiKeyId: result.NyxAgentApiKeyId ?? string.Empty,
+            nyxConversationRouteId: result.NyxConversationRouteId ?? string.Empty,
+            relayCallbackUrl: result.RelayCallbackUrl ?? string.Empty,
+            webhookUrl: result.WebhookUrl ?? string.Empty,
+            error: result.Error ?? string.Empty,
+            note: result.Note ?? string.Empty);
+    }
+
+    private async Task<string> RepairLarkMirrorAsync(JsonElement args, CancellationToken ct)
+    {
+        var provisioningService = _serviceProvider.GetService<INyxLarkProvisioningService>();
+        if (provisioningService is null)
+            return """{"error":"Nyx-backed Lark provisioning service is not registered."}""";
+
+        var nyxChannelBotId = GetStr(args, "nyx_channel_bot_id")?.Trim() ?? string.Empty;
+        var nyxAgentApiKeyId = GetStr(args, "nyx_agent_api_key_id")?.Trim() ?? string.Empty;
+        var nyxConversationRouteId = GetStr(args, "nyx_conversation_route_id")?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(nyxChannelBotId))
+            return """{"error":"'nyx_channel_bot_id' is required for repair_lark_mirror"}""";
+        if (string.IsNullOrWhiteSpace(nyxAgentApiKeyId))
+            return """{"error":"'nyx_agent_api_key_id' is required for repair_lark_mirror"}""";
+
+        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
+        if (queryPort is not null)
+        {
+            var registrations = await queryPort.QueryAllAsync(ct);
+            var existing = registrations.FirstOrDefault(entry =>
+                string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+                MatchesNyxIdentity(entry, nyxChannelBotId, nyxAgentApiKeyId, nyxConversationRouteId));
+            if (existing is not null)
+            {
+                return SerializeLarkRegistrationPayload(
+                    status: "already_registered",
+                    registrationId: existing.Id,
+                    nyxProviderSlug: string.IsNullOrWhiteSpace(existing.NyxProviderSlug)
+                        ? DefaultNyxProviderSlug
+                        : existing.NyxProviderSlug,
+                    nyxChannelBotId: existing.NyxChannelBotId,
+                    nyxAgentApiKeyId: existing.NyxAgentApiKeyId,
+                    nyxConversationRouteId: existing.NyxConversationRouteId,
+                    relayCallbackUrl: string.Empty,
+                    webhookUrl: existing.WebhookUrl,
+                    error: string.Empty,
+                    note: "Matching local Aevatar mirror already exists.");
+            }
+        }
+
+        var result = await provisioningService.RepairLocalMirrorAsync(
+            new NyxLarkMirrorRepairRequest(
+                RequestedRegistrationId: GetStr(args, "registration_id")?.Trim() ?? string.Empty,
+                ScopeId: GetStr(args, "scope_id")?.Trim() ?? string.Empty,
+                NyxProviderSlug: ResolveNyxProviderSlug(args),
+                NyxChannelBotId: nyxChannelBotId,
+                NyxAgentApiKeyId: nyxAgentApiKeyId,
+                NyxConversationRouteId: nyxConversationRouteId),
+            ct);
+
+        return SerializeLarkRegistrationPayload(
+            status: result.Status,
+            registrationId: result.RegistrationId ?? string.Empty,
+            nyxProviderSlug: ResolveNyxProviderSlug(args),
+            nyxChannelBotId: result.NyxChannelBotId ?? string.Empty,
+            nyxAgentApiKeyId: result.NyxAgentApiKeyId ?? string.Empty,
+            nyxConversationRouteId: result.NyxConversationRouteId ?? string.Empty,
+            relayCallbackUrl: string.Empty,
+            webhookUrl: result.WebhookUrl ?? string.Empty,
+            error: result.Error ?? string.Empty,
+            note: result.Note ?? string.Empty);
+    }
+
+    private async Task<string> RebuildProjectionAsync(
+        IChannelBotRegistrationQueryPort queryPort,
+        IActorRuntime actorRuntime,
+        JsonElement args,
+        CancellationToken ct)
+    {
+        var registrations = await queryPort.QueryAllAsync(ct);
+        await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
+            actorRuntime,
+            GetStr(args, "reason")?.Trim() ?? "tool_manual_rebuild",
+            ct);
+
         return JsonSerializer.Serialize(new
         {
-            status = result.Status,
-            registration_id = result.RegistrationId ?? string.Empty,
-            platform = "lark",
-            nyx_provider_slug = string.IsNullOrWhiteSpace(GetStr(args, "nyx_provider_slug"))
-                ? "api-lark-bot"
-                : GetStr(args, "nyx_provider_slug")!.Trim(),
-            nyx_channel_bot_id = result.NyxChannelBotId ?? string.Empty,
-            nyx_agent_api_key_id = result.NyxAgentApiKeyId ?? string.Empty,
-            nyx_conversation_route_id = result.NyxConversationRouteId ?? string.Empty,
-            relay_callback_url = result.RelayCallbackUrl ?? string.Empty,
-            webhook_url = result.WebhookUrl ?? string.Empty,
-            error = result.Error ?? string.Empty,
-            note = result.Note ?? string.Empty,
+            status = "accepted",
+            actor_id = ChannelBotRegistrationGAgent.WellKnownId,
+            observed_registrations_before_rebuild = registrations.Count,
+            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.",
         });
+    }
+
+    private static bool MatchesNyxIdentity(
+        ChannelBotRegistrationEntry entry,
+        string nyxChannelBotId,
+        string nyxAgentApiKeyId,
+        string nyxConversationRouteId)
+    {
+        static bool Match(string left, string right) =>
+            !string.IsNullOrWhiteSpace(left) &&
+            !string.IsNullOrWhiteSpace(right) &&
+            string.Equals(left, right, StringComparison.Ordinal);
+
+        return Match(entry.NyxAgentApiKeyId, nyxAgentApiKeyId) ||
+               Match(entry.NyxChannelBotId, nyxChannelBotId) ||
+               Match(entry.NyxConversationRouteId, nyxConversationRouteId);
     }
 
     private async Task<string> DeleteAsync(
@@ -209,23 +360,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
             });
         }
 
-        var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-                    ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
-                        ChannelBotRegistrationGAgent.WellKnownId);
-
-        var command = new ChannelBotUnregisterCommand { RegistrationId = registrationId };
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(envelope);
+        await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
+            actorRuntime,
+            registrationId,
+            ct);
 
         var confirmed = false;
         for (var attempt = 0; attempt < 10; attempt++)

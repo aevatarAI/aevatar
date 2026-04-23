@@ -172,10 +172,11 @@ public class NyxIdChannelBotsToolTests
         try
         {
             var result = await tool.ExecuteAsync(
-                """{"action":"register","platform":"telegram","bot_token":"123:ABC","label":"Test Bot"}""");
+                """{"action":"register","platform":"lark","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","label":"Test Bot"}""");
             handler.LastRequest.Should().NotBeNull();
             handler.LastRequest!.RequestUri!.AbsolutePath.Should().Contain("channel-bots");
             handler.LastRequest.Method.Should().Be(HttpMethod.Post);
+            handler.LastRequestBody.Should().Contain("\"verification_token\":\"verify-123\"");
         }
         finally { ClearToken(); }
     }
@@ -224,15 +225,19 @@ public class NyxIdChannelBotsToolTests
     internal sealed class CaptureHandler : DelegatingHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }
+        public string LastRequestBody { get; private set; } = string.Empty;
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
             LastRequest = request;
-            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            LastRequestBody = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(ct);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent("{}", Encoding.UTF8, "application/json"),
-            });
+            };
         }
     }
 }

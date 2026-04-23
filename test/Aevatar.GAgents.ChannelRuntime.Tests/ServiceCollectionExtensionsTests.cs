@@ -16,12 +16,14 @@ public sealed class ServiceCollectionExtensionsTests
 
         var act = () => services.AddChannelRuntime();
 
-        act.Should().Throw<ArgumentException>()
-            .WithMessage("*IHostedService*");
+        act.Should().NotThrow();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) &&
+            descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IPlatformAdapter) &&
             descriptor.ImplementationType == typeof(LarkPlatformAdapter));
@@ -43,12 +45,14 @@ public sealed class ServiceCollectionExtensionsTests
 
         var act = () => services.AddChannelRuntime(configuration);
 
-        act.Should().Throw<ArgumentException>()
-            .WithMessage("*IHostedService*");
+        act.Should().NotThrow();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) &&
+            descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
     }

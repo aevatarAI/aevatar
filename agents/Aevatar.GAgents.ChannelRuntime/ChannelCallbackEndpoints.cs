@@ -27,6 +27,7 @@ public static class ChannelCallbackEndpoints
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
+        group.MapPost("/registrations/rebuild", HandleRebuildRegistrationsAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
@@ -34,18 +35,6 @@ public static class ChannelCallbackEndpoints
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
-    }
-
-    /// <summary>
-    /// Gets or creates the well-known ChannelBotRegistrationGAgent singleton actor.
-    /// Lifecycle: created on first request, never destroyed (long-lived fact owner per CLAUDE.md).
-    /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
-    /// CreateAsync calls from multiple requests safely converge to the same grain.
-    /// </summary>
-    private static async Task<IActor> GetOrCreateRegistrationActorAsync(IActorRuntime actorRuntime)
-    {
-        return await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-               ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(ChannelBotRegistrationGAgent.WellKnownId);
     }
 
     /// <summary>
@@ -136,6 +125,7 @@ public static class ChannelCallbackEndpoints
                 AccessToken: accessToken,
                 AppId: request.AppId.Trim(),
                 AppSecret: request.AppSecret.Trim(),
+                VerificationToken: request.VerificationToken?.Trim() ?? string.Empty,
                 WebhookBaseUrl: request.WebhookBaseUrl.Trim(),
                 ScopeId: request.ScopeId?.Trim() ?? string.Empty,
                 Label: request.Label?.Trim() ?? string.Empty,
@@ -191,6 +181,26 @@ public static class ChannelCallbackEndpoints
         return Results.Ok(result);
     }
 
+    private static async Task<IResult> HandleRebuildRegistrationsAsync(
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        CancellationToken ct)
+    {
+        var registrations = await queryPort.QueryAllAsync(ct);
+        await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
+            actorRuntime,
+            "http_api_manual_rebuild",
+            ct);
+
+        return Results.Accepted(value: new
+        {
+            status = "accepted",
+            actor_id = ChannelBotRegistrationGAgent.WellKnownId,
+            observed_registrations_before_rebuild = registrations.Count,
+            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.",
+        });
+    }
+
     private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
         [FromServices] IActorRuntime actorRuntime,
@@ -201,20 +211,10 @@ public static class ChannelCallbackEndpoints
         if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
-        var cmd = new ChannelBotUnregisterCommand { RegistrationId = registrationId };
-        var cmdEnvelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(cmd),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(cmdEnvelope);
+        await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
+            actorRuntime,
+            registrationId,
+            ct);
         return Results.Ok(new { status = "deleted" });
     }
 
@@ -281,7 +281,7 @@ public static class ChannelCallbackEndpoints
         return error switch
         {
             "missing_access_token" => StatusCodes.Status401Unauthorized,
-            "missing_app_id" or "missing_app_secret" or "missing_webhook_base_url" => StatusCodes.Status400BadRequest,
+            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_webhook_base_url" => StatusCodes.Status400BadRequest,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status502BadGateway,
         };
@@ -294,6 +294,7 @@ public static class ChannelCallbackEndpoints
         string? WebhookBaseUrl,
         string? AppId,
         string? AppSecret,
+        string? VerificationToken,
         string? Label);
 
 }
