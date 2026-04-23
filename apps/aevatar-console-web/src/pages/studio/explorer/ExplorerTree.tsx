@@ -12,6 +12,7 @@ import {
 import { Typography } from "antd";
 import React from "react";
 import type { ExplorerManifestEntry } from "@/shared/api/explorerApi";
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 
 type ExplorerTreeProps = {
   manifest: ExplorerManifestEntry[];
@@ -219,6 +220,7 @@ const ExplorerTree: React.FC<ExplorerTreeProps> = ({
         return (
           <React.Fragment key={node.path}>
             <button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
               onClick={() => toggleFolder(node.path)}
               style={{
@@ -242,6 +244,7 @@ const ExplorerTree: React.FC<ExplorerTreeProps> = ({
 
       return (
         <button
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           key={entry.key}
           type="button"
           onClick={() => onSelect(entry.key)}

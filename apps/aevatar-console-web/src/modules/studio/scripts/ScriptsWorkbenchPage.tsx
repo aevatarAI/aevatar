@@ -28,6 +28,7 @@ import React from 'react';
 import { history } from '@/shared/navigation/history';
 import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import type { StudioAppContext } from '@/shared/studio/models';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import {
   addPackageFile,
   coerceScriptPackage,
@@ -2459,7 +2460,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     },
   ];
   const surfaceActionClass = (active = false) =>
-    `console-scripts-surface-action ${active ? 'active' : ''}`;
+    `console-scripts-surface-action ${AEVATAR_INTERACTIVE_BUTTON_CLASS} ${active ? 'active' : ''}`;
   const settlePendingLeaveDecision = React.useCallback(
     (
       allowed: boolean,
@@ -3148,7 +3149,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
                   toggleAskAiComposer();
                 }}
-                className={`console-scripts-ask-ai-trigger ${askAiOpen ? 'active' : ''}`}
+                className={`console-scripts-ask-ai-trigger ${AEVATAR_INTERACTIVE_BUTTON_CLASS} ${askAiOpen ? 'active' : ''}`}
                 title={
                   canUseAskAi
                     ? 'Ask AI to generate script code.'

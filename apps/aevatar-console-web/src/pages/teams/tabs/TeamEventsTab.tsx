@@ -4,6 +4,7 @@ import {
   AevatarInspectorEmpty,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_INTERACTIVE_CHIP_CLASS } from "@/shared/ui/interactionStandards";
 import {
   CompactFactValue,
   DetailPill,
@@ -152,6 +153,7 @@ const TeamEventsTab: React.FC<TeamEventsTabProps> = ({
                       {runSwitchOptions.map((option) => (
                         <button
                           aria-label={`切换到 ${option.runId}`}
+                          className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                           key={option.runId}
                           onClick={() => onSelectRun(option.runId)}
                           style={option.buttonStyle}

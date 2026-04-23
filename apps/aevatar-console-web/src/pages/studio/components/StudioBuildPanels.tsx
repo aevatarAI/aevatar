@@ -16,6 +16,7 @@ import {
   Button,
   Empty,
   Input,
+  message,
   Radio,
   Select,
   Space,
@@ -54,6 +55,11 @@ import type {
 } from '@/shared/studio/scriptsModels';
 import type { StudioGraphStep } from '@/shared/studio/graph';
 import { describeError } from '@/shared/ui/errorText';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  joinInteractiveClassNames,
+} from '@/shared/ui/interactionStandards';
 import ScriptCodeEditor, {
   type ScriptEditorMarker,
 } from '@/modules/studio/scripts/ScriptCodeEditor';
@@ -388,6 +394,7 @@ type DraftRunState = {
   readonly commandId: string;
   readonly error: string;
   readonly events: readonly AGUIEvent[];
+  readonly finalOutput: string;
   readonly runId: string;
   readonly status: 'idle' | 'running' | 'success' | 'error';
 };
@@ -398,6 +405,7 @@ const IDLE_DRAFT_RUN_STATE: DraftRunState = {
   commandId: '',
   error: '',
   events: [],
+  finalOutput: '',
   runId: '',
   status: 'idle',
 };
@@ -414,6 +422,10 @@ function getRunDebugLines(state: DraftRunState): string[] {
 function renderRunOutput(state: DraftRunState): string {
   if (state.error.trim()) {
     return state.error.trim();
+  }
+
+  if (state.finalOutput.trim()) {
+    return state.finalOutput.trim();
   }
 
   if (state.assistantText.trim()) {
@@ -550,7 +562,7 @@ function updateStepDraftParameterValue(
 async function consumeAguiDraftRun(
   response: Response,
   signal: AbortSignal,
-  onChange: React.Dispatch<React.SetStateAction<DraftRunState>>,
+    onChange: React.Dispatch<React.SetStateAction<DraftRunState>>,
 ): Promise<void> {
   for await (const event of parseBackendSSEStream(response, { signal })) {
     if (signal.aborted) {
@@ -560,6 +572,7 @@ async function consumeAguiDraftRun(
     onChange((current) => {
       const nextEvents = [...current.events, event];
       let nextAssistantText = current.assistantText;
+      let nextFinalOutput = current.finalOutput;
       let nextActorId = current.actorId;
       let nextCommandId = current.commandId;
       let nextRunId = current.runId;
@@ -580,6 +593,9 @@ async function consumeAguiDraftRun(
         if (!nextAssistantText.trim() && finalAssistantText.trim()) {
           nextAssistantText = finalAssistantText;
         }
+        if (finalAssistantText.trim()) {
+          nextFinalOutput = finalAssistantText.trim();
+        }
       }
 
       if (event.type === AGUIEventType.RUN_STARTED) {
@@ -595,8 +611,8 @@ async function consumeAguiDraftRun(
         const finalOutput = extractRunFinishedOutput(
           (event as { result?: unknown }).result,
         );
-        if (!nextAssistantText.trim() && finalOutput.trim()) {
-          nextAssistantText = finalOutput;
+        if (finalOutput.trim()) {
+          nextFinalOutput = finalOutput.trim();
         }
         nextStatus = 'success';
       }
@@ -627,6 +643,7 @@ async function consumeAguiDraftRun(
         commandId: nextCommandId,
         error: nextError,
         events: nextEvents,
+        finalOutput: nextFinalOutput,
         runId: nextRunId,
         status: nextStatus,
       };
@@ -684,8 +701,15 @@ function ScriptLeaveDialog(props: {
         当前脚本草稿还没有保存。离开 Build 会丢掉这次 source editor 里的未保存修改。
       </Typography.Text>
       <Space>
-        <Button onClick={props.onStay}>继续编辑</Button>
-        <Button danger type="primary" onClick={props.onLeave}>
+        <Button className={AEVATAR_INTERACTIVE_BUTTON_CLASS} onClick={props.onStay}>
+          继续编辑
+        </Button>
+        <Button
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+          danger
+          type="primary"
+          onClick={props.onLeave}
+        >
           离开页面
         </Button>
       </Space>
@@ -780,6 +804,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   >('');
   const [stepMutationError, setStepMutationError] = React.useState('');
   const abortControllerRef = React.useRef<AbortController | null>(null);
+  const runPendingRef = React.useRef(false);
+  const stepMutationPendingRef = React.useRef(false);
   const selectedStep = React.useMemo(() => {
     const stepId = selectedGraphNodeId.startsWith('step:')
       ? selectedGraphNodeId.slice('step:'.length)
@@ -889,21 +915,32 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   );
 
   const handleRun = React.useCallback(async () => {
+    if (runPendingRef.current) {
+      return;
+    }
+
     if (!scopeId) {
-      setWorkflowRunError('Resolve the current scope before running the workflow draft.');
+      const visibleMessage = 'Resolve the current scope before running the workflow draft.';
+      setWorkflowRunError(visibleMessage);
+      void message.error(visibleMessage);
       return;
     }
 
     if (dryRunBlockedReason?.trim()) {
-      setWorkflowRunError(dryRunBlockedReason.trim());
+      const visibleMessage = dryRunBlockedReason.trim();
+      setWorkflowRunError(visibleMessage);
+      void message.error(visibleMessage);
       return;
     }
 
     if (!runPrompt.trim()) {
-      setWorkflowRunError('Sample input is required before running the workflow draft.');
+      const visibleMessage = 'Sample input is required before running the workflow draft.';
+      setWorkflowRunError(visibleMessage);
+      void message.error(visibleMessage);
       return;
     }
 
+    runPendingRef.current = true;
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -940,17 +977,21 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
 
       const rawMessage = describeError(error);
       const disconnectedProvider = rawMessage.match(/Provider '([^']+)' not connected/i);
-      setWorkflowRunError(
+      const visibleMessage =
         disconnectedProvider
           ? `Dry-run 还不能运行，因为 ${disconnectedProvider[1]} provider 还没有连好。先连接可用 provider，再回来运行当前 workflow draft。`
-          : rawMessage,
+          : rawMessage;
+      setWorkflowRunError(
+        visibleMessage,
       );
+      void message.error(visibleMessage);
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
         error: rawMessage,
         status: 'error',
       });
     } finally {
+      runPendingRef.current = false;
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
@@ -964,42 +1005,62 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   ]);
 
   const handleInsertStep = React.useCallback(async (stepType: string) => {
+    if (stepMutationPendingRef.current) {
+      return;
+    }
+
+    stepMutationPendingRef.current = true;
     setStepMutationPending('add');
     setStepMutationError('');
     try {
       await onInsertStep(stepType);
       setStepTypePickerOpen(false);
     } catch (error) {
-      setStepMutationError(describeError(error));
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
     } finally {
+      stepMutationPendingRef.current = false;
       setStepMutationPending('');
     }
   }, [onInsertStep]);
 
   const handleApplyStepChanges = React.useCallback(async () => {
-    if (!stepDraft) {
+    if (!stepDraft || stepMutationPendingRef.current) {
       return;
     }
 
+    stepMutationPendingRef.current = true;
     setStepMutationPending('apply');
     setStepMutationError('');
     try {
       await onApplyStepDraft(stepDraft);
     } catch (error) {
-      setStepMutationError(describeError(error));
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
     } finally {
+      stepMutationPendingRef.current = false;
       setStepMutationPending('');
     }
   }, [onApplyStepDraft, stepDraft]);
 
   const handleRemoveStep = React.useCallback(async () => {
+    if (stepMutationPendingRef.current) {
+      return;
+    }
+
+    stepMutationPendingRef.current = true;
     setStepMutationPending('remove');
     setStepMutationError('');
     try {
       await onRemoveSelectedStep();
     } catch (error) {
-      setStepMutationError(describeError(error));
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
     } finally {
+      stepMutationPendingRef.current = false;
       setStepMutationPending('');
     }
   }, [onRemoveSelectedStep]);
@@ -1057,13 +1118,18 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           </div>
           <Space wrap size={[8, 8]}>
             <Button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               disabled={!canSaveWorkflow}
               loading={savePending}
               onClick={onSaveDraft}
             >
               Save draft
             </Button>
-            <Button type="primary" onClick={onContinueToBind}>
+            <Button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+              type="primary"
+              onClick={onContinueToBind}
+            >
               Continue to Bind
             </Button>
           </Space>
@@ -1093,6 +1159,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             <div style={workflowToolbarActionsStyle}>
               <div style={workflowViewSwitchStyle}>
                 <Button
+                  className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                   aria-pressed={viewMode === 'canvas'}
                   onClick={() => setViewMode('canvas')}
                   size="small"
@@ -1101,6 +1168,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   Canvas
                 </Button>
                 <Button
+                  className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                   aria-pressed={viewMode === 'yaml'}
                   onClick={() => setViewMode('yaml')}
                   size="small"
@@ -1110,13 +1178,18 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 </Button>
               </div>
               <Button
-                disabled={viewMode !== 'canvas'}
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={viewMode !== 'canvas' || Boolean(stepMutationPending)}
                 loading={stepMutationPending === 'add'}
                 onClick={() => setStepTypePickerOpen((current) => !current)}
               >
                 Add step
               </Button>
-              <Button disabled={viewMode !== 'canvas'} onClick={onAutoLayout}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={viewMode !== 'canvas' || Boolean(stepMutationPending)}
+                onClick={onAutoLayout}
+              >
                 Auto-layout
               </Button>
             </div>
@@ -1134,10 +1207,16 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 >
                   {describedStepTypes.map((entry) => (
                     <button
+                      aria-disabled={stepMutationPending ? 'true' : undefined}
+                      className={joinInteractiveClassNames(
+                        AEVATAR_INTERACTIVE_BUTTON_CLASS,
+                        AEVATAR_INTERACTIVE_CHIP_CLASS,
+                      )}
+                      disabled={Boolean(stepMutationPending)}
                       key={entry.stepType}
-                      type="button"
-                      style={workflowTypeOptionStyle}
                       onClick={() => void handleInsertStep(entry.stepType)}
+                      style={workflowTypeOptionStyle}
+                      type="button"
                     >
                       <strong style={{ color: '#1f2937', fontSize: 13 }}>{entry.stepType}</strong>
                       <span style={{ color: '#6b7280', fontSize: 12, lineHeight: '18px' }}>
@@ -1443,14 +1522,17 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               </div>
               <div style={workflowStageActionsRowStyle}>
                 <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   danger
-                  disabled={!selectedStepId}
+                  disabled={!selectedStepId || Boolean(stepMutationPending)}
                   loading={stepMutationPending === 'remove'}
                   onClick={() => void handleRemoveStep()}
                 >
                   Delete step
                 </Button>
                 <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  disabled={!selectedStepId || !stepDraft || Boolean(stepMutationPending)}
                   loading={stepMutationPending === 'apply'}
                   type="primary"
                   onClick={() => void handleApplyStepChanges()}
@@ -1488,7 +1570,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <Alert
             action={
               onOpenRunSetup ? (
-                <Button size="small" type="link" onClick={onOpenRunSetup}>
+                <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  size="small"
+                  type="link"
+                  onClick={onOpenRunSetup}
+                >
                   Connect provider
                 </Button>
               ) : undefined
@@ -1507,15 +1594,18 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         />
         <Space wrap size={[8, 8]}>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             icon={<PlayCircleOutlined />}
             loading={runState.status === 'running'}
             type="primary"
-            disabled={Boolean(dryRunBlockedReason?.trim())}
+            disabled={Boolean(dryRunBlockedReason?.trim()) || runState.status === 'running'}
             onClick={() => void handleRun()}
           >
             Run
           </Button>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            disabled={runState.status === 'running'}
             onClick={() =>
               onRunPromptChange(
                 JSON.stringify(
@@ -1826,10 +1916,19 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               />
             </Space>
             <Space wrap size={[8, 8]}>
-              <Button loading={validationPending} onClick={() => void handleValidate()}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                loading={validationPending}
+                onClick={() => void handleValidate()}
+              >
                 Validate
               </Button>
-              <Button icon={<CheckCircleOutlined />} loading={savePending} onClick={() => void handleSave()}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                icon={<CheckCircleOutlined />}
+                loading={savePending}
+                onClick={() => void handleSave()}
+              >
                 Save draft
               </Button>
             </Space>
@@ -1873,6 +1972,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     </Tag>
                   ) : null}
                   <Button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     icon={<PlayCircleOutlined />}
                     loading={runPending}
                     type="primary"
@@ -1937,7 +2037,11 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           <Typography.Text type="secondary">
             Script Build keeps code editing here. Service rollout still moves to Bind.
           </Typography.Text>
-          <Button type="primary" onClick={onContinueToBind}>
+          <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            type="primary"
+            onClick={onContinueToBind}
+          >
             Continue to Bind
           </Button>
         </div>
@@ -1970,6 +2074,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         />
         <Space wrap size={[8, 8]}>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             icon={<PlayCircleOutlined />}
             loading={runPending}
             type="primary"
@@ -1978,6 +2083,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             Run
           </Button>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={() =>
               setRunInput(
                 JSON.stringify(
@@ -2230,7 +2336,11 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <Typography.Text type="secondary">
             GAgent Build 只负责定义 actor 语义；真正发布 service / endpoint 还是下一步去 Bind。
           </Typography.Text>
-          <Button type="primary" onClick={onContinueToBind}>
+          <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            type="primary"
+            onClick={onContinueToBind}
+          >
             Continue to Bind
           </Button>
         </div>
@@ -2257,6 +2367,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         />
         <Space wrap size={[8, 8]}>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             icon={<PlayCircleOutlined />}
             loading={runState.status === 'running'}
             type="primary"
@@ -2265,6 +2376,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             Run
           </Button>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={() =>
               setRunPrompt('Classify this support ticket, keep the member state, and decide whether to escalate.')
             }
