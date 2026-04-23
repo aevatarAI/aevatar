@@ -70,6 +70,11 @@ public sealed class ChannelRuntimeProtoTests
                 Disposition = MessageDisposition.Normal,
             },
             CompletedAtUnixMs = 123,
+            OutboundDelivery = new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-1",
+                ReplyAccessToken = "relay-token-1",
+            },
         };
         var registration = new ChannelBotRegistrationEntry
         {
@@ -91,6 +96,7 @@ public sealed class ChannelRuntimeProtoTests
         };
 
         completed.Clone().ShouldBe(completed);
+        completed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
         registration.Clone().ShouldBe(registration);
         registration.TransportBinding.Bot.RegistrationId.ShouldBe("bot-reg-1");
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("transport_binding")!.FieldNumber.ShouldBe(1);

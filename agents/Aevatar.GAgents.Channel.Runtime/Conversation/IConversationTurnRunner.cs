@@ -34,6 +34,7 @@ public sealed record ConversationTurnResult(
     string SentActivityId,
     MessageContent Outbound,
     string AuthPrincipal,
+    OutboundDeliveryContext? OutboundDelivery,
     string ErrorCode,
     string ErrorSummary,
     FailureKind FailureKind,
@@ -42,20 +43,51 @@ public sealed record ConversationTurnResult(
     /// <summary>
     /// Success factory.
     /// </summary>
-    public static ConversationTurnResult Sent(string sentActivityId, MessageContent outbound, string authPrincipal) =>
-        new(true, sentActivityId, outbound, authPrincipal, string.Empty, string.Empty, FailureKind.Unspecified, null);
+    public static ConversationTurnResult Sent(
+        string sentActivityId,
+        MessageContent outbound,
+        string authPrincipal,
+        OutboundDeliveryContext? outboundDelivery = null) =>
+        new(
+            true,
+            sentActivityId,
+            outbound,
+            authPrincipal,
+            outboundDelivery,
+            string.Empty,
+            string.Empty,
+            FailureKind.Unspecified,
+            null);
 
     /// <summary>
     /// Transient failure factory.
     /// </summary>
     public static ConversationTurnResult TransientFailure(string errorCode, string errorSummary, TimeSpan? retryAfter = null) =>
-        new(false, string.Empty, new MessageContent(), string.Empty, errorCode, errorSummary, FailureKind.TransientAdapterError, retryAfter);
+        new(
+            false,
+            string.Empty,
+            new MessageContent(),
+            string.Empty,
+            null,
+            errorCode,
+            errorSummary,
+            FailureKind.TransientAdapterError,
+            retryAfter);
 
     /// <summary>
     /// Permanent failure factory.
     /// </summary>
     public static ConversationTurnResult PermanentFailure(string errorCode, string errorSummary) =>
-        new(false, string.Empty, new MessageContent(), string.Empty, errorCode, errorSummary, FailureKind.PermanentAdapterError, null);
+        new(
+            false,
+            string.Empty,
+            new MessageContent(),
+            string.Empty,
+            null,
+            errorCode,
+            errorSummary,
+            FailureKind.PermanentAdapterError,
+            null);
 }
 
 /// <summary>

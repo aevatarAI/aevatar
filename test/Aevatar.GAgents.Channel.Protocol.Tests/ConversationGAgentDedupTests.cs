@@ -125,6 +125,32 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_PersistsOutboundDeliveryContext_OnCompletedEvent()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.Sent(
+                "sent:act-relay",
+                new MessageContent { Text = "ack" },
+                "bot",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-1",
+                    ReplyAccessToken = "relay-token-1",
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-relay");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-relay", "conv:slack:C1"));
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events[0].EventData.Value);
+        completed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
+        completed.OutboundDelivery.ReplyAccessToken.ShouldBe("relay-token-1");
+    }
+
+    [Fact]
     public async Task HandleContinueCommandAsync_TransientFailure_LeavesCommandRetriable()
     {
         // Retriable continue failures (retry_after_ms) must NOT mark the command id as processed —

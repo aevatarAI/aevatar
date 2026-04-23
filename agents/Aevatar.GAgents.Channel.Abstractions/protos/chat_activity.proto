@@ -256,6 +256,14 @@ message MessageContent {
   CardActionSubmission card_action = 6;
 }
 
+// Carries the transport-issued facts required to deliver one async reply back through the same boundary.
+message OutboundDeliveryContext {
+  // The opaque reply target identifier that the transport expects when publishing the async reply.
+  string reply_message_id = 1;
+  // The opaque credential or access token that authorizes reply delivery on the current transport.
+  string reply_access_token = 2;
+}
+
 // Represents one normalized activity flowing through the channel pipeline.
 message ChatActivity {
   // The deterministic adapter-owned activity identifier.
@@ -280,4 +288,6 @@ message ChatActivity {
   string reply_to_activity_id = 10;
   // The stable blob reference for sanitized raw payload storage.
   string raw_payload_blob_ref = 11;
+  // The optional async reply delivery facts emitted by the ingress transport.
+  OutboundDeliveryContext outbound_delivery = 12;
 }
