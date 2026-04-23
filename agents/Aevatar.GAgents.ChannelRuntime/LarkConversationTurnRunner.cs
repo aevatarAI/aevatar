@@ -14,6 +14,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
 {
     private readonly IServiceProvider _services;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
+    private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
     private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
     private readonly NyxIdApiClient _nyxClient;
     private readonly IConversationReplyGenerator _replyGenerator;
@@ -22,6 +23,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
     public LarkConversationTurnRunner(
         IServiceProvider services,
         IChannelBotRegistrationQueryPort registrationQueryPort,
+        IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort,
         IEnumerable<IPlatformAdapter> platformAdapters,
         NyxIdApiClient nyxClient,
         IConversationReplyGenerator replyGenerator,
@@ -29,6 +31,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
+        _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -39,7 +42,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(activity);
 
-        var registration = await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+        var registration = await ResolveRegistrationAsync(activity, ct);
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
@@ -197,6 +200,24 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
         return await _registrationQueryPort.GetAsync(registrationId, ct);
     }
 
+    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationAsync(ChatActivity activity, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(activity);
+
+        var nyxAgentApiKeyId = activity.TransportExtras?.NyxAgentApiKeyId;
+        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId) &&
+            _registrationQueryByNyxIdentityPort is not null)
+        {
+            var byNyxIdentity = await _registrationQueryByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync(
+                nyxAgentApiKeyId,
+                ct);
+            if (byNyxIdentity is not null)
+                return byNyxIdentity;
+        }
+
+        return await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+    }
+
     private async Task<ConversationTurnResult?> TryHandleWorkflowResumeAsync(InboundMessage inbound, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(inbound);
@@ -327,6 +348,7 @@ internal sealed class LarkConversationTurnRunner : IConversationTurnRunner
             MessageId = activity.Id,
             ChatType = ResolveChatType(activity.Conversation, activity.Type),
             OutboundDelivery = activity.OutboundDelivery?.Clone(),
+            TransportExtras = activity.TransportExtras?.Clone(),
             Extra = extra,
         };
     }

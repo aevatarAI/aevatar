@@ -96,6 +96,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelPlatformReplyService>();

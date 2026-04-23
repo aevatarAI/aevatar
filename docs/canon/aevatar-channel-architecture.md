@@ -185,7 +185,7 @@ sequenceDiagram
 
 | Proto 归属 | 类型 |
 |---|---|
-| `agents/Aevatar.GAgents.Channel.Abstractions/protos/chat_activity.proto` | `ChatActivity` / `ConversationReference` / `ParticipantRef` / `MessageContent` / `OutboundDeliveryContext` / `AttachmentRef` / `AttachmentKind` (enum) / `ActionElement` / `CardBlock` / `MessageDisposition` / `ActivityType` / `ConversationScope` / `ChannelId` / `BotInstanceId` / `TransportMode` |
+| `agents/Aevatar.GAgents.Channel.Abstractions/protos/chat_activity.proto` | `ChatActivity` / `ConversationReference` / `ParticipantRef` / `MessageContent` / `OutboundDeliveryContext` / `TransportExtras` / `AttachmentRef` / `AttachmentKind` (enum) / `ActionElement` / `CardBlock` / `MessageDisposition` / `ActivityType` / `ConversationScope` / `ChannelId` / `BotInstanceId` / `TransportMode` |
 | `agents/Aevatar.GAgents.Channel.Abstractions/protos/channel_contracts.proto` | `EmitResult` / `ComposeCapability` / `ComposeContext` / `ChannelBotDescriptor` / `ChannelTransportBinding` / `ChannelCapabilities` / `StreamingSupport` / `AuthContext` / `PrincipalKind` / `StreamChunk` |
 | `agents/Aevatar.GAgents.Channel.Abstractions/protos/schedule.proto` | `ScheduleState` / `ProjectionVerdict` |
 | `agents/Aevatar.GAgents.Channel.Runtime/protos/conversation_events.proto` | `ConversationTurnCompletedEvent` / `ConversationContinueRequestedEvent` / `ConversationContinueRejectedEvent` / `ConversationContinueFailedEvent` / `ChannelBotRegistrationEntry` / `UserAgentCatalogEntry` / `DeviceRegistrationEntry`（含 `IsDeleted` flag 支持 tombstone retention）。详细 field schema 见 §4.3.1 |
@@ -301,8 +301,9 @@ public record ChatActivity(
     DateTimeOffset Timestamp,
     MessageContent Content,             // Text + Attachments + Actions + Cards
     string? ReplyToActivityId,
-    string? RawPayloadBlobRef,          // 原始 payload 存储引用，逃生舱
-    OutboundDeliveryContext? OutboundDelivery
+    string? RawPayloadBlobRef,          // 原始 payload 的 forensic 引用，不承载 reply 凭证或路由事实
+    OutboundDeliveryContext? OutboundDelivery,
+    TransportExtras? TransportExtras    // transport-specific ingress facts（typed）
 );
 ```
 
@@ -311,6 +312,8 @@ public record ChatActivity(
 **为什么没有 `ChannelData`**：早期草稿里有 `ChannelData : IReadOnlyDictionary<string, string>`，但 Slack event envelope / Discord interaction 带嵌套结构（user profile / guild member / team info），string→string 天然太窄；放宽到 `object` 又让调用方陷入动态类型。已有 `RawPayloadBlobRef` 作为 escape hatch（原始 payload 按需取），两套冗余的结构化索引反而让 adapter 作者"两边都想塞点东西"，抽象边界打糊。结论：**只留 `RawPayloadBlobRef`，不要 `ChannelData`**。
 
 **为什么新增 `OutboundDeliveryContext`**：Nyx relay 这类 async callback transport 的 reply 不只是 "往这个 conversation 发一条消息"，还需要把 ingress 提供的 **opaque reply target**（如 relay `message_id`）和 **opaque delivery credential**（如 relay access token）带回 outbound 边界。它们不是业务 metadata bag，也不是 `ConversationReference` 的稳定会话语义，而是**一次 inbound turn 派生出的 reply-delivery 事实**。因此单独建模成 `ChatActivity.OutboundDelivery`，并在 `ConversationTurnCompletedEvent` 上原样保留，避免后续 projection/outbound path 再退回字符串 key bag。
+
+**为什么新增 `TransportExtras`**：某些 transport ingress 会带来必须穿过 runtime 的结构化事实，例如 Nyx relay 的 `nyx_message_id`、`nyx_agent_api_key_id`、`nyx_platform`、`nyx_conversation_id`。这些值会影响 registration lookup、reply correlation 和 platform dispatch，但它们**不属于** `ConversationReference` 的稳定业务语义，也不应该退回到开放式 metadata bag。`TransportExtras` 的职责正是承载这类 typed ingress facts；`RawPayloadBlobRef` 继续只做 forensic hash/blob 引用，**不能**反向充当 reply credential 或 structured routing metadata 的回查通道。
 
 ### 5.1b Supporting types
 

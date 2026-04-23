@@ -264,6 +264,18 @@ message OutboundDeliveryContext {
   string reply_access_token = 2;
 }
 
+// Carries transport-specific ingress facts that must survive normalization without polluting core conversation semantics.
+message TransportExtras {
+  // The Nyx relay message id that identifies the original callback on async reply.
+  string nyx_message_id = 1;
+  // The Nyx agent API key id that owns the callback route and identifies the local registration.
+  string nyx_agent_api_key_id = 2;
+  // The source platform name reported by Nyx relay.
+  string nyx_platform = 3;
+  // The Nyx relay conversation id observed on ingress.
+  string nyx_conversation_id = 4;
+}
+
 // Represents one normalized activity flowing through the channel pipeline.
 message ChatActivity {
   // The deterministic adapter-owned activity identifier.
@@ -290,4 +302,6 @@ message ChatActivity {
   string raw_payload_blob_ref = 11;
   // The optional async reply delivery facts emitted by the ingress transport.
   OutboundDeliveryContext outbound_delivery = 12;
+  // The optional transport-specific ingress facts preserved for adapter/runtime handoff.
+  TransportExtras transport_extras = 13;
 }
