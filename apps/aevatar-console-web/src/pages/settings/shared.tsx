@@ -26,7 +26,7 @@ export function buildSettingsSurfaceStyle(
     background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorBgLayout} 100%)`,
     border: `1px solid ${token.colorBorderSecondary}`,
     borderRadius: 16,
-    boxShadow: "0 16px 36px rgba(15, 23, 42, 0.045)",
+    boxShadow: token.boxShadowSecondary,
   };
 }
 
@@ -36,7 +36,7 @@ export function buildSettingsPanelStyle(
   return {
     border: `1px solid ${token.colorBorderSecondary}`,
     borderRadius: 12,
-    boxShadow: "0 8px 22px rgba(15, 23, 42, 0.04)",
+    boxShadow: token.boxShadowSecondary,
   };
 }
 
@@ -76,7 +76,7 @@ export function buildSettingsSwitchButtonStyle(
     background: active ? token.colorBgContainer : "transparent",
     border: "none",
     borderRadius: 999,
-    boxShadow: active ? "0 4px 14px rgba(15, 23, 42, 0.07)" : "none",
+    boxShadow: active ? token.boxShadowSecondary : "none",
     color: active ? token.colorTextHeading : token.colorTextSecondary,
     cursor: "pointer",
     fontSize: 13,
@@ -132,7 +132,7 @@ export const SummaryMetric: React.FC<SummaryMetricProps> = ({
           tone,
         ),
         borderRadius: 12,
-        boxShadow: "0 8px 20px rgba(15, 23, 42, 0.035)",
+        boxShadow: (token as AevatarThemeSurfaceToken).boxShadowSecondary,
       }}
     >
       <Typography.Text style={{ ...summaryFieldLabelStyle, color: visual.labelColor }}>

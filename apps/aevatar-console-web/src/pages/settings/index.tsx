@@ -25,6 +25,7 @@ import {
   LLM_ROUTE_HEADER_KEY,
   USER_CONFIG_PROVIDER_SOURCE_GATEWAY,
   USER_CONFIG_PROVIDER_SOURCE_SERVICE,
+  buildConversationModelGroups,
   buildConversationRouteOptions,
   decodeConversationRouteSelectValue,
   describeConversationRoute,
@@ -45,6 +46,11 @@ import type {
   StudioUserConfig,
   StudioUserConfigProviderStatus,
 } from "@/shared/studio/models";
+import {
+  formatStudioUserConfigRuntimeModeLabel,
+  normalizeStudioUserConfigRuntimeMode,
+  resolveStudioUserConfigRuntimeBaseUrl,
+} from "@/shared/studio/userConfigRuntime";
 import {
   aevatarMonoFontFamily,
   truncateMiddle,
@@ -68,10 +74,6 @@ type SettingsSection = "llm" | "account";
 type SettingsDraft = {
   readonly defaultModel: string;
   readonly preferredLlmRoute: string;
-  readonly runtimeMode: "local" | "remote";
-  readonly localRuntimeBaseUrl: string;
-  readonly remoteRuntimeBaseUrl: string;
-  readonly maxToolRounds: number | null;
 };
 
 type ScopeChipProps = {
@@ -89,16 +91,8 @@ type TechnicalPreviewRow = {
   readonly value: string;
 };
 
-type RouteScopedModelGroup = {
-  readonly id: string;
-  readonly label: string;
-  readonly models: string[];
-};
-
 const llmTabKey = "llm";
 const accountTabKey = "account";
-const defaultRuntimeBaseUrl = "https://aevatar-console-backend-api.aevatar.ai";
-const defaultRuntimeMode = "local";
 
 const tabBodyStyle: React.CSSProperties = {
   display: "flex",
@@ -203,20 +197,9 @@ function buildSettingsHref(section: SettingsSection): string {
 }
 
 function normalizeUserConfigDraft(config?: StudioUserConfig): SettingsDraft {
-  const runtimeMode =
-    trimConversationValue(config?.runtimeMode)?.toLowerCase() === "remote"
-      ? "remote"
-      : defaultRuntimeMode;
-
   return {
     defaultModel: trimConversationValue(config?.defaultModel) ?? "",
     preferredLlmRoute: normalizeUserLlmRoute(config?.preferredLlmRoute),
-    runtimeMode,
-    localRuntimeBaseUrl:
-      trimConversationValue(config?.localRuntimeBaseUrl) ?? "",
-    remoteRuntimeBaseUrl:
-      trimConversationValue(config?.remoteRuntimeBaseUrl) ?? "",
-    maxToolRounds: config?.maxToolRounds ?? null,
   };
 }
 
@@ -224,40 +207,29 @@ function draftsEqual(left: SettingsDraft, right: SettingsDraft): boolean {
   return (
     trimConversationValue(left.defaultModel) === trimConversationValue(right.defaultModel) &&
     normalizeUserLlmRoute(left.preferredLlmRoute) ===
-      normalizeUserLlmRoute(right.preferredLlmRoute) &&
-    left.runtimeMode === right.runtimeMode &&
-    trimConversationValue(left.localRuntimeBaseUrl) ===
-      trimConversationValue(right.localRuntimeBaseUrl) &&
-    trimConversationValue(left.remoteRuntimeBaseUrl) ===
-      trimConversationValue(right.remoteRuntimeBaseUrl) &&
-    left.maxToolRounds === right.maxToolRounds
+      normalizeUserLlmRoute(right.preferredLlmRoute)
   );
-}
-
-function resolveActiveRuntimeBaseUrl(draft: SettingsDraft): string {
-  const configuredValue =
-    draft.runtimeMode === "remote"
-      ? trimConversationValue(draft.remoteRuntimeBaseUrl)
-      : trimConversationValue(draft.localRuntimeBaseUrl);
-
-  return configuredValue || defaultRuntimeBaseUrl;
-}
-
-function formatRuntimeModeLabel(runtimeMode: SettingsDraft["runtimeMode"]): string {
-  return runtimeMode === "remote" ? "Remote" : "Local";
 }
 
 function isProviderReady(provider: StudioUserConfigProviderStatus): boolean {
   return provider.status.trim().toLowerCase() === "ready";
 }
 
+function isServiceProviderSource(source?: string): boolean {
+  return source === USER_CONFIG_PROVIDER_SOURCE_SERVICE;
+}
+
+function isGatewayProviderSource(source?: string): boolean {
+  return !isServiceProviderSource(source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY);
+}
+
 function resolveRouteScopedProviders(
   route: string,
-  readyGatewayProvider: StudioUserConfigProviderStatus | null,
+  readyGatewayProviders: readonly StudioUserConfigProviderStatus[],
   readyServiceProviders: readonly StudioUserConfigProviderStatus[],
 ): StudioUserConfigProviderStatus[] {
   if (route === "") {
-    return readyGatewayProvider ? [readyGatewayProvider] : [];
+    return [...readyGatewayProviders];
   }
 
   return readyServiceProviders.filter(
@@ -265,55 +237,13 @@ function resolveRouteScopedProviders(
   );
 }
 
-function buildRouteScopedModelGroups(input: {
-  readonly modelsByProvider?: Record<string, string[]>;
-  readonly routeProviders: readonly StudioUserConfigProviderStatus[];
-  readonly supportedModels: readonly string[];
-}): RouteScopedModelGroup[] {
-  const explicitGroups = input.routeProviders
-    .map((provider) => {
-      const models = Array.from(
-        new Set(
-          (input.modelsByProvider?.[provider.providerSlug] ?? []).filter(Boolean),
-        ),
-      );
-
-      return {
-        id: provider.providerSlug || formatConversationProviderLabel(provider),
-        label: formatConversationProviderLabel(provider),
-        models,
-      };
-    })
-    .filter((group) => group.models.length > 0);
-
-  if (explicitGroups.length > 0) {
-    return explicitGroups;
-  }
-
-  const fallbackModels = Array.from(new Set(input.supportedModels.filter(Boolean)));
-  if (input.routeProviders.length === 0 || fallbackModels.length === 0) {
-    return [];
-  }
-
-  return [
-    {
-      id: "__supported__",
-      label:
-        input.routeProviders.length === 1
-          ? formatConversationProviderLabel(input.routeProviders[0])
-          : "Supported models",
-      models: fallbackModels,
-    },
-  ];
-}
-
 function isRouteAvailable(
   route: string,
-  readyGatewayProvider: StudioUserConfigProviderStatus | null,
+  readyGatewayProviders: readonly StudioUserConfigProviderStatus[],
   readyServiceProviders: readonly StudioUserConfigProviderStatus[],
 ): boolean {
   if (route === "") {
-    return Boolean(readyGatewayProvider);
+    return readyGatewayProviders.length > 0;
   }
 
   return readyServiceProviders.some(
@@ -370,9 +300,7 @@ function buildProviderSlugCountMap(
 function formatProviderSourceLabel(
   source: string | undefined,
 ): string {
-  return source === USER_CONFIG_PROVIDER_SOURCE_SERVICE
-    ? "User service"
-    : "Gateway provider";
+  return isServiceProviderSource(source) ? "User service" : "Gateway provider";
 }
 
 function formatConnectedProviderLabel(
@@ -384,7 +312,7 @@ function formatConnectedProviderLabel(
     return baseLabel;
   }
 
-  return provider.source === USER_CONFIG_PROVIDER_SOURCE_SERVICE
+  return isServiceProviderSource(provider.source)
     ? `${baseLabel} Service`
     : `${baseLabel} Gateway`;
 }
@@ -394,10 +322,7 @@ function isProviderActiveForRoute(
   route: string,
 ): boolean {
   if (route === "") {
-    return (
-      (provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) !==
-      USER_CONFIG_PROVIDER_SOURCE_SERVICE
-    );
+    return isGatewayProviderSource(provider.source);
   }
 
   return routePathFromProviderSlug(provider.providerSlug) === route;
@@ -607,12 +532,6 @@ const SettingsPage: React.FC = () => {
       studioApi.saveUserConfig({
         defaultModel: trimConversationValue(nextDraft.defaultModel) ?? "",
         preferredLlmRoute: normalizeUserLlmRoute(nextDraft.preferredLlmRoute),
-        runtimeMode: nextDraft.runtimeMode,
-        localRuntimeBaseUrl:
-          trimConversationValue(nextDraft.localRuntimeBaseUrl) ?? "",
-        remoteRuntimeBaseUrl:
-          trimConversationValue(nextDraft.remoteRuntimeBaseUrl) ?? "",
-        maxToolRounds: nextDraft.maxToolRounds,
       }),
     onSuccess: (savedConfig) => {
       const normalized = normalizeUserConfigDraft(savedConfig);
@@ -632,22 +551,14 @@ const SettingsPage: React.FC = () => {
     () => providers.filter(isProviderReady),
     [providers],
   );
-  const readyGatewayProvider = React.useMemo(
+  const readyGatewayProviders = React.useMemo(
     () =>
-      readyProviders.find(
-        (provider) =>
-          (provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) !==
-          USER_CONFIG_PROVIDER_SOURCE_SERVICE,
-      ) ?? null,
+      readyProviders.filter((provider) => isGatewayProviderSource(provider.source)),
     [readyProviders],
   );
   const readyServiceProviders = React.useMemo(
     () =>
-      readyProviders.filter(
-        (provider) =>
-          (provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) ===
-          USER_CONFIG_PROVIDER_SOURCE_SERVICE,
-      ),
+      readyProviders.filter((provider) => isServiceProviderSource(provider.source)),
     [readyProviders],
   );
   const routeOptions = React.useMemo(
@@ -667,19 +578,19 @@ const SettingsPage: React.FC = () => {
     () =>
       isRouteAvailable(
         draft.preferredLlmRoute,
-        readyGatewayProvider,
+        readyGatewayProviders,
         readyServiceProviders,
       ),
-    [draft.preferredLlmRoute, readyGatewayProvider, readyServiceProviders],
+    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
   );
   const effectiveRoute = React.useMemo(
     () =>
       resolveReadyConversationRoute(
         draft.preferredLlmRoute,
-        readyGatewayProvider,
+        readyGatewayProviders[0] ?? null,
         readyServiceProviders,
       ),
-    [draft.preferredLlmRoute, readyGatewayProvider, readyServiceProviders],
+    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
   );
   const routeFallbackActive = effectiveRoute !== draft.preferredLlmRoute;
   const routeSummaryLabel = describeConversationRoute(effectiveRoute, routeOptions);
@@ -691,38 +602,51 @@ const SettingsPage: React.FC = () => {
     () =>
       resolveRouteScopedProviders(
         draft.preferredLlmRoute,
-        readyGatewayProvider,
+        readyGatewayProviders,
         readyServiceProviders,
       ),
-    [draft.preferredLlmRoute, readyGatewayProvider, readyServiceProviders],
+    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
   );
   const modelGroups = React.useMemo(
     () =>
-      buildRouteScopedModelGroups({
-        modelsByProvider: userConfigModelsQuery.data?.modelsByProvider,
-        routeProviders: routeScopedProviders,
-        supportedModels: userConfigModelsQuery.data?.supportedModels ?? [],
+      buildConversationModelGroups({
+        conversationModel: draft.defaultModel,
+        effectiveRoute: draft.preferredLlmRoute,
+        models: {
+          gatewayUrl: userConfigModelsQuery.data?.gatewayUrl ?? "",
+          modelsByProvider: userConfigModelsQuery.data?.modelsByProvider,
+          providers: routeScopedProviders,
+          supportedModels: userConfigModelsQuery.data?.supportedModels ?? [],
+        },
       }),
-    [routeScopedProviders, userConfigModelsQuery.data],
+    [draft.defaultModel, draft.preferredLlmRoute, routeScopedProviders, userConfigModelsQuery.data],
+  );
+  const liveModelGroups = React.useMemo(
+    () => modelGroups.filter((group) => group.id !== "__current__"),
+    [modelGroups],
   );
   const modelOptions = React.useMemo<SelectProps["options"]>(
     () =>
-      modelGroups.map((group) => ({
+      (liveModelGroups.length > 0 ? modelGroups : []).map((group) => ({
         label: group.label,
         options: group.models.map((model) => ({
           label: model,
           value: model,
         })),
       })),
-    [modelGroups],
+    [liveModelGroups.length, modelGroups],
   );
   const displayedRuntimeBaseUrl = React.useMemo(
-    () => resolveActiveRuntimeBaseUrl(draft),
-    [draft],
+    () => resolveStudioUserConfigRuntimeBaseUrl(userConfigQuery.data),
+    [userConfigQuery.data],
+  );
+  const persistedRuntimeMode = React.useMemo(
+    () => normalizeStudioUserConfigRuntimeMode(userConfigQuery.data?.runtimeMode),
+    [userConfigQuery.data?.runtimeMode],
   );
   const runtimeModeLabel = React.useMemo(
-    () => formatRuntimeModeLabel(draft.runtimeMode),
-    [draft.runtimeMode],
+    () => formatStudioUserConfigRuntimeModeLabel(persistedRuntimeMode),
+    [persistedRuntimeMode],
   );
   const providerHealth = React.useMemo(
     () => formatProviderHealth(providers),
@@ -793,7 +717,7 @@ const SettingsPage: React.FC = () => {
   );
 
   const routeSelectOptions = React.useMemo<SelectProps["options"]>(() => {
-    const gatewayLabel = readyGatewayProvider
+    const gatewayLabel = readyGatewayProviders.length > 0
       ? "NyxID Gateway"
       : "NyxID Gateway (fallback unavailable)";
     const serviceOptions = readyServiceProviders.map((provider) => ({
@@ -843,7 +767,7 @@ const SettingsPage: React.FC = () => {
     draft.preferredLlmRoute,
     preferredRouteAvailable,
     preferredRouteLabel,
-    readyGatewayProvider,
+    readyGatewayProviders.length,
     readyServiceProviders,
   ]);
 
@@ -876,8 +800,7 @@ const SettingsPage: React.FC = () => {
                   borderRadius: 10,
                   color: token.colorTextSecondary,
                   cursor: "default",
-                  fontFamily:
-                    '"SFMono-Regular", "SF Mono", "JetBrains Mono", Consolas, monospace',
+                  fontFamily: aevatarMonoFontFamily,
                 }}
                 value={displayedRuntimeBaseUrl}
               />
@@ -912,10 +835,10 @@ const SettingsPage: React.FC = () => {
       },
       {
         keyLabel: "aevatar.runtime_mode",
-        value: draft.runtimeMode,
+        value: persistedRuntimeMode,
       },
     ],
-    [displayedRuntimeBaseUrl, draft.defaultModel, draft.runtimeMode, effectiveRoute],
+    [displayedRuntimeBaseUrl, draft.defaultModel, effectiveRoute, persistedRuntimeMode],
   );
 
   const handleSave = React.useCallback(() => {
@@ -934,19 +857,27 @@ const SettingsPage: React.FC = () => {
       );
       const nextRouteProviders = resolveRouteScopedProviders(
         nextRoute,
-        readyGatewayProvider,
+        readyGatewayProviders,
         readyServiceProviders,
       );
-      const nextRouteGroups = buildRouteScopedModelGroups({
-        modelsByProvider: userConfigModelsQuery.data?.modelsByProvider,
-        routeProviders: nextRouteProviders,
-        supportedModels: userConfigModelsQuery.data?.supportedModels ?? [],
+      const nextRouteGroups = buildConversationModelGroups({
+        conversationModel: draft.defaultModel,
+        effectiveRoute: nextRoute,
+        models: {
+          gatewayUrl: userConfigModelsQuery.data?.gatewayUrl ?? "",
+          modelsByProvider: userConfigModelsQuery.data?.modelsByProvider,
+          providers: nextRouteProviders,
+          supportedModels: userConfigModelsQuery.data?.supportedModels ?? [],
+        },
       });
       const currentModel = trimConversationValue(draft.defaultModel);
+      const nextLiveRouteGroups = nextRouteGroups.filter(
+        (group) => group.id !== "__current__",
+      );
       const shouldClearModel =
         Boolean(currentModel) &&
-        nextRouteGroups.length > 0 &&
-        !nextRouteGroups.some((group) => group.models.includes(currentModel!));
+        nextLiveRouteGroups.length > 0 &&
+        !nextLiveRouteGroups.some((group) => group.models.includes(currentModel!));
 
       setDraft((currentDraft) => ({
         ...currentDraft,
@@ -956,10 +887,9 @@ const SettingsPage: React.FC = () => {
     },
     [
       draft.defaultModel,
-      readyGatewayProvider,
+      readyGatewayProviders,
       readyServiceProviders,
-      userConfigModelsQuery.data?.modelsByProvider,
-      userConfigModelsQuery.data?.supportedModels,
+      userConfigModelsQuery.data,
     ],
   );
 
@@ -978,7 +908,7 @@ const SettingsPage: React.FC = () => {
       : null;
 
   const headerExtra =
-    activeSection === llmTabKey || draftDirty ? (
+    activeSection === llmTabKey ? (
       <Space>
         <Button
           disabled={!draftDirty || saveMutation.isPending}
@@ -997,6 +927,49 @@ const SettingsPage: React.FC = () => {
         </Button>
       </Space>
     ) : null;
+
+  const tabDefinitions = React.useMemo(
+    (): readonly { key: SettingsSection; label: string }[] => [
+      { key: llmTabKey, label: "LLM" },
+      { key: accountTabKey, label: "Account" },
+    ],
+    [],
+  );
+  const tabButtonRefs = React.useRef<Record<SettingsSection, HTMLButtonElement | null>>({
+    [llmTabKey]: null,
+    [accountTabKey]: null,
+  });
+  const activePanelId = `${activeSection}-panel`;
+  const activeTabId = `${activeSection}-tab`;
+  const handleSectionTabKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLButtonElement>, currentKey: SettingsSection) => {
+      const currentIndex = tabDefinitions.findIndex((tab) => tab.key === currentKey);
+      if (currentIndex < 0) {
+        return;
+      }
+
+      let nextIndex = currentIndex;
+      if (event.key === "ArrowRight") {
+        nextIndex = (currentIndex + 1) % tabDefinitions.length;
+      } else if (event.key === "ArrowLeft") {
+        nextIndex = (currentIndex - 1 + tabDefinitions.length) % tabDefinitions.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = tabDefinitions.length - 1;
+      } else {
+        return;
+      }
+
+      event.preventDefault();
+      const nextSection = tabDefinitions[nextIndex]?.key ?? currentKey;
+      handleSectionChange(nextSection);
+      window.requestAnimationFrame(() => {
+        tabButtonRefs.current[nextSection]?.focus();
+      });
+    },
+    [handleSectionChange, tabDefinitions],
+  );
 
   const llmSection = React.useMemo(
     () => (
@@ -1128,7 +1101,9 @@ const SettingsPage: React.FC = () => {
                                   providerSlugCountMap[provider.providerSlug] ?? 1
                                 }
                                 key={`${
-                                  provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY
+                                  isServiceProviderSource(provider.source)
+                                    ? USER_CONFIG_PROVIDER_SOURCE_SERVICE
+                                    : USER_CONFIG_PROVIDER_SOURCE_GATEWAY
                                 }-${provider.providerSlug}`}
                                 provider={provider}
                                 selected={isProviderActiveForRoute(
@@ -1151,7 +1126,7 @@ const SettingsPage: React.FC = () => {
                           <FieldMetaPill
                             label={
                               modelOptions && modelOptions.length > 0
-                                ? `${modelGroups.reduce(
+                                ? `${liveModelGroups.reduce(
                                     (count, group) => count + group.models.length,
                                     0,
                                   )} live`
@@ -1266,7 +1241,8 @@ const SettingsPage: React.FC = () => {
                 <AevatarPanel style={settingsPanelStyle} title="Technical preview">
                   <div style={{ ...panelStackStyle, padding: 20 }}>
                     <Typography.Text type="secondary">
-                      These values reflect the effective route and current draft.
+                      These values reflect the effective route, the current model draft,
+                      and the stored runtime defaults.
                     </Typography.Text>
                     <div style={codePreviewStyle}>
                       {technicalPreviewRows.map((row, index) => (
@@ -1315,15 +1291,9 @@ const SettingsPage: React.FC = () => {
       bodyGridStyle,
       defaultModelPlaceholder,
       draft.defaultModel,
-      draft.maxToolRounds,
-      draft.localRuntimeBaseUrl,
-      draft.preferredLlmRoute,
-      draft.remoteRuntimeBaseUrl,
-      draft.runtimeMode,
-      draftDirty,
       displayedRuntimeBaseUrl,
       llmLoadError,
-      modelGroups,
+      liveModelGroups,
       modelOptions,
       insetCardStyle,
       preferredRouteAvailable,
@@ -1380,18 +1350,24 @@ const SettingsPage: React.FC = () => {
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div role="tablist" style={buildSettingsSwitchRailStyle(token)}>
-          {[
-            { key: llmTabKey, label: "LLM" },
-            { key: accountTabKey, label: "Account" },
-          ].map((option) => {
+          {tabDefinitions.map((option) => {
             const active = activeSection === option.key;
             return (
               <button
                 key={option.key}
+                aria-controls={active ? activePanelId : undefined}
                 aria-selected={active}
+                id={`${option.key}-tab`}
+                onKeyDown={(event) =>
+                  handleSectionTabKeyDown(event, option.key as SettingsSection)
+                }
                 onClick={() => handleSectionChange(option.key)}
                 role="tab"
+                ref={(node) => {
+                  tabButtonRefs.current[option.key as SettingsSection] = node;
+                }}
                 style={buildSettingsSwitchButtonStyle(token, active)}
+                tabIndex={active ? 0 : -1}
                 type="button"
               >
                 {option.label}
@@ -1399,7 +1375,13 @@ const SettingsPage: React.FC = () => {
             );
           })}
         </div>
-        {activeSection === llmTabKey ? llmSection : accountSection}
+        <div
+          aria-labelledby={activeTabId}
+          id={activePanelId}
+          role="tabpanel"
+        >
+          {activeSection === llmTabKey ? llmSection : accountSection}
+        </div>
       </div>
     </SettingsPageShell>
   );
