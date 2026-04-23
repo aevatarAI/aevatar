@@ -15,5 +15,6 @@ public sealed class InboundMessage
     public string? MessageId { get; init; }
     public string? ChatType { get; init; }
     public OutboundDeliveryContext? OutboundDelivery { get; init; }
+    public TransportExtras? TransportExtras { get; init; }
     public IReadOnlyDictionary<string, string> Extra { get; init; } = new Dictionary<string, string>();
 }

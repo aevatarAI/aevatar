@@ -47,6 +47,49 @@ public sealed class LarkConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldResolveRegistrationByNyxAgentApiKeyId_WhenBotIdDoesNotMatch()
+    {
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync("missing-reg", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(BuildRegistrationEntry()));
+        var adapter = new RecordingPlatformAdapter();
+        var replyGenerator = new StubReplyGenerator("reply-from-nyx");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            replyGenerator: replyGenerator,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-nyx-1",
+                botId: "missing-reg",
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxMessageId = "nyx-msg-1",
+                    NyxPlatform = "lark",
+                    NyxConversationId = "nyx-conv-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Be("reply-from-nyx");
+        adapter.Replies[0].Inbound.TransportExtras?.NyxAgentApiKeyId.Should().Be("nyx-key-1");
+        replyGenerator.GeneratedActivities.Should().ContainSingle();
+        replyGenerator.GeneratedActivities[0].TransportExtras?.NyxAgentApiKeyId.Should().Be("nyx-key-1");
+        await registrationByNyxIdentityPort.Received(1)
+            .GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive()
+            .GetAsync("missing-reg", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldReturnTransientFailure_WhenWorkflowResumeServiceIsMissing()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -204,12 +247,14 @@ public sealed class LarkConversationTurnRunnerTests
         IChannelBotRegistrationQueryPort registrationQueryPort,
         RecordingPlatformAdapter adapter,
         IServiceProvider? services = null,
-        IConversationReplyGenerator? replyGenerator = null)
+        IConversationReplyGenerator? replyGenerator = null,
+        IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort = null)
     {
         services ??= new ServiceCollection().BuildServiceProvider();
         return new LarkConversationTurnRunner(
             services,
             registrationQueryPort,
+            registrationQueryByNyxIdentityPort,
             [adapter],
             new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://example.com" }),
             replyGenerator ?? new StubReplyGenerator(),
@@ -221,17 +266,19 @@ public sealed class LarkConversationTurnRunnerTests
         string messageId,
         ConversationScope scope = ConversationScope.Group,
         string? partition = "oc_group_chat_1",
-        OutboundDeliveryContext? outboundDelivery = null)
+        OutboundDeliveryContext? outboundDelivery = null,
+        TransportExtras? transportExtras = null,
+        string botId = "reg-1")
     {
         return new ChatActivity
         {
             Id = messageId,
             Type = ActivityType.Message,
             ChannelId = ChannelId.From("lark"),
-            Bot = BotInstanceId.From("reg-1"),
+            Bot = BotInstanceId.From(botId),
             Conversation = ConversationReference.Create(
                 ChannelId.From("lark"),
-                BotInstanceId.From("reg-1"),
+                BotInstanceId.From(botId),
                 scope,
                 partition,
                 scope == ConversationScope.Group ? "group" : "dm",
@@ -246,25 +293,28 @@ public sealed class LarkConversationTurnRunnerTests
                 Text = text,
             },
             OutboundDelivery = outboundDelivery?.Clone(),
+            TransportExtras = transportExtras?.Clone(),
         };
     }
 
     private static IChannelBotRegistrationQueryPort BuildRegistrationQueryPort()
     {
-        var registration = new ChannelBotRegistrationEntry
-        {
-            Id = "reg-1",
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        };
-
+        var registration = BuildRegistrationEntry();
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync(registration.Id, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
         return queryPort;
     }
+
+    private static ChannelBotRegistrationEntry BuildRegistrationEntry(string id = "reg-1") =>
+        new()
+        {
+            Id = id,
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
 
     private sealed class RecordingPlatformAdapter : IPlatformAdapter
     {
