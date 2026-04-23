@@ -33,8 +33,9 @@ public static class NyxIdChatEndpoints
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
         // this callback; auth is carried via X-NyxID-User-Token rather than the JWT bearer we
-        // validate in the fallback policy, so the route must stay anonymous. The diag + health
-        // routes under the same prefix are operator probes that also must stay open.
+        // validate in the fallback policy, so the route must stay anonymous. The health route
+        // stays open for liveness checks, but the diag route remains behind host auth because it
+        // can probe upstream Nyx connectivity with caller-supplied credentials.
         app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync)
             .WithTags("NyxIdRelay")
             .AllowAnonymous();
@@ -78,8 +79,7 @@ public static class NyxIdChatEndpoints
                 responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
             });
         })
-            .WithTags("NyxIdRelay")
-            .AllowAnonymous();
+            .WithTags("NyxIdRelay");
 
         // Access control for relay is handled by NyxID's route configuration.
 
@@ -194,8 +194,6 @@ public static class NyxIdChatEndpoints
                     chatRequest.InputParts.Add(part.ToProto());
             }
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
-            if (TryExtractRefreshToken(http) is { } refreshToken)
-                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRefreshToken] = refreshToken;
             chatRequest.Metadata["scope_id"] = scopeId;
             await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
             await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
@@ -677,24 +675,6 @@ public static class NyxIdChatEndpoints
         return null;
     }
 
-    private static string? TryExtractRefreshToken(HttpContext http)
-    {
-        if (http.Request.Headers.TryGetValue("X-Nyx-Refresh-Token", out var headerValue))
-        {
-            var token = headerValue.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(token))
-                return token.Trim();
-        }
-
-        if (http.Request.Cookies.TryGetValue("nyx_refresh_token", out var cookieValue) &&
-            !string.IsNullOrWhiteSpace(cookieValue))
-        {
-            return cookieValue.Trim();
-        }
-
-        return null;
-    }
-
     /// <summary>
     /// Parse the JWT (without verification) to extract the 'sub' claim.
     /// Signature validation is handled earlier by the auth middleware / relay JWT
@@ -899,8 +879,6 @@ public static class NyxIdChatEndpoints
                 ScopeId = scopeId,
             };
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
-            if (TryExtractRefreshToken(http) is { } refreshToken)
-                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRefreshToken] = refreshToken;
             chatRequest.Metadata["scope_id"] = scopeId;
             chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
             chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";

@@ -28,12 +28,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Microsoft.AspNetCore.Authorization;
 
 namespace Aevatar.AI.Tests;
 
 public class NyxIdChatEndpointsCoverageTests
 {
     private static readonly System.Type EndpointsType = typeof(NyxIdChatEndpoints);
+    private const string NyxRefreshTokenMetadataKey = "nyxid.refresh_token";
 
     [Fact]
     public void MapNyxIdChatEndpoints_ShouldRegisterExpectedRoutes()
@@ -61,22 +63,11 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task NyxRelayDiagRoute_ShouldReturnGuidance_WhenTokenIsMissing()
+    public void NyxRelayDiagRoute_ShouldNotAllowAnonymous()
     {
         var endpoint = BuildRouteEndpoint("/api/webhooks/nyxid-relay/diag");
-        var context = new DefaultHttpContext
-        {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddSingleton(new NyxIdToolOptions())
-                .BuildServiceProvider(),
-        };
-        context.Request.Method = HttpMethods.Post;
 
-        var response = await ExecuteEndpointAsync(endpoint, context);
-
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("Provide token via X-Test-Token header");
+        endpoint.Metadata.OfType<IAllowAnonymous>().Should().BeEmpty();
     }
 
     [Fact]
@@ -371,6 +362,7 @@ public class NyxIdChatEndpointsCoverageTests
                 .BuildServiceProvider(),
         };
         context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
         context.Response.Body = new MemoryStream();
 
         var runtime = new StubActorRuntime();
@@ -402,6 +394,7 @@ public class NyxIdChatEndpointsCoverageTests
         chatRequest.Prompt.Should().Be("hello there");
         chatRequest.ScopeId.Should().Be("scope-a");
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("valid-token");
+        chatRequest.Metadata.Should().NotContainKey(NyxRefreshTokenMetadataKey);
         chatRequest.Metadata["scope_id"].Should().Be("scope-a");
         chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("relay-model");
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/relay-route");
@@ -657,6 +650,7 @@ public class NyxIdChatEndpointsCoverageTests
         };
         context.Request.ContentType = "application/json";
         context.Request.Headers["X-NyxID-User-Token"] = relay.Token;
+        context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
         context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
 
         var runtime = new StubActorRuntime();
@@ -695,6 +689,8 @@ public class NyxIdChatEndpointsCoverageTests
             envelope.Payload != null &&
             envelope.Payload.Is(ChatRequestEvent.Descriptor) &&
             envelope.Payload.Unpack<ChatRequestEvent>().Prompt == "hello");
+        actor.HandledEnvelopes.Single().Payload.Unpack<ChatRequestEvent>().Metadata
+            .Should().NotContainKey(NyxRefreshTokenMetadataKey);
     }
 
     [Fact]

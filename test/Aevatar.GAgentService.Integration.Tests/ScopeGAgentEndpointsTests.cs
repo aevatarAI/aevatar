@@ -251,7 +251,7 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public async Task HandleDraftRunAsync_ShouldContinueWhenActorRegistrationFails()
+    public async Task HandleDraftRunAsync_ShouldFail_WhenActorRegistrationFails()
     {
         var interactionService = new FakeGAgentDraftRunInteractionService
         {
@@ -281,10 +281,12 @@ public sealed class ScopeGAgentEndpointsTests
             logger,
             CancellationToken.None);
 
-        context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.InternalServerError);
         context.Response.Headers["X-Correlation-Id"].ToString().Should().Be("corr-1");
         var body = await ReadResponseBodyAsync(context);
-        body.Should().Contain("runStarted");
+        body.Should().Contain("GAGENT_DRAFT_RUN_FAILED");
+        body.Should().Contain("persist failed");
+        body.Should().NotContain("runStarted");
     }
 
     [Fact]

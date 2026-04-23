@@ -310,19 +310,7 @@ public static class ScopeGAgentEndpoints
             async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
             {
                 http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
-
-                try
-                {
-                    await actorStore.AddActorAsync(scopeId, receipt.ActorTypeName, receipt.ActorId, token);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(
-                        ex,
-                        "Failed to persist GAgent actor {ActorId} for scope {ScopeId}.",
-                        receipt.ActorId,
-                        scopeId);
-                }
+                await actorStore.AddActorAsync(scopeId, receipt.ActorTypeName, receipt.ActorId, token);
 
                 await EnsureSseStartedAsync(token);
                 await writer.WriteAsync(
