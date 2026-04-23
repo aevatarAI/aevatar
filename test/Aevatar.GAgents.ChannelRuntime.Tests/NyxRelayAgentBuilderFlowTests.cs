@@ -25,6 +25,73 @@ public sealed class NyxRelayAgentBuilderFlowTests
     }
 
     [Fact]
+    public void TryResolve_ShouldAcceptPositionalGithubUsername_AndForwardConversationId()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_8a70aeefbdb4340e1fa5f575b4c794eb",
+            Text = "/daily-report eanzhao",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_daily_report");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
+        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
+        body.RootElement.GetProperty("github_username").GetString().Should().Be("eanzhao");
+        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_8a70aeefbdb4340e1fa5f575b4c794eb");
+    }
+
+    [Theory]
+    [InlineData("/daily-report =broken")]
+    [InlineData("/daily-report github_username=")]
+    public void TryResolve_ShouldNotTreatMalformedKeyValueTokenAsPositional(string text)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_chat_xyz",
+            Text = text,
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("github_username is required");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldAcceptPositionalSocialMediaTopic()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_chat_abc",
+            Text = "/social-media \"Launch update\" schedule_time=10:30",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("create_social_media");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("topic").GetString().Should().Be("Launch update");
+        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("30 10 * * *");
+        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_chat_abc");
+    }
+
+    [Fact]
     public void TryResolve_ShouldBuildCreateSocialMediaToolCall_FromTextCommand()
     {
         var inbound = new ChannelInboundEvent
