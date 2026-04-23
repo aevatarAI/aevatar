@@ -53,6 +53,10 @@ Operationally:
    - Aevatar -> Nyx `channel-relay/reply` success
    - `POST /api/channels/lark/callback/{registrationId}` returns `410 Gone`
 
+## Backfill Notes
+
+- Relay API keys created before `#323` were registered with `platform=lark`. New provisioning uses `platform=generic` because NyxID treats `lark` as the channel-bot platform identifier, not a relay platform name. Existing relay keys are not migrated automatically; if NyxID enforces the platform contract on relay use, rotate the existing relay key by re-running the Nyx-backed provisioning flow and updating the Lark Developer Console webhook URL to the new `webhook_url`.
+
 ## Expected Runtime Behavior
 
 - New Lark provisioning goes through Nyx only.

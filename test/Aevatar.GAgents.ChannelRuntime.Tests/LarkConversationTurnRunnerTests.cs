@@ -143,6 +143,31 @@ public sealed class LarkConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteSlashCommand_WhenRegistrationHasNoRelayApiKey()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var replyGenerator = new StubReplyGenerator("llm-fallback-should-not-fire");
+        var runner = CreateRunner(registrationQueryPort, adapter, replyGenerator: replyGenerator);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/daily-report alice",
+                "msg-slash-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:msg-slash-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("Create daily report agent failed");
+        adapter.Replies[0].ReplyText.Should().Contain("No NyxID access token available");
+        replyGenerator.GeneratedActivities.Should().BeEmpty(
+            because: "deterministic slash flow must not fall through to the LLM reply generator");
+    }
+
+    [Fact]
     public async Task RunContinueAsync_DirectMessageWithoutPartition_ReturnsPermanentFailure()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
