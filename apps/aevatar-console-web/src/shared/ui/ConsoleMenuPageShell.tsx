@@ -6,6 +6,7 @@ type ConsoleMenuPageShellProps = {
   readonly children: React.ReactNode;
   readonly description?: React.ReactNode;
   readonly extra?: React.ReactNode;
+  readonly surfaceStyle?: React.CSSProperties;
   readonly surfacePadding?: number | string;
   readonly title: React.ReactNode;
 };
@@ -63,7 +64,7 @@ const descriptionStyle: React.CSSProperties = {
   maxWidth: 880,
 };
 
-const surfaceStyle: React.CSSProperties = {
+const defaultSurfaceStyle: React.CSSProperties = {
   background: '#fafcff',
   borderRadius: 24,
   boxSizing: 'border-box',
@@ -83,6 +84,7 @@ export const ConsoleMenuPageShell: React.FC<ConsoleMenuPageShellProps> = ({
   children,
   description,
   extra,
+  surfaceStyle,
   surfacePadding = 24,
   title,
 }) => (
@@ -101,7 +103,11 @@ export const ConsoleMenuPageShell: React.FC<ConsoleMenuPageShellProps> = ({
       </div>
       {extra ? <div style={{ flexShrink: 0 }}>{extra}</div> : null}
     </div>
-    <div style={{ ...surfaceStyle, padding: surfacePadding }}>{children}</div>
+    <div
+      style={{ ...defaultSurfaceStyle, ...surfaceStyle, padding: surfacePadding }}
+    >
+      {children}
+    </div>
   </div>
 );
 
