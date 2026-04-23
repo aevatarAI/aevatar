@@ -17,7 +17,6 @@ import {
   Table,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
   theme,
 } from "antd";
@@ -30,7 +29,6 @@ import type {
   WorkflowActorGraphEdge,
   WorkflowActorGraphNode,
   WorkflowActorGraphSubgraph,
-  WorkflowActorSnapshot,
   WorkflowActorTimelineItem,
 } from "@/shared/models/runtime/actors";
 import type { WorkflowAgentSummary } from "@/shared/models/runtime/query";
@@ -48,9 +46,7 @@ import {
 import {
   AevatarCompactTag,
   AevatarCompactText,
-  aevatarMonoFontFamily,
   truncateMiddle,
-  truncateTail,
 } from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import {
@@ -75,6 +71,32 @@ type DisplayActorRecord = {
   subtitle?: string;
   type?: string;
   workflowName?: string;
+};
+
+const actorTableMaxHeight = "min(52vh, 440px)";
+const actorTableBodyMaxHeight = `calc(${actorTableMaxHeight} - 64px)`;
+const actorTableMinWidth = 1120;
+const actorPageStackStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 18,
+  maxWidth: "100%",
+  minWidth: 0,
+  width: "100%",
+};
+const actorTableShellStyle: React.CSSProperties = {
+  maxWidth: "100%",
+  minWidth: 0,
+  overflowX: "auto",
+  overflowY: "hidden",
+  width: "100%",
+};
+const actorTableStyle: React.CSSProperties = {
+  maxHeight: actorTableMaxHeight,
+  maxWidth: "100%",
+  minWidth: 0,
+  overflow: "hidden",
+  width: "100%",
 };
 
 function readExplorerSelection(): ExplorerRouteSelection {
@@ -380,28 +402,6 @@ const TopologyCompactIdentifierTag: React.FC<{
       value={value}
     />
   );
-};
-
-const TopologyCompactDateText: React.FC<{
-  value?: string;
-}> = ({ value }) => {
-  const display = value ? formatDateTime(value) : "n/a";
-  const content = (
-    <Typography.Text
-      style={{
-        display: "inline-block",
-        fontSize: 12,
-        maxWidth: 140,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {display}
-    </Typography.Text>
-  );
-
-  return value ? <Tooltip title={display}>{content}</Tooltip> : content;
 };
 
 const TopologyStatusPill: React.FC<{
@@ -1257,7 +1257,7 @@ export const TopologyExplorerPage: React.FC<{
       }
       title="Topology"
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={actorPageStackStyle}>
         <div
           style={{
             ...buildAevatarPanelStyle(surfaceToken),
@@ -1461,20 +1461,20 @@ export const TopologyExplorerPage: React.FC<{
             extra={<Tag color="default">实时</Tag>}
           >
             {displayActors.length > 0 ? (
-              <Table<DisplayActorRecord>
-                columns={actorListColumns}
-                dataSource={displayActors}
-                locale={{ emptyText: "当前没有可追查对象。" }}
-                onRow={(record) => ({
-                  onClick: () => handleOpenPreview(record.id),
-                  style: { cursor: "pointer" },
-                })}
-                pagination={false}
-                rowKey={(record) => record.id}
-                scroll={{ x: 1120 }}
-                size="middle"
-                tableLayout="fixed"
-              />
+              <div className="topology-actor-table-shell" style={actorTableShellStyle}>
+                <Table<DisplayActorRecord>
+                  className="topology-actor-table"
+                  columns={actorListColumns}
+                  dataSource={displayActors}
+                  locale={{ emptyText: "当前没有可追查对象。" }}
+                  pagination={false}
+                  rowKey={(record) => record.id}
+                  scroll={{ x: actorTableMinWidth, y: actorTableBodyMaxHeight }}
+                  size="middle"
+                  style={actorTableStyle}
+                  tableLayout="fixed"
+                />
+              </div>
             ) : (
               <AevatarInspectorEmpty
                 description="当前租户下没有可见 actor，或者 actor query endpoints 未启用。"

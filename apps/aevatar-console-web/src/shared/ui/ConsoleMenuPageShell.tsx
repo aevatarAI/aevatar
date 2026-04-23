@@ -6,22 +6,31 @@ type ConsoleMenuPageShellProps = {
   readonly children: React.ReactNode;
   readonly description?: React.ReactNode;
   readonly extra?: React.ReactNode;
+  readonly surfaceStyle?: React.CSSProperties;
   readonly surfacePadding?: number | string;
   readonly title: React.ReactNode;
 };
 
 const rootStyle: React.CSSProperties = {
+  boxSizing: 'border-box',
   display: 'flex',
   flexDirection: 'column',
   gap: 20,
+  maxWidth: '100%',
   minHeight: 0,
+  minWidth: 0,
+  width: '100%',
 };
 
 const headerStyle: React.CSSProperties = {
   alignItems: 'flex-start',
+  boxSizing: 'border-box',
   display: 'flex',
   gap: 16,
   justifyContent: 'space-between',
+  maxWidth: '100%',
+  minWidth: 0,
+  width: '100%',
 };
 
 const headerTextStyle: React.CSSProperties = {
@@ -55,14 +64,19 @@ const descriptionStyle: React.CSSProperties = {
   maxWidth: 880,
 };
 
-const surfaceStyle: React.CSSProperties = {
+const defaultSurfaceStyle: React.CSSProperties = {
   background: '#fafcff',
   borderRadius: 24,
+  boxSizing: 'border-box',
   boxShadow: '0 20px 48px rgba(15, 23, 42, 0.06)',
   display: 'flex',
   flex: 1,
   flexDirection: 'column',
+  maxWidth: '100%',
   minHeight: 0,
+  minWidth: 0,
+  overflowX: 'hidden',
+  width: '100%',
 };
 
 export const ConsoleMenuPageShell: React.FC<ConsoleMenuPageShellProps> = ({
@@ -70,6 +84,7 @@ export const ConsoleMenuPageShell: React.FC<ConsoleMenuPageShellProps> = ({
   children,
   description,
   extra,
+  surfaceStyle,
   surfacePadding = 24,
   title,
 }) => (
@@ -88,7 +103,11 @@ export const ConsoleMenuPageShell: React.FC<ConsoleMenuPageShellProps> = ({
       </div>
       {extra ? <div style={{ flexShrink: 0 }}>{extra}</div> : null}
     </div>
-    <div style={{ ...surfaceStyle, padding: surfacePadding }}>{children}</div>
+    <div
+      style={{ ...defaultSurfaceStyle, ...surfaceStyle, padding: surfacePadding }}
+    >
+      {children}
+    </div>
   </div>
 );
 

@@ -15,7 +15,7 @@ public sealed class AgentBuilderCardFlowTests
         {
             ChatType = "p2p",
             RegistrationScopeId = "scope-1",
-            Text = "/daily-report",
+            Text = "/daily",
         };
 
         var decision = await AgentBuilderCardFlow.TryResolveAsync(

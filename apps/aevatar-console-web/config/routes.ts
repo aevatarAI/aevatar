@@ -169,7 +169,7 @@ export default [
   {
     path: "/settings",
     name: "Settings",
-    component: "./settings/account",
+    component: "./settings",
     menuGroupKey: "settings",
   },
   {
