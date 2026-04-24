@@ -45,7 +45,10 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct)
+    public async Task<ConversationTurnResult> RunInboundAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
 
@@ -61,7 +64,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
 
-        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, ct) is { } agentBuilderResult)
+        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, ct) is { } agentBuilderResult)
             return agentBuilderResult;
 
         if (string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
@@ -74,7 +77,13 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return ConversationTurnResult.LlmReplyRequested(BuildLlmReplyRequest(activity, registration, inboundEvent));
     }
 
-    public async Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct)
+    public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
+        RunInboundAsync(activity, ConversationTurnRuntimeContext.Empty, ct);
+
+    public async Task<ConversationTurnResult> RunLlmReplyAsync(
+        LlmReplyReadyEvent reply,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(reply);
 
@@ -117,8 +126,12 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             reply.Activity.Conversation,
             inbound,
             registration,
+            runtimeContext,
             ct);
     }
+
+    public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct) =>
+        RunLlmReplyAsync(reply, ConversationTurnRuntimeContext.Empty, ct);
 
     public async Task<ConversationTurnResult> RunContinueAsync(
         ConversationContinueRequestedEvent command,
@@ -158,6 +171,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             command.Conversation,
             inbound,
             registration,
+            ConversationTurnRuntimeContext.Empty,
             ct);
     }
 
@@ -165,6 +179,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
         ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         AgentBuilderFlowDecision? decision = null;
@@ -203,7 +218,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             }
         }
 
-        var result = await SendReplyAsync(replyPayload, activity, ToInboundMessage(activity), registration, ct);
+        var result = await SendReplyAsync(replyPayload, activity, ToInboundMessage(activity), registration, runtimeContext, ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
@@ -218,6 +233,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChatActivity activity,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct) =>
         await SendReplyAsync(
             new MessageContent { Text = replyText },
@@ -225,6 +241,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             activity.Conversation,
             inbound,
             registration,
+            runtimeContext,
             ct);
 
     private async Task<ConversationTurnResult> SendReplyAsync(
@@ -233,6 +250,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationReference? conversation,
         InboundMessage inbound,
         ChannelBotRegistrationEntry? registration,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(outboundIntent);
@@ -240,12 +258,21 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (HasRelayDelivery(inbound))
         {
             var relayDelivery = inbound.OutboundDelivery!.Clone();
+            var relayToken = ResolveRelayReplyToken(relayDelivery, runtimeContext);
+            if (relayToken is null)
+            {
+                return ConversationTurnResult.PermanentFailure(
+                    "reply_token_missing_or_expired",
+                    "Nyx relay reply token is missing or expired for this conversation turn.");
+            }
+
             if (await TrySendInteractiveRelayReplyAsync(
                     outboundIntent,
                     sentActivitySeed,
                     conversation,
                     inbound,
                     relayDelivery,
+                    relayToken,
                     ct) is { } interactiveResult)
             {
                 return interactiveResult;
@@ -256,6 +283,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 conversation?.Clone() ?? new ConversationReference(),
                 outboundIntent,
                 relayDelivery,
+                relayToken,
                 ct);
             return emit.Success
                 ? BuildRelaySentResult(
@@ -324,6 +352,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationReference? conversation,
         InboundMessage inbound,
         OutboundDeliveryContext relayDelivery,
+        string relayToken,
         CancellationToken ct)
     {
         if (!HasInteractiveContent(outboundIntent))
@@ -341,13 +370,14 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 conversation,
                 inbound,
                 relayDelivery,
+                relayToken,
                 ct);
         }
 
         var dispatch = await _interactiveReplyDispatcher.DispatchAsync(
             ResolveRelayChannel(inbound, conversation),
             relayDelivery.ReplyMessageId,
-            relayDelivery.ReplyAccessToken,
+            relayToken,
             outboundIntent,
             new ComposeContext
             {
@@ -376,6 +406,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             conversation,
             inbound,
             relayDelivery,
+            relayToken,
             ct);
     }
 
@@ -385,6 +416,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationReference? conversation,
         InboundMessage inbound,
         OutboundDeliveryContext relayDelivery,
+        string relayToken,
         CancellationToken ct)
     {
         var outbound = new MessageContent { Text = NormalizeReplyText(fallbackText) };
@@ -393,6 +425,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             conversation?.Clone() ?? new ConversationReference(),
             outbound,
             relayDelivery,
+            relayToken,
             ct);
         return emit.Success
             ? BuildRelaySentResult(
@@ -702,7 +735,35 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         inbound.OutboundDelivery is
         {
             ReplyMessageId.Length: > 0,
+            CorrelationId.Length: > 0,
         };
+
+    private static string? ResolveRelayReplyToken(
+        OutboundDeliveryContext relayDelivery,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var tokenContext = runtimeContext.NyxRelayReplyToken;
+        if (tokenContext is null || tokenContext.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+            return null;
+
+        if (!string.Equals(
+                NormalizeOptional(relayDelivery.CorrelationId),
+                NormalizeOptional(tokenContext.CorrelationId),
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (!string.Equals(
+                NormalizeOptional(relayDelivery.ReplyMessageId),
+                NormalizeOptional(tokenContext.ReplyMessageId),
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return NormalizeOptional(tokenContext.ReplyToken);
+    }
 
     private static string? ResolveUserAccessToken(ChatActivity activity) =>
         NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
@@ -730,7 +791,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         activity.OutboundDelivery is
         {
             ReplyMessageId.Length: > 0,
-            ReplyAccessToken.Length: > 0,
+            CorrelationId.Length: > 0,
         } &&
         string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
 
@@ -879,7 +940,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         return errorCode switch
         {
-            "missing_reply_access_token" or "missing_reply_message_id" or "empty_reply" =>
+            "reply_token_missing_or_expired" or "missing_reply_message_id" or "empty_reply" =>
                 ConversationTurnResult.PermanentFailure(errorCode, errorMessage),
             _ when emit.RetryAfterTimeSpan is { } retryAfter =>
                 ConversationTurnResult.TransientFailure(errorCode, errorMessage, retryAfter),
@@ -915,6 +976,6 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             outboundDelivery: new OutboundDeliveryContext
             {
                 ReplyMessageId = relayDelivery.ReplyMessageId,
-                ReplyAccessToken = relayDelivery.ReplyAccessToken,
+                CorrelationId = relayDelivery.CorrelationId,
             });
 }

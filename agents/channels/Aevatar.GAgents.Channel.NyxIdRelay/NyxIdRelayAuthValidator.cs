@@ -1,8 +1,6 @@
-using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Microsoft.AspNetCore.Http;
@@ -30,33 +28,37 @@ public sealed class NyxIdRelayAuthValidator
         IReadOnlyList<SecurityKey> SigningKeys,
         DateTimeOffset ExpiresAtUtc);
 
-    private sealed record SignatureValidationResult(
+    private sealed record CallbackJwtValidationResult(
         bool Succeeded,
-        string SigningSecretSource,
-        bool SignatureHeaderPresent,
-        int SignatureHeaderLength);
+        ClaimsPrincipal? Principal = null,
+        string? ScopeId = null,
+        string? RelayApiKeyId = null,
+        string? MessageId = null,
+        string? Platform = null,
+        string? Jti = null,
+        string? BodySha256 = null,
+        string? ErrorCode = null,
+        string? ErrorSummary = null);
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly NyxIdRelayOptions _relayOptions;
-    private readonly INyxIdRelayRegistrationCredentialResolver? _registrationCredentialResolver;
     private readonly INyxIdRelayReplayGuard? _replayGuard;
     private readonly ILogger<NyxIdRelayAuthValidator> _logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private CachedOidcConfiguration? _cachedConfiguration;
+    private DateTimeOffset _lastForcedRefreshUtc = DateTimeOffset.MinValue;
 
     public NyxIdRelayAuthValidator(
         IHttpClientFactory httpClientFactory,
         NyxIdToolOptions nyxOptions,
         NyxIdRelayOptions relayOptions,
         ILogger<NyxIdRelayAuthValidator>? logger = null,
-        INyxIdRelayRegistrationCredentialResolver? registrationCredentialResolver = null,
         INyxIdRelayReplayGuard? replayGuard = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _relayOptions = relayOptions ?? throw new ArgumentNullException(nameof(relayOptions));
-        _registrationCredentialResolver = registrationCredentialResolver;
         _replayGuard = replayGuard;
         _logger = logger ?? NullLogger<NyxIdRelayAuthValidator>.Instance;
     }
@@ -71,26 +73,32 @@ public sealed class NyxIdRelayAuthValidator
         ArgumentNullException.ThrowIfNull(bodyBytes);
         ArgumentNullException.ThrowIfNull(payload);
 
-        var userToken = http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault()?.Trim();
-        if (string.IsNullOrWhiteSpace(userToken))
+        var callbackToken = http.Request.Headers["X-NyxID-Callback-Token"].FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(callbackToken))
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
-                ErrorCode: "missing_user_token",
-                ErrorSummary: "Relay callback is missing X-NyxID-User-Token.");
+                ErrorCode: "callback_jwt_missing",
+                ErrorSummary: "Relay callback is missing X-NyxID-Callback-Token.");
         }
 
-        var jwtValidation = await ValidateJwtAsync(userToken, ct);
+        var jwtValidation = await ValidateCallbackJwtAsync(callbackToken, ct);
         if (!jwtValidation.Succeeded)
-            return jwtValidation with { UserAccessToken = null };
-
-        if (!string.IsNullOrWhiteSpace(payload.Agent?.ApiKeyId) &&
-            !string.Equals(payload.Agent.ApiKeyId.Trim(), jwtValidation.RelayApiKeyId, StringComparison.Ordinal))
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
-                ErrorCode: "relay_api_key_mismatch",
-                ErrorSummary: "Relay callback agent api_key_id does not match validated relay token.");
+                ErrorCode: jwtValidation.ErrorCode,
+                ErrorSummary: jwtValidation.ErrorSummary);
+        }
+
+        var payloadApiKeyId = NormalizeOptional(payload.Agent?.ApiKeyId);
+        if (payloadApiKeyId is null ||
+            !string.Equals(payloadApiKeyId, jwtValidation.RelayApiKeyId, StringComparison.Ordinal))
+        {
+            return new NyxIdRelayAuthenticationResult(
+                false,
+                ErrorCode: "callback_jwt_api_key_id_mismatch",
+                ErrorSummary: "Relay callback agent api_key_id does not match callback JWT.");
         }
 
         var headerMessageId = NormalizeOptional(http.Request.Headers["X-NyxID-Message-Id"].FirstOrDefault());
@@ -98,157 +106,84 @@ public sealed class NyxIdRelayAuthValidator
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
-                ErrorCode: "missing_message_id_header",
+                ErrorCode: "callback_jwt_message_id_mismatch",
                 ErrorSummary: "Relay callback is missing X-NyxID-Message-Id.");
         }
 
-        if (headerMessageId is not null &&
-            !string.Equals(headerMessageId, NormalizeOptional(payload.MessageId), StringComparison.Ordinal))
+        var payloadMessageId = NormalizeOptional(payload.MessageId);
+        if (!string.Equals(jwtValidation.MessageId, payloadMessageId, StringComparison.Ordinal) ||
+            (headerMessageId is not null && !string.Equals(headerMessageId, payloadMessageId, StringComparison.Ordinal)))
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
-                ErrorCode: "message_id_mismatch",
-                ErrorSummary: "Relay callback header message id does not match payload message_id.");
+                ErrorCode: "callback_jwt_message_id_mismatch",
+                ErrorSummary: "Relay callback message id does not match callback JWT.");
         }
 
-        if (!TryValidateTimestamp(http, out var observedAtUtc, out var timestampErrorCode, out var timestampErrorSummary))
+        var payloadPlatform = NormalizeOptional(payload.Platform);
+        if (!string.Equals(jwtValidation.Platform, payloadPlatform, StringComparison.OrdinalIgnoreCase))
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
-                ErrorCode: timestampErrorCode,
-                ErrorSummary: timestampErrorSummary);
+                ErrorCode: "callback_jwt_platform_mismatch",
+                ErrorSummary: "Relay callback platform does not match callback JWT.");
         }
 
-        NyxIdRelayRegistrationCredential? registrationCredential = null;
-        try
-        {
-            registrationCredential = await ResolveRegistrationCredentialAsync(jwtValidation.RelayApiKeyId, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Nyx relay registration credential resolution failed for relay_api_key_id={RelayApiKeyId}",
-                jwtValidation.RelayApiKeyId);
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "registration_credential_resolution_failed",
-                ErrorSummary: "Relay callback registration credential lookup failed.");
-        }
-
-        var signatureValidation = ValidateSignatureInternal(http, bodyBytes, registrationCredential);
-        if (!signatureValidation.Succeeded)
-        {
-            _logger.LogWarning(
-                "Nyx relay signature verification failed: relay_api_key_id={RelayApiKeyId}, payload_agent_api_key_id={PayloadAgentApiKeyId}, message_id={MessageId}, registration_id={RegistrationId}, credential_resolved={CredentialResolved}, signing_secret_source={SigningSecretSource}, signature_header_present={SignatureHeaderPresent}, signature_header_length={SignatureHeaderLength}, body_length={BodyLength}",
-                jwtValidation.RelayApiKeyId,
-                NormalizeOptional(payload.Agent?.ApiKeyId),
-                NormalizeOptional(payload.MessageId),
-                NormalizeOptional(registrationCredential?.RegistrationId),
-                registrationCredential is not null,
-                signatureValidation.SigningSecretSource,
-                signatureValidation.SignatureHeaderPresent,
-                signatureValidation.SignatureHeaderLength,
-                bodyBytes.Length);
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "invalid_signature",
-                ErrorSummary: "Relay callback signature verification failed.");
-        }
-
-        if (headerMessageId is not null &&
-            _replayGuard is not null &&
-            !_replayGuard.TryClaim(headerMessageId, observedAtUtc))
+        var payloadCorrelationId = NormalizeOptional(payload.CorrelationId);
+        if (payloadCorrelationId is null ||
+            !string.Equals(payloadCorrelationId, jwtValidation.Jti, StringComparison.Ordinal))
         {
             return new NyxIdRelayAuthenticationResult(
                 false,
-                ErrorCode: "replay_detected",
-                ErrorSummary: "Relay callback replay was rejected.");
+                ErrorCode: "callback_jwt_correlation_id_mismatch",
+                ErrorSummary: "Relay callback correlation_id does not match callback JWT jti.");
         }
 
-        return jwtValidation with { UserAccessToken = userToken };
+        if (!string.Equals(ComputeBodySha256Hex(bodyBytes), jwtValidation.BodySha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return new NyxIdRelayAuthenticationResult(
+                false,
+                ErrorCode: "callback_jwt_body_hash_mismatch",
+                ErrorSummary: "Relay callback raw body hash does not match callback JWT.");
+        }
+
+        if (_replayGuard is not null)
+        {
+            var observedAtUtc = DateTimeOffset.UtcNow;
+            if (!_replayGuard.TryClaim($"jti:{jwtValidation.Jti}", observedAtUtc) ||
+                !_replayGuard.TryClaim($"message:{payloadMessageId}", observedAtUtc))
+            {
+                return new NyxIdRelayAuthenticationResult(
+                    false,
+                    ErrorCode: "callback_jwt_replay_detected",
+                    ErrorSummary: "Relay callback replay was rejected.");
+            }
+        }
+
+        var userToken = NormalizeOptional(http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault());
+        return new NyxIdRelayAuthenticationResult(
+            true,
+            Principal: jwtValidation.Principal,
+            ScopeId: jwtValidation.ScopeId,
+            RelayApiKeyId: jwtValidation.RelayApiKeyId,
+            UserAccessToken: userToken);
     }
 
-    public bool ValidateSignature(
-        HttpContext http,
-        byte[] bodyBytes,
-        NyxIdRelayRegistrationCredential? registrationCredential = null)
-        => ValidateSignatureInternal(http, bodyBytes, registrationCredential).Succeeded;
-
-    private SignatureValidationResult ValidateSignatureInternal(
-        HttpContext http,
-        byte[] bodyBytes,
-        NyxIdRelayRegistrationCredential? registrationCredential = null)
-    {
-        ArgumentNullException.ThrowIfNull(http);
-        ArgumentNullException.ThrowIfNull(bodyBytes);
-
-        if (_relayOptions.SkipSignatureVerification)
-        {
-            return new SignatureValidationResult(
-                true,
-                SigningSecretSource: "skipped",
-                SignatureHeaderPresent: false,
-                SignatureHeaderLength: 0);
-        }
-
-        var registrationSigningSecret = NormalizeOptional(registrationCredential?.RelayApiKeyHash);
-        var globalSigningSecret = NormalizeOptional(_relayOptions.HmacSecret);
-        var signingSecret = registrationSigningSecret ?? globalSigningSecret;
-        var signingSecretSource = registrationSigningSecret is not null
-            ? "registration_credential"
-            : globalSigningSecret is not null
-                ? "global_hmac_secret"
-                : "missing";
-        if (signingSecret is null)
-        {
-            return new SignatureValidationResult(
-                false,
-                SigningSecretSource: signingSecretSource,
-                SignatureHeaderPresent: false,
-                SignatureHeaderLength: 0);
-        }
-
-        if (!http.Request.Headers.TryGetValue("X-NyxID-Signature", out var signatureHeader) ||
-            string.IsNullOrWhiteSpace(signatureHeader))
-        {
-            return new SignatureValidationResult(
-                false,
-                SigningSecretSource: signingSecretSource,
-                SignatureHeaderPresent: false,
-                SignatureHeaderLength: 0);
-        }
-
-        var normalizedSignature = signatureHeader.ToString().Trim().ToLowerInvariant();
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(signingSecret));
-        var computedHash = hmac.ComputeHash(bodyBytes);
-        var computedSignature = Convert.ToHexString(computedHash).ToLowerInvariant();
-        var succeeded = CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(computedSignature),
-            Encoding.UTF8.GetBytes(normalizedSignature));
-        return new SignatureValidationResult(
-            succeeded,
-            SigningSecretSource: signingSecretSource,
-            SignatureHeaderPresent: true,
-            SignatureHeaderLength: normalizedSignature.Length);
-    }
-
-    private async Task<NyxIdRelayAuthenticationResult> ValidateJwtAsync(string token, CancellationToken ct)
+    private async Task<CallbackJwtValidationResult> ValidateCallbackJwtAsync(string token, CancellationToken ct)
     {
         var configuration = await GetConfigurationAsync(forceRefresh: false, ct);
-        var initial = ValidateJwtCore(token, configuration);
+        var initial = ValidateCallbackJwtCore(token, configuration);
         if (initial.Succeeded)
             return initial;
 
-        if (!string.Equals(initial.ErrorCode, "signing_key_not_found", StringComparison.Ordinal))
+        if (!string.Equals(initial.ErrorCode, "callback_jwt_kid_not_found", StringComparison.Ordinal))
             return initial;
 
-        _logger.LogInformation("Refreshing Nyx relay OIDC/JWKS cache after signing key miss");
-        var refreshed = await GetConfigurationAsync(forceRefresh: true, ct);
-        return ValidateJwtCore(token, refreshed);
+        var refreshed = await RefreshConfigurationAfterKidMissAsync(ct);
+        return ValidateCallbackJwtCore(token, refreshed);
     }
 
-    private NyxIdRelayAuthenticationResult ValidateJwtCore(string token, CachedOidcConfiguration configuration)
+    private CallbackJwtValidationResult ValidateCallbackJwtCore(string token, CachedOidcConfiguration configuration)
     {
         var handler = new JwtSecurityTokenHandler
         {
@@ -276,43 +211,117 @@ public sealed class NyxIdRelayAuthValidator
         {
             var principal = handler.ValidateToken(token, parameters, out _);
             var scopeId = principal.FindFirstValue("sub")?.Trim();
-            var relayApiKeyId = principal.FindFirstValue("relay_api_key_id")?.Trim();
-            if (string.IsNullOrWhiteSpace(scopeId))
-            {
-                return new NyxIdRelayAuthenticationResult(
-                    false,
-                    ErrorCode: "jwt_missing_sub",
-                    ErrorSummary: "Validated relay JWT is missing subject.");
-            }
+            var relayApiKeyId = principal.FindFirstValue("api_key_id")?.Trim();
+            var messageId = principal.FindFirstValue("message_id")?.Trim();
+            var platform = principal.FindFirstValue("platform")?.Trim();
+            var bodySha256 = principal.FindFirstValue("body_sha256")?.Trim();
+            var jti = principal.FindFirstValue(JwtRegisteredClaimNames.Jti)?.Trim() ??
+                      principal.FindFirstValue("jti")?.Trim();
 
             if (string.IsNullOrWhiteSpace(relayApiKeyId))
             {
-                return new NyxIdRelayAuthenticationResult(
+                return new CallbackJwtValidationResult(
                     false,
-                    ErrorCode: "jwt_missing_relay_api_key_id",
-                    ErrorSummary: "Validated relay JWT is missing relay_api_key_id.");
+                    ErrorCode: "callback_jwt_api_key_id_mismatch",
+                    ErrorSummary: "Callback JWT is missing api_key_id.");
             }
 
-            return new NyxIdRelayAuthenticationResult(
+            if (string.IsNullOrWhiteSpace(messageId))
+            {
+                return new CallbackJwtValidationResult(
+                    false,
+                    ErrorCode: "callback_jwt_message_id_mismatch",
+                    ErrorSummary: "Callback JWT is missing message_id.");
+            }
+
+            if (string.IsNullOrWhiteSpace(platform))
+            {
+                return new CallbackJwtValidationResult(
+                    false,
+                    ErrorCode: "callback_jwt_platform_mismatch",
+                    ErrorSummary: "Callback JWT is missing platform.");
+            }
+
+            if (string.IsNullOrWhiteSpace(jti))
+            {
+                return new CallbackJwtValidationResult(
+                    false,
+                    ErrorCode: "callback_jwt_correlation_id_mismatch",
+                    ErrorSummary: "Callback JWT is missing jti.");
+            }
+
+            if (string.IsNullOrWhiteSpace(bodySha256))
+            {
+                return new CallbackJwtValidationResult(
+                    false,
+                    ErrorCode: "callback_jwt_body_hash_mismatch",
+                    ErrorSummary: "Callback JWT is missing body_sha256.");
+            }
+
+            return new CallbackJwtValidationResult(
                 true,
                 Principal: principal,
                 ScopeId: scopeId,
-                RelayApiKeyId: relayApiKeyId);
+                RelayApiKeyId: relayApiKeyId,
+                MessageId: messageId,
+                Platform: platform,
+                Jti: jti,
+                BodySha256: bodySha256);
         }
         catch (SecurityTokenSignatureKeyNotFoundException ex)
         {
-            _logger.LogWarning(ex, "Nyx relay JWT validation failed: signing key not found");
-            return new NyxIdRelayAuthenticationResult(false, ErrorCode: "signing_key_not_found", ErrorSummary: ex.Message);
+            _logger.LogWarning(ex, "Nyx relay callback JWT validation failed: signing key not found");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_kid_not_found", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenInvalidIssuerException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT issuer mismatch");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_issuer_mismatch", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenInvalidAudienceException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT audience mismatch");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_audience_mismatch", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenExpiredException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT lifetime invalid");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_lifetime_invalid", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenNotYetValidException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT lifetime invalid");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_lifetime_invalid", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenInvalidLifetimeException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT lifetime invalid");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_lifetime_invalid", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenInvalidAlgorithmException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT algorithm invalid");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_signature_invalid", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenInvalidSignatureException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT signature invalid");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_signature_invalid", ErrorSummary: ex.Message);
+        }
+        catch (SecurityTokenMalformedException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT malformed");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_malformed", ErrorSummary: ex.Message);
         }
         catch (SecurityTokenException ex)
         {
-            _logger.LogWarning(ex, "Nyx relay JWT validation failed");
-            return new NyxIdRelayAuthenticationResult(false, ErrorCode: ex.GetType().Name, ErrorSummary: ex.Message);
+            _logger.LogWarning(ex, "Nyx relay callback JWT validation failed");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_signature_invalid", ErrorSummary: ex.Message);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Nyx relay JWT validation failed unexpectedly");
-            return new NyxIdRelayAuthenticationResult(false, ErrorCode: ex.GetType().Name, ErrorSummary: ex.Message);
+            _logger.LogError(ex, "Nyx relay callback JWT validation failed unexpectedly");
+            return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_invalid", ErrorSummary: ex.Message);
         }
     }
 
@@ -329,33 +338,62 @@ public sealed class NyxIdRelayAuthValidator
             if (!forceRefresh && cached is not null && cached.ExpiresAtUtc > DateTimeOffset.UtcNow)
                 return cached;
 
-            var http = _httpClientFactory.CreateClient();
-            using var discoveryResponse = await http.GetAsync(ResolveDiscoveryUrl(), ct);
-            discoveryResponse.EnsureSuccessStatusCode();
-            var discoveryJson = await discoveryResponse.Content.ReadAsStringAsync(ct);
-            using var discoveryDocument = JsonDocument.Parse(discoveryJson);
-
-            var issuer = RequireString(discoveryDocument.RootElement, "issuer");
-            var jwksUri = RequireString(discoveryDocument.RootElement, "jwks_uri");
-
-            using var jwksResponse = await http.GetAsync(jwksUri, ct);
-            jwksResponse.EnsureSuccessStatusCode();
-            var jwksJson = await jwksResponse.Content.ReadAsStringAsync(ct);
-
-            var configuration = new CachedOidcConfiguration(
-                Issuer: issuer,
-                Audience: ResolveExpectedAudience(),
-                JwksUri: jwksUri,
-                SigningKeys: new JsonWebKeySet(jwksJson).GetSigningKeys().ToArray(),
-                ExpiresAtUtc: DateTimeOffset.UtcNow.AddSeconds(Math.Max(30, _relayOptions.OidcCacheTtlSeconds)));
-
-            _cachedConfiguration = configuration;
-            return configuration;
+            return await LoadConfigurationAsync(ct);
         }
         finally
         {
             _refreshLock.Release();
         }
+    }
+
+    private async Task<CachedOidcConfiguration> RefreshConfigurationAfterKidMissAsync(CancellationToken ct)
+    {
+        await _refreshLock.WaitAsync(ct);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var cooldown = TimeSpan.FromSeconds(Math.Max(0, _relayOptions.JwksKidMissRefreshCooldownSeconds));
+            if (cooldown > TimeSpan.Zero &&
+                now - _lastForcedRefreshUtc < cooldown &&
+                _cachedConfiguration is { } cached)
+            {
+                return cached;
+            }
+
+            _lastForcedRefreshUtc = now;
+            _logger.LogInformation("Refreshing Nyx relay OIDC/JWKS cache after callback JWT signing key miss");
+            return await LoadConfigurationAsync(ct);
+        }
+        finally
+        {
+            _refreshLock.Release();
+        }
+    }
+
+    private async Task<CachedOidcConfiguration> LoadConfigurationAsync(CancellationToken ct)
+    {
+        var http = _httpClientFactory.CreateClient();
+        using var discoveryResponse = await http.GetAsync(ResolveDiscoveryUrl(), ct);
+        discoveryResponse.EnsureSuccessStatusCode();
+        var discoveryJson = await discoveryResponse.Content.ReadAsStringAsync(ct);
+        using var discoveryDocument = JsonDocument.Parse(discoveryJson);
+
+        var issuer = RequireString(discoveryDocument.RootElement, "issuer");
+        var jwksUri = RequireString(discoveryDocument.RootElement, "jwks_uri");
+
+        using var jwksResponse = await http.GetAsync(jwksUri, ct);
+        jwksResponse.EnsureSuccessStatusCode();
+        var jwksJson = await jwksResponse.Content.ReadAsStringAsync(ct);
+
+        var configuration = new CachedOidcConfiguration(
+            Issuer: issuer,
+            Audience: ResolveExpectedCallbackAudience(),
+            JwksUri: jwksUri,
+            SigningKeys: new JsonWebKeySet(jwksJson).GetSigningKeys().ToArray(),
+            ExpiresAtUtc: DateTimeOffset.UtcNow.AddSeconds(Math.Max(30, _relayOptions.OidcCacheTtlSeconds)));
+
+        _cachedConfiguration = configuration;
+        return configuration;
     }
 
     private string ResolveDiscoveryUrl()
@@ -370,73 +408,12 @@ public sealed class NyxIdRelayAuthValidator
         return $"{baseUrl}/.well-known/openid-configuration";
     }
 
-    private string ResolveExpectedAudience()
+    private string ResolveExpectedCallbackAudience()
     {
-        if (!string.IsNullOrWhiteSpace(_relayOptions.ExpectedAudience))
-            return _relayOptions.ExpectedAudience.Trim();
+        if (!string.IsNullOrWhiteSpace(_relayOptions.CallbackExpectedAudience))
+            return _relayOptions.CallbackExpectedAudience.Trim();
 
-        var baseUrl = _nyxOptions.BaseUrl?.TrimEnd('/');
-        if (string.IsNullOrWhiteSpace(baseUrl))
-            throw new InvalidOperationException("NyxID base URL is not configured.");
-
-        return baseUrl;
-    }
-
-    private async Task<NyxIdRelayRegistrationCredential?> ResolveRegistrationCredentialAsync(
-        string? relayApiKeyId,
-        CancellationToken ct)
-    {
-        var normalizedRelayApiKeyId = NormalizeOptional(relayApiKeyId);
-        if (normalizedRelayApiKeyId is null || _registrationCredentialResolver is null)
-            return null;
-
-        return await _registrationCredentialResolver.ResolveAsync(normalizedRelayApiKeyId, ct);
-    }
-
-    private bool TryValidateTimestamp(
-        HttpContext http,
-        out DateTimeOffset observedAtUtc,
-        out string errorCode,
-        out string errorSummary)
-    {
-        observedAtUtc = DateTimeOffset.UtcNow;
-        errorCode = string.Empty;
-        errorSummary = string.Empty;
-
-        var headerTimestamp = NormalizeOptional(http.Request.Headers["X-NyxID-Timestamp"].FirstOrDefault());
-        if (headerTimestamp is null)
-        {
-            if (_relayOptions.RequireTimestampHeader)
-            {
-                errorCode = "missing_timestamp_header";
-                errorSummary = "Relay callback is missing X-NyxID-Timestamp.";
-                return false;
-            }
-
-            return true;
-        }
-
-        if (!DateTimeOffset.TryParse(
-                headerTimestamp,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out observedAtUtc))
-        {
-            errorCode = "invalid_timestamp_header";
-            errorSummary = "Relay callback X-NyxID-Timestamp is not a valid ISO 8601 timestamp.";
-            return false;
-        }
-
-        var replayWindow = TimeSpan.FromSeconds(Math.Max(1, _relayOptions.ReplayWindowSeconds));
-        var now = DateTimeOffset.UtcNow;
-        if ((now - observedAtUtc).Duration() > replayWindow)
-        {
-            errorCode = "timestamp_outside_replay_window";
-            errorSummary = "Relay callback timestamp is outside the allowed replay window.";
-            return false;
-        }
-
-        return true;
+        return "channel-relay/callback";
     }
 
     private static string? NormalizeOptional(string? value)
@@ -444,6 +421,9 @@ public sealed class NyxIdRelayAuthValidator
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
+
+    private static string ComputeBodySha256Hex(byte[] bodyBytes) =>
+        Convert.ToHexString(SHA256.HashData(bodyBytes)).ToLowerInvariant();
 
     private static string RequireString(JsonElement element, string propertyName)
     {

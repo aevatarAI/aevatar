@@ -52,11 +52,12 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
-    public void Parse_ShouldPropagateReplyTokenIntoOutboundDelivery()
+    public void Parse_ShouldPropagateCorrelationIntoOutboundDelivery()
     {
         var body = """
             {
               "message_id": "msg-relay-1",
+              "correlation_id": "corr-relay-1",
               "platform": "lark",
               "reply_token": "  relay-access-token-xyz  ",
               "agent": { "api_key_id": "api-key-1" },
@@ -70,7 +71,7 @@ public sealed class NyxIdRelayTransportTests
 
         parsed.Success.Should().BeTrue();
         parsed.Activity!.OutboundDelivery.ReplyMessageId.Should().Be("msg-relay-1");
-        parsed.Activity.OutboundDelivery.ReplyAccessToken.Should().Be("relay-access-token-xyz");
+        parsed.Activity.OutboundDelivery.CorrelationId.Should().Be("corr-relay-1");
     }
 
     [Fact]

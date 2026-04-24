@@ -47,7 +47,7 @@ public sealed class ChannelAbstractionsProtoTests
             OutboundDelivery = new OutboundDeliveryContext
             {
                 ReplyMessageId = "relay-msg-1",
-                ReplyAccessToken = "relay-token-1",
+                CorrelationId = "corr-relay-1",
             },
             TransportExtras = new TransportExtras
             {

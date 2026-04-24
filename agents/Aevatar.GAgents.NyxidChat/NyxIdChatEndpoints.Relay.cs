@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -28,6 +29,7 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] NyxIdRelayTransport relayTransport,
         [FromServices] NyxIdRelayAuthValidator relayAuthValidator,
+        [FromServices] Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -124,6 +126,13 @@ public static partial class NyxIdChatEndpoints
             activity.OutboundDelivery ??= new OutboundDeliveryContext();
             activity.TransportExtras ??= new TransportExtras();
             activity.TransportExtras.NyxUserAccessToken = validation.UserAccessToken ?? string.Empty;
+            var relayInbound = new NyxRelayInboundActivity
+            {
+                Activity = activity,
+                ReplyToken = payload.ReplyToken?.Trim() ?? string.Empty,
+                ReplyTokenExpiresAtUnixMs = ResolveReplyTokenExpiresAtUnixMs(payload.ReplyToken, relayOptions),
+                CorrelationId = activity.OutboundDelivery.CorrelationId,
+            };
 
             var actorId = ConversationGAgent.BuildActorId(activity.Conversation.CanonicalKey);
             var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
@@ -131,7 +140,7 @@ public static partial class NyxIdChatEndpoints
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(activity),
+                Payload = Any.Pack(relayInbound),
                 Route = new EnvelopeRoute
                 {
                     Direct = new DirectRoute { TargetActorId = actorId },
@@ -170,6 +179,27 @@ public static partial class NyxIdChatEndpoints
         ILogger logger,
         CancellationToken ct) =>
         await NyxIdRelayWorkflowCards.TryHandleAsync(http, message, logger, ct);
+
+    private static long ResolveReplyTokenExpiresAtUnixMs(
+        string? replyToken,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions)
+    {
+        var fallback = DateTimeOffset.UtcNow.AddSeconds(Math.Max(1, relayOptions.RelayReplyTokenRuntimeTtlSeconds));
+        if (string.IsNullOrWhiteSpace(replyToken))
+            return fallback.ToUnixTimeMilliseconds();
+
+        try
+        {
+            var jwt = new JwtSecurityTokenHandler().ReadJwtToken(replyToken.Trim());
+            return jwt.ValidTo == DateTime.MinValue
+                ? fallback.ToUnixTimeMilliseconds()
+                : new DateTimeOffset(DateTime.SpecifyKind(jwt.ValidTo, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+        }
+        catch (ArgumentException)
+        {
+            return fallback.ToUnixTimeMilliseconds();
+        }
+    }
 
     private static RelayMessage BuildRelayMessage(NyxIdRelayCallbackPayload payload) =>
         new()

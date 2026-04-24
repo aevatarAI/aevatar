@@ -184,7 +184,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         return activity?.OutboundDelivery is
         {
             ReplyMessageId.Length: > 0,
-            ReplyAccessToken.Length: > 0,
+            CorrelationId.Length: > 0,
         };
     }
 }

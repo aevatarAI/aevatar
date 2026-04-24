@@ -85,6 +85,27 @@ bash "${SCRIPT_DIR}/channel_inbox_gagent_guard.sh"
 bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
 
+secret_store_scan_roots=()
+while IFS= read -r host_dir; do
+  secret_store_scan_roots+=("${host_dir}")
+done < <(find src -maxdepth 1 -type d -name 'Aevatar.*Host*' | sort)
+while IFS= read -r service_extension; do
+  secret_store_scan_roots+=("${service_extension}")
+done < <(find agents -type f -name 'ServiceCollectionExtensions.cs' | sort)
+
+if [ "${#secret_store_scan_roots[@]}" -gt 0 ]; then
+  secret_store_di_hits="$(
+    rg -n "AddSingleton<IAevatarSecretsStore|TryAddSingleton<IAevatarSecretsStore|IAevatarSecretsStore" \
+      "${secret_store_scan_roots[@]}" \
+      -g '*.cs' || true
+  )"
+  if [ -n "${secret_store_di_hits}" ]; then
+    echo "${secret_store_di_hits}"
+    echo "Service hosts and agent ServiceCollectionExtensions must not default-register IAevatarSecretsStore."
+    exit 1
+  fi
+fi
+
 if rg -n "ExecuteDeclaredQueryAsync|ExecuteReadModelQueryAsync" src; then
   echo "Declared readmodel query execution is forbidden. Query must read persisted snapshots/documents only."
   exit 1

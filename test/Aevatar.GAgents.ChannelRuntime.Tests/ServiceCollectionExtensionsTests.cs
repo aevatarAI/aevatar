@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
@@ -24,8 +23,8 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IAevatarSecretsStore));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>
@@ -78,8 +77,8 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IAevatarSecretsStore));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>

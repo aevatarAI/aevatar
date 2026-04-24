@@ -137,7 +137,7 @@ public sealed class ConversationGAgentDedupTests
                 new OutboundDeliveryContext
                 {
                     ReplyMessageId = "relay-msg-1",
-                    ReplyAccessToken = "relay-token-1",
+                    CorrelationId = "corr-relay-1",
                 }),
         };
         var (agent, store) = CreateAgent(runner, "conv-relay");
@@ -367,7 +367,10 @@ public sealed class ConversationGAgentDedupTests
         public Func<LlmReplyReadyEvent, ConversationTurnResult>? LlmReplyResultFactory { get; set; }
         public Func<ConversationContinueRequestedEvent, ConversationTurnResult>? ContinueResultFactory { get; set; }
 
-        public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct)
+        public Task<ConversationTurnResult> RunInboundAsync(
+            ChatActivity activity,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
         {
             Interlocked.Increment(ref InboundCount);
             var result = InboundResultFactory is null
@@ -376,7 +379,10 @@ public sealed class ConversationGAgentDedupTests
             return Task.FromResult(result);
         }
 
-        public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct)
+        public Task<ConversationTurnResult> RunLlmReplyAsync(
+            LlmReplyReadyEvent reply,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
         {
             Interlocked.Increment(ref LlmReplyCount);
             var result = LlmReplyResultFactory is null

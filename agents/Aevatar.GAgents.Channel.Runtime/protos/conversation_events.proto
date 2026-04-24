@@ -34,6 +34,13 @@ message NeedsLlmReplyEvent {
   int64 requested_at_unix_ms = 6;
 }
 
+message NyxRelayInboundActivity {
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 1;
+  string reply_token = 2;
+  int64 reply_token_expires_at_unix_ms = 3;
+  string correlation_id = 4;
+}
+
 enum LlmReplyTerminalState {
   LLM_REPLY_TERMINAL_STATE_UNSPECIFIED = 0;
   LLM_REPLY_TERMINAL_STATE_COMPLETED = 1;
