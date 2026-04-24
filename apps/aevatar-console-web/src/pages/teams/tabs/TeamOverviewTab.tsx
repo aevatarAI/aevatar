@@ -133,6 +133,66 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <section style={surfaceStyle(token)}>
+        <div
+          style={{
+            alignItems: "flex-start",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 12,
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Space wrap size={8}>
+              <Typography.Text strong style={{ fontSize: 16 }}>
+                当前态势
+              </Typography.Text>
+              <DetailPill
+                style={currentHeaderStatusStyle}
+                text={currentHeaderStatusFriendly}
+              />
+            </Space>
+          </div>
+          <Space wrap size={[8, 8]}>
+            <DetailPill
+              style={currentServicePillStyle}
+              text={currentServicePillText}
+            />
+            <DetailPill
+              style={currentDeploymentPillStyle}
+              text={currentDeploymentPillText}
+            />
+            <DetailPill style={currentRunPillStyle} text={currentRunPillText} />
+          </Space>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gap: 14,
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          }}
+        >
+          <SignalCard
+            label="当前服务"
+            value={currentServiceFriendly}
+            caption={currentServiceCardCaption}
+            captionTooltip={currentServiceCardTooltip}
+          />
+          <SignalCard
+            label="最近运行"
+            value={currentRunFriendly}
+            caption={currentRunCardCaption}
+            captionTooltip={currentRunCardTooltip}
+          />
+          <SignalCard
+            label="最近一次更新"
+            value={latestVisibleUpdateLabel}
+            caption={latestVisibleUpdateNote}
+          />
+        </div>
+      </section>
+
       <div
         style={{
           display: "grid",
@@ -323,66 +383,6 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <AevatarInspectorEmpty title="暂无可比较运行" description={compareSummary} />
         )}
       </section>
-
-      <div style={surfaceStyle(token)}>
-        <div
-          style={{
-            alignItems: "flex-start",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 12,
-            justifyContent: "space-between",
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <Space wrap size={8}>
-              <Typography.Text strong style={{ fontSize: 16 }}>
-                当前态势
-              </Typography.Text>
-              <DetailPill
-                style={currentHeaderStatusStyle}
-                text={currentHeaderStatusFriendly}
-              />
-            </Space>
-          </div>
-          <Space wrap size={[8, 8]}>
-            <DetailPill
-              style={currentServicePillStyle}
-              text={currentServicePillText}
-            />
-            <DetailPill
-              style={currentDeploymentPillStyle}
-              text={currentDeploymentPillText}
-            />
-            <DetailPill style={currentRunPillStyle} text={currentRunPillText} />
-          </Space>
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gap: 14,
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          }}
-        >
-          <SignalCard
-            label="当前服务"
-            value={currentServiceFriendly}
-            caption={currentServiceCardCaption}
-            captionTooltip={currentServiceCardTooltip}
-          />
-          <SignalCard
-            label="最近运行"
-            value={currentRunFriendly}
-            caption={currentRunCardCaption}
-            captionTooltip={currentRunCardTooltip}
-          />
-          <SignalCard
-            label="最近一次更新"
-            value={latestVisibleUpdateLabel}
-            caption={latestVisibleUpdateNote}
-          />
-        </div>
-      </div>
 
       <div
         style={{
