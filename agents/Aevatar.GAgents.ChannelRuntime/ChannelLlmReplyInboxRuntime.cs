@@ -78,6 +78,11 @@ internal sealed class ChannelLlmReplyInboxRuntime :
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        _logger.LogInformation(
+            "Processing LLM reply request: correlation={CorrelationId} target={TargetActorId}",
+            request.CorrelationId,
+            request.TargetActorId);
+
         if (request.Activity is null || string.IsNullOrWhiteSpace(request.TargetActorId))
         {
             _logger.LogWarning(
