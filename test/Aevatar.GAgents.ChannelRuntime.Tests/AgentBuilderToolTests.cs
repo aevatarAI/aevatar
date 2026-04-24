@@ -183,7 +183,7 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-1");
             doc.RootElement.GetProperty("api_key_id").GetString().Should().Be("key-1");
             doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
-            doc.RootElement.GetProperty("run_immediately_triggered").GetBoolean().Should().BeTrue();
+            doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeTrue();
             doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeFalse();
 
             await skillRunnerActor.Received(1).HandleEventAsync(
@@ -589,7 +589,7 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
             doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
             doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeTrue();
-            doc.RootElement.GetProperty("run_immediately_triggered").GetBoolean().Should().BeFalse();
+            doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeFalse();
 
             await userConfigCommandService.Received(1)
                 .SaveGithubUsernameAsync("scope-1", "alice", Arg.Any<CancellationToken>());

@@ -14,28 +14,37 @@ internal static class AgentBuilderCardContent
     private const string SocialMediaAction = "create_social_media";
     private const string DefaultScheduleTime = "09:00";
 
-    public static MessageContent BuildDailyReportForm(string? preferredGithubUsername)
+    public static MessageContent BuildDailyReportForm(string? preferredGithubUsername) =>
+        BuildDailyReportForm(preferredGithubUsername, introCard: null);
+
+    /// <summary>
+    /// Builds the Daily Report creation form card. When <paramref name="introCard"/> is null the
+    /// default Day One description card is rendered; callers that need a different header (for
+    /// example, the credentials-required re-prompt) pass their own <see cref="CardBlock"/> and this
+    /// method uses it verbatim instead.
+    /// </summary>
+    public static MessageContent BuildDailyReportForm(
+        string? preferredGithubUsername,
+        CardBlock? introCard)
     {
-        var savedNote = string.IsNullOrWhiteSpace(preferredGithubUsername)
-            ? string.Empty
-            : $"\n\nSaved GitHub username: `{preferredGithubUsername}`. Leave the field blank to reuse it.";
+        var normalizedSaved = string.IsNullOrWhiteSpace(preferredGithubUsername)
+            ? null
+            : preferredGithubUsername!.Trim();
 
         var content = new MessageContent();
-        content.Cards.Add(new CardBlock
-        {
-            Kind = CardBlockKind.Section,
-            BlockId = "daily_report_intro",
-            Title = "Create Daily Report Agent",
-            Text =
-                "**Day One template:** Daily GitHub report\n" +
-                "Fill in the fields below. The agent will run once now and then repeat every day at your chosen local time." +
-                savedNote,
-        });
+        content.Cards.Add(introCard ?? BuildDefaultDailyReportIntroCard(normalizedSaved));
 
-        content.Actions.Add(BuildTextInput(
+        // Pre-fill the saved GitHub username into the input's default_value so users see it inline
+        // and can keep it with one submit click. Placeholder stays as a generic hint so the field
+        // does not disappear when the user clicks to edit.
+        var githubInput = BuildTextInput(
             "github_username",
             "GitHub Username",
-            preferredGithubUsername ?? "alice"));
+            placeholder: "octocat");
+        if (normalizedSaved is not null)
+            githubInput.Value = normalizedSaved;
+        content.Actions.Add(githubInput);
+
         content.Actions.Add(BuildTextInput(
             "repositories",
             "Repositories (Optional)",
@@ -58,6 +67,24 @@ internal static class AgentBuilderCardContent
         content.Actions.Add(submit);
 
         return content;
+    }
+
+    private static CardBlock BuildDefaultDailyReportIntroCard(string? savedGithubUsername)
+    {
+        var savedNote = savedGithubUsername is null
+            ? string.Empty
+            : $"\n\nSaved GitHub username: `{savedGithubUsername}` — it is already filled in, just press **Create Agent** to reuse it.";
+
+        return new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = "daily_report_intro",
+            Title = "Create Daily Report Agent",
+            Text =
+                "**Day One template:** Daily GitHub report\n" +
+                "Fill in the fields below. The agent will run once now and then repeat every day at your chosen local time." +
+                savedNote,
+        };
     }
 
     public static MessageContent BuildSocialMediaForm()
@@ -126,10 +153,14 @@ internal static class AgentBuilderCardContent
         var agentId = TryReadString(root, "agent_id") ?? "unknown-agent";
         var githubUsername = TryReadString(root, "github_username");
         var savedPreference = TryReadBool(root, "github_username_preference_saved");
-        var runImmediatelyTriggered = TryReadBool(root, "run_immediately_triggered");
+        // The tool reports whether it asked the skill-runner actor to run now, not whether the
+        // runner actually finished — hence "requested", not "triggered". The ack text still says
+        // "Running first report now" because we sent the command; if it fails downstream, the
+        // ground-truth status surfaces through /agent-status, not through this immediate reply.
+        var runImmediatelyRequested = TryReadBool(root, "run_immediately_requested");
         var nextRun = TryReadString(root, "next_scheduled_run") ?? "pending";
 
-        var headline = runImmediatelyTriggered
+        var headline = runImmediatelyRequested
             ? (string.IsNullOrWhiteSpace(githubUsername)
                 ? "Daily report scheduled. Running first report now — I'll reply with the results shortly."
                 : $"Daily report scheduled for `{githubUsername}`. Running first report now — I'll reply with the results shortly.")
@@ -166,11 +197,6 @@ internal static class AgentBuilderCardContent
             ? "GitHub authorization required."
             : "GitHub credentials required.";
 
-        var content = BuildDailyReportForm(preferredGithubUsername: null);
-        // Replace the intro card with a context-specific description so the user knows why the form
-        // popped up and where to authorize GitHub when the provider returned an auth URL.
-        content.Cards.Clear();
-
         var descriptionLines = new List<string>
         {
             $"**{heading}**",
@@ -181,13 +207,15 @@ internal static class AgentBuilderCardContent
             descriptionLines.Add($"Open: {url}");
         descriptionLines.Add("Or just reply with `/daily <github_username>` — I'll save it and run the report now.");
 
-        content.Cards.Add(new CardBlock
+        var introCard = new CardBlock
         {
             Kind = CardBlockKind.Section,
             BlockId = "daily_report_credentials",
             Title = "Create Daily Report Agent",
             Text = string.Join('\n', descriptionLines),
-        });
+        };
+
+        var content = BuildDailyReportForm(preferredGithubUsername: null, introCard: introCard);
 
         // Plain-text fallback for channels that cannot render the card.
         var fallbackLines = new List<string>

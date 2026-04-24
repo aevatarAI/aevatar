@@ -34,15 +34,31 @@ public sealed class AgentBuilderCardContentTests
     }
 
     [Fact]
-    public void BuildDailyReportForm_PrefillsGithubUsernamePlaceholder_WhenProvided()
+    public void BuildDailyReportForm_PrefillsSavedGithubUsernameIntoValue_WhenProvided()
     {
         var content = AgentBuilderCardContent.BuildDailyReportForm("eanzhao");
 
         var githubField = content.Actions.Single(a =>
             a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username");
-        githubField.Placeholder.Should().Be("eanzhao");
+        // Saved usernames must live in Value so LarkMessageComposer emits default_value and the
+        // user sees the name as real input text they can edit, not as ghost placeholder that
+        // disappears on click.
+        githubField.Value.Should().Be("eanzhao");
+        githubField.Placeholder.Should().Be("octocat");
 
         content.Cards.Single().Text.Should().Contain("Saved GitHub username: `eanzhao`");
+        content.Cards.Single().Text.Should().Contain("already filled in");
+    }
+
+    [Fact]
+    public void BuildDailyReportForm_LeavesValueEmpty_WhenNoSavedUsername()
+    {
+        var content = AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername: null);
+
+        var githubField = content.Actions.Single(a =>
+            a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username");
+        githubField.Value.Should().BeEmpty();
+        githubField.Placeholder.Should().Be("octocat");
     }
 
     [Fact]

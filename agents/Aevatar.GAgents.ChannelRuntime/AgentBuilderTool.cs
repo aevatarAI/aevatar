@@ -292,7 +292,7 @@ public sealed class AgentBuilderTool : IAgentTool
             template = templateSpec.TemplateName,
             github_username = githubUsernameResolution.GithubUsername,
             github_username_preference_saved = preferenceSaved,
-            run_immediately_triggered = runImmediatelyRequested,
+            run_immediately_requested = runImmediatelyRequested,
             next_scheduled_run = nextRunAtUtc,
             conversation_id = conversationId,
             api_key_id = apiKeyId,

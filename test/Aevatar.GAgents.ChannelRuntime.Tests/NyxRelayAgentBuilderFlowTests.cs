@@ -304,7 +304,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
             template = "daily_report",
             github_username = "eanzhao",
             github_username_preference_saved = true,
-            run_immediately_triggered = true,
+            run_immediately_requested = true,
             next_scheduled_run = "2026-04-25T09:00:00+00:00",
             conversation_id = "oc_default_daily",
         });
@@ -332,7 +332,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
             template = "daily_report",
             github_username = "eanzhao",
             github_username_preference_saved = false,
-            run_immediately_triggered = true,
+            run_immediately_requested = true,
             next_scheduled_run = "2026-04-25T09:00:00+00:00",
         });
 
