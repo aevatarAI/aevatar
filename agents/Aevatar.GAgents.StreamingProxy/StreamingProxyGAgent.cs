@@ -14,8 +14,10 @@ namespace Aevatar.GAgents.StreamingProxy;
 /// OpenClaw agents. Does NOT call LLM itself — it receives messages from
 /// participants and broadcasts them to all SSE subscribers.
 /// </summary>
-public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
+public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>, IProjectedActor
 {
+    public static string ProjectionKind => StreamingProxyProjectionKinds.CurrentState;
+
     [EventHandler(EndpointName = "initializeRoom")]
     public async Task HandleGroupChatRoomInitialized(GroupChatRoomInitializedEvent evt)
     {
@@ -83,6 +85,18 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         Logger.LogInformation("[StreamingProxy] Participant left: {Id}", evt.AgentId);
     }
 
+    [EventHandler(EndpointName = "completeSession")]
+    public async Task HandleChatSessionTerminalStateChanged(StreamingProxyChatSessionTerminalStateChanged evt)
+    {
+        await PersistDomainEventAsync(evt);
+
+        Logger.LogInformation(
+            "[StreamingProxy] Session terminal state changed: room={RoomId} session={SessionId} status={Status}",
+            Id,
+            evt.SessionId,
+            evt.Status);
+    }
+
     /// <summary>
     /// Applies domain events to the sole authoritative actor state.
     /// Called by the event sourcing infrastructure after PersistDomainEventAsync.
@@ -95,6 +109,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             .On<GroupChatMessageEvent>(ApplyMessage)
             .On<GroupChatParticipantJoinedEvent>(ApplyParticipantJoined)
             .On<GroupChatParticipantLeftEvent>(ApplyParticipantLeft)
+            .On<StreamingProxyChatSessionTerminalStateChanged>(ApplyTerminalStateChanged)
             .OrCurrent();
 
     private static StreamingProxyGAgentState ApplyRoomInitialized(
@@ -183,5 +198,23 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         {
             state.Messages.RemoveAt(0);
         }
+    }
+
+    private static StreamingProxyGAgentState ApplyTerminalStateChanged(
+        StreamingProxyGAgentState current,
+        StreamingProxyChatSessionTerminalStateChanged evt)
+    {
+        var next = current.Clone();
+        if (string.IsNullOrWhiteSpace(evt.SessionId))
+            return next;
+
+        next.TerminalSessions[evt.SessionId] = new StreamingProxyChatSessionTerminalRecord
+        {
+            SessionId = evt.SessionId,
+            Status = evt.Status,
+            TerminalAt = evt.TerminalAt,
+            ErrorMessage = evt.ErrorMessage ?? string.Empty,
+        };
+        return next;
     }
 }

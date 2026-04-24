@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Application.Scripts;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
@@ -66,6 +67,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.AddScopeGAgentDraftRunInteraction();
         services.AddOptions<ScopeWorkflowCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();

@@ -15,6 +15,7 @@ public sealed record NyxIdRelayAuthenticationResult(
     ClaimsPrincipal? Principal = null,
     string? RelayApiKeyId = null,
     string? UserAccessToken = null,
+    string? ScopeId = null,
     string? ErrorCode = null,
     string? ErrorSummary = null);
 
@@ -143,11 +144,15 @@ public sealed class NyxIdRelayAuthValidator
         }
 
         var userToken = NormalizeOptional(http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault());
+        var scopeId = NormalizeOptional(jwtValidation.Principal.FindFirstValue("scope_id")) ??
+                      NormalizeOptional(jwtValidation.Principal.FindFirstValue(JwtRegisteredClaimNames.Sub)) ??
+                      NormalizeOptional(jwtValidation.Principal.FindFirstValue(ClaimTypes.NameIdentifier));
         return new NyxIdRelayAuthenticationResult(
             true,
             Principal: jwtValidation.Principal,
             RelayApiKeyId: jwtValidation.RelayApiKeyId,
-            UserAccessToken: userToken);
+            UserAccessToken: userToken,
+            ScopeId: scopeId);
     }
 
     private static NyxIdRelayAuthenticationResult Fail(string? code, string? summary)
@@ -254,6 +259,12 @@ public sealed class NyxIdRelayAuthValidator
                     ErrorSummary: "Callback JWT is missing body_sha256.");
             }
 
+            var canonicalScopeId = NormalizeOptional(principal.FindFirstValue("scope_id")) ??
+                                   NormalizeOptional(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)) ??
+                                   NormalizeOptional(principal.FindFirstValue(ClaimTypes.NameIdentifier));
+            if (!string.IsNullOrWhiteSpace(canonicalScopeId))
+                EnsureCanonicalScopeClaim(principal, canonicalScopeId);
+
             return new CallbackJwtValidationResult(
                 true,
                 Principal: principal,
@@ -318,6 +329,23 @@ public sealed class NyxIdRelayAuthValidator
             _logger.LogError(ex, "Nyx relay callback JWT validation failed unexpectedly");
             return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_invalid", ErrorSummary: ex.Message);
         }
+    }
+
+    private static void EnsureCanonicalScopeClaim(ClaimsPrincipal principal, string scopeId)
+    {
+        ArgumentNullException.ThrowIfNull(principal);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+
+        if (principal.Claims.Any(claim =>
+                string.Equals(claim.Type, "scope_id", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(claim.Value?.Trim(), scopeId, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var identity = principal.Identities.FirstOrDefault(candidate => candidate.IsAuthenticated)
+            ?? principal.Identities.FirstOrDefault();
+        identity?.AddClaim(new Claim("scope_id", scopeId));
     }
 
     private async Task<CachedOidcConfiguration> GetConfigurationAsync(bool forceRefresh, CancellationToken ct)
