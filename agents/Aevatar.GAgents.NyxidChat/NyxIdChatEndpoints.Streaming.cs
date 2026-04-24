@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Hosting;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -20,7 +19,6 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdChatStreamRequest request,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -49,7 +47,7 @@ public static partial class NyxIdChatEndpoints
                 return;
             }
 
-            if (!await IsConversationRegisteredAsync(scopeId, actorId, actorStore, ct))
+            if (!IsConversationBoundToScope(scopeId, actorId))
             {
                 await ConversationNotFoundResult().ExecuteAsync(http);
                 return;
@@ -201,7 +199,6 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdApprovalRequest request,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -227,7 +224,7 @@ public static partial class NyxIdChatEndpoints
                 return;
             }
 
-            if (!await IsConversationRegisteredAsync(scopeId, actorId, actorStore, ct))
+            if (!IsConversationBoundToScope(scopeId, actorId))
             {
                 await ConversationNotFoundResult().ExecuteAsync(http);
                 return;

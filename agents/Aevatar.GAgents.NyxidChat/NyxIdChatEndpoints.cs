@@ -91,7 +91,7 @@ public static partial class NyxIdChatEndpoints
         // Conversation creation is fail-fast on IGAgentActorStore persistence.
         // NyxId chat depends on the registry being available; there is no
         // degraded mode where a conversation can run without being registered.
-        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
+        var actorId = NyxIdChatServiceDefaults.GenerateActorId(scopeId);
         await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
         return Results.Ok(new { actorId });
     }
@@ -131,7 +131,7 @@ public static partial class NyxIdChatEndpoints
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
-        if (!await IsConversationRegisteredAsync(scopeId, actorId, actorStore, ct))
+        if (!IsConversationBoundToScope(scopeId, actorId))
             return ConversationNotFoundResult();
 
         await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
@@ -148,17 +148,10 @@ public static partial class NyxIdChatEndpoints
         return Results.Ok();
     }
 
-    private static async Task<bool> IsConversationRegisteredAsync(
+    private static bool IsConversationBoundToScope(
         string scopeId,
-        string actorId,
-        IGAgentActorStore actorStore,
-        CancellationToken ct)
-    {
-        var groups = await actorStore.GetAsync(scopeId, ct);
-        return groups.Any(group =>
-            string.Equals(group.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal) &&
-            group.ActorIds.Any(registeredActorId => string.Equals(registeredActorId, actorId, StringComparison.Ordinal)));
-    }
+        string actorId) =>
+        NyxIdChatServiceDefaults.IsActorIdForScope(actorId, scopeId);
 
     private static IResult ConversationNotFoundResult() =>
         Results.Json(
