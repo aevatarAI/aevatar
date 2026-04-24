@@ -9,10 +9,15 @@ export type StudioTab =
 
 export type StudioStep = 'build' | 'bind' | 'invoke' | 'observe';
 export type StudioBuildFocus = `workflow:${string}` | `script:${string}` | `template:${string}`;
+export type StudioMemberKey =
+  | `member:${string}`
+  | `workflow:${string}`
+  | `script:${string}`;
 
 type StudioRouteOptions = {
   scopeId?: string;
   memberId?: string;
+  memberKey?: StudioMemberKey | string;
   step?: StudioStep;
   focus?: StudioBuildFocus;
   tab?: StudioTab;
@@ -23,6 +28,36 @@ type StudioRouteOptions = {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
+}
+
+function readWorkflowFileStem(fileName: string | null | undefined): string {
+  return trimOptional(fileName).replace(/\.(ya?ml)$/i, '');
+}
+
+export function resolveStudioWorkflowMemberRouteValue(options?: {
+  workflowId?: string | null;
+  workflowName?: string | null;
+  fileName?: string | null;
+}): string {
+  const workflowId = trimOptional(options?.workflowId);
+  if (workflowId && workflowId.toLowerCase() !== 'default') {
+    return workflowId;
+  }
+
+  return (
+    trimOptional(options?.workflowName) ||
+    readWorkflowFileStem(options?.fileName) ||
+    workflowId
+  );
+}
+
+export function buildStudioWorkflowMemberKey(options?: {
+  workflowId?: string | null;
+  workflowName?: string | null;
+  fileName?: string | null;
+}): StudioMemberKey | undefined {
+  const routeValue = resolveStudioWorkflowMemberRouteValue(options);
+  return routeValue ? (`workflow:${routeValue}` as const) : undefined;
 }
 
 function normalizeStudioBuildFocus(
@@ -38,6 +73,25 @@ function normalizeStudioBuildFocus(
   }
 
   return undefined;
+}
+
+function normalizeStudioMemberKey(
+  value: StudioMemberKey | string | null | undefined,
+  fallbackMemberId?: string | null | undefined,
+): StudioMemberKey | undefined {
+  const normalizedValue = trimOptional(value);
+  if (
+    normalizedValue.startsWith('member:') ||
+    normalizedValue.startsWith('workflow:') ||
+    normalizedValue.startsWith('script:')
+  ) {
+    return normalizedValue as StudioMemberKey;
+  }
+
+  const normalizedMemberId = trimOptional(fallbackMemberId);
+  return normalizedMemberId
+    ? (`member:${normalizedMemberId}` as const)
+    : undefined;
 }
 
 function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
@@ -82,8 +136,12 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   if (options?.scopeId?.trim()) {
     params.set('scopeId', options.scopeId.trim());
   }
-  if (options?.memberId?.trim()) {
-    params.set('memberId', options.memberId.trim());
+  const memberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  if (memberKey) {
+    params.set('member', memberKey);
   }
   if (options?.step) {
     params.set('step', options.step);
@@ -113,6 +171,7 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
 export function buildStudioWorkflowWorkspaceRoute(options?: {
   scopeId?: string;
   memberId?: string;
+  memberKey?: StudioMemberKey | string;
 } & Record<string, unknown>): string {
   return buildStudioRoute({
     ...options,
@@ -123,17 +182,27 @@ export function buildStudioWorkflowWorkspaceRoute(options?: {
 export function buildStudioWorkflowEditorRoute(options?: {
   scopeId?: string;
   memberId?: string;
+  memberKey?: StudioMemberKey | string;
   workflowId?: string;
   template?: string;
   prompt?: string;
 } & Record<string, unknown>): string {
   const workflowId = trimOptional(options?.workflowId);
   const template = trimOptional(options?.template);
+  const memberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  const hasWorkflowMemberKey = memberKey?.startsWith('workflow:');
+  const workflowFocus = workflowId
+    ? (`workflow:${workflowId}` as const)
+    : undefined;
   return buildStudioRoute({
     ...options,
-    focus: workflowId
-      ? `workflow:${workflowId}`
-      : template
+    focus:
+      !hasWorkflowMemberKey && workflowFocus && workflowFocus !== memberKey
+        ? workflowFocus
+        : template
         ? `template:${template}`
         : undefined,
     tab: 'studio',
@@ -143,6 +212,7 @@ export function buildStudioWorkflowEditorRoute(options?: {
 export function buildStudioBindingWorkspaceRoute(options?: {
   scopeId?: string;
   memberId?: string;
+  memberKey?: StudioMemberKey | string;
 } & Record<string, unknown>): string {
   return buildStudioRoute({
     ...options,
@@ -154,6 +224,7 @@ export function buildStudioBindingWorkspaceRoute(options?: {
 export function buildStudioInvokeWorkspaceRoute(options?: {
   scopeId?: string;
   memberId?: string;
+  memberKey?: StudioMemberKey | string;
 } & Record<string, unknown>): string {
   return buildStudioRoute({
     ...options,
@@ -165,12 +236,19 @@ export function buildStudioInvokeWorkspaceRoute(options?: {
 export function buildStudioScriptsWorkspaceRoute(options?: {
   scopeId?: string;
   memberId?: string;
+  memberKey?: StudioMemberKey | string;
   scriptId?: string;
 } & Record<string, unknown>): string {
   const scriptId = trimOptional(options?.scriptId);
+  const memberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  const scriptFocus = scriptId ? (`script:${scriptId}` as const) : undefined;
   return buildStudioRoute({
     ...options,
-    focus: scriptId ? `script:${scriptId}` : undefined,
+    focus:
+      scriptFocus && scriptFocus !== memberKey ? scriptFocus : undefined,
     tab: 'scripts',
   });
 }

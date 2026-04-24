@@ -136,6 +136,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             return Failure("missing_app_secret");
         if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
             return Failure("missing_webhook_base_url");
+        if (string.IsNullOrWhiteSpace(request.ScopeId))
+            return Failure("missing_scope_id");
         if (string.IsNullOrWhiteSpace(_nyxOptions.BaseUrl))
             return Failure("nyx_base_url_not_configured");
 
@@ -222,6 +224,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             return MirrorFailure("missing_access_token");
         if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
             return MirrorFailure("missing_webhook_base_url");
+        if (string.IsNullOrWhiteSpace(request.ScopeId))
+            return MirrorFailure("missing_scope_id");
         if (string.IsNullOrWhiteSpace(request.NyxChannelBotId))
             return MirrorFailure("missing_nyx_channel_bot_id");
         if (string.IsNullOrWhiteSpace(request.NyxAgentApiKeyId))

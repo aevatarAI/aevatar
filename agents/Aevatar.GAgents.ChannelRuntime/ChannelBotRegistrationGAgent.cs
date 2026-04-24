@@ -42,12 +42,22 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(cmd.ScopeId))
+        {
+            Logger.LogWarning(
+                "Ignoring channel bot registration without scope id: platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
+                cmd.Platform,
+                cmd.RequestedId,
+                cmd.NyxAgentApiKeyId);
+            return;
+        }
+
         var entry = new ChannelBotRegistrationEntry
         {
             Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
-            ScopeId = cmd.ScopeId,
+            ScopeId = cmd.ScopeId.Trim(),
             WebhookUrl = cmd.WebhookUrl,
             NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,

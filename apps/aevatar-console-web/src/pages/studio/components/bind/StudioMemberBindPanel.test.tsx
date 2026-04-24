@@ -167,20 +167,6 @@ describe('StudioMemberBindPanel', () => {
         scopeId: 'scope-1',
         preferredServiceId: 'default',
         onSelectionChange: handleSelectionChange,
-        scopeBinding: {
-          available: true,
-          scopeId: 'scope-1',
-          serviceId: 'default',
-          displayName: 'workspace-demo',
-          serviceKey: 'scope-1:default:workspace-demo',
-          defaultServingRevisionId: 'rev-2',
-          activeServingRevisionId: 'rev-2',
-          deploymentId: 'dep-2',
-          deploymentStatus: 'Active',
-          primaryActorId: 'actor-default',
-          updatedAt: '2026-03-26T08:00:00Z',
-          revisions: [],
-        },
         services: [
           {
             serviceKey: 'scope-1:default:workspace-demo',
@@ -470,5 +456,69 @@ describe('StudioMemberBindPanel', () => {
     });
 
     expect(handleBindPendingCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the previous member bind notice when the bind candidate changes', async () => {
+    const handleBindPendingCandidate = jest.fn().mockResolvedValue(undefined);
+    const CandidateHarness = () => {
+      const [candidate, setCandidate] = React.useState({
+        kind: 'workflow' as const,
+        displayName: 'draft1',
+        description:
+          'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+        actionLabel: 'Bind current revision',
+      });
+
+      return React.createElement(React.Fragment, null, [
+        React.createElement(
+          'button',
+          {
+            key: 'switch',
+            type: 'button',
+            onClick: () =>
+              setCandidate({
+                kind: 'workflow',
+                displayName: 'joker',
+                description:
+                  'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+                actionLabel: 'Bind current revision',
+              }),
+          },
+          'Switch candidate',
+        ),
+        React.createElement(StudioMemberBindPanel, {
+          key: 'panel',
+          authSession: {
+            enabled: true,
+            authenticated: true,
+            name: 'Abigail Deng',
+            scopeId: 'scope-1',
+            scopeSource: 'nyxid',
+          },
+          scopeId: 'scope-1',
+          pendingBindingCandidate: candidate,
+          onBindPendingCandidate: handleBindPendingCandidate,
+          services: [],
+        }),
+      ]);
+    };
+
+    renderWithQueryClient(React.createElement(CandidateHarness));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Bind current revision' }));
+    });
+
+    expect(await screen.findByText('draft1 is now bound. Review the invoke contract below.')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch candidate' }));
+
+    expect(await screen.findByText('No published contract exists for joker yet.')).toBeTruthy();
+    expect(
+      screen.queryByText('draft1 is now bound. Review the invoke contract below.'),
+    ).toBeNull();
+    expect(
+      screen.queryByText('joker is now bound. Review the invoke contract below.'),
+    ).toBeNull();
   });
 });
