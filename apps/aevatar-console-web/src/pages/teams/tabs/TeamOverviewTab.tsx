@@ -26,7 +26,28 @@ type OverviewRuntimeSummaryRow = {
   readonly value: string;
 };
 
+type OverviewGovernanceRow = {
+  readonly badge: string;
+  readonly badgeStyle: React.CSSProperties;
+  readonly key: string;
+  readonly label: string;
+  readonly note: string;
+  readonly value: string;
+};
+
+type OverviewCompareSection = {
+  readonly items: readonly string[];
+  readonly key: string;
+  readonly title: string;
+};
+
 type TeamOverviewTabProps = {
+  readonly compareAvailable: boolean;
+  readonly compareSections: readonly OverviewCompareSection[];
+  readonly compareStatusLabel: string;
+  readonly compareStatusStyle: React.CSSProperties;
+  readonly compareSummary: string;
+  readonly compareTitle: string;
   readonly compositionRows: readonly OverviewCompositionRow[];
   readonly currentDeploymentPillStyle: React.CSSProperties;
   readonly currentDeploymentPillText: string;
@@ -42,8 +63,15 @@ type TeamOverviewTabProps = {
   readonly currentServiceFriendly: string;
   readonly currentServicePillStyle: React.CSSProperties;
   readonly currentServicePillText: string;
+  readonly governanceRows: readonly OverviewGovernanceRow[];
+  readonly healthActionLabel: string;
+  readonly healthDetails: readonly string[];
+  readonly healthStatusLabel: string;
+  readonly healthStatusStyle: React.CSSProperties;
+  readonly healthSummary: string;
   readonly latestVisibleUpdateLabel: string;
   readonly latestVisibleUpdateNote: string;
+  readonly partialSignals: readonly string[];
   readonly runtimeSummaryRows: readonly OverviewRuntimeSummaryRow[];
 };
 
@@ -60,7 +88,21 @@ const surfaceStyle = (
   padding: 24,
 });
 
+const decisionSurfaceStyle = (
+  token: ReturnType<typeof theme.useToken>["token"],
+): React.CSSProperties => ({
+  ...surfaceStyle(token),
+  gap: 16,
+  minHeight: "100%",
+});
+
 const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
+  compareAvailable,
+  compareSections,
+  compareStatusLabel,
+  compareStatusStyle,
+  compareSummary,
+  compareTitle,
   compositionRows,
   currentDeploymentPillStyle,
   currentDeploymentPillText,
@@ -76,14 +118,212 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   currentServiceFriendly,
   currentServicePillStyle,
   currentServicePillText,
+  governanceRows,
+  healthActionLabel,
+  healthDetails,
+  healthStatusLabel,
+  healthStatusStyle,
+  healthSummary,
   latestVisibleUpdateLabel,
   latestVisibleUpdateNote,
+  partialSignals,
   runtimeSummaryRows,
 }) => {
   const { token } = theme.useToken();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div
+        style={{
+          display: "grid",
+          gap: 18,
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+        }}
+      >
+        <section style={decisionSurfaceStyle(token)}>
+          <div
+            style={{
+              alignItems: "flex-start",
+              display: "flex",
+              gap: 12,
+              justifyContent: "space-between",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <Typography.Text strong style={{ fontSize: 16 }}>
+                信任态势
+              </Typography.Text>
+              <Typography.Title level={3} style={{ margin: 0 }}>
+                {healthActionLabel}
+              </Typography.Title>
+            </div>
+            <DetailPill style={healthStatusStyle} text={healthStatusLabel} />
+          </div>
+          <FactLine monospace={false} rows={3} secondary text={healthSummary} />
+          <div style={{ display: "grid", gap: 10 }}>
+            {healthDetails.length > 0 ? (
+              healthDetails.map((detail, index) => (
+                <div
+                  key={`${detail}-${index}`}
+                  style={{
+                    borderTop:
+                      index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                    paddingTop: index === 0 ? 0 : 10,
+                  }}
+                >
+                  <FactLine monospace={false} rows={2} text={detail} />
+                </div>
+              ))
+            ) : (
+              <Typography.Text type="secondary">
+                当前没有更多健康说明。
+              </Typography.Text>
+            )}
+          </div>
+          {partialSignals.length > 0 ? (
+            <div
+              style={{
+                background: token.colorFillQuaternary,
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 18,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                padding: 14,
+              }}
+            >
+              <Space wrap size={8}>
+                <DetailPill
+                  compact
+                  style={{
+                    background: token.colorInfoBg,
+                    color: token.colorInfo,
+                  }}
+                  text="部分信号"
+                />
+                <Typography.Text type="secondary">
+                  缺失事实不会被当作健康处理。
+                </Typography.Text>
+              </Space>
+              {partialSignals.map((signal) => (
+                <FactLine
+                  key={signal}
+                  monospace={false}
+                  rows={2}
+                  secondary
+                  text={signal}
+                />
+              ))}
+            </div>
+          ) : null}
+        </section>
+
+        <section style={decisionSurfaceStyle(token)}>
+          <div
+            style={{
+              alignItems: "flex-start",
+              display: "flex",
+              gap: 12,
+              justifyContent: "space-between",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <Typography.Text strong style={{ fontSize: 16 }}>
+                治理快照
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                支撑当前信任判断的版本、审计和回退事实。
+              </Typography.Text>
+            </div>
+          </div>
+          <div style={{ display: "grid", gap: 12 }}>
+            {governanceRows.map((row, index) => (
+              <div
+                key={row.key}
+                style={{
+                  alignItems: "start",
+                  borderTop:
+                    index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns: "minmax(96px, 128px) minmax(0, 1fr) max-content",
+                  paddingTop: index === 0 ? 0 : 12,
+                }}
+              >
+                <Typography.Text style={{ paddingTop: 2 }} type="secondary">
+                  {row.label}
+                </Typography.Text>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                  <FactLine rows={2} text={row.value} />
+                  <FactLine monospace={false} rows={3} secondary text={row.note} />
+                </div>
+                <DetailPill compact style={row.badgeStyle} text={row.badge} />
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <section style={surfaceStyle(token)}>
+        <div
+          style={{
+            alignItems: "flex-start",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 12,
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Typography.Title level={3} style={{ margin: 0 }}>
+              {compareTitle}
+            </Typography.Title>
+            <FactLine monospace={false} rows={2} secondary text={compareSummary} />
+          </div>
+          <DetailPill compact style={compareStatusStyle} text={compareStatusLabel} />
+        </div>
+        {compareAvailable && compareSections.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gap: 14,
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            }}
+          >
+            {compareSections.map((section) => (
+              <div
+                key={section.key}
+                style={{
+                  background: token.colorFillAlter,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: 18,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                  padding: 16,
+                }}
+              >
+                <Typography.Text strong>{section.title}</Typography.Text>
+                {section.items.map((item, index) => (
+                  <div
+                    key={`${section.key}-${item}-${index}`}
+                    style={{
+                      borderTop:
+                        index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                      paddingTop: index === 0 ? 0 : 10,
+                    }}
+                  >
+                    <FactLine monospace={false} rows={3} secondary text={item} />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <AevatarInspectorEmpty title="暂无可比较运行" description={compareSummary} />
+        )}
+      </section>
+
       <div style={surfaceStyle(token)}>
         <div
           style={{

@@ -516,9 +516,37 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("运行摘要")).toBeTruthy();
     expect(screen.getByText("当前态势")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "运行记录" })).toBeTruthy();
+    expect(screen.getByText("信任态势")).toBeTruthy();
+    expect(
+      await screen.findByText("Comparing run run-current against baseline run-good."),
+    ).toBeTruthy();
+    expect(screen.getByText("需要人工处理后继续")).toBeTruthy();
+    expect(screen.getByText("等待人工")).toBeTruthy();
+    expect(screen.getByText("治理快照")).toBeTruthy();
+    expect(screen.getByText("Run Compare / Change Diff")).toBeTruthy();
+    expect(screen.getByText("Runtime deltas")).toBeTruthy();
+    expect(await screen.findByText("Step deltas")).toBeTruthy();
+    expect(await screen.findByText("Handoff deltas")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "本次对话" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
+  });
+
+  it("keeps compare honest when no successful baseline exists", async () => {
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateRunsCatalog(),
+      runs: [mockCreateRunsCatalog().runs[0]],
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("信任态势")).toBeTruthy();
+    expect(
+      (await screen.findAllByText("No successful baseline is available yet.")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("等待基线")).toBeTruthy();
+    expect(screen.getByText("无基线")).toBeTruthy();
+    expect(screen.getByText("暂无成功基线运行")).toBeTruthy();
   });
 
   it("prefers the explicit workflow display name for the team heading", async () => {
