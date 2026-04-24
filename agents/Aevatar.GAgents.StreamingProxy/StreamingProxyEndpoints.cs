@@ -142,6 +142,10 @@ public static class StreamingProxyEndpoints
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
+        var roomNotFound = await TryCreateRoomNotFoundResultAsync(scopeId, roomId, actorStore, ct);
+        if (roomNotFound is not null)
+            return roomNotFound;
+
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
@@ -172,6 +176,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         ChatTopicRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         [FromServices] StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
         [FromServices] IStreamingProxyParticipantStore participantStore,
@@ -195,6 +200,9 @@ public static class StreamingProxyEndpoints
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
             }
+
+            if (await TryWriteRoomNotFoundAsync(http, scopeId, roomId, actorStore, ct))
+                return;
 
             actor = await actorRuntime.GetAsync(roomId);
             if (actor is null)
@@ -389,6 +397,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         PostMessageRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -396,6 +405,10 @@ public static class StreamingProxyEndpoints
 
         if (string.IsNullOrWhiteSpace(request.AgentId) || string.IsNullOrWhiteSpace(request.Content))
             return Results.BadRequest(new { error = "agentId and content are required" });
+
+        var roomNotFound = await TryCreateRoomNotFoundResultAsync(scopeId, roomId, actorStore, ct);
+        if (roomNotFound is not null)
+            return roomNotFound;
 
         var actor = await actorRuntime.GetAsync(roomId);
         if (actor is null)
@@ -428,6 +441,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -438,6 +452,9 @@ public static class StreamingProxyEndpoints
         try
         {
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
+            if (await TryWriteRoomNotFoundAsync(http, scopeId, roomId, actorStore, ct))
                 return;
 
             var actor = await actorRuntime.GetAsync(roomId);
@@ -511,12 +528,17 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         string roomId,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
+
+        var roomNotFound = await TryCreateRoomNotFoundResultAsync(scopeId, roomId, actorStore, ct);
+        if (roomNotFound is not null)
+            return roomNotFound;
 
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
@@ -540,6 +562,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         JoinRoomRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -549,6 +572,10 @@ public static class StreamingProxyEndpoints
 
         if (string.IsNullOrWhiteSpace(request.AgentId))
             return Results.BadRequest(new { error = "agentId is required" });
+
+        var roomNotFound = await TryCreateRoomNotFoundResultAsync(scopeId, roomId, actorStore, ct);
+        if (roomNotFound is not null)
+            return roomNotFound;
 
         var actor = await actorRuntime.GetAsync(roomId);
         if (actor is null)
@@ -880,6 +907,51 @@ public static class StreamingProxyEndpoints
             logger.LogError(ex, "Failed to remove room {RoomId} from actor store during rollback", roomId);
         }
     }
+
+    private static async Task<IResult?> TryCreateRoomNotFoundResultAsync(
+        string scopeId,
+        string roomId,
+        IGAgentActorStore actorStore,
+        CancellationToken ct) =>
+        await IsRoomRegisteredAsync(scopeId, roomId, actorStore, ct)
+            ? null
+            : RoomNotFoundResult();
+
+    private static async Task<bool> TryWriteRoomNotFoundAsync(
+        HttpContext http,
+        string scopeId,
+        string roomId,
+        IGAgentActorStore actorStore,
+        CancellationToken ct)
+    {
+        var result = await TryCreateRoomNotFoundResultAsync(scopeId, roomId, actorStore, ct);
+        if (result is null)
+            return false;
+
+        await result.ExecuteAsync(http);
+        return true;
+    }
+
+    private static async Task<bool> IsRoomRegisteredAsync(
+        string scopeId,
+        string roomId,
+        IGAgentActorStore actorStore,
+        CancellationToken ct)
+    {
+        var groups = await actorStore.GetAsync(scopeId, ct);
+        return groups.Any(group =>
+            string.Equals(group.GAgentType, StreamingProxyDefaults.GAgentTypeName, StringComparison.Ordinal) &&
+            group.ActorIds.Any(actorId => string.Equals(actorId, roomId, StringComparison.Ordinal)));
+    }
+
+    private static IResult RoomNotFoundResult() =>
+        Results.Json(
+            new
+            {
+                code = "STREAMING_PROXY_ROOM_NOT_FOUND",
+                message = "StreamingProxy room is not registered in the requested scope.",
+            },
+            statusCode: StatusCodes.Status404NotFound);
 
     // ─── Request DTOs ───
 

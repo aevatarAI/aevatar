@@ -111,6 +111,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
+            RegisteredRoomStore("room-1"),
             participantStore,
             loggerFactory,
             CancellationToken.None);
@@ -135,6 +136,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
+            RegisteredRoomStore("room-1"),
             participantStore,
             loggerFactory,
             CancellationToken.None);
@@ -180,6 +182,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext("scope-b"),
             "scope-a",
             "room-1",
+            new RecordingGAgentActorStore([]),
             participantStore,
             loggerFactory,
             CancellationToken.None);
@@ -209,13 +212,14 @@ public sealed class StreamingProxyEndpointsCoverageTests
         HttpContext context,
         string scopeId,
         string roomId,
+        IGAgentActorStore actorStore,
         IStreamingProxyParticipantStore participantStore,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         return await (Task<IResult>)HandleListParticipantsAsyncMethod.Invoke(
             null,
-            [context, scopeId, roomId, participantStore, loggerFactory, ct])!;
+            [context, scopeId, roomId, actorStore, participantStore, loggerFactory, ct])!;
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -251,18 +255,26 @@ public sealed class StreamingProxyEndpointsCoverageTests
         };
     }
 
+    private static RecordingGAgentActorStore RegisteredRoomStore(string roomId)
+    {
+        var store = new RecordingGAgentActorStore([]);
+        store.Groups.Add(new GAgentActorGroup(StreamingProxyDefaults.GAgentTypeName, [roomId]));
+        return store;
+    }
+
     private sealed class RecordingGAgentActorStore(List<string> operations) : IGAgentActorStore
     {
+        public List<GAgentActorGroup> Groups { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
+            Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Groups.AsReadOnly());
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
             string scopeId,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
+            Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Groups.AsReadOnly());
 
         public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {
