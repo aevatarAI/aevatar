@@ -224,6 +224,111 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         await actorRuntime.DidNotReceiveWithAnyArgs().GetAsync(Arg.Any<string>());
     }
 
+    [Fact]
+    public async Task ProcessAsync_StreamingEnabled_DispatchesChunkEventAndReadyEvent()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "streamed reply" };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true, StreamingFlushIntervalMs = 0 },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stream",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+        });
+
+        handled.Any(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor)).Should().BeTrue();
+        handled.Any(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor)).Should().BeTrue();
+        var chunk = handled.First(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor))
+            .Payload.Unpack<LlmReplyStreamChunkEvent>();
+        chunk.AccumulatedText.Should().Be("streamed reply");
+        chunk.CorrelationId.Should().Be("corr-stream");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_StreamingDisabledFlag_DispatchesOnlyReadyEvent()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "plain reply" };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = false },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-legacy",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+        });
+
+        handled.Should().ContainSingle();
+        handled[0].Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProcessAsync_StreamingEnabledButNonRelay_DispatchesOnlyReadyEvent()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "plain reply" };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:dm:user");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-nonrelay",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = new ChatActivity
+            {
+                Id = "msg-nonrelay",
+                Content = new MessageContent { Text = "hello" },
+                // No OutboundDelivery → not a relay turn
+            },
+        });
+
+        handled.Should().ContainSingle();
+        handled[0].Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
+    }
+
     private static ChatActivity BuildRelayActivity() =>
         new()
         {
@@ -250,13 +355,16 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
 
         public bool CaptureSucceeded { get; private set; }
 
-        public Task<string?> GenerateReplyAsync(
+        public async Task<string?> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
+            IStreamingReplySink? streamingSink,
             CancellationToken ct)
         {
             CaptureSucceeded = captureAction();
-            return Task.FromResult<string?>(ReplyText);
+            if (streamingSink is not null && !string.IsNullOrEmpty(ReplyText))
+                await streamingSink.OnDeltaAsync(ReplyText, ct);
+            return ReplyText;
         }
     }
 
@@ -265,6 +373,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         public Task<string?> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
+            IStreamingReplySink? streamingSink,
             CancellationToken ct) => Task.FromException<string?>(exception);
     }
 }

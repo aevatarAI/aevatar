@@ -31,6 +31,22 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private static readonly TimeSpan InitialDeferredLlmDispatchDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan DeferredLlmDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private readonly Dictionary<string, NyxRelayReplyTokenContext> _nyxRelayReplyTokens = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NyxRelayStreamingState> _nyxRelayStreamingStates = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Actor-scoped, in-memory streaming state for one conversation turn. Never persisted: tracks
+    /// the upstream platform message id of the placeholder send and whether a subsequent failure
+    /// has disabled the streaming path for this turn. Keyed by <c>correlation_id</c>, same
+    /// lifecycle as <see cref="NyxRelayReplyTokenContext"/>.
+    /// </summary>
+    private sealed record NyxRelayStreamingState(
+        string? PlatformMessageId,
+        string LastFlushedText,
+        int EditCount,
+        bool Disabled)
+    {
+        public static NyxRelayStreamingState Initial { get; } = new(null, string.Empty, 0, false);
+    }
 
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
@@ -212,10 +228,16 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
+        var referenceActivity = pendingRequest?.Activity ?? evt.Activity;
+        var runtimeContext = BuildNyxRelayRuntimeContext(evt.CorrelationId, referenceActivity);
+
+        if (await TryCompleteStreamedReplyAsync(evt, commandId, referenceActivity, runtimeContext))
+            return;
+
         var runner = ResolveRunner();
         var result = await runner.RunLlmReplyAsync(
             evt,
-            BuildNyxRelayRuntimeContext(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity),
+            runtimeContext,
             CancellationToken.None);
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -273,6 +295,156 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             evt.CorrelationId,
             result.ErrorCode,
             result.FailureKind);
+    }
+
+    /// <summary>
+    /// Drives one progressive streaming delta: placeholder send on the first chunk, edit-in-place
+    /// on subsequent chunks. Runs inside the actor turn so the reply token stays within the actor
+    /// boundary and the edit ordering is enforced by actor serialization.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleLlmReplyStreamChunkAsync(LlmReplyStreamChunkEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null || evt.Activity is null || string.IsNullOrWhiteSpace(evt.AccumulatedText))
+        {
+            Logger.LogDebug(
+                "Dropping malformed streaming chunk: correlation={CorrelationId}",
+                evt.CorrelationId);
+            return;
+        }
+
+        var state = _nyxRelayStreamingStates.GetValueOrDefault(correlationId) ?? NyxRelayStreamingState.Initial;
+        if (state.Disabled)
+            return;
+
+        if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
+        {
+            // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
+            return;
+        }
+
+        var runtimeContext = BuildNyxRelayRuntimeContext(evt.CorrelationId, evt.Activity);
+        if (runtimeContext.NyxRelayReplyToken is null)
+        {
+            Logger.LogInformation(
+                "Streaming chunk received but relay reply token is unavailable; disabling streaming for turn. correlation={CorrelationId}",
+                evt.CorrelationId);
+            _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
+            return;
+        }
+
+        var runner = ResolveRunner();
+        var result = await runner.RunStreamChunkAsync(
+            evt,
+            state.PlatformMessageId,
+            runtimeContext,
+            CancellationToken.None);
+        if (!result.Success)
+        {
+            Logger.LogInformation(
+                "Streaming chunk delivery failed; disabling streaming for turn. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
+                evt.CorrelationId,
+                result.ErrorCode,
+                result.EditUnsupported);
+            _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
+            return;
+        }
+
+        var isFirstChunk = string.IsNullOrEmpty(state.PlatformMessageId);
+        var newPlatformMessageId = string.IsNullOrWhiteSpace(result.PlatformMessageId)
+            ? state.PlatformMessageId
+            : result.PlatformMessageId;
+        _nyxRelayStreamingStates[correlationId] = state with
+        {
+            PlatformMessageId = newPlatformMessageId,
+            LastFlushedText = evt.AccumulatedText,
+            EditCount = isFirstChunk ? 0 : state.EditCount + 1,
+        };
+    }
+
+    private async Task<bool> TryCompleteStreamedReplyAsync(
+        LlmReplyReadyEvent evt,
+        string commandId,
+        ChatActivity? referenceActivity,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        if (evt.TerminalState != LlmReplyTerminalState.Completed)
+            return false;
+
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return false;
+
+        if (!_nyxRelayStreamingStates.TryGetValue(correlationId, out var state))
+            return false;
+        if (state.Disabled || string.IsNullOrEmpty(state.PlatformMessageId))
+            return false;
+
+        var finalText = evt.Outbound?.Text ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(finalText))
+        {
+            // Streaming already rendered something partial but the LLM reported empty; fall back so
+            // the user sees the safety-net text instead of a stale placeholder.
+            _nyxRelayStreamingStates.Remove(correlationId);
+            return false;
+        }
+
+        var platformMessageId = state.PlatformMessageId!;
+        var edits = state.EditCount;
+        if (!string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal))
+        {
+            var runner = ResolveRunner();
+            var finalChunk = new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = evt.CorrelationId,
+                RegistrationId = evt.RegistrationId,
+                Activity = referenceActivity?.Clone() ?? evt.Activity?.Clone() ?? new ChatActivity(),
+                AccumulatedText = finalText,
+                ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            var finalResult = await runner.RunStreamChunkAsync(
+                finalChunk,
+                platformMessageId,
+                runtimeContext,
+                CancellationToken.None);
+            if (!finalResult.Success)
+            {
+                Logger.LogWarning(
+                    "Streaming final flush failed; falling back to full send. correlation={CorrelationId}, code={Code}",
+                    evt.CorrelationId,
+                    finalResult.ErrorCode);
+                _nyxRelayStreamingStates.Remove(correlationId);
+                return false;
+            }
+            edits += 1;
+        }
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var completed = new ConversationTurnCompletedEvent
+        {
+            ProcessedActivityId = string.Empty,
+            CausationCommandId = commandId,
+            SentActivityId = $"nyx-relay-stream:{platformMessageId}",
+            AuthPrincipal = "bot",
+            Conversation = evt.Activity?.Conversation?.Clone()
+                           ?? State.Conversation?.Clone()
+                           ?? new ConversationReference(),
+            Outbound = new MessageContent { Text = finalText },
+            CompletedAtUnixMs = nowMs,
+            OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
+        };
+        await PersistDomainEventAsync(completed);
+        RemoveNyxRelayReplyToken(evt.CorrelationId, referenceActivity);
+        Logger.LogInformation(
+            "Completed streamed LLM reply: correlation={CorrelationId} platformMessageId={PlatformMessageId} edits={EditCount} conversation={Key}",
+            evt.CorrelationId,
+            platformMessageId,
+            edits,
+            completed.Conversation?.CanonicalKey);
+        return true;
     }
 
     [EventHandler]
@@ -517,7 +689,10 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var normalizedCorrelationId = NormalizeOptional(correlationId) ??
                                       NormalizeOptional(activity?.OutboundDelivery?.CorrelationId);
         if (normalizedCorrelationId is not null)
+        {
             _nyxRelayReplyTokens.Remove(normalizedCorrelationId);
+            _nyxRelayStreamingStates.Remove(normalizedCorrelationId);
+        }
     }
 
     private static OutboundDeliveryReceipt? ToOutboundDeliveryReceipt(OutboundDeliveryContext? outboundDelivery)

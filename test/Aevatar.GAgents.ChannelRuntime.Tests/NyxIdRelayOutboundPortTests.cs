@@ -186,6 +186,133 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task SendAsync_ShouldSurfacePlatformMessageId()
+    {
+        var handler = new RecordingJsonHandler(
+            HttpStatusCode.OK,
+            """{"message_id":"reply-1","platform_message_id":"om_abc"}""");
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.SendAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.PlatformMessageId.Should().Be("om_abc");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldPostUpdateEndpointAndSurfaceSuccess()
+    {
+        var handler = new RecordingJsonHandler(
+            HttpStatusCode.OK,
+            """{"upstream_message_id":"om_abc","edited_at":"2026-04-24T09:00:00Z"}""");
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.UpdateAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: "om_abc",
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("nyx-relay-update:om_abc");
+        result.PlatformMessageId.Should().Be("om_abc");
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply/update");
+        handler.Requests[0].Body.Should().Contain("\"message_id\":\"om_abc\"");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRejectMissingReplyToken()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.UpdateAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: "om_abc",
+            " ",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("reply_token_missing_or_expired");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRejectMissingPlatformMessageId()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.UpdateAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: " ",
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("missing_platform_message_id");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldMap501ToEditUnsupportedErrorCode()
+    {
+        var handler = new RecordingJsonHandler(
+            HttpStatusCode.NotImplemented,
+            """{"code":"edit_unsupported","message":"platform does not support edits"}""");
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.UpdateAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: "om_abc",
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_edit_unsupported");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldMapGenericFailuresToUpdateRejected()
+    {
+        var handler = new RecordingJsonHandler(
+            HttpStatusCode.BadRequest,
+            """{"error":"invalid_request"}""");
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.UpdateAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: "om_abc",
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_update_rejected");
+    }
+
     private static NyxIdRelayOutboundPort CreatePort(HttpMessageHandler handler, params IMessageComposer[] composers)
     {
         var client = new NyxIdApiClient(

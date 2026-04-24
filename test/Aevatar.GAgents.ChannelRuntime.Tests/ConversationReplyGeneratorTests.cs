@@ -34,6 +34,7 @@ public sealed class ConversationReplyGeneratorTests
                 },
             },
             new Dictionary<string, string>(),
+            streamingSink: null,
             CancellationToken.None);
 
         reply.Should().Be("ok");

@@ -22,6 +22,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly NyxIdRelayOptions? _relayOptions;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChannelLlmReplyInboxRuntime> _logger;
     private IAsyncDisposable? _subscription;
 
@@ -31,13 +32,15 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
         NyxIdRelayOptions? relayOptions,
-        ILogger<ChannelLlmReplyInboxRuntime> logger)
+        ILogger<ChannelLlmReplyInboxRuntime> logger,
+        TimeProvider? timeProvider = null)
     {
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -87,11 +90,15 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             return;
         }
 
+        var actor = await _actorRuntime.GetAsync(request.TargetActorId)
+                    ?? await _actorRuntime.CreateAsync<ConversationGAgent>(request.TargetActorId, CancellationToken.None);
+
         string replyText;
         MessageContent? outboundIntent = null;
         var terminalState = LlmReplyTerminalState.Completed;
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
+        TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, actor);
 
         try
         {
@@ -105,12 +112,20 @@ internal sealed class ChannelLlmReplyInboxRuntime :
                 replyText = await _replyGenerator.GenerateReplyAsync(
                     request.Activity,
                     effectiveMetadata,
+                    streamingSink,
                     CancellationToken.None) ?? string.Empty;
                 outboundIntent = _interactiveReplyCollector?.TryTake();
             }
             finally
             {
                 interactiveReplyScope?.Dispose();
+            }
+
+            if (streamingSink is not null &&
+                outboundIntent is null &&
+                !string.IsNullOrWhiteSpace(replyText))
+            {
+                await streamingSink.FinalizeAsync(replyText, CancellationToken.None);
             }
 
             if (outboundIntent is null && string.IsNullOrWhiteSpace(replyText))
@@ -133,8 +148,6 @@ internal sealed class ChannelLlmReplyInboxRuntime :
                 request.CorrelationId);
         }
 
-        var actor = await _actorRuntime.GetAsync(request.TargetActorId)
-                    ?? await _actorRuntime.CreateAsync<ConversationGAgent>(request.TargetActorId, CancellationToken.None);
         var ready = new LlmReplyReadyEvent
         {
             CorrelationId = request.CorrelationId,
@@ -145,12 +158,12 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             TerminalState = terminalState,
             ErrorCode = errorCode,
             ErrorSummary = errorSummary,
-            ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ReadyAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         };
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(ready),
             Route = new EnvelopeRoute
             {
@@ -159,6 +172,32 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         };
 
         await actor.HandleEventAsync(envelope, CancellationToken.None);
+    }
+
+    private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, IActor targetActor)
+    {
+        if (_relayOptions is not { StreamingRepliesEnabled: true })
+            return null;
+        if (request.Activity?.OutboundDelivery is not
+            {
+                ReplyMessageId.Length: > 0,
+                CorrelationId.Length: > 0,
+            })
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(request.CorrelationId))
+            return null;
+
+        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, _relayOptions.StreamingFlushIntervalMs));
+        return new TurnStreamingReplySink(
+            targetActor,
+            request.CorrelationId,
+            request.RegistrationId,
+            request.Activity.Clone(),
+            throttle,
+            _timeProvider,
+            _logger);
     }
 
     private IReadOnlyDictionary<string, string> BuildEffectiveMetadata(NeedsLlmReplyEvent request)

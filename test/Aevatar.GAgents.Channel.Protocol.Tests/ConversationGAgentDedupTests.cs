@@ -364,6 +364,188 @@ public sealed class ConversationGAgentDedupTests
         runner.ContinueCount.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_FirstChunk_CallsRunStreamChunkWithoutPlatformMessageId()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-first");
+        SeedReplyToken(agent, "act-stream", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream", "relay-msg-1", "hello"));
+
+        runner.StreamChunkCount.ShouldBe(1);
+        runner.LastStreamChunkCurrentPlatformMessageId.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_SubsequentChunk_PassesStoredPlatformMessageId()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-2");
+        SeedReplyToken(agent, "act-stream-2", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk plus more"));
+
+        runner.StreamChunkCount.ShouldBe(2);
+        runner.LastStreamChunkCurrentPlatformMessageId.ShouldBe("om_first");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_WhenRunnerFails_MarksDisabledAndDropsFurtherChunks()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, _) =>
+                ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-fail");
+        SeedReplyToken(agent, "act-stream-fail", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fail", "relay-msg-1", "first"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fail", "relay-msg-1", "first plus second"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fail", "relay-msg-1", "first plus second plus third"));
+
+        runner.StreamChunkCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_WithoutReplyToken_DisablesStreamingForTurn()
+    {
+        var runner = new RecordingTurnRunner();
+        var (agent, _) = CreateAgent(runner, "conv-stream-no-token");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-no-token", "relay-msg-1", "hello"));
+
+        runner.StreamChunkCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenStreamingSucceeded_PersistsCompletedWithoutInvokingRunLlmReply()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_stream"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-short-circuit");
+        SeedReplyToken(agent, "act-stream-sc", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-sc", "relay-msg-1", "final text"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-sc",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-sc", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "final text" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        runner.LlmReplyCount.ShouldBe(0);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldNotBeEmpty();
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.Outbound.Text.ShouldBe("final text");
+        completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenStreamingDisabled_FallsBackToRunLlmReplyAsync()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, _) =>
+                ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-fallback");
+        SeedReplyToken(agent, "act-stream-fb", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fb", "relay-msg-1", "partial"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-fb",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-fb", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "final text" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        runner.LlmReplyCount.ShouldBe(1);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+    }
+
+    private static LlmReplyStreamChunkEvent CreateStreamChunk(string correlationId, string replyMessageId, string accumulatedText) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            RegistrationId = "reg-1",
+            Activity = CreateRelayActivity(correlationId, replyMessageId),
+            AccumulatedText = accumulatedText,
+            ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+
+    private static ChatActivity CreateRelayActivity(string correlationId, string replyMessageId) =>
+        new()
+        {
+            Id = correlationId,
+            Type = ActivityType.Message,
+            ChannelId = new ChannelId { Value = "lark" },
+            Bot = new BotInstanceId { Value = "lark-bot" },
+            Conversation = new ConversationReference
+            {
+                Channel = new ChannelId { Value = "lark" },
+                Bot = new BotInstanceId { Value = "lark-bot" },
+                Scope = ConversationScope.Group,
+                CanonicalKey = "conv:lark:grp",
+            },
+            Content = new MessageContent { Text = "user question" },
+            OutboundDelivery = new OutboundDeliveryContext
+            {
+                ReplyMessageId = replyMessageId,
+                CorrelationId = correlationId,
+            },
+        };
+
+    private static void SeedReplyToken(ConversationGAgent agent, string correlationId, string replyToken, string replyMessageId)
+    {
+        var field = typeof(ConversationGAgent).GetField(
+            "_nyxRelayReplyTokens",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var dict = (Dictionary<string, NyxRelayReplyTokenContext>)field.GetValue(agent)!;
+        dict[correlationId] = new NyxRelayReplyTokenContext(
+            correlationId,
+            replyToken,
+            replyMessageId,
+            DateTimeOffset.UtcNow.AddMinutes(5));
+    }
+
     private static (ConversationGAgent agent, IEventStore store) CreateAgent(RecordingTurnRunner runner, string agentId)
     {
         var store = new InMemoryEventStore();
@@ -490,6 +672,25 @@ public sealed class ConversationGAgentDedupTests
             var result = ContinueResultFactory is null
                 ? ConversationTurnResult.Sent("sent:" + command.CommandId, new MessageContent { Text = "ack" }, "bot")
                 : ContinueResultFactory(command);
+            return Task.FromResult(result);
+        }
+
+        public int StreamChunkCount;
+        public string? LastStreamChunkCurrentPlatformMessageId { get; private set; }
+        public Func<LlmReplyStreamChunkEvent, string?, ConversationStreamChunkResult>? StreamChunkResultFactory { get; set; }
+
+        public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+            LlmReplyStreamChunkEvent chunk,
+            string? currentPlatformMessageId,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
+        {
+            Interlocked.Increment(ref StreamChunkCount);
+            LastStreamChunkCurrentPlatformMessageId = currentPlatformMessageId;
+            var result = StreamChunkResultFactory is null
+                ? ConversationStreamChunkResult.Succeeded(
+                    currentPlatformMessageId ?? $"om_{chunk.CorrelationId}")
+                : StreamChunkResultFactory(chunk, currentPlatformMessageId);
             return Task.FromResult(result);
         }
     }

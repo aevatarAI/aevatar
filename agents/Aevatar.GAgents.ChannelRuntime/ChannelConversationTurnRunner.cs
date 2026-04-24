@@ -175,6 +175,83 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ct);
     }
 
+    public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+
+        if (chunk.Activity is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "activity_required",
+                "Stream chunk event is missing the source activity.");
+        }
+
+        var inbound = ToInboundMessage(chunk.Activity);
+        if (!HasRelayDelivery(inbound))
+        {
+            return ConversationStreamChunkResult.Failed(
+                "invalid_delivery",
+                "Stream chunk requires a relay outbound delivery context.");
+        }
+
+        var relayDelivery = inbound.OutboundDelivery!.Clone();
+        var relayToken = ResolveRelayReplyToken(relayDelivery, runtimeContext);
+        if (relayToken is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "reply_token_missing_or_expired",
+                "Nyx relay reply token is missing or expired for this streaming chunk.");
+        }
+
+        var conversation = chunk.Activity.Conversation;
+        var platform = ResolveRelayPlatform(inbound, conversation);
+        var content = new MessageContent { Text = NormalizeReplyText(chunk.AccumulatedText) };
+
+        EmitResult emit;
+        if (string.IsNullOrWhiteSpace(currentPlatformMessageId))
+        {
+            emit = await _relayOutboundPort.SendAsync(
+                platform,
+                conversation?.Clone() ?? new ConversationReference(),
+                content,
+                relayDelivery,
+                relayToken,
+                ct);
+        }
+        else
+        {
+            emit = await _relayOutboundPort.UpdateAsync(
+                platform,
+                conversation?.Clone() ?? new ConversationReference(),
+                content,
+                relayDelivery,
+                currentPlatformMessageId,
+                relayToken,
+                ct);
+        }
+
+        if (!emit.Success)
+        {
+            var editUnsupported = string.Equals(
+                emit.ErrorCode,
+                "relay_reply_edit_unsupported",
+                StringComparison.Ordinal);
+            return ConversationStreamChunkResult.Failed(
+                string.IsNullOrWhiteSpace(emit.ErrorCode) ? "stream_chunk_rejected" : emit.ErrorCode,
+                emit.ErrorMessage ?? "Relay stream chunk rejected.",
+                editUnsupported);
+        }
+
+        var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
+            ? currentPlatformMessageId
+            : emit.PlatformMessageId;
+        return ConversationStreamChunkResult.Succeeded(resolvedPlatformMessageId);
+    }
+
     private async Task<ConversationTurnResult?> TryHandleAgentBuilderAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,

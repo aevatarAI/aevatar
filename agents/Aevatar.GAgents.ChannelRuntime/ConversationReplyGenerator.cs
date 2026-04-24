@@ -13,9 +13,15 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 internal interface IConversationReplyGenerator
 {
+    /// <summary>
+    /// Generates the full LLM reply text. If <paramref name="streamingSink"/> is supplied, the
+    /// generator forwards progressive deltas as the stream advances; implementations must tolerate
+    /// a null sink by simply accumulating the final text.
+    /// </summary>
     Task<string?> GenerateReplyAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
+        IStreamingReplySink? streamingSink,
         CancellationToken ct);
 }
 
@@ -60,6 +66,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
     public async Task<string?> GenerateReplyAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
+        IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -106,8 +113,12 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
                            effectiveMetadata,
                            ct))
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                output.Append(chunk.DeltaContent);
+            if (string.IsNullOrEmpty(chunk.DeltaContent))
+                continue;
+
+            output.Append(chunk.DeltaContent);
+            if (streamingSink is not null)
+                await streamingSink.OnDeltaAsync(output.ToString(), ct);
         }
 
         return output.ToString();
