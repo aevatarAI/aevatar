@@ -412,7 +412,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(activity);
 
-        var nyxAgentApiKeyId = activity.TransportExtras?.NyxAgentApiKeyId;
+        var nyxAgentApiKeyId = NormalizeOptional(activity.TransportExtras?.NyxAgentApiKeyId);
         if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId) &&
             _registrationQueryByNyxIdentityPort is not null)
         {
@@ -421,9 +421,25 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 ct);
             if (byNyxIdentity is not null)
                 return byNyxIdentity;
+
+            if (IsNyxRelayActivity(activity, nyxAgentApiKeyId))
+            {
+                var byBoundedScan = await ResolveRegistrationByNyxIdentityScanAsync(nyxAgentApiKeyId, ct);
+                if (byBoundedScan is not null)
+                    return byBoundedScan;
+            }
         }
 
         return await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+    }
+
+    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationByNyxIdentityScanAsync(
+        string nyxAgentApiKeyId,
+        CancellationToken ct)
+    {
+        var registrations = await _registrationQueryPort.QueryAllAsync(ct);
+        return registrations.FirstOrDefault(entry =>
+            string.Equals(NormalizeOptional(entry.NyxAgentApiKeyId), nyxAgentApiKeyId, StringComparison.Ordinal));
     }
 
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationForReplyAsync(
@@ -698,6 +714,14 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ? "lark"
             : platform;
     }
+
+    private static bool IsNyxRelayActivity(ChatActivity activity, string nyxAgentApiKeyId) =>
+        activity.OutboundDelivery is
+        {
+            ReplyMessageId.Length: > 0,
+            ReplyAccessToken.Length: > 0,
+        } &&
+        string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
 
     private static ConversationTurnResult ToRelayFailure(EmitResult emit)
     {

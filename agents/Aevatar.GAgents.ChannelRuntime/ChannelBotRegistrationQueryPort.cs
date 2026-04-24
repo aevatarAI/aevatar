@@ -45,29 +45,19 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
     public Task<ChannelBotRegistrationEntry?> GetByNyxAgentApiKeyIdAsync(
         string nyxAgentApiKeyId,
         CancellationToken ct = default) =>
-        QuerySingleByFieldAsync(
-            nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId),
-            nyxAgentApiKeyId,
-            static entry => entry.NyxAgentApiKeyId,
-            ct);
+        QuerySingleByFieldAsync(nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId), nyxAgentApiKeyId, ct);
 
     public Task<ChannelBotRegistrationEntry?> GetByNyxChannelBotIdAsync(
         string nyxChannelBotId,
         CancellationToken ct = default) =>
-        QuerySingleByFieldAsync(
-            nameof(ChannelBotRegistrationDocument.NyxChannelBotId),
-            nyxChannelBotId,
-            static entry => entry.NyxChannelBotId,
-            ct);
+        QuerySingleByFieldAsync(nameof(ChannelBotRegistrationDocument.NyxChannelBotId), nyxChannelBotId, ct);
 
     private async Task<ChannelBotRegistrationEntry?> QuerySingleByFieldAsync(
         string fieldPath,
         string fieldValue,
-        Func<ChannelBotRegistrationEntry, string?> entrySelector,
         CancellationToken ct)
     {
-        var normalizedFieldValue = NormalizeOptional(fieldValue);
-        if (normalizedFieldValue is null)
+        if (string.IsNullOrWhiteSpace(fieldValue))
             return null;
 
         var result = await _documentReader.QueryAsync(
@@ -80,22 +70,14 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
                     {
                         FieldPath = fieldPath,
                         Operator = ProjectionDocumentFilterOperator.Eq,
-                        Value = ProjectionDocumentValue.FromString(normalizedFieldValue),
+                        Value = ProjectionDocumentValue.FromString(fieldValue),
                     },
                 ],
             },
             ct);
 
         var document = result.Items.FirstOrDefault();
-        if (document is not null)
-            return ToEntry(document);
-
-        // Some projection providers have returned empty exact-match results even while the
-        // document is visible via QueryAll(). Fall back to a bounded scan so relay traffic
-        // still resolves registrations by Nyx identity instead of silently failing.
-        var entries = await QueryAllAsync(ct);
-        return entries.FirstOrDefault(entry =>
-            string.Equals(NormalizeOptional(entrySelector(entry)), normalizedFieldValue, StringComparison.Ordinal));
+        return document == null ? null : ToEntry(document);
     }
 
     private static ChannelBotRegistrationEntry ToEntry(ChannelBotRegistrationDocument document) =>
@@ -111,10 +93,4 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
             CredentialRef = document.CredentialRef ?? string.Empty,
         };
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
 }

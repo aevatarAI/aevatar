@@ -130,41 +130,6 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task BotQueryPort_GetByNyxAgentApiKeyIdAsync_FallsBackToBoundedScan_WhenFieldQueryMisses()
-    {
-        var queries = new List<ProjectionDocumentQuery>();
-        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.QueryAsync(
-                Arg.Do<ProjectionDocumentQuery>(query => queries.Add(query)),
-                Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>()),
-                Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>
-                {
-                    Items =
-                    [
-                        new ChannelBotRegistrationDocument
-                        {
-                            Id = "bot-1",
-                            Platform = "lark",
-                            NyxAgentApiKeyId = "key-1",
-                        },
-                    ],
-                }));
-
-        var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.GetByNyxAgentApiKeyIdAsync("key-1");
-
-        result.Should().NotBeNull();
-        result!.Id.Should().Be("bot-1");
-        queries.Should().HaveCount(2);
-        queries[0].Take.Should().Be(1);
-        queries[0].Filters.Should().ContainSingle();
-        queries[1].Take.Should().Be(1000);
-        queries[1].Filters.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task BotQueryPort_GetByNyxChannelBotIdAsync_QueriesProjectionByIdentityField()
     {
         ProjectionDocumentQuery? capturedQuery = null;
@@ -196,41 +161,6 @@ public sealed class RegistrationQueryPortTests
         capturedQuery.Filters[0].FieldPath.Should().Be(nameof(ChannelBotRegistrationDocument.NyxChannelBotId));
         capturedQuery.Filters[0].Operator.Should().Be(ProjectionDocumentFilterOperator.Eq);
         capturedQuery.Filters[0].Value.RawValue.Should().Be("nyx-bot-2");
-    }
-
-    [Fact]
-    public async Task BotQueryPort_GetByNyxChannelBotIdAsync_FallsBackToBoundedScan_WhenFieldQueryMisses()
-    {
-        var queries = new List<ProjectionDocumentQuery>();
-        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
-        reader.QueryAsync(
-                Arg.Do<ProjectionDocumentQuery>(query => queries.Add(query)),
-                Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>()),
-                Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>
-                {
-                    Items =
-                    [
-                        new ChannelBotRegistrationDocument
-                        {
-                            Id = "bot-2",
-                            Platform = "lark",
-                            NyxChannelBotId = "nyx-bot-2",
-                        },
-                    ],
-                }));
-
-        var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.GetByNyxChannelBotIdAsync("nyx-bot-2");
-
-        result.Should().NotBeNull();
-        result!.Id.Should().Be("bot-2");
-        queries.Should().HaveCount(2);
-        queries[0].Take.Should().Be(1);
-        queries[0].Filters.Should().ContainSingle();
-        queries[1].Take.Should().Be(1000);
-        queries[1].Filters.Should().BeEmpty();
     }
 
     [Fact]
