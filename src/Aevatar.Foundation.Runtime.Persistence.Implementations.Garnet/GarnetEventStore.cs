@@ -125,8 +125,10 @@ public sealed class GarnetEventStore : IEventStore
         var actualVersion = (long)result[1];
         if (status == 0)
         {
-            throw new InvalidOperationException(
-                $"Optimistic concurrency conflict: expected {expectedVersion}, actual {actualVersion}");
+            throw new EventStoreOptimisticConcurrencyException(
+                agentId,
+                expectedVersion,
+                actualVersion);
         }
 
         if (status != 1)
