@@ -219,11 +219,24 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         // Apply the bot owner's pre-configured LLM route + model. The relay callback
         // identifies the bot by api_key_id (in activity.Bot.Value); we resolve that to
         // the owner's Aevatar scope id and load the same UserConfig the owner uses
-        // when chatting through nyxid-chat themselves. This decouples the bot's LLM
-        // call from any inbound user session — the bot reply succeeds whenever the
-        // owner has a valid configuration, regardless of whether the relay callback's
-        // X-NyxID-User-Token has expired since dispatch.
+        // when chatting through nyxid-chat themselves, then pin ModelOverride /
+        // NyxIdRoutePreference / MaxToolRoundsOverride from that configuration.
         await ApplyBotOwnerLlmConfigAsync(request, metadata, ct);
+
+        // The inbound callback's X-NyxID-User-Token is the bot owner's NyxID session
+        // JWT (freshly issued by NyxID for each callback). It is the bot owner's own
+        // credential for LLM calls — the same thing that would authorize them in
+        // nyxid-chat. The short TTL (~15 min) is mitigated by the direct-enqueue
+        // dispatch (#380), the inbox-echoed token flow (#383), and the stale pending
+        // request GC, so the token is still valid when the LLM call actually fires
+        // for any non-stale request. If the downstream provider rejects it, the
+        // classifier surfaces a real user-facing error via NyxIdRelayErrorClassifier.
+        var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
+        if (!string.IsNullOrWhiteSpace(userAccessToken))
+        {
+            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
+            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
+        }
 
         return metadata;
     }

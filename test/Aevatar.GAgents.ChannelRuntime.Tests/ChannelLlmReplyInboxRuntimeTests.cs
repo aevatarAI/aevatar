@@ -357,9 +357,10 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     {
         // Bot owner's LLM model + route comes from UserConfig (the same store that backs
         // their nyxid-chat preferences), looked up by the scope id resolved from the
-        // bot registration. The relay turn must NOT depend on the inbound user-token's
-        // freshness for LLM auth, and must override server defaults with what the bot
-        // owner has configured.
+        // bot registration. The relay turn uses the inbound user-token as the bearer
+        // (it is the bot owner's own NyxID session, freshly issued per callback) while
+        // taking model / route / max-tool-rounds from the owner's pre-configured
+        // UserConfig.
         var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
@@ -405,8 +406,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         activity.Bot = BotInstanceId.From("api-key-bot");
         activity.TransportExtras = new TransportExtras
         {
-            // The 15-min user session token must NOT leak into LLM auth metadata.
-            NyxUserAccessToken = "ephemeral-user-jwt-DO-NOT-USE-FOR-LLM",
+            NyxUserAccessToken = "bot-owner-session-jwt",
         };
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -424,17 +424,21 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             .WhoseValue.Should().Be("/api/v1/proxy/s/anthropic-via-bot-owner");
         capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride)
             .WhoseValue.Should().Be("11");
-        capturedMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        capturedMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldNotLeakUserAccessTokenIntoLlmAuthMetadata()
+    public async Task ProcessAsync_ShouldThreadBotOwnerSessionTokenAsLlmBearer()
     {
-        // Regression: the previous implementation copied Activity.TransportExtras
-        // .NyxUserAccessToken into LLMRequestMetadataKeys.NyxIdAccessToken, which
-        // caused token_expired LLM rejections once the inbound user's NyxID session
-        // (~15 min TTL) lapsed. The token must never become the LLM call's bearer.
+        // The inbound X-NyxID-User-Token is the bot owner's own NyxID session JWT.
+        // It is the credential that would authorize the owner's LLM calls in
+        // nyxid-chat, so it is also the correct credential for the bot's relay
+        // LLM call. The stale-pending GC plus the direct-enqueue + inbox-echoed
+        // token flow keeps it fresh through the window where the LLM call actually
+        // fires.
         var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
@@ -462,20 +466,22 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         var activity = BuildRelayActivity();
         activity.TransportExtras = new TransportExtras
         {
-            NyxUserAccessToken = "ephemeral-user-jwt",
+            NyxUserAccessToken = "bot-owner-session-jwt",
         };
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
         {
-            CorrelationId = "corr-no-leak",
+            CorrelationId = "corr-bearer",
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = activity,
             ReplyToken = "relay-token-1",
         });
 
-        capturedMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        capturedMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
     }
 
     private static ChatActivity BuildRelayActivity() =>
