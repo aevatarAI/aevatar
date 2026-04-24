@@ -938,6 +938,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByText("Support Escalation Triage");
     fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
 
     await waitFor(() => {
@@ -945,6 +946,7 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("memberId")).toBe("default");
     expect(params.get("tab")).toBe("studio");
     if (params.get("focus")) {
       expect(params.get("focus")).toBe("workflow:workflow-1");
@@ -955,6 +957,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByText("Support Escalation Triage");
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
     await screen.findByText("当前 Team 资产");
 
@@ -964,6 +967,7 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
+    expect(window.location.search).toContain("memberId=default");
     expect(window.location.search).toContain(
       "focus=workflow%3Aworkflow-1",
     );

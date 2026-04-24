@@ -31,6 +31,7 @@ describe('StudioMemberInvokePanel', () => {
     render(
       React.createElement(StudioMemberInvokePanel, {
         scopeId: 'scope-1',
+        selectedMemberLabel: 'workspace-demo',
         scopeBinding: {
           available: true,
           scopeId: 'scope-1',
@@ -97,9 +98,11 @@ describe('StudioMemberInvokePanel', () => {
 
     expect(await screen.findByTestId('studio-member-invoke-panel')).toBeTruthy();
     expect(screen.getByText('Invocation Contract')).toBeTruthy();
+    expect(screen.getByText('Current member')).toBeTruthy();
     expect(screen.getByText('Playground')).toBeTruthy();
     expect(screen.getByText('Live Trace')).toBeTruthy();
     expect(screen.getByText('Request History (0)')).toBeTruthy();
+    expect(screen.queryByText('Published service')).toBeNull();
   });
 
   it('records successful invoke requests into history and restores them on click', async () => {
@@ -181,5 +184,28 @@ describe('StudioMemberInvokePanel', () => {
         'Route this escalation to billing review.',
       );
     });
+  });
+
+  it('renders a clear empty state when no selected member is available for invoke', async () => {
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        scopeId: 'scope-1',
+        services: [],
+        emptyState: {
+          message: 'Select a member to invoke.',
+          description:
+            'Choose a member from Team members or continue from Bind so Invoke stays pinned to one member.',
+          type: 'info',
+        },
+      }),
+    );
+
+    expect(await screen.findByText('Select a member to invoke.')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Choose a member from Team members or continue from Bind so Invoke stays pinned to one member.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('Invocation Contract')).toBeNull();
   });
 });

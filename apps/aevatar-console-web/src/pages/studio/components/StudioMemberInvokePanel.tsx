@@ -46,6 +46,12 @@ type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
   readonly scopeBinding?: StudioScopeBindingStatus | null;
   readonly services: readonly ScopeConsoleServiceOption[];
+  readonly selectedMemberLabel?: string;
+  readonly emptyState?: {
+    readonly description?: string;
+    readonly message: string;
+    readonly type?: 'error' | 'info' | 'success' | 'warning';
+  } | null;
   readonly returnTo?: string;
   readonly initialServiceId?: string;
   readonly initialEndpointId?: string;
@@ -144,16 +150,6 @@ const surfaceStyle: React.CSSProperties = {
   minHeight: 0,
   overflow: 'auto',
   paddingBottom: 8,
-};
-
-const sectionStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 14,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 14,
-  padding: 16,
 };
 
 const summaryGridStyle: React.CSSProperties = {
@@ -314,6 +310,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
   scopeBinding,
   services,
+  selectedMemberLabel,
+  emptyState,
   returnTo,
   initialServiceId,
   initialEndpointId,
@@ -367,9 +365,23 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentBindingContext = describeStudioScopeBindingRevisionContext(
     currentBindingRevision,
   );
+  const currentMemberLabel =
+    trimOptional(selectedMemberLabel) ||
+    trimOptional(selectedService?.displayName) ||
+    trimOptional(selectedService?.serviceId) ||
+    'Current member';
   const observedEvents = invokeResult.events;
   const canInvoke = Boolean(scopeId && selectedService && selectedEndpoint);
-  const latestHistoryEntry = requestHistory[0] ?? null;
+  const visibleRequestHistory = useMemo(() => {
+    const currentServiceId =
+      trimOptional(selectedService?.serviceId) || trimOptional(initialServiceId);
+    if (!currentServiceId) {
+      return [];
+    }
+
+    return requestHistory.filter((entry) => entry.serviceId === currentServiceId);
+  }, [initialServiceId, requestHistory, selectedService?.serviceId]);
+  const latestHistoryEntry = visibleRequestHistory[0] ?? null;
   const currentRequestStatus =
     invokeResult.status === 'running'
       ? 'running'
@@ -508,6 +520,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       block: 'end',
     });
   }, [chatMessages]);
+
+  useEffect(() => {
+    if (!focusedHistoryId) {
+      return;
+    }
+
+    if (visibleRequestHistory.some((entry) => entry.id === focusedHistoryId)) {
+      return;
+    }
+
+    setFocusedHistoryId('');
+  }, [focusedHistoryId, visibleRequestHistory]);
 
   const ensureNyxIdChatBound = useCallback(async () => {
     if (!scopeId || nyxIdChatBoundRef.current) {
@@ -939,10 +963,6 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setActiveTab(isChatEndpoint ? 'chat' : 'output');
   }, [isChatEndpoint]);
 
-  const serviceOptions = services.map((service) => ({
-    label: service.displayName || service.serviceId,
-    value: service.serviceId,
-  }));
   const endpointOptions = (selectedService?.endpoints ?? []).map((endpoint) => ({
     label: endpoint.displayName || endpoint.endpointId,
     value: endpoint.endpointId,
@@ -1070,10 +1090,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     latestHistoryEntry?.responsePreview ||
     '';
   const activeSelectionLabel = selectedEndpoint
-    ? `${selectedService?.displayName || selectedService?.serviceId || 'service'} / ${
+    ? `${currentMemberLabel} / ${
         selectedEndpoint.displayName || selectedEndpoint.endpointId
       }`
-    : 'Select a published service endpoint';
+    : 'Select the current member endpoint';
   const invokeNotice =
     invokeResult.status !== 'idle' ? (
       <Alert
@@ -1109,6 +1129,13 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           message="Resolve a team scope before invoking this member."
           type="info"
         />
+      ) : emptyState ? (
+        <Alert
+          showIcon
+          message={emptyState.message}
+          description={emptyState.description}
+          type={emptyState.type || 'info'}
+        />
       ) : services.length === 0 ? (
         <Alert
           showIcon
@@ -1122,7 +1149,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             layoutMode="document"
             padding={14}
             title="Invocation Contract"
-            titleHelp="Keep the published service, endpoint, and action posture visible while you move from a quick probe into full runtime observation."
+            titleHelp="Keep the current member, endpoint, and action posture visible while you move from a quick probe into full runtime observation."
             extra={
               <Space wrap size={[8, 8]}>
                 <Button
@@ -1160,16 +1187,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               {invokeNotice}
               <div style={controlsGridStyle}>
                 <div style={{ display: 'grid', gap: 8 }}>
-                  <Typography.Text strong>Published service</Typography.Text>
-                  <Select
-                    placeholder="Select a published service"
-                    options={serviceOptions}
-                    value={selectedServiceId || undefined}
-                    onChange={(value) => {
-                      setSelectedServiceId(String(value || ''));
-                      setSelectedEndpointId('');
-                    }}
-                  />
+                  <Typography.Text strong>Current member</Typography.Text>
+                  <div style={summaryValueStyle}>{currentMemberLabel}</div>
+                  <Typography.Text type="secondary">
+                    Invoke stays pinned to the selected member. Change the member from
+                    Team members or Bind before returning here.
+                  </Typography.Text>
                 </div>
                 <div style={{ display: 'grid', gap: 8 }}>
                   <Typography.Text strong>Endpoint</Typography.Text>
@@ -1340,12 +1363,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               <AevatarPanel
                 layoutMode="document"
                 padding={14}
-                title={`Request History (${requestHistory.length})`}
+                title={`Request History (${visibleRequestHistory.length})`}
                 titleHelp="Keep recent requests nearby so you can quickly replay a payload or jump back to a prior contract without leaving Studio."
               >
-                {requestHistory.length > 0 ? (
+                {visibleRequestHistory.length > 0 ? (
                   <div style={{ display: 'grid', gap: 10 }}>
-                    {requestHistory.map((entry) => {
+                    {visibleRequestHistory.map((entry) => {
                       const isFocused = entry.id === focusedHistoryId;
                       return (
                         <button
@@ -1401,7 +1424,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   <div style={compactEmptyStateStyle}>
                     <Typography.Text strong>No requests yet</Typography.Text>
                     <Typography.Text type="secondary">
-                      Start a request and the latest prompt, payload, and receipt will stay here.
+                      Start a request for the current member and the latest prompt,
+                      payload, and receipt will stay here.
                     </Typography.Text>
                   </div>
                 )}
@@ -1463,18 +1487,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                         </div>
                         <Typography.Text type="secondary">
                           {selectedEndpoint.description || 'No endpoint description available.'}
-                    </Typography.Text>
-                    <Space wrap size={[8, 8]}>
-                      <Tag>{selectedService?.displayName || selectedService?.serviceId}</Tag>
-                      <Tag>
-                        revision · {currentBindingRevision?.revisionId || 'not serving'}
-                      </Tag>
-                    </Space>
-                    {!isChatEndpoint && selectedEndpoint.requestTypeUrl ? (
-                      <Typography.Text type="secondary">
-                        Request: {selectedEndpoint.requestTypeUrl}
-                      </Typography.Text>
-                    ) : null}
+                        </Typography.Text>
+                        <Space wrap size={[8, 8]}>
+                          <Tag>{currentMemberLabel}</Tag>
+                          <Tag>
+                            revision · {currentBindingRevision?.revisionId || 'not serving'}
+                          </Tag>
+                        </Space>
+                        {!isChatEndpoint && selectedEndpoint.requestTypeUrl ? (
+                          <Typography.Text type="secondary">
+                            Request: {selectedEndpoint.requestTypeUrl}
+                          </Typography.Text>
+                        ) : null}
                         {!isChatEndpoint && selectedEndpoint.responseTypeUrl ? (
                           <Typography.Text type="secondary">
                             Response: {selectedEndpoint.responseTypeUrl}
@@ -1486,7 +1510,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                     <div style={compactEmptyStateStyle}>
                       <Typography.Text strong>No endpoint selected</Typography.Text>
                       <Typography.Text type="secondary">
-                        Pick a published service endpoint to keep its contract details here.
+                        Pick an endpoint on the current member to keep its contract
+                        details here.
                       </Typography.Text>
                     </div>
                   )}

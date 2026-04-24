@@ -1260,14 +1260,25 @@ const TeamDetailPage: React.FC = () => {
     }),
     [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
   );
+  const selectedStudioMemberId =
+    trimText(runtimeServiceId) ||
+    trimText(bindingQuery.data?.serviceId) ||
+    trimText(preferredServiceId) ||
+    trimText(servicesQuery.data?.[0]?.serviceId) ||
+    trimText(activeWorkflowSummary?.serviceKey).split(":").pop()?.trim() ||
+    "";
 
   const teamBuilderRoute =
     trimText(activeWorkflowSummary?.workflowId).length > 0
       ? buildStudioWorkflowEditorRoute({
           scopeId,
+          memberId: selectedStudioMemberId || undefined,
           workflowId: activeWorkflowSummary?.workflowId,
         })
-      : buildStudioWorkflowWorkspaceRoute({ scopeId });
+      : buildStudioWorkflowWorkspaceRoute({
+          scopeId,
+          memberId: selectedStudioMemberId || undefined,
+        });
 
   const availableActorIds = React.useMemo(
     () =>
@@ -3049,22 +3060,30 @@ const TeamDetailPage: React.FC = () => {
       history.push(
         buildStudioWorkflowEditorRoute({
           scopeId,
+          memberId:
+            trimText(workflowId) === trimText(activeWorkflowSummary?.workflowId)
+              ? selectedStudioMemberId || undefined
+              : undefined,
           workflowId,
         }),
       );
     },
-    [scopeId],
+    [activeWorkflowSummary?.workflowId, scopeId, selectedStudioMemberId],
   );
   const handleOpenScriptAsset = React.useCallback(
     (scriptId: string) => {
       history.push(
         buildStudioScriptsWorkspaceRoute({
           scopeId,
+          memberId:
+            trimText(scriptId) === trimText(lens.activeRevision?.scriptId)
+              ? selectedStudioMemberId || undefined
+              : undefined,
           scriptId,
         }),
       );
     },
-    [scopeId],
+    [lens.activeRevision?.scriptId, scopeId, selectedStudioMemberId],
   );
 
   const renderOverviewTab = () => {
@@ -3246,6 +3265,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioScriptsWorkspaceRoute({
               scopeId,
+              memberId: selectedStudioMemberId || undefined,
             }),
           )
         }
@@ -3254,6 +3274,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioWorkflowWorkspaceRoute({
               scopeId,
+              memberId: selectedStudioMemberId || undefined,
             }),
           )
         }
