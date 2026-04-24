@@ -21,6 +21,8 @@ public sealed record NyxIdRelayAuthenticationResult(
 
 public sealed class NyxIdRelayAuthValidator
 {
+    private const string RelayCallbackTokenType = "relay_callback";
+
     private sealed record CachedOidcConfiguration(
         string Issuer,
         string Audience,
@@ -136,8 +138,7 @@ public sealed class NyxIdRelayAuthValidator
         if (_replayGuard is not null)
         {
             var observedAtUtc = DateTimeOffset.UtcNow;
-            if (!_replayGuard.TryClaim($"jti:{jwtValidation.Jti}", observedAtUtc) ||
-                !_replayGuard.TryClaim($"message:{payloadMessageId}", observedAtUtc))
+            if (!_replayGuard.TryClaim($"jti:{jwtValidation.Jti}", observedAtUtc))
             {
                 return Fail("callback_jwt_replay_detected", "Relay callback replay was rejected.");
             }
@@ -207,6 +208,15 @@ public sealed class NyxIdRelayAuthValidator
             var bodySha256 = principal.FindFirstValue("body_sha256")?.Trim();
             var jti = principal.FindFirstValue(JwtRegisteredClaimNames.Jti)?.Trim() ??
                       principal.FindFirstValue("jti")?.Trim();
+            var tokenType = principal.FindFirstValue("token_type")?.Trim();
+
+            if (!string.Equals(tokenType, RelayCallbackTokenType, StringComparison.Ordinal))
+            {
+                return new CallbackJwtValidationResult(
+                    false,
+                    ErrorCode: "callback_jwt_token_type_mismatch",
+                    ErrorSummary: "Callback JWT token_type must be relay_callback.");
+            }
 
             if (string.IsNullOrWhiteSpace(relayApiKeyId))
             {

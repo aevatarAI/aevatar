@@ -4,7 +4,7 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public interface INyxIdRelayReplayGuard
 {
-    bool TryClaim(string messageId, DateTimeOffset observedAtUtc);
+    bool TryClaim(string replayKey, DateTimeOffset observedAtUtc);
 }
 
 public sealed class NyxIdRelayReplayGuard : INyxIdRelayReplayGuard
@@ -26,9 +26,9 @@ public sealed class NyxIdRelayReplayGuard : INyxIdRelayReplayGuard
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
-    public bool TryClaim(string messageId, DateTimeOffset observedAtUtc)
+    public bool TryClaim(string replayKey, DateTimeOffset observedAtUtc)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(replayKey);
 
         var now = _timeProvider.GetUtcNow();
         SweepExpired(now);
@@ -37,7 +37,7 @@ public sealed class NyxIdRelayReplayGuard : INyxIdRelayReplayGuard
         if (expiry <= now)
             return false;
 
-        return _claims.TryAdd(messageId.Trim(), expiry);
+        return _claims.TryAdd(replayKey.Trim(), expiry);
     }
 
     private void SweepExpired(DateTimeOffset now)

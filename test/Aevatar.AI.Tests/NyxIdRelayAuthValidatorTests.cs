@@ -198,6 +198,26 @@ public sealed class NyxIdRelayAuthValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_ShouldRejectWrongTokenType()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var validator = CreateValidator(
+            new NyxRelayOidcDocumentHandler(CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"), () => CreateJwksJson(key)),
+            Issuer);
+        var request = CreateRelayRequest(key, tokenType: "reply_token");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("callback_jwt_token_type_mismatch");
+    }
+
+    [Fact]
     public async Task ValidateAsync_ShouldRejectExpiredToken()
     {
         using var rsa = RSA.Create(2048);
@@ -431,6 +451,33 @@ public sealed class NyxIdRelayAuthValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_ShouldAcceptRetryWithSameMessageIdAndFreshJti()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var validator = CreateValidator(
+            new NyxRelayOidcDocumentHandler(CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"), () => CreateJwksJson(key)),
+            Issuer,
+            replayGuard: new NyxIdRelayReplayGuard());
+        var firstRequest = CreateRelayRequest(key, messageId: "msg-retry", correlationId: "jti-retry-1");
+        var retryRequest = CreateRelayRequest(key, messageId: "msg-retry", correlationId: "jti-retry-2");
+
+        var first = await validator.ValidateAsync(
+            firstRequest.HttpContext,
+            firstRequest.BodyBytes,
+            firstRequest.Payload,
+            CancellationToken.None);
+        var retry = await validator.ValidateAsync(
+            retryRequest.HttpContext,
+            retryRequest.BodyBytes,
+            retryRequest.Payload,
+            CancellationToken.None);
+
+        first.Succeeded.Should().BeTrue();
+        retry.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task SendChannelRelayTextReplyAsync_ShouldPostExpectedBody()
     {
         var handler = new CaptureHandler(
@@ -497,7 +544,8 @@ public sealed class NyxIdRelayAuthValidatorTests
         string? userToken = "user-token-1",
         DateTime? notBeforeUtc = null,
         DateTime? expiresAtUtc = null,
-        string signingAlgorithm = SecurityAlgorithms.RsaSha256)
+        string signingAlgorithm = SecurityAlgorithms.RsaSha256,
+        string? tokenType = "relay_callback")
     {
         var payload = new NyxIdRelayCallbackPayload
         {
@@ -540,7 +588,8 @@ public sealed class NyxIdRelayAuthValidatorTests
             ComputeBodySha256Hex(bodyBytes),
             notBeforeUtc,
             expiresAtUtc,
-            signingAlgorithm);
+            signingAlgorithm,
+            tokenType);
 
         var http = new DefaultHttpContext();
         if (includeCallbackToken)
@@ -564,21 +613,27 @@ public sealed class NyxIdRelayAuthValidatorTests
         string bodySha256,
         DateTime? notBeforeUtc = null,
         DateTime? expiresAtUtc = null,
-        string signingAlgorithm = SecurityAlgorithms.RsaSha256)
+        string signingAlgorithm = SecurityAlgorithms.RsaSha256,
+        string? tokenType = "relay_callback")
     {
+        var claims = new List<Claim>
+        {
+            new("sub", subject),
+            new("api_key_id", relayApiKeyId),
+            new("message_id", messageId),
+            new("platform", platform),
+            new("body_sha256", bodySha256),
+            new(JwtRegisteredClaimNames.Jti, jti),
+        };
+
+        if (!string.IsNullOrWhiteSpace(tokenType))
+            claims.Add(new Claim("token_type", tokenType));
+
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = issuer,
             Audience = audience,
-            Subject = new ClaimsIdentity(
-            [
-                new Claim("sub", subject),
-                new Claim("api_key_id", relayApiKeyId),
-                new Claim("message_id", messageId),
-                new Claim("platform", platform),
-                new Claim("body_sha256", bodySha256),
-                new Claim(JwtRegisteredClaimNames.Jti, jti),
-            ]),
+            Subject = new ClaimsIdentity(claims),
             NotBefore = notBeforeUtc ?? DateTime.UtcNow.AddMinutes(-1),
             Expires = expiresAtUtc ?? DateTime.UtcNow.AddMinutes(5),
             SigningCredentials = new SigningCredentials(key, signingAlgorithm),
