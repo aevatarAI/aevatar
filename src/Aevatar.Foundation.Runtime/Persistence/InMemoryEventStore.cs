@@ -36,7 +36,12 @@ public sealed class InMemoryEventStore : IEventStore
             var stream = _store.GetOrAdd(agentId, _ => new EventStreamState());
             var current = stream.CurrentVersion;
             if (current != expectedVersion)
-                throw new InvalidOperationException($"Optimistic concurrency conflict: expected {expectedVersion}, actual {current}");
+            {
+                throw new EventStoreOptimisticConcurrencyException(
+                    agentId,
+                    expectedVersion,
+                    current);
+            }
             var eventList = events.ToList();
             stream.Events.AddRange(eventList.Select(static x => x.Clone()));
             if (eventList.Count > 0)
