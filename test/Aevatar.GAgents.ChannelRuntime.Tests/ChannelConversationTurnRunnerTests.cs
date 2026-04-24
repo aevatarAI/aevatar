@@ -530,6 +530,207 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies[0].ReplyText.Should().Contain("No NyxID access token available");
     }
 
+    [Fact]
+    public async Task RunInboundAsync_ShouldSendRelayReply_ForDailySlashCommand_WhenRelayDeliveryIsPresent()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-daily"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/daily alice",
+                "msg-daily-relay-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-daily-1",
+                    CorrelationId = "corr-daily-relay-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-daily-relay-1",
+                "relay-token-daily-1",
+                "relay-msg-daily-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:msg-daily-relay-1");
+        result.OutboundDelivery?.ReplyMessageId.Should().Be("relay-msg-daily-1");
+        result.OutboundDelivery?.CorrelationId.Should().Be("corr-daily-relay-1");
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-daily-1");
+        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"relay-msg-daily-1\"");
+        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"Create daily report agent failed");
+        relayHandler.Requests[0].Body.Should().Contain("No NyxID access token available");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldSendRelayRestriction_ForDailySlashCommandInGroup()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-group"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/daily alice",
+                "msg-daily-group-1",
+                ConversationScope.Group,
+                "oc_group_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-group-1",
+                    CorrelationId = "corr-daily-group-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-daily-group-1",
+                "relay-token-group-1",
+                "relay-msg-group-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-group-1");
+        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"relay-msg-group-1\"");
+        relayHandler.Requests[0].Body.Should().Contain("private chat");
+        relayHandler.Requests[0].Body.Should().Contain("/daily");
+    }
+
+    [Theory]
+    [InlineData("/daily_report")]
+    [InlineData("/foobar")]
+    public async Task RunInboundAsync_ShouldSendRelayUsage_ForUnknownSlashCommand(string command)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-unknown"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                command,
+                "msg-unknown-relay-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-unknown-1",
+                    CorrelationId = "corr-unknown-relay-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-unknown-relay-1",
+                "relay-token-unknown-1",
+                "relay-msg-unknown-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-unknown-1");
+        relayHandler.Requests[0].Body.Should().Contain($"Unknown command: {command}");
+        relayHandler.Requests[0].Body.Should().Contain("Supported commands:");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldFailRelayDailySlashCommand_WhenReplyTokenIsMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-unexpected"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/daily alice",
+                "msg-daily-missing-token-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-missing-token-1",
+                    CorrelationId = "corr-missing-token-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            ConversationTurnRuntimeContext.Empty,
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("reply_token_missing_or_expired");
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldCarryRelayReplyToken_WhenNormalRelayTextFallsBackToLlm()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-normal-relay-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-normal-1",
+                    CorrelationId = "corr-normal-relay-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-normal-relay-1",
+                "relay-token-normal-1",
+                "relay-msg-normal-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-normal-1");
+        result.LlmReplyRequest.ReplyTokenExpiresAtUnixMs.Should().BeGreaterThan(0);
+        result.LlmReplyRequest.Activity.OutboundDelivery.ReplyMessageId.Should().Be("relay-msg-normal-1");
+        result.LlmReplyRequest.Activity.OutboundDelivery.CorrelationId.Should().Be("corr-normal-relay-1");
+        adapter.Replies.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("/daily_report")]
     [InlineData("/foobar")]

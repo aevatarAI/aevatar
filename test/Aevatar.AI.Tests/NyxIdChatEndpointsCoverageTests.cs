@@ -867,6 +867,72 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchLarkPrivateDailySlashCommand_WithReplyToken()
+    {
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-daily");
+        var payload = """
+            {
+              "message_id":"msg-daily-1",
+              "correlation_id":"corr-daily-1",
+              "platform":"lark",
+              "reply_token":"reply-token-daily-1",
+              "agent":{"api_key_id":"scope-daily"},
+              "conversation":{"id":"oc_private_1","type":"private"},
+              "sender":{"platform_id":"ou_user_1","display_name":"Alice"},
+              "content":{"type":"text","text":"/daily alice"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-daily-1");
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("accepted");
+        var expectedActorId = BuildScopedRelayConversationActorId("scope-daily", "lark:dm:ou_user_1");
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(ConversationGAgent) &&
+            call.Id == expectedActorId);
+        runtime.Actors.Should().ContainKey(expectedActorId);
+
+        var actor = (StubActor)runtime.Actors[expectedActorId];
+        actor.HandledEnvelopes.Should().ContainSingle(envelope =>
+            envelope.Payload != null &&
+            envelope.Payload.Is(NyxRelayInboundActivity.Descriptor));
+        var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
+        relayInbound.ReplyToken.Should().Be("reply-token-daily-1");
+        relayInbound.CorrelationId.Should().Be("corr-daily-1");
+        var activity = relayInbound.Activity;
+        activity.Id.Should().Be("msg-daily-1");
+        activity.Content.Text.Should().Be("/daily alice");
+        activity.ChannelId.Value.Should().Be("lark");
+        activity.Conversation.Scope.Should().Be(ConversationScope.DirectMessage);
+        activity.Conversation.CanonicalKey.Should().Be("lark:dm:ou_user_1");
+        activity.OutboundDelivery.ReplyMessageId.Should().Be("msg-daily-1");
+        activity.OutboundDelivery.CorrelationId.Should().Be("corr-daily-1");
+        activity.TransportExtras.NyxPlatform.Should().Be("lark");
+        activity.TransportExtras.NyxConversationId.Should().Be("oc_private_1");
+        activity.TransportExtras.NyxUserAccessToken.Should().Be(relay.UserToken);
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldRejectMismatchedRelayApiKeyId()
     {
         var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-a");
