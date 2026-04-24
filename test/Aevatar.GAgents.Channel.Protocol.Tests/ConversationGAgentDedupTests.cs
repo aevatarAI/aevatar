@@ -256,6 +256,34 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_WhenInboxIsRegistered_DispatchesDirectlyWithoutWaitingForReminder()
+    {
+        // Regression: previously the inbound LlmReplyRequest path scheduled a 100ms durable
+        // Reminder before EnqueueAsync, which Orleans rounded up to ~1 minute and effectively
+        // dropped the dispatch in production. The inbound path must call inbox.EnqueueAsync
+        // inline so the LLM worker picks it up immediately.
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-direct-dispatch", inbox);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-direct", "conv:slack:C1"));
+
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].CorrelationId.ShouldBe("act-direct");
+    }
+
+    [Fact]
     public async Task HandleNyxRelayInboundActivityAsync_NeverPersistsReplyTokenIntoEventStore()
     {
         // Issue #366 §4 invariant: relay reply_token must stay actor-owned runtime state.
@@ -364,7 +392,10 @@ public sealed class ConversationGAgentDedupTests
         runner.ContinueCount.ShouldBe(1);
     }
 
-    private static (ConversationGAgent agent, IEventStore store) CreateAgent(RecordingTurnRunner runner, string agentId)
+    private static (ConversationGAgent agent, IEventStore store) CreateAgent(
+        RecordingTurnRunner runner,
+        string agentId,
+        IChannelLlmReplyInbox? inbox = null)
     {
         var store = new InMemoryEventStore();
         var services = new ServiceCollection();
@@ -372,6 +403,8 @@ public sealed class ConversationGAgentDedupTests
         services.AddSingleton<IActorRuntimeCallbackScheduler, RecordingCallbackScheduler>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IConversationTurnRunner>(runner);
+        if (inbox is not null)
+            services.AddSingleton(inbox);
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         var sp = services.BuildServiceProvider();
@@ -491,6 +524,17 @@ public sealed class ConversationGAgentDedupTests
                 ? ConversationTurnResult.Sent("sent:" + command.CommandId, new MessageContent { Text = "ack" }, "bot")
                 : ContinueResultFactory(command);
             return Task.FromResult(result);
+        }
+    }
+
+    private sealed class RecordingInbox : IChannelLlmReplyInbox
+    {
+        public List<NeedsLlmReplyEvent> Enqueued { get; } = [];
+
+        public Task EnqueueAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+        {
+            Enqueued.Add(request.Clone());
+            return Task.CompletedTask;
         }
     }
 
