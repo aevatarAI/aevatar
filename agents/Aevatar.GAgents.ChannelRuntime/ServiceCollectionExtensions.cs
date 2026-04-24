@@ -197,6 +197,13 @@ public static class ServiceCollectionExtensions
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
+        services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>
+        {
+            var relayOptions = sp.GetService<NyxIdRelayOptions>() ?? new NyxIdRelayOptions();
+            return new NyxIdRelayReplayGuard(
+                TimeSpan.FromSeconds(Math.Max(1, relayOptions.CallbackReplayWindowSeconds)),
+                TimeProvider.System);
+        });
         services.TryAddSingleton<ConversationDispatchMiddleware>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, ChannelContextMiddleware>());
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());

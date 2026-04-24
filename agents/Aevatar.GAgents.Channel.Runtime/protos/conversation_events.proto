@@ -64,6 +64,11 @@ message DeferredLlmReplyDispatchRequestedEvent {
   int64 requested_at_unix_ms = 2;
 }
 
+message NyxRelayReplyTokenCleanupRequestedEvent {
+  string correlation_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
 message ConversationContinueRequestedEvent {
   string command_id = 1;
   string correlation_id = 2;

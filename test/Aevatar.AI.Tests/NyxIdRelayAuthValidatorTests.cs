@@ -1,4 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
@@ -87,6 +88,31 @@ public sealed class NyxIdRelayAuthValidatorTests
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("callback_jwt_missing");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRecordFailureMetricWithReason()
+    {
+        using var metrics = new RelayMetricCapture();
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var validator = CreateValidator(
+            new NyxRelayOidcDocumentHandler(CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"), () => CreateJwksJson(key)),
+            Issuer);
+        var request = CreateRelayRequest(key, includeCallbackToken: false);
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        metrics.Failures.Should().Contain(measurement =>
+            measurement.Value == 1 &&
+            measurement.Tags.Any(tag =>
+                tag.Key == "reason" &&
+                string.Equals(tag.Value as string, "callback_jwt_missing", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -591,6 +617,32 @@ public sealed class NyxIdRelayAuthValidatorTests
         DefaultHttpContext HttpContext,
         byte[] BodyBytes,
         NyxIdRelayCallbackPayload Payload);
+
+    private sealed class RelayMetricCapture : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+
+        public RelayMetricCapture()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == NyxIdRelayMetrics.MeterName)
+                    listener.EnableMeasurementEvents(instrument);
+            };
+            _listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+            {
+                if (instrument.Name == NyxIdRelayMetrics.CallbackJwtValidationFailuresTotal)
+                    Failures.Add(new MetricMeasurement(measurement, tags.ToArray()));
+            });
+            _listener.Start();
+        }
+
+        public List<MetricMeasurement> Failures { get; } = [];
+
+        public void Dispose() => _listener.Dispose();
+    }
+
+    private sealed record MetricMeasurement(long Value, KeyValuePair<string, object?>[] Tags);
 
     private sealed class CaptureHandler : HttpMessageHandler
     {

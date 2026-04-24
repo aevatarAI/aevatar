@@ -23,8 +23,7 @@ public sealed record NyxLarkMirrorRepairRequest(
     string WebhookBaseUrl,
     string NyxChannelBotId,
     string NyxAgentApiKeyId,
-    string NyxConversationRouteId,
-    string CredentialRef);
+    string NyxConversationRouteId);
 
 public sealed record NyxLarkProvisioningResult(
     bool Succeeded,
@@ -32,7 +31,6 @@ public sealed record NyxLarkProvisioningResult(
     string? RegistrationId = null,
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
-    string? CredentialRef = null,
     string? NyxConversationRouteId = null,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
@@ -71,7 +69,6 @@ public sealed record NyxChannelBotProvisioningResult(
     string? RegistrationId = null,
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
-    string? CredentialRef = null,
     string? NyxConversationRouteId = null,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
@@ -178,7 +175,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 webhookUrl,
                 request.ScopeId?.Trim() ?? string.Empty,
                 apiKeyId,
-                credentialRef: string.Empty,
                 channelBotId,
                 routeId,
                 ct);
@@ -190,7 +186,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 RegistrationId: registrationId,
                 NyxChannelBotId: channelBotId,
                 NyxAgentApiKeyId: apiKeyId,
-                CredentialRef: null,
                 NyxConversationRouteId: routeId,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
@@ -265,7 +260,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 confirmedBot.WebhookUrl,
                 request.ScopeId?.Trim() ?? string.Empty,
                 confirmedApiKey.Id,
-                credentialRef: string.Empty,
                 confirmedBot.Id,
                 confirmedRoute.Id,
                 ct);
@@ -391,7 +385,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string webhookUrl,
         string scopeId,
         string apiKeyId,
-        string? credentialRef,
         string channelBotId,
         string routeId,
         CancellationToken ct)
@@ -404,7 +397,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             ScopeId = scopeId,
             WebhookUrl = webhookUrl,
             NyxAgentApiKeyId = apiKeyId,
-            CredentialRef = credentialRef ?? string.Empty,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
         };
@@ -779,7 +771,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             RegistrationId: result.RegistrationId,
             NyxChannelBotId: result.NyxChannelBotId,
             NyxAgentApiKeyId: result.NyxAgentApiKeyId,
-            CredentialRef: result.CredentialRef,
             NyxConversationRouteId: result.NyxConversationRouteId,
             RelayCallbackUrl: result.RelayCallbackUrl,
             WebhookUrl: result.WebhookUrl,

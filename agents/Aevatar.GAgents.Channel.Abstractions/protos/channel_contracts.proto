@@ -83,8 +83,8 @@ message ChannelBotDescriptor {
 message ChannelTransportBinding {
   // The bot registration descriptor bound to the adapter.
   ChannelBotDescriptor bot = 1;
-  // The credential reference resolved by the adapter at runtime.
-  string credential_ref = 2;
+  reserved 2;
+  reserved "credential_ref";
   // The optional verification token used by webhook-style transports.
   string verification_token = 3;
 }

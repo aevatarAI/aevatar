@@ -20,7 +20,7 @@ public static partial class NyxIdChatEndpoints
 
     /// <summary>
     /// Receives forwarded platform messages from NyxID Channel Bot Relay.
-    /// Validates the Nyx relay token, dispatches the inbound turn into ConversationGAgent,
+    /// Validates the Nyx relay callback JWT, dispatches the inbound turn into ConversationGAgent,
     /// and returns 202 immediately. Workflow card actions still short-circuit through the
     /// dedicated relay card handler because they are not message turns.
     /// </summary>

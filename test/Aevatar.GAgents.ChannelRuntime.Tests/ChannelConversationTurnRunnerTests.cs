@@ -231,10 +231,8 @@ public sealed class ChannelConversationTurnRunnerTests
     {
         var stale = BuildRegistrationEntry("reg-old");
         stale.NyxAgentApiKeyId = "nyx-key-1";
-        stale.CredentialRef = "vault://old";
         var fresh = BuildRegistrationEntry("reg-new");
         fresh.NyxAgentApiKeyId = "nyx-key-1";
-        fresh.CredentialRef = "vault://new";
 
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())

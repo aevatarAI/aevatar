@@ -62,13 +62,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         HandleInboundActivityCoreAsync(activity, ConversationTurnRuntimeContext.Empty);
 
     [EventHandler]
-    public Task HandleNyxRelayInboundActivityAsync(NyxRelayInboundActivity relayActivity)
+    public async Task HandleNyxRelayInboundActivityAsync(NyxRelayInboundActivity relayActivity)
     {
         ArgumentNullException.ThrowIfNull(relayActivity);
 
         var activity = relayActivity.Activity?.Clone() ?? new ChatActivity();
         var runtimeContext = CaptureNyxRelayReplyToken(relayActivity, activity);
-        return HandleInboundActivityCoreAsync(activity, runtimeContext);
+        if (runtimeContext.NyxRelayReplyToken is { } tokenContext)
+            await ScheduleNyxRelayReplyTokenCleanupAsync(tokenContext, CancellationToken.None);
+        await HandleInboundActivityCoreAsync(activity, runtimeContext);
     }
 
     private async Task HandleInboundActivityCoreAsync(
@@ -89,6 +91,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             Logger.LogInformation(
                 "Duplicate inbound activity {ActivityId} (conversation={Key}); skipping turn",
                 activity.Id, activity.Conversation?.CanonicalKey);
+            RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
             return;
         }
 
@@ -124,6 +127,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
             await PersistDomainEventAsync(completed);
+            RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
             Logger.LogInformation(
                 "Completed inbound turn: activity={ActivityId} sent={SentId} conversation={Key}",
                 activity.Id, result.SentActivityId, activity.Conversation?.CanonicalKey);
@@ -142,6 +146,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         };
         AssignRetryPolicy(failed, result);
         await PersistDomainEventAsync(failed);
+        RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
         Logger.LogWarning(
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
@@ -249,10 +254,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         };
         AssignRetryPolicy(failed, result);
         await PersistDomainEventAsync(failed);
+        SweepExpiredNyxRelayReplyTokens();
         if (failed.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
-        {
             RemoveNyxRelayReplyToken(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity);
-        }
         if (failed.RetryPolicyCase != ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable &&
             pendingRequest is not null)
         {
@@ -269,6 +273,23 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             evt.CorrelationId,
             result.ErrorCode,
             result.FailureKind);
+    }
+
+    [EventHandler]
+    public Task HandleNyxRelayReplyTokenCleanupRequestedAsync(NyxRelayReplyTokenCleanupRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is not null &&
+            _nyxRelayReplyTokens.TryGetValue(correlationId, out var tokenContext) &&
+            tokenContext.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            _nyxRelayReplyTokens.Remove(correlationId);
+        }
+
+        SweepExpiredNyxRelayReplyTokens();
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -365,6 +386,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private static string BuildDeferredLlmReplyCallbackId(string? correlationId) =>
         $"conversation-llm-dispatch:{correlationId?.Trim() ?? string.Empty}";
 
+    private static string BuildNyxRelayReplyTokenCleanupCallbackId(string? correlationId) =>
+        $"nyx-relay-reply-token-cleanup:{correlationId?.Trim() ?? string.Empty}";
+
     private async Task ScheduleDeferredLlmReplyDispatchAsync(
         NeedsLlmReplyEvent request,
         TimeSpan dueTime,
@@ -376,6 +400,23 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             new DeferredLlmReplyDispatchRequestedEvent
             {
                 CorrelationId = request.CorrelationId,
+                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            ct: ct);
+    }
+
+    private Task ScheduleNyxRelayReplyTokenCleanupAsync(NyxRelayReplyTokenContext tokenContext, CancellationToken ct)
+    {
+        var dueTime = tokenContext.ExpiresAtUtc - DateTimeOffset.UtcNow;
+        if (dueTime <= TimeSpan.Zero)
+            dueTime = TimeSpan.FromSeconds(1);
+
+        return ScheduleSelfDurableTimeoutAsync(
+            BuildNyxRelayReplyTokenCleanupCallbackId(tokenContext.CorrelationId),
+            dueTime,
+            new NyxRelayReplyTokenCleanupRequestedEvent
+            {
+                CorrelationId = tokenContext.CorrelationId,
                 RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             },
             ct: ct);
@@ -413,6 +454,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         NyxRelayInboundActivity relayActivity,
         ChatActivity activity)
     {
+        SweepExpiredNyxRelayReplyTokens();
+
         var outboundDelivery = activity.OutboundDelivery;
         var correlationId = NormalizeOptional(relayActivity.CorrelationId) ??
                             NormalizeOptional(outboundDelivery?.CorrelationId);
@@ -437,6 +480,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         string? correlationId,
         ChatActivity? activity)
     {
+        SweepExpiredNyxRelayReplyTokens();
+
         var normalizedCorrelationId = NormalizeOptional(correlationId) ??
                                       NormalizeOptional(activity?.OutboundDelivery?.CorrelationId);
         if (normalizedCorrelationId is null)
@@ -452,6 +497,19 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
 
         return new ConversationTurnRuntimeContext(tokenContext);
+    }
+
+    private void SweepExpiredNyxRelayReplyTokens()
+    {
+        if (_nyxRelayReplyTokens.Count == 0)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var token in _nyxRelayReplyTokens.ToArray())
+        {
+            if (token.Value.ExpiresAtUtc <= now)
+                _nyxRelayReplyTokens.Remove(token.Key);
+        }
     }
 
     private void RemoveNyxRelayReplyToken(string? correlationId, ChatActivity? activity)

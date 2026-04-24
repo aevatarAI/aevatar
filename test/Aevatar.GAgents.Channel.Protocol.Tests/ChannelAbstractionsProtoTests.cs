@@ -160,11 +160,13 @@ public sealed class ChannelAbstractionsProtoTests
                 Channel = new ChannelId { Value = "discord" },
                 ScopeId = "scope-1",
             },
-            CredentialRef = "vault://bots/helper",
             VerificationToken = "verify-me",
         };
         binding.Clone().ShouldBe(binding);
         binding.Bot.ScopeId.ShouldBe("scope-1");
+        ChannelTransportBinding.Descriptor.FindFieldByName("credential_ref").ShouldBeNull();
+        OutboundDeliveryContext.Descriptor.FindFieldByName("reply_access_token").ShouldBeNull();
+        OutboundDeliveryContext.Descriptor.FindFieldByName("correlation_id")!.FieldNumber.ShouldBe(3);
         var channelCapabilities = ChannelContractsReflection.Descriptor.MessageTypes
             .Single(x => x.Name == nameof(ChannelCapabilities));
         channelCapabilities.FindFieldByName("transport").FieldNumber.ShouldBe(17);

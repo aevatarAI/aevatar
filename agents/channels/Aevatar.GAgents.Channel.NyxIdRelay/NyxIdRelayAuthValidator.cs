@@ -76,75 +76,61 @@ public sealed class NyxIdRelayAuthValidator
         var callbackToken = http.Request.Headers["X-NyxID-Callback-Token"].FirstOrDefault()?.Trim();
         if (string.IsNullOrWhiteSpace(callbackToken))
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "callback_jwt_missing",
-                ErrorSummary: "Relay callback is missing X-NyxID-Callback-Token.");
+            return Fail("callback_jwt_missing", "Relay callback is missing X-NyxID-Callback-Token.");
         }
 
         var jwtValidation = await ValidateCallbackJwtAsync(callbackToken, ct);
         if (!jwtValidation.Succeeded)
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: jwtValidation.ErrorCode,
-                ErrorSummary: jwtValidation.ErrorSummary);
+            return Fail(jwtValidation.ErrorCode, jwtValidation.ErrorSummary);
         }
 
         var payloadApiKeyId = NormalizeOptional(payload.Agent?.ApiKeyId);
         if (payloadApiKeyId is null ||
             !string.Equals(payloadApiKeyId, jwtValidation.RelayApiKeyId, StringComparison.Ordinal))
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "callback_jwt_api_key_id_mismatch",
-                ErrorSummary: "Relay callback agent api_key_id does not match callback JWT.");
+            return Fail(
+                "callback_jwt_api_key_id_mismatch",
+                "Relay callback agent api_key_id does not match callback JWT.");
         }
 
         var headerMessageId = NormalizeOptional(http.Request.Headers["X-NyxID-Message-Id"].FirstOrDefault());
         if (_relayOptions.RequireMessageIdHeader && headerMessageId is null)
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "callback_jwt_message_id_mismatch",
-                ErrorSummary: "Relay callback is missing X-NyxID-Message-Id.");
+            return Fail("callback_jwt_message_id_mismatch", "Relay callback is missing X-NyxID-Message-Id.");
         }
 
         var payloadMessageId = NormalizeOptional(payload.MessageId);
         if (!string.Equals(jwtValidation.MessageId, payloadMessageId, StringComparison.Ordinal) ||
             (headerMessageId is not null && !string.Equals(headerMessageId, payloadMessageId, StringComparison.Ordinal)))
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "callback_jwt_message_id_mismatch",
-                ErrorSummary: "Relay callback message id does not match callback JWT.");
+            return Fail(
+                "callback_jwt_message_id_mismatch",
+                "Relay callback message id does not match callback JWT.");
         }
 
         var payloadPlatform = NormalizeOptional(payload.Platform);
         if (!string.Equals(jwtValidation.Platform, payloadPlatform, StringComparison.OrdinalIgnoreCase))
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "callback_jwt_platform_mismatch",
-                ErrorSummary: "Relay callback platform does not match callback JWT.");
+            return Fail(
+                "callback_jwt_platform_mismatch",
+                "Relay callback platform does not match callback JWT.");
         }
 
         var payloadCorrelationId = NormalizeOptional(payload.CorrelationId);
         if (payloadCorrelationId is null ||
             !string.Equals(payloadCorrelationId, jwtValidation.Jti, StringComparison.Ordinal))
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "callback_jwt_correlation_id_mismatch",
-                ErrorSummary: "Relay callback correlation_id does not match callback JWT jti.");
+            return Fail(
+                "callback_jwt_correlation_id_mismatch",
+                "Relay callback correlation_id does not match callback JWT jti.");
         }
 
         if (!string.Equals(ComputeBodySha256Hex(bodyBytes), jwtValidation.BodySha256, StringComparison.OrdinalIgnoreCase))
         {
-            return new NyxIdRelayAuthenticationResult(
-                false,
-                ErrorCode: "callback_jwt_body_hash_mismatch",
-                ErrorSummary: "Relay callback raw body hash does not match callback JWT.");
+            return Fail(
+                "callback_jwt_body_hash_mismatch",
+                "Relay callback raw body hash does not match callback JWT.");
         }
 
         if (_replayGuard is not null)
@@ -153,10 +139,7 @@ public sealed class NyxIdRelayAuthValidator
             if (!_replayGuard.TryClaim($"jti:{jwtValidation.Jti}", observedAtUtc) ||
                 !_replayGuard.TryClaim($"message:{payloadMessageId}", observedAtUtc))
             {
-                return new NyxIdRelayAuthenticationResult(
-                    false,
-                    ErrorCode: "callback_jwt_replay_detected",
-                    ErrorSummary: "Relay callback replay was rejected.");
+                return Fail("callback_jwt_replay_detected", "Relay callback replay was rejected.");
             }
         }
 
@@ -167,6 +150,13 @@ public sealed class NyxIdRelayAuthValidator
             ScopeId: jwtValidation.ScopeId,
             RelayApiKeyId: jwtValidation.RelayApiKeyId,
             UserAccessToken: userToken);
+    }
+
+    private static NyxIdRelayAuthenticationResult Fail(string? code, string? summary)
+    {
+        var normalizedCode = string.IsNullOrWhiteSpace(code) ? "callback_jwt_invalid" : code.Trim();
+        NyxIdRelayMetrics.RecordCallbackJwtValidationFailure(normalizedCode);
+        return new NyxIdRelayAuthenticationResult(false, ErrorCode: normalizedCode, ErrorSummary: summary);
     }
 
     private async Task<CallbackJwtValidationResult> ValidateCallbackJwtAsync(string token, CancellationToken ct)

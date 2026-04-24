@@ -56,7 +56,6 @@ public class NyxLarkProvisioningServiceTests
         result.Status.Should().Be("accepted");
         result.RegistrationId.Should().NotBeNullOrWhiteSpace();
         result.NyxAgentApiKeyId.Should().Be("key-123");
-        result.CredentialRef.Should().BeNull();
         result.NyxChannelBotId.Should().Be("bot-456");
         result.NyxConversationRouteId.Should().Be("route-789");
         result.RelayCallbackUrl.Should().Be("https://aevatar.example.com/api/webhooks/nyxid-relay");
@@ -207,8 +206,7 @@ public class NyxLarkProvisioningServiceTests
                 WebhookBaseUrl: "https://aevatar.example.com",
                 NyxChannelBotId: "bot-456",
                 NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: "route-789",
-                CredentialRef: string.Empty),
+                NyxConversationRouteId: "route-789"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
@@ -263,8 +261,7 @@ public class NyxLarkProvisioningServiceTests
                 WebhookBaseUrl: "https://aevatar.example.com",
                 NyxChannelBotId: "bot-456",
                 NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: string.Empty,
-                CredentialRef: string.Empty),
+                NyxConversationRouteId: string.Empty),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
@@ -308,8 +305,7 @@ public class NyxLarkProvisioningServiceTests
                 WebhookBaseUrl: "https://aevatar.example.com",
                 NyxChannelBotId: "bot-456",
                 NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: "route-789",
-                CredentialRef: string.Empty),
+                NyxConversationRouteId: "route-789"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
@@ -348,8 +344,7 @@ public class NyxLarkProvisioningServiceTests
                 WebhookBaseUrl: "https://aevatar.example.com",
                 NyxChannelBotId: "bot-456",
                 NyxAgentApiKeyId: "key-123",
-                NyxConversationRouteId: string.Empty,
-                CredentialRef: string.Empty),
+                NyxConversationRouteId: string.Empty),
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
@@ -364,7 +359,6 @@ public class NyxLarkProvisioningServiceTests
         command.NyxProviderSlug == "api-lark-bot" &&
         command.ScopeId == "scope-1" &&
         command.NyxAgentApiKeyId == "key-123" &&
-        command.CredentialRef == string.Empty &&
         command.NyxChannelBotId == "bot-456" &&
         command.NyxConversationRouteId == "route-789" &&
         command.WebhookUrl == "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456";

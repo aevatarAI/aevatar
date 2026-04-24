@@ -95,7 +95,7 @@ done < <(find agents -type f -name 'ServiceCollectionExtensions.cs' | sort)
 
 if [ "${#secret_store_scan_roots[@]}" -gt 0 ]; then
   secret_store_di_hits="$(
-    rg -n "AddSingleton<IAevatarSecretsStore|TryAddSingleton<IAevatarSecretsStore|IAevatarSecretsStore" \
+    rg -n "(AddSingleton|TryAddSingleton)<IAevatarSecretsStore" \
       "${secret_store_scan_roots[@]}" \
       -g '*.cs' || true
   )"

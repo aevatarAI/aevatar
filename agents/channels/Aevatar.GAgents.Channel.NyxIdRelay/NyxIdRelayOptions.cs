@@ -21,6 +21,8 @@ public class NyxIdRelayOptions
 
     public int JwksKidMissRefreshCooldownSeconds { get; set; } = 10;
 
+    public int CallbackReplayWindowSeconds { get; set; } = 6 * 60;
+
     public string? WebhookBaseUrl { get; set; }
 
     public bool RequireMessageIdHeader { get; set; } = true;
