@@ -38,6 +38,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     // and the user access token (~15 min TTL) used for the LLM call is definitely gone.
     // Drop them rather than burn an LLM round and reply hours late.
     private static readonly TimeSpan PendingLlmReplyRequestMaxAge = TimeSpan.FromMinutes(5);
+
+    // Mirror of DeferredLlmDispatchRetryDelay for the inbound-turn retry pipeline.
+    // The same reminder-granularity floor applies: any requested retry shorter than this
+    // would be silently rounded up by Orleans and appear lost.
+    private static readonly TimeSpan DeferredInboundTurnRetryDelay = TimeSpan.FromSeconds(60);
+    // Bounded retry count for transient inbound-turn failures. On exhaustion the actor
+    // persists a terminal ConversationContinueFailedEvent (NotRetryable) so the pending
+    // set does not grow unboundedly.
+    public const int MaxInboundTurnRetryCount = 5;
     private readonly Dictionary<string, NyxRelayReplyTokenContext> _nyxRelayReplyTokens = new(StringComparer.Ordinal);
     private readonly Dictionary<string, NyxRelayStreamingState> _nyxRelayStreamingStates = new(StringComparer.Ordinal);
 
@@ -86,6 +95,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         await base.OnActivateAsync(ct);
         await SchedulePendingLlmReplyDispatchesAsync(ct);
+        await SchedulePendingInboundTurnRetriesAsync(ct);
     }
 
     /// <inheritdoc />
@@ -96,6 +106,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             .On<NeedsLlmReplyEvent>(ApplyLlmReplyRequested)
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
             .On<ConversationContinueFailedEvent>(ApplyContinueFailed)
+            .On<InboundTurnRetryScheduledEvent>(ApplyInboundTurnRetryScheduled)
             .OrCurrent();
 
     /// <summary>
@@ -183,6 +194,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
+        if (result.FailureKind == FailureKind.TransientAdapterError)
+        {
+            await HandleInboundTurnTransientFailureAsync(activity, runtimeContext, result, nowMs);
+            return;
+        }
+
         var failed = new ConversationContinueFailedEvent
         {
             CommandId = string.Empty,
@@ -199,6 +216,80 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         Logger.LogWarning(
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
+    }
+
+    /// <summary>
+    /// Mirrors the deferred LLM reply retry pattern for the inbound-turn path: bounds the retry
+    /// count, schedules a durable reminder for the next attempt, or emits a terminal
+    /// <see cref="ConversationContinueFailedEvent"/> on exhaustion so the pending entry is
+    /// reaped by the state matcher.
+    /// </summary>
+    private async Task HandleInboundTurnTransientFailureAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        ConversationTurnResult result,
+        long nowMs)
+    {
+        var existingPending = FindPendingInboundTurn(activity.Id);
+        var nextRetryCount = (existingPending?.RetryCount ?? 0) + 1;
+
+        if (nextRetryCount > MaxInboundTurnRetryCount)
+        {
+            var failed = new ConversationContinueFailedEvent
+            {
+                CommandId = string.Empty,
+                CorrelationId = activity.Id,
+                CausationId = string.Empty,
+                Kind = FailureKind.TransientAdapterError,
+                ErrorCode = string.IsNullOrWhiteSpace(result.ErrorCode)
+                    ? "inbound_turn_retries_exhausted"
+                    : result.ErrorCode,
+                ErrorSummary = string.IsNullOrWhiteSpace(result.ErrorSummary)
+                    ? "Inbound turn retries exhausted."
+                    : result.ErrorSummary,
+                NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+                FailedAtUnixMs = nowMs,
+            };
+            await PersistDomainEventAsync(failed);
+            RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
+            Logger.LogWarning(
+                "Inbound turn retries exhausted: activity={ActivityId} retryCount={RetryCount} code={Code}",
+                activity.Id,
+                nextRetryCount - 1,
+                result.ErrorCode);
+            return;
+        }
+
+        var requested = result.RetryAfter ?? DeferredInboundTurnRetryDelay;
+        // Floor to reminder granularity so the durable scheduler does not silently round the
+        // request up past the retry window and drop the dispatch (same trap the LLM reply
+        // retry path has to guard against).
+        var retryAfter = requested < DeferredInboundTurnRetryDelay
+            ? DeferredInboundTurnRetryDelay
+            : requested;
+        var firstFailedUnixMs = existingPending is { FirstFailedUnixMs: > 0 }
+            ? existingPending.FirstFailedUnixMs
+            : nowMs;
+        var nextRetryUnixMs = DateTimeOffset.UtcNow.Add(retryAfter).ToUnixTimeMilliseconds();
+
+        var scheduled = new InboundTurnRetryScheduledEvent
+        {
+            ActivityId = activity.Id,
+            Activity = activity.Clone(),
+            RetryCount = nextRetryCount,
+            FirstFailedUnixMs = firstFailedUnixMs,
+            NextRetryUnixMs = nextRetryUnixMs,
+            ScheduledAtUnixMs = nowMs,
+        };
+        await PersistDomainEventAsync(scheduled);
+        await ScheduleDeferredInboundTurnRetryAsync(activity.Id, retryAfter, CancellationToken.None);
+
+        Logger.LogInformation(
+            "Scheduled inbound turn retry: activity={ActivityId} retryCount={RetryCount} retryAfter={RetryAfter} code={Code}",
+            activity.Id,
+            nextRetryCount,
+            retryAfter,
+            result.ErrorCode);
     }
 
     [EventHandler]
@@ -254,6 +345,37 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             "Retired pending LLM reply after inbox drop: correlation={CorrelationId} reason={Reason}",
             evt.CorrelationId,
             reason);
+    }
+
+    [EventHandler]
+    public async Task HandleDeferredInboundTurnRetryRequestedAsync(DeferredInboundTurnRetryRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var pending = FindPendingInboundTurn(evt.ActivityId);
+        if (pending is null || pending.Activity is null)
+        {
+            Logger.LogDebug(
+                "Ignoring deferred inbound turn retry without pending entry: activity={ActivityId}",
+                evt.ActivityId);
+            return;
+        }
+
+        // If the turn already completed via another path between scheduling and firing, the
+        // dedup guard in HandleInboundActivityCoreAsync will drop the redelivery without
+        // running the turn runner. That's still desired behaviour — we just log and let the
+        // core handler's existing check handle the cleanup.
+        //
+        // The in-memory _nyxRelayReplyTokens dict is the authoritative source for the relay
+        // reply credential. If the activation is still alive, BuildNyxRelayRuntimeContext
+        // will re-hydrate it from activity.outbound_delivery.correlation_id; if the pod was
+        // restarted between attempts the dict is empty and the retry runs with Empty
+        // context. In both cases the runner is invoked identically to the first turn.
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            pending.Activity.OutboundDelivery?.CorrelationId,
+            pending.Activity);
+
+        await HandleInboundActivityCoreAsync(pending.Activity.Clone(), runtimeContext);
     }
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
@@ -734,6 +856,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private static string BuildNyxRelayReplyTokenCleanupCallbackId(string? correlationId) =>
         $"nyx-relay-reply-token-cleanup:{correlationId?.Trim() ?? string.Empty}";
 
+    private static string BuildDeferredInboundTurnRetryCallbackId(string? activityId) =>
+        $"conversation-inbound-turn-retry:{activityId?.Trim() ?? string.Empty}";
+
     private async Task ScheduleDeferredLlmReplyDispatchAsync(
         NeedsLlmReplyEvent request,
         TimeSpan dueTime,
@@ -748,6 +873,51 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             },
             ct: ct);
+    }
+
+    private async Task ScheduleDeferredInboundTurnRetryAsync(
+        string activityId,
+        TimeSpan dueTime,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(activityId);
+        await ScheduleSelfDurableTimeoutAsync(
+            BuildDeferredInboundTurnRetryCallbackId(activityId),
+            dueTime <= TimeSpan.Zero ? DeferredInboundTurnRetryDelay : dueTime,
+            new DeferredInboundTurnRetryRequestedEvent
+            {
+                ActivityId = activityId,
+                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            ct: ct);
+    }
+
+    private async Task SchedulePendingInboundTurnRetriesAsync(CancellationToken ct)
+    {
+        // Snapshot to avoid enumerating the live repeated field while downstream scheduling
+        // may trigger state mutations (the same invariant SchedulePendingLlmReplyDispatchesAsync
+        // already relies on).
+        var pending = State.PendingInboundTurns.ToArray();
+        if (pending.Length == 0)
+            return;
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var entry in pending)
+        {
+            if (string.IsNullOrWhiteSpace(entry.ActivityId))
+                continue;
+
+            var remainingMs = entry.NextRetryUnixMs > 0
+                ? entry.NextRetryUnixMs - nowMs
+                : 0;
+            var delay = remainingMs > 0
+                ? TimeSpan.FromMilliseconds(remainingMs)
+                : DeferredInboundTurnRetryDelay;
+            if (delay < DeferredInboundTurnRetryDelay)
+                delay = DeferredInboundTurnRetryDelay;
+
+            await ScheduleDeferredInboundTurnRetryAsync(entry.ActivityId, delay, ct);
+        }
     }
 
     private Task ScheduleNyxRelayReplyTokenCleanupAsync(NyxRelayReplyTokenContext tokenContext, CancellationToken ct)
@@ -951,6 +1121,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (!string.IsNullOrEmpty(evt.ProcessedActivityId))
         {
             AppendBounded(next.ProcessedMessageIds, evt.ProcessedActivityId, ProcessedIdsCap);
+            // Successful inbound completion supersedes any pending retry entry.
+            RemovePendingInboundTurn(next.PendingInboundTurns, evt.ProcessedActivityId);
         }
         if (!string.IsNullOrEmpty(evt.CausationCommandId))
         {
@@ -962,6 +1134,27 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             next.Conversation = evt.Conversation.Clone();
         }
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
+        return next;
+    }
+
+    private static ConversationGAgentState ApplyInboundTurnRetryScheduled(
+        ConversationGAgentState current,
+        InboundTurnRetryScheduledEvent evt)
+    {
+        var next = current.Clone();
+        if (string.IsNullOrEmpty(evt.ActivityId))
+            return next;
+
+        var pending = new PendingInboundTurn
+        {
+            ActivityId = evt.ActivityId,
+            Activity = evt.Activity?.Clone(),
+            RetryCount = evt.RetryCount,
+            FirstFailedUnixMs = evt.FirstFailedUnixMs,
+            NextRetryUnixMs = evt.NextRetryUnixMs,
+        };
+        UpsertPendingInboundTurn(next.PendingInboundTurns, pending);
+        next.LastUpdatedUnixMs = evt.ScheduledAtUnixMs > 0 ? evt.ScheduledAtUnixMs : evt.NextRetryUnixMs;
         return next;
     }
 
@@ -1018,6 +1211,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             AppendBounded(next.ProcessedCommandIds, evt.CommandId, ProcessedIdsCap);
             RemovePendingLlmReplyRequest(next.PendingLlmReplyRequests, ExtractLlmReplyCorrelationId(evt.CommandId));
         }
+        // Inbound terminal failures (e.g. retries exhausted) carry an empty CommandId and set
+        // CorrelationId to the activity id; reap the matching pending retry entry so the set
+        // does not leak.
+        if (string.IsNullOrEmpty(evt.CommandId)
+            && !string.IsNullOrEmpty(evt.CorrelationId)
+            && evt.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
+        {
+            RemovePendingInboundTurn(next.PendingInboundTurns, evt.CorrelationId);
+        }
         next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
         return next;
     }
@@ -1051,6 +1253,39 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         for (var i = field.Count - 1; i >= 0; i--)
         {
             if (string.Equals(field[i].CorrelationId, normalizedCorrelationId, StringComparison.Ordinal))
+                field.RemoveAt(i);
+        }
+    }
+
+    private PendingInboundTurn? FindPendingInboundTurn(string? activityId)
+    {
+        var normalized = NormalizeOptional(activityId);
+        if (normalized is null)
+            return null;
+
+        return State.PendingInboundTurns.FirstOrDefault(entry =>
+            string.Equals(entry.ActivityId, normalized, StringComparison.Ordinal));
+    }
+
+    private static void UpsertPendingInboundTurn(
+        Google.Protobuf.Collections.RepeatedField<PendingInboundTurn> field,
+        PendingInboundTurn entry)
+    {
+        RemovePendingInboundTurn(field, entry.ActivityId);
+        field.Add(entry.Clone());
+    }
+
+    private static void RemovePendingInboundTurn(
+        Google.Protobuf.Collections.RepeatedField<PendingInboundTurn> field,
+        string? activityId)
+    {
+        var normalized = NormalizeOptional(activityId);
+        if (normalized is null)
+            return;
+
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(field[i].ActivityId, normalized, StringComparison.Ordinal))
                 field.RemoveAt(i);
         }
     }

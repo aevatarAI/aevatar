@@ -107,8 +107,12 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleInboundActivityAsync_WhenRunnerReportsFailure_EmitsFailedEvent()
+    public async Task HandleInboundActivityAsync_WhenRunnerReportsTransientFailure_SchedulesGrainOwnedRetry()
     {
+        // Grain-level retry pattern (issue #399): a transient inbound-turn failure must land as
+        // an InboundTurnRetryScheduledEvent with a bounded retry count rather than a leaf
+        // ConversationContinueFailedEvent, because the webhook adapter no longer surfaces a
+        // retryable 503 back to NyxID and the end-user reply would otherwise be dropped.
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later", TimeSpan.FromMilliseconds(250)),
@@ -118,12 +122,128 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleInboundActivityAsync(CreateActivity("act-fail", "conv:slack:C1"));
 
         agent.State.ProcessedMessageIds.ShouldBeEmpty();
+        agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-fail");
+        var pending = agent.State.PendingInboundTurns.Single(entry => entry.ActivityId == "act-fail");
+        pending.RetryCount.ShouldBe(1);
+        pending.FirstFailedUnixMs.ShouldBeGreaterThan(0);
+        pending.NextRetryUnixMs.ShouldBeGreaterThan(pending.FirstFailedUnixMs);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(InboundTurnRetryScheduledEvent));
+        var parsed = InboundTurnRetryScheduledEvent.Parser.ParseFrom(events[0].EventData.Value);
+        parsed.ActivityId.ShouldBe("act-fail");
+        parsed.RetryCount.ShouldBe(1);
+        parsed.Activity.Id.ShouldBe("act-fail");
+    }
+
+    [Fact]
+    public async Task HandleDeferredInboundTurnRetryRequestedAsync_AfterTransientFailure_RerunsTurnAndClearsPendingOnSuccess()
+    {
+        // Issue #399 success path: once the adapter recovers, the durable reminder fires the
+        // retry, the runner returns a proper ConversationTurnResult.Sent, and the pending entry
+        // is reaped by ApplyTurnCompleted via ProcessedActivityId.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationTurnResult.TransientFailure("rate_limited", "retry later");
+                return ConversationTurnResult.Sent(
+                    "sent:act-retry-success",
+                    new MessageContent { Text = "ok" },
+                    "bot");
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-retry-success");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-retry-success", "conv:slack:C1"));
+        agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-retry-success");
+
+        await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+        {
+            ActivityId = "act-retry-success",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(2);
+        agent.State.ProcessedMessageIds.ShouldContain("act-retry-success");
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-retry-success");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(2);
+        events[0].EventType.ShouldContain(nameof(InboundTurnRetryScheduledEvent));
+        events[1].EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+    }
+
+    [Fact]
+    public async Task HandleDeferredInboundTurnRetryRequestedAsync_WhenRetriesExhausted_EmitsNotRetryableTerminalFailure()
+    {
+        // Issue #399 exhaustion path: after MaxInboundTurnRetryCount successive transient
+        // failures, the actor persists a terminal NotRetryable ConversationContinueFailedEvent
+        // so the pending set does not leak and downstream observers see a final state.
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.TransientFailure("stuck", "persistent transient error"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-retry-exhaust");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-exhaust", "conv:slack:C1"));
+        agent.State.PendingInboundTurns.Single(e => e.ActivityId == "act-exhaust").RetryCount.ShouldBe(1);
+
+        // Fire MaxInboundTurnRetryCount - 1 retries, each bumps the retry count but stays pending.
+        for (var i = 0; i < ConversationGAgent.MaxInboundTurnRetryCount - 1; i++)
+        {
+            await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+            {
+                ActivityId = "act-exhaust",
+                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            });
+        }
+        agent.State.PendingInboundTurns.Single(e => e.ActivityId == "act-exhaust").RetryCount
+            .ShouldBe(ConversationGAgent.MaxInboundTurnRetryCount);
+
+        // One more retry pushes retry_count past the cap; the actor emits a terminal failure
+        // and reaps the pending entry.
+        await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+        {
+            ActivityId = "act-exhaust",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(ConversationGAgent.MaxInboundTurnRetryCount + 1);
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-exhaust");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
+        var terminal = ConversationContinueFailedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        terminal.CorrelationId.ShouldBe("act-exhaust");
+        terminal.Kind.ShouldBe(FailureKind.TransientAdapterError);
+        terminal.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_WhenRunnerReportsPermanentFailure_EmitsTerminalWithoutScheduling()
+    {
+        // Issue #399 non-regression: permanent-adapter failures must skip the retry pipeline and
+        // land as terminal ConversationContinueFailedEvent with NotRetryable semantics, as before.
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.PermanentFailure("bad_input", "rejected"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-permanent-inbound");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-permanent", "conv:slack:C1"));
+
+        agent.State.PendingInboundTurns.ShouldBeEmpty();
         var events = await store.GetEventsAsync(agent.Id);
         events.Count.ShouldBe(1);
         events[0].EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
         var parsed = ConversationContinueFailedEvent.Parser.ParseFrom(events[0].EventData.Value);
-        parsed.Kind.ShouldBe(FailureKind.TransientAdapterError);
-        parsed.RetryAfterMs.ShouldBe(250);
+        parsed.Kind.ShouldBe(FailureKind.PermanentAdapterError);
+        parsed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
     }
 
     [Fact]
