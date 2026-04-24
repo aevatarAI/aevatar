@@ -526,6 +526,74 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleDeferredLlmReplyDroppedAsync_RetiresPendingRequestWithNotRetryableFailure()
+    {
+        // Inbox-side gates (stale-age, missing relay credential, malformed payload) need
+        // a way to tell the actor "stop tracking this pending request" so it doesn't
+        // silently accumulate in State.PendingLlmReplyRequests until the next
+        // rehydration. The actor's drop handler emits a NotRetryable
+        // ConversationContinueFailedEvent which routes through the existing state
+        // matcher to remove the pending entry.
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ReplyToken = "drop-test-token",
+                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-drop-clears", inbox);
+
+        var inboundActivity = CreateActivity("act-drop", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-drop",
+            CorrelationId = "corr-drop",
+        };
+        await agent.HandleInboundActivityAsync(inboundActivity);
+        agent.State.PendingLlmReplyRequests.ShouldContain(req => req.CorrelationId == "corr-drop");
+
+        await agent.HandleDeferredLlmReplyDroppedAsync(new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = "corr-drop",
+            Reason = "stale_inbox_request_dropped",
+            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        agent.State.PendingLlmReplyRequests.ShouldNotContain(req => req.CorrelationId == "corr-drop");
+        var events = await store.GetEventsAsync(agent.Id);
+        var lastEvent = events[^1];
+        lastEvent.EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
+        var failed = ConversationContinueFailedEvent.Parser.ParseFrom(lastEvent.EventData.Value);
+        failed.ErrorCode.ShouldBe("stale_inbox_request_dropped");
+        failed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public async Task HandleDeferredLlmReplyDroppedAsync_IgnoresUnknownCorrelationId()
+    {
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-drop-unknown");
+        var initialEvents = (await store.GetEventsAsync(agent.Id)).Count;
+
+        await agent.HandleDeferredLlmReplyDroppedAsync(new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = "corr-not-pending",
+            Reason = "stale_inbox_request_dropped",
+            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(initialEvents);
+    }
+
+    [Fact]
     public async Task HandleContinueCommandAsync_PermanentFailure_MarksCommandProcessed()
     {
         // Terminal (non-retryable) continue failures consume the command id so a buggy caller's

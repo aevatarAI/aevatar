@@ -181,6 +181,44 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         await DispatchPendingLlmReplyAsync(pendingRequest, CancellationToken.None);
     }
 
+    [EventHandler]
+    public async Task HandleDeferredLlmReplyDroppedAsync(DeferredLlmReplyDroppedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var pending = FindPendingLlmReplyRequest(evt.CorrelationId);
+        if (pending is null)
+        {
+            Logger.LogDebug(
+                "Ignoring deferred LLM reply drop without pending request: correlation={CorrelationId} reason={Reason}",
+                evt.CorrelationId,
+                evt.Reason);
+            return;
+        }
+
+        var reason = string.IsNullOrWhiteSpace(evt.Reason) ? "deferred_llm_reply_dropped" : evt.Reason;
+        var failed = new ConversationContinueFailedEvent
+        {
+            CommandId = BuildLlmReplyCommandId(evt.CorrelationId),
+            CorrelationId = evt.CorrelationId,
+            CausationId = string.Empty,
+            Kind = FailureKind.PermanentAdapterError,
+            ErrorCode = reason,
+            ErrorSummary = "Deferred LLM reply request was dropped by the inbox pre-LLM gate.",
+            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+            FailedAtUnixMs = evt.DroppedAtUnixMs > 0
+                ? evt.DroppedAtUnixMs
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        await PersistDomainEventAsync(failed);
+        RemoveNyxRelayReplyToken(evt.CorrelationId, pending.Activity);
+
+        Logger.LogInformation(
+            "Retired pending LLM reply after inbox drop: correlation={CorrelationId} reason={Reason}",
+            evt.CorrelationId,
+            reason);
+    }
+
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
         var inbox = Services.GetService<IChannelLlmReplyInbox>();

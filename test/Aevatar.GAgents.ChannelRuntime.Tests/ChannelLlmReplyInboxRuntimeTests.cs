@@ -220,7 +220,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     [Fact]
     public async Task ProcessAsync_ShouldDropRelayRequest_WhenInboxCarriesNoReplyToken()
     {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
@@ -241,13 +247,22 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         });
 
         replyGenerator.CaptureSucceeded.Should().BeFalse();
-        await actorRuntime.DidNotReceiveWithAnyArgs().GetAsync(Arg.Any<string>());
+        handled.Should().NotBeNull();
+        var dropped = handled!.Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-no-token");
+        dropped.Reason.Should().Be("missing_relay_reply_token");
     }
 
     [Fact]
     public async Task ProcessAsync_ShouldDropRequest_WhenOlderThanMaxAge()
     {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
@@ -271,7 +286,10 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         });
 
         replyGenerator.CaptureSucceeded.Should().BeFalse();
-        await actorRuntime.DidNotReceiveWithAnyArgs().GetAsync(Arg.Any<string>());
+        handled.Should().NotBeNull();
+        var dropped = handled!.Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-stale");
+        dropped.Reason.Should().Be("stale_inbox_request_dropped");
     }
 
     [Fact]
@@ -298,9 +316,18 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldDropSilently_WhenActivityMissing()
+    public async Task ProcessAsync_ShouldNotifyActor_WhenActivityMissing()
     {
+        // Malformed payload (no Activity) should still tell the actor to retire its
+        // pending entry — the actor decides whether to clean up. Otherwise the entry
+        // accumulates silently in State.PendingLlmReplyRequests until rehydration.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -316,7 +343,10 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             RegistrationId = "reg-1",
         });
 
-        await actorRuntime.DidNotReceiveWithAnyArgs().GetAsync(Arg.Any<string>());
+        handled.Should().NotBeNull();
+        var dropped = handled!.Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-no-activity");
+        dropped.Reason.Should().Be("malformed_deferred_llm_reply_request");
     }
 
     private static ChatActivity BuildRelayActivity() =>

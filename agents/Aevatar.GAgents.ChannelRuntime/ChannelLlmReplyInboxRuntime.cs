@@ -91,6 +91,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
                 "Dropping malformed deferred LLM reply request: correlation={CorrelationId}, target={TargetActorId}",
                 request.CorrelationId,
                 request.TargetActorId);
+            await NotifyActorOfDropAsync(request, "malformed_deferred_llm_reply_request");
             return;
         }
 
@@ -105,6 +106,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
                 "Dropping stale LLM reply request: correlation={CorrelationId} ageMs={AgeMs}",
                 request.CorrelationId,
                 nowMs - request.RequestedAtUnixMs);
+            await NotifyActorOfDropAsync(request, "stale_inbox_request_dropped");
             return;
         }
 
@@ -117,6 +119,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             _logger.LogWarning(
                 "Dropping relay LLM reply request without inbox-carried reply_token: correlation={CorrelationId}",
                 request.CorrelationId);
+            await NotifyActorOfDropAsync(request, "missing_relay_reply_token");
             return;
         }
 
@@ -217,6 +220,67 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             ReplyMessageId.Length: > 0,
             CorrelationId.Length: > 0,
         };
+
+    private async Task NotifyActorOfDropAsync(NeedsLlmReplyEvent request, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(request.TargetActorId) ||
+            string.IsNullOrWhiteSpace(request.CorrelationId))
+        {
+            return;
+        }
+
+        IActor? actor;
+        try
+        {
+            actor = await _actorRuntime.GetAsync(request.TargetActorId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve actor for inbox drop notification: correlation={CorrelationId} target={TargetActorId}",
+                request.CorrelationId,
+                request.TargetActorId);
+            return;
+        }
+
+        if (actor is null)
+        {
+            // No active actor means there is nothing pending to clean up; the request
+            // either was never persisted or the actor's state was already retired.
+            return;
+        }
+
+        var dropped = new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = request.CorrelationId,
+            Reason = reason,
+            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(dropped),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+
+        try
+        {
+            await actor.HandleEventAsync(envelope, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to deliver inbox drop notification: correlation={CorrelationId} reason={Reason}",
+                request.CorrelationId,
+                reason);
+        }
+    }
 
     private bool ShouldCaptureInteractiveReply(ChatActivity? activity)
     {
