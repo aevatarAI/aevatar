@@ -66,4 +66,96 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
 
         payload.PlainText.ShouldBe("A🙂");
     }
+
+    [Fact]
+    public void Compose_WhenFormInputCarriesValue_RendersLarkDefaultValue()
+    {
+        var intent = new MessageContent();
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = "github_username",
+            Label = "GitHub Username",
+            Placeholder = "octocat",
+            Value = "eanzhao",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "submit",
+            Label = "Submit",
+            IsPrimary = true,
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        payload.MessageType.ShouldBe("interactive");
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var formElement = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "form");
+        var inputElement = formElement
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "input");
+        inputElement.GetProperty("default_value").GetString().ShouldBe("eanzhao");
+    }
+
+    [Fact]
+    public void Compose_WhenFormInputHasNoValue_OmitsLarkDefaultValue()
+    {
+        var intent = new MessageContent();
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = "github_username",
+            Label = "GitHub Username",
+            Placeholder = "octocat",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "submit",
+            Label = "Submit",
+            IsPrimary = true,
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var formElement = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "form");
+        var inputElement = formElement
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "input");
+        inputElement.TryGetProperty("default_value", out _).ShouldBeFalse();
+    }
 }

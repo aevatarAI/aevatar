@@ -214,21 +214,30 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             ? BuildFormInput(action)
             : BuildFormButton(action);
 
-    private static object BuildFormInput(ActionElement action) => new
+    private static object BuildFormInput(ActionElement action)
     {
-        tag = "input",
-        name = action.ActionId,
-        label = new
+        // Lark schema 2.0 input honors `default_value` as the pre-filled textbox content; if we emit
+        // it unconditionally even as empty string, the rendered input still shows placeholder ghost
+        // text, which defeats the point. So only add it when the caller put something in Value.
+        var input = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            tag = "plain_text",
-            content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
-        },
-        placeholder = new
-        {
-            tag = "plain_text",
-            content = action.Placeholder ?? string.Empty,
-        },
-    };
+            ["tag"] = "input",
+            ["name"] = action.ActionId,
+            ["label"] = new
+            {
+                tag = "plain_text",
+                content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
+            },
+            ["placeholder"] = new
+            {
+                tag = "plain_text",
+                content = action.Placeholder ?? string.Empty,
+            },
+        };
+        if (!string.IsNullOrEmpty(action.Value))
+            input["default_value"] = action.Value;
+        return input;
+    }
 
     private static object BuildFormButton(ActionElement action) => new
     {

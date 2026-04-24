@@ -197,7 +197,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (decision is null)
             return null;
 
-        var replyPayload = decision.ReplyPayload;
+        var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
             var previousMetadata = AgentToolRequestContext.CurrentMetadata;
@@ -209,7 +209,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     ResolveUserAccessToken(activity));
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_services);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyPayload = relayDecisionMatched
+                replyContent = relayDecisionMatched
                     ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
                     : AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
             }
@@ -219,11 +219,18 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             }
         }
 
-        var result = await SendReplyAsync(replyPayload, activity, ToInboundMessage(activity), registration, runtimeContext, ct);
+        var result = await SendReplyAsync(
+            replyContent,
+            activity.Id,
+            activity.Conversation,
+            ToInboundMessage(activity),
+            registration,
+            runtimeContext,
+            ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
-                outbound: new MessageContent { Text = replyPayload },
+                outbound: replyContent.Clone(),
                 authPrincipal: "bot",
                 outboundDelivery: result.OutboundDelivery?.Clone())
             : result;
