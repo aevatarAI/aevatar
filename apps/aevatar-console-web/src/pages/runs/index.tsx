@@ -13,6 +13,7 @@ import {
 import {
   AppstoreOutlined,
   ArrowLeftOutlined,
+  ControlOutlined,
   DeploymentUnitOutlined,
   InfoCircleOutlined,
   SendOutlined,
@@ -27,6 +28,7 @@ import { sanitizeReturnTo } from "@/shared/auth/session";
 import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import {
   buildRuntimeExplorerHref,
+  buildRuntimeMissionControlHref,
   buildRuntimeWorkflowsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import {
@@ -1203,6 +1205,35 @@ const RunsPage: React.FC = () => {
   ]);
   const actorId = session.context?.actorId;
   const commandId = session.context?.commandId ?? "";
+  const canOpenMissionControl = Boolean(activeScopeId.trim() && session.runId);
+  const handleOpenMissionControl = useCallback(() => {
+    const runId = session.runId?.trim();
+    const scopeId = activeScopeId.trim();
+    if (!scopeId || !runId) {
+      return;
+    }
+
+    const prompt = activePrompt.trim();
+
+    history.push(
+      buildRuntimeMissionControlHref({
+        actorId: actorId || undefined,
+        autoStream: true,
+        endpointId: activeEndpointId || undefined,
+        prompt: prompt || undefined,
+        runId,
+        scopeId,
+        serviceId: activeServiceOverrideId || undefined,
+      }),
+    );
+  }, [
+    activeEndpointId,
+    activePrompt,
+    activeScopeId,
+    activeServiceOverrideId,
+    actorId,
+    session.runId,
+  ]);
   const payloadTypeUrl =
     activePayloadTypeUrl.trim() ||
     composerFormRef.current?.getFieldValue("payloadTypeUrl")?.trim?.() ||
@@ -2145,6 +2176,14 @@ const RunsPage: React.FC = () => {
               }
             >
               Actor explorer
+            </Button>
+            <Button
+              className={`${runsWorkbenchHeaderButtonClassName} ${runsWorkbenchHeaderButtonAccentClassName}`}
+              disabled={!canOpenMissionControl}
+              icon={<ControlOutlined />}
+              onClick={handleOpenMissionControl}
+            >
+              Mission Control
             </Button>
           </div>
         </div>
