@@ -1,8 +1,11 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -44,7 +47,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -84,7 +87,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -123,7 +126,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -163,7 +166,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -197,7 +200,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
             new AsyncLocalInteractiveReplyCollector(),
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         var expiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds();
@@ -233,7 +236,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         // Relay activity but no inbox-carried ReplyToken — simulates a request rehydrated
@@ -269,7 +272,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         var requestedAtUnixMs = DateTimeOffset.UtcNow
@@ -301,7 +304,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             new RecordingReplyGenerator(() => false),
             new AsyncLocalInteractiveReplyCollector(),
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -333,7 +336,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             new RecordingReplyGenerator(() => false),
             new AsyncLocalInteractiveReplyCollector(),
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -366,7 +369,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true, StreamingFlushIntervalMs = 0 },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true, StreamingFlushIntervalMs = 0 },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -404,7 +407,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = false },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = false },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -438,7 +441,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -456,6 +459,138 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
 
         handled.Should().ContainSingle();
         handled[0].Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ShouldApplyBotOwnerLlmConfig_FromUserConfigQueryPort()
+    {
+        // Bot owner's LLM model + route comes from UserConfig (the same store that backs
+        // their nyxid-chat preferences), looked up by the scope id resolved from the
+        // bot registration. The relay turn uses the inbound user-token as the bearer
+        // (it is the bot owner's own NyxID session, freshly issued per callback) while
+        // taking model / route / max-tool-rounds from the owner's pre-configured
+        // UserConfig.
+        var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "ack",
+            MetadataObserver = m =>
+            {
+                foreach (var pair in m)
+                    capturedMetadata[pair.Key] = pair.Value;
+            },
+        };
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+
+        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
+        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>("scope-bot-owner"));
+
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
+                DefaultModel: "gpt-4o-bot-owner",
+                PreferredLlmRoute: "/api/v1/proxy/s/anthropic-via-bot-owner",
+                RuntimeMode: "local",
+                LocalRuntimeBaseUrl: "http://localhost",
+                RemoteRuntimeBaseUrl: "https://example.com",
+                GithubUsername: null,
+                MaxToolRounds: 11)));
+
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance,
+            scopeResolver,
+            userConfigQueryPort);
+
+        var activity = BuildRelayActivity();
+        activity.Bot = BotInstanceId.From("api-key-bot");
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "bot-owner-session-jwt",
+        };
+
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-bot-owner",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-bot-owner",
+        });
+
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.ModelOverride)
+            .WhoseValue.Should().Be("gpt-4o-bot-owner");
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
+            .WhoseValue.Should().Be("/api/v1/proxy/s/anthropic-via-bot-owner");
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride)
+            .WhoseValue.Should().Be("11");
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ShouldThreadBotOwnerSessionTokenAsLlmBearer()
+    {
+        // The inbound X-NyxID-User-Token is the bot owner's own NyxID session JWT.
+        // It is the credential that would authorize the owner's LLM calls in
+        // nyxid-chat, so it is also the correct credential for the bot's relay
+        // LLM call. The stale-pending GC plus the direct-enqueue + inbox-echoed
+        // token flow keeps it fresh through the window where the LLM call actually
+        // fires.
+        var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "ack",
+            MetadataObserver = m =>
+            {
+                foreach (var pair in m)
+                    capturedMetadata[pair.Key] = pair.Value;
+            },
+        };
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        var activity = BuildRelayActivity();
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "bot-owner-session-jwt",
+        };
+
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-bearer",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-1",
+        });
+
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
+            .WhoseValue.Should().Be("bot-owner-session-jwt");
     }
 
     private static ChatActivity BuildRelayActivity() =>
@@ -484,6 +619,8 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
 
         public bool CaptureSucceeded { get; private set; }
 
+        public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
+
         public async Task<string?> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
@@ -491,6 +628,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             CancellationToken ct)
         {
             CaptureSucceeded = captureAction();
+            MetadataObserver?.Invoke(metadata);
             if (streamingSink is not null && !string.IsNullOrEmpty(ReplyText))
                 await streamingSink.OnDeltaAsync(ReplyText, ct);
             return ReplyText;

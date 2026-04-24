@@ -10,6 +10,7 @@ using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 
@@ -75,11 +76,18 @@ public static partial class NyxIdChatEndpoints
             }
 
             http.User = validation.Principal;
-            if (string.IsNullOrWhiteSpace(validation.ScopeId))
+            var scopeId = await ResolveRelayScopeIdAsync(
+                validation.ScopeId,
+                payload,
+                http.RequestServices,
+                logger,
+                ct);
+            if (string.IsNullOrWhiteSpace(scopeId))
             {
                 logger.LogWarning(
-                    "Relay callback authentication succeeded but did not produce a canonical scope id: message={MessageId}",
-                    payload.MessageId);
+                    "Relay callback authentication succeeded but did not resolve a canonical scope id: message={MessageId}, apiKeyId={ApiKeyId}",
+                    payload.MessageId,
+                    payload.Agent?.ApiKeyId);
                 return Results.Unauthorized();
             }
 
@@ -143,7 +151,7 @@ public static partial class NyxIdChatEndpoints
                 CorrelationId = activity.OutboundDelivery.CorrelationId,
             };
 
-            var actorId = BuildScopedRelayConversationActorId(validation.ScopeId, activity.Conversation.CanonicalKey);
+            var actorId = BuildScopedRelayConversationActorId(scopeId, activity.Conversation.CanonicalKey);
             var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
             var command = new EventEnvelope
             {
@@ -248,6 +256,59 @@ public static partial class NyxIdChatEndpoints
             Timestamp = payload.Timestamp,
         };
 
+    private static async Task<string?> ResolveRelayScopeIdAsync(
+        string? validatedScopeId,
+        NyxIdRelayCallbackPayload payload,
+        IServiceProvider services,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var scopeId = NormalizeOptional(validatedScopeId);
+        if (scopeId is not null)
+            return scopeId;
+
+        var nyxAgentApiKeyId = NormalizeOptional(payload.Agent?.ApiKeyId);
+        if (nyxAgentApiKeyId is null)
+            return null;
+
+        var scopeResolver = services.GetService<INyxIdRelayScopeResolver>();
+        if (scopeResolver is null)
+        {
+            logger.LogWarning(
+                "Relay callback JWT had no scope id and relay scope resolver is unavailable: message={MessageId}, apiKeyId={ApiKeyId}",
+                payload.MessageId,
+                nyxAgentApiKeyId);
+            return null;
+        }
+
+        try
+        {
+            var resolvedScopeId = NormalizeOptional(await scopeResolver.ResolveScopeIdByApiKeyAsync(nyxAgentApiKeyId, ct));
+            if (resolvedScopeId is not null)
+            {
+                logger.LogInformation(
+                    "Resolved relay callback scope id from relay scope resolver: message={MessageId}, apiKeyId={ApiKeyId}",
+                    payload.MessageId,
+                    nyxAgentApiKeyId);
+            }
+
+            return resolvedScopeId;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to resolve relay callback scope id from channel bot registration: message={MessageId}, apiKeyId={ApiKeyId}",
+                payload.MessageId,
+                nyxAgentApiKeyId);
+            return null;
+        }
+    }
+
     private static string BuildScopedRelayConversationActorId(string? scopeId, string canonicalKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
@@ -256,6 +317,12 @@ public static partial class NyxIdChatEndpoints
         var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
             .ToLowerInvariant();
         return $"{ConversationGAgent.BuildActorId(canonicalKey)}:scope:{scopeHash}";
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static string ClassifyError(string error) => NyxIdRelayReplies.ClassifyError(error);
