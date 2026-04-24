@@ -79,13 +79,8 @@ const monoFontFamily =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
 
 const rootStyle: React.CSSProperties = {
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'column',
-  gap: 16,
-  minHeight: 0,
   minWidth: 0,
-  overflow: 'auto',
+  width: '100%',
 };
 
 const controlsGridStyle: React.CSSProperties = {
@@ -97,15 +92,20 @@ const controlsGridStyle: React.CSSProperties = {
 const pageFlowStyle: React.CSSProperties = {
   display: 'grid',
   gap: 16,
-  minHeight: 0,
+  width: '100%',
+};
+
+const contractSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
 };
 
 const workflowGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 16,
-  gridTemplateColumns: 'minmax(0, 1.08fr) minmax(360px, 0.92fr)',
+  gap: 14,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
   alignItems: 'start',
-  minHeight: 0,
+  width: '100%',
 };
 
 const parameterGridStyle: React.CSSProperties = {
@@ -114,11 +114,16 @@ const parameterGridStyle: React.CSSProperties = {
   gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
 };
 
-const valueCardStyle: React.CSSProperties = {
+const surfaceCardStyle: React.CSSProperties = {
+  background: '#ffffff',
   border: '1px solid #eef2f7',
   borderRadius: 12,
+};
+
+const valueCardStyle: React.CSSProperties = {
+  ...surfaceCardStyle,
   display: 'grid',
-  gap: 4,
+  gap: 3,
   minWidth: 0,
   padding: 12,
 };
@@ -141,26 +146,30 @@ const snippetTabButtonStyle: React.CSSProperties = {
   borderRadius: 999,
   fontSize: 12,
   fontWeight: 600,
-  padding: '6px 12px',
+  padding: '6px 10px',
 };
 
 const snippetBlockStyle: React.CSSProperties = {
-  background: '#0f172a',
-  borderRadius: 14,
-  color: '#e2e8f0',
+  background: '#f8fafc',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
+  color: '#0f172a',
   fontFamily: monoFontFamily,
-  fontSize: 12,
-  lineHeight: 1.6,
+  fontSize: 12.5,
+  lineHeight: 1.65,
   margin: 0,
   overflowX: 'auto',
-  padding: 14,
+  padding: 12,
   whiteSpace: 'pre-wrap',
 };
 
 const snippetPreviewStyle: React.CSSProperties = {
   ...snippetBlockStyle,
-  maxHeight: 320,
-  overflowY: 'auto',
+};
+
+const workflowSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
 };
 
 const listColumnStyle: React.CSSProperties = {
@@ -170,10 +179,9 @@ const listColumnStyle: React.CSSProperties = {
 };
 
 const compactCardStyle: React.CSSProperties = {
-  border: '1px solid #eef2f7',
-  borderRadius: 12,
+  ...surfaceCardStyle,
   display: 'grid',
-  gap: 8,
+  gap: 6,
   padding: 12,
 };
 
@@ -182,11 +190,15 @@ const smokeInputStyle: React.CSSProperties = {
 };
 
 const revisionCardStyle: React.CSSProperties = {
-  border: '1px solid #eef2f7',
-  borderRadius: 12,
+  ...surfaceCardStyle,
   display: 'grid',
-  gap: 8,
+  gap: 6,
   padding: 12,
+};
+
+const supportingSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -691,6 +703,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     <div data-testid="studio-bind-surface" style={rootStyle}>
       <div style={pageFlowStyle}>
         <AevatarPanel
+          layoutMode="document"
+          padding={14}
           title="Current member contract"
           titleHelp="Keep only the callable essentials here so the page opens with the method, URL, auth, and revision at a glance."
           extra={
@@ -702,7 +716,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             </Button>
           }
         >
-          <div style={{ display: 'grid', gap: 12 }}>
+          <div
+            data-testid="studio-bind-contract-section"
+            style={contractSectionStyle}
+          >
             <Typography.Text type="secondary">
               {runsCurrentWorkflowDraft
                 ? 'Keep the current draft in focus here; the smoke test and snippets below are the two fastest follow-up actions.'
@@ -713,46 +730,44 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <div
                   data-testid="studio-bind-contract-card"
                   style={{
-                    alignItems: 'stretch',
-                    border: '1px solid #d9d9d9',
-                    borderRadius: 12,
-                    display: 'flex',
-                    overflow: 'hidden',
+                    ...surfaceCardStyle,
+                    display: 'grid',
+                    gridTemplateColumns: '88px minmax(0, 1fr)',
                   }}
                 >
                   <div
                     style={{
                       alignItems: 'center',
-                      background: '#fafafa',
-                      borderRight: '1px solid #d9d9d9',
-                      color: '#6b7280',
+                      background: '#f8fafc',
+                      borderRight: '1px solid #eef2f7',
+                      color: '#475569',
                       display: 'flex',
                       fontFamily: monoFontFamily,
                       fontSize: 12,
                       fontWeight: 700,
                       justifyContent: 'center',
-                      minWidth: 74,
-                      padding: '0 14px',
+                      minWidth: 0,
+                      padding: '10px 12px',
                     }}
                   >
                     {bindContract.method}
                   </div>
                   <div
                     style={{
-                      color: '#111827',
+                      color: '#0f172a',
                       flex: 1,
                       fontFamily: monoFontFamily,
                       fontSize: 12.5,
                       minWidth: 0,
                       overflowX: 'auto',
-                      padding: '12px 14px',
+                      padding: '10px 14px',
                       whiteSpace: 'nowrap',
                     }}
                   >
                     {bindContract.invokeUrl}
                   </div>
                 </div>
-                <Space wrap size={[8, 8]}>
+                <Space wrap size={[6, 6]}>
                   <Tag>auth · {bindContract.authLabel}</Tag>
                   <Tag>revision · {bindContract.revisionId}</Tag>
                   {bindContract.streaming.sse ? (
@@ -774,8 +789,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           </div>
         </AevatarPanel>
 
-        <div style={workflowGridStyle}>
+        <div data-testid="studio-bind-primary-grid" style={workflowGridStyle}>
           <AevatarPanel
+            layoutMode="document"
+            padding={14}
             title="Quick smoke test"
             titleHelp={
               runsCurrentWorkflowDraft
@@ -783,7 +800,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 : 'Use a light contract check here, then move into Invoke for the full transcript and event stream.'
             }
           >
-            <div data-testid="studio-bind-smoke-test" style={{ display: 'grid', gap: 12 }}>
+            <div
+              data-testid="studio-bind-smoke-test-section"
+              style={workflowSectionStyle}
+            >
               <div style={{ display: 'grid', gap: 6 }}>
                 <Typography.Text strong>Authorization</Typography.Text>
                 <Typography.Text type="secondary">
@@ -899,12 +919,13 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                     </Typography.Text>
                     <div
                       style={{
-                        background: '#ffffff',
-                        border: '1px solid #eef2f7',
+                        background: '#f8fafc',
+                        border: '1px solid #e5e7eb',
                         borderRadius: 12,
-                        color: '#111827',
-                        fontSize: 13,
-                        lineHeight: 1.7,
+                        color: '#0f172a',
+                        fontFamily: monoFontFamily,
+                        fontSize: 12.5,
+                        lineHeight: 1.65,
                         padding: 12,
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
@@ -926,11 +947,16 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           </AevatarPanel>
 
           <AevatarPanel
+            layoutMode="document"
+            padding={14}
             title="Integration snippets"
             titleHelp="Give the user a ready-to-copy call shape right away, without making them hunt through the support sections."
           >
             {bindContract ? (
-              <div style={{ display: 'grid', gap: 12 }}>
+              <div
+                data-testid="studio-bind-snippet-section"
+                style={workflowSectionStyle}
+              >
                 <div style={snippetHeaderStyle}>
                   <div style={snippetTabsStyle}>
                     {(['curl', 'fetch', 'sdk'] as SnippetTab[]).map((tabKey) => (
@@ -971,14 +997,20 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         </div>
 
         <AevatarPanel
+          layoutMode="document"
+          padding={14}
           title="Supporting details"
           titleHelp="Keep the source selector, routing, bindings, and revision history available below the primary workflow."
         >
-          <Collapse
-            bordered={false}
-            defaultActiveKey={[]}
-            ghost
-            items={[
+          <div
+            data-testid="studio-bind-supporting-section"
+            style={supportingSectionStyle}
+          >
+            <Collapse
+              bordered={false}
+              defaultActiveKey={[]}
+              ghost
+              items={[
               {
                 key: 'published-contract-source',
                 label: 'Published contract source',
@@ -1253,8 +1285,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   />
                 ),
               },
-            ]}
-          />
+              ]}
+            />
+          </div>
         </AevatarPanel>
       </div>
     </div>

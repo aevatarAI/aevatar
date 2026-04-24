@@ -2958,7 +2958,14 @@ describe("StudioPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
 
-    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    const bindSurface = await screen.findByTestId("studio-bind-surface");
+    expect(bindSurface).toBeTruthy();
+    expect(bindSurface.parentElement).not.toHaveStyle({
+      height: "100%",
+    });
+    expect(bindSurface.parentElement).not.toHaveStyle({
+      overflow: "hidden",
+    });
   });
 
   it("applies workflow step changes without requiring a manual graph selection first", async () => {

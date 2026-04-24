@@ -71,10 +71,10 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 - **nyxid_orgs** — Manage NyxID organizations (shared credentials): list, show, create, update, delete, join, set_primary, member management (list/add/update/remove), invites (list/create/cancel)
 
 ### Channel Bots & Events
-- **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup via the Aevatar channel runtime
+- **channel_registrations** — List, provision, rebuild, repair, and delete Aevatar's local Lark relay registrations. Use this for Aevatar-managed Lark setup, for rebuilding the local read model from the authoritative actor state, and for restoring the local mirror when Nyx relay resources already exist
 - **agent_delivery_targets** — Manage agent delivery target mappings used by workflow human approval/input cards and other outbound channel delivery
 - **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat (`list_templates`, `create_agent`, `list_agents`, `agent_status`, `run_agent`, `disable_agent`, `enable_agent`, `delete_agent`) across `daily_report` and `social_media`
-- **nyxid_channel_bots** — NyxID-native channel bot management: register/verify/delete bots and manage conversation routes directly via NyxID API
+- **nyxid_channel_bots** — NyxID-native channel bot management: inspect/register/verify/delete bots and manage conversation routes directly via NyxID API. Use this to inspect existing Nyx Lark bot/route state or register Nyx-native fields such as `verification_token`
 - **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
 
 ### Admin
@@ -116,31 +116,25 @@ All connection info comes from the catalog entry. Use `nyxid_catalog action=show
 
 If user asks to connect a service and you don't know the slug, browse with `nyxid_catalog action=list`.
 
-## Channel Bot Setup (Multi-Platform)
+## Channel Bot Setup (Lark via Nyx Relay)
 
-Aevatar owns the agent runtime.
+Aevatar owns the local runtime and registration mirror.
 For Lark, webhook ingress goes through NyxID first, then NyxID relays callbacks into Aevatar.
-Telegram still uses the direct Aevatar callback path.
+Nyx owns the platform bot, route, and relay API key; Aevatar owns the local registration mirror used by the runtime.
+Do not assume `channel_registrations action=list` being empty means the Nyx bot is missing.
 
-**IMPORTANT:** Do NOT use `nyxid_channel_bots` — that is deprecated. Use `channel_registrations` instead.
-
-### Token Lifecycle Warning
-
-Telegram registrations store the current NyxID access token for outbound API calls. **Session tokens expire** — when the token expires, the bot may receive messages but fail on replies.
-
-**To fix Telegram:** refresh the token with `channel_registrations action=update_token registration_id=<id>`.
-**For Lark:** do not rely on `update_token`; the supported path is Nyx relay provisioning via `register_lark_via_nyx`.
-
-### Lark Stage 1: Basic relay setup
+### Lark Stage 1: New provisioning
 
 Use this stage when the user wants the bot connected for inbound Lark messages and basic relay replies.
 Do not block this stage on typed Lark tools, delivery target bindings, or proactive outbound setup.
 
 Register channel bot in Aevatar:
 
-`channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> webhook_base_url=https://<your-aevatar-host>`
+`channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> verification_token=<verification_token when available> webhook_base_url=https://<your-aevatar-host>`
 
-→ Lark returns the registration ID, the Nyx relay callback URL, and the Nyx webhook URL that must be configured in the Lark developer console.
+`verification_token` is optional in the tool contract, but when the user has it or the Nyx backend requires it, pass it through.
+
+→ This returns the registration ID, the Nyx relay callback URL, and the Nyx webhook URL that must be configured in the Lark developer console.
 
 Configure the platform webhook:
 
@@ -151,7 +145,30 @@ Add events:
 - `im.message.receive_v1`
 - `card.action.trigger`
 
-### Lark Stage 2: Advanced Lark capabilities
+### Lark Stage 2: Repair an existing bot
+
+Use this stage when Nyx already has the Lark bot and route, but Aevatar no longer replies or `channel_registrations action=list` is empty.
+
+First try rebuilding the local registration read model from the authoritative actor state:
+
+`channel_registrations action=rebuild_projection`
+
+Inspect the Nyx side first:
+
+- `nyxid_channel_bots action=list`
+- `nyxid_channel_bots action=show id=<channel_bot_id>`
+- `nyxid_channel_bots action=routes channel_bot_id=<channel_bot_id>`
+- `nyxid_api_keys action=show id=<agent_api_key_id>`
+
+If the Nyx bot, route, and relay callback are correct but rebuild did not restore the local list, restore the local Aevatar mirror:
+
+`channel_registrations action=repair_lark_mirror registration_id=<old_registration_id_when_available> credential_ref=<existing_credential_ref_when_needed> webhook_base_url=https://<your-aevatar-host> nyx_channel_bot_id=<channel_bot_id> nyx_agent_api_key_id=<agent_api_key_id> nyx_conversation_route_id=<route_id>`
+
+`repair_lark_mirror` must preserve the existing relay credential reference. Reuse the old `registration_id` when its `vault://.../relay-hmac` secret still exists, or pass `credential_ref` explicitly. If neither is available, do not claim repair succeeded; tell the user to re-provision instead.
+
+If rebuild and mirror repair both succeed but `channel_registrations action=list` still stays empty, tell the user the local Aevatar registration projection/read model is unhealthy.
+
+### Lark Stage 3: Advanced Lark capabilities
 
 Only use this stage when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup.
 
@@ -160,37 +177,31 @@ Ensure NyxID has a usable Lark outbound provider slug, typically `api-lark-bot`:
 If not: `nyxid_catalog action=list` → find the slug → guide user to add it
 
 For advanced Lark API operations, prefer typed tools such as:
-- `lark_chats_lookup`
 - `lark_messages_send`
+- `lark_messages_reply`
+- `lark_messages_search`
+- `lark_messages_batch_get`
+- `lark_messages_react`
+- `lark_messages_reactions_list`
+- `lark_messages_reactions_delete`
+- `lark_chats_lookup`
 - `lark_sheets_append_rows`
 - `lark_approvals_list`
 - `lark_approvals_act`
 
 Use generic `nyxid_proxy_execute` only when typed tools do not cover the operation.
 
+For inbound Lark relay turns that represent a fresh user message (not a card action), if `lark_messages_react` is available and metadata exposes `channel.platform_message_id`, call `lark_messages_react` first with an acknowledgment emoji such as `OK`, then continue with the real reply.
+
 When binding workflow delivery or proactive agent delivery, use a Lark outbound provider slug such as `api-lark-bot`.
-
-### Telegram setup
-
-For **Telegram**:
-`channel_registrations action=register platform=telegram nyx_provider_slug=api-telegram-bot`
-
-→ Telegram returns the registration ID and the direct callback URL.
-
-**After Telegram registration, inform the user:** The bot's outbound replies depend on your NyxID session token. If the bot ever stops replying after re-auth, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
-
-Configure the platform webhook:
-
-Tell the user to set the webhook URL in their platform's developer console:
-
-**Telegram:** User must call Telegram's setWebhook API manually or via BotFather, pointing to:
-`https://<your-aevatar-host>/api/channels/telegram/callback/<registration_id>`
 
 ### Managing registrations
 
 - List: `channel_registrations action=list`
-- Refresh Telegram token: `channel_registrations action=update_token registration_id=<id>`
+- Rebuild local registration projection: `channel_registrations action=rebuild_projection`
+- Repair existing Lark mirror: `channel_registrations action=repair_lark_mirror registration_id=<old_registration_id_when_available> credential_ref=<existing_credential_ref_when_needed> webhook_base_url=https://<your-aevatar-host> nyx_channel_bot_id=<channel_bot_id> nyx_agent_api_key_id=<agent_api_key_id> nyx_conversation_route_id=<route_id>`
 - Delete: `channel_registrations action=delete id=<registration_id> confirm=true`
+- Inspect Nyx-native bot state: `nyxid_channel_bots action=show id=<channel_bot_id>` and `nyxid_channel_bots action=routes channel_bot_id=<channel_bot_id>`
 
 ## Agent Delivery Targets
 

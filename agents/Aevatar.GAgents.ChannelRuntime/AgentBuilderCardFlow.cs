@@ -311,6 +311,7 @@ internal static class AgentBuilderCardFlow
             action = "create_agent",
             template = "daily_report",
             github_username = githubUsername,
+            save_github_username_preference = githubUsername is not null,
             repositories,
             schedule_cron = scheduleCron,
             schedule_timezone = scheduleTimezone,

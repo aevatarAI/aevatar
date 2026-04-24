@@ -14,9 +14,10 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
     public string Name => "nyxid_channel_bots";
 
     public string Description =>
-        "Manage channel bots (Telegram, Discord, Lark, Feishu) and conversation routes. " +
+        "Manage NyxID-native channel bots (Telegram, Discord, Lark, Feishu) and conversation routes. " +
         "Bot actions: list, show, register, delete, verify. " +
         "Route actions: routes, show_route, create_route, update_route, delete_route. " +
+        "Use this tool to inspect existing Nyx bot/route state or to register Nyx-native fields such as Lark verification_token. " +
         "Supports per-sender routing in group chats.";
 
     public string ParametersSchema => """
@@ -52,6 +53,10 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
             "app_secret": {
               "type": "string",
               "description": "Lark/Feishu app secret (for register with platform=lark/feishu)"
+            },
+            "verification_token": {
+              "type": "string",
+              "description": "Lark/Feishu verification token (for register when required by the backend)"
             },
             "public_key": {
               "type": "string",
@@ -141,6 +146,9 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
 
         var appSecret = args.Str("app_secret");
         if (!string.IsNullOrWhiteSpace(appSecret)) payload["app_secret"] = appSecret;
+
+        var verificationToken = args.Str("verification_token");
+        if (!string.IsNullOrWhiteSpace(verificationToken)) payload["verification_token"] = verificationToken;
 
         var publicKey = args.Str("public_key");
         if (!string.IsNullOrWhiteSpace(publicKey)) payload["public_key"] = publicKey;

@@ -237,10 +237,7 @@ public sealed class NyxIdProxyTool : IAgentTool
     internal static HashSet<string> ParseServiceSlugs(System.Text.Json.JsonDocument doc)
     {
         var slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
-            return slugs;
-
-        foreach (var svc in doc.RootElement.EnumerateArray())
+        foreach (var svc in EnumerateServiceItems(doc.RootElement))
         {
             if (svc.TryGetProperty("slug", out var slugProp))
             {
@@ -251,6 +248,31 @@ public sealed class NyxIdProxyTool : IAgentTool
         }
 
         return slugs;
+    }
+
+    private static IEnumerable<System.Text.Json.JsonElement> EnumerateServiceItems(System.Text.Json.JsonElement root)
+    {
+        if (root.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+                yield return item;
+            yield break;
+        }
+
+        if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+            yield break;
+
+        foreach (var propertyName in new[] { "services", "custom_services", "data" })
+        {
+            if (!root.TryGetProperty(propertyName, out var items) ||
+                items.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var item in items.EnumerateArray())
+                yield return item;
+        }
     }
 
     private static string HashToken(string token)

@@ -1,10 +1,12 @@
 ---
 title: "Lark Nyx Relay Webhook Topology"
-status: accepted
+status: superseded
 owner: eanzhao
 ---
 
 # ADR-0011: Lark Nyx Relay Webhook Topology
+
+Superseded by [ADR-0013](0013-unified-channel-inbound-backbone.md), which generalizes relay ingress from a Lark-only webhook topology to the unified channel inbound backbone.
 
 ## Context
 

@@ -3967,6 +3967,12 @@ public sealed class ScopeServiceEndpointsTests
         public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }

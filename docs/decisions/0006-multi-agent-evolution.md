@@ -419,14 +419,8 @@ Agent actor 发布 `ProgressEvent` 作为 committed event → 现有 projection 
 
 | 资料 | 路径 |
 |------|------|
-<<<<<<<< HEAD:docs/design/WORKFLOW_MULTIAGENT_EVOLUTION.md
-| Workflow 原语文档 | `docs/guides/WORKFLOW_PRIMITIVES.md` |
-| CQRS 架构 | `docs/architecture/CQRS_ARCHITECTURE.md` |
-| Event Sourcing | `docs/architecture/EVENT_SOURCING.md` |
-========
 | Workflow 原语文档 | `docs/canon/workflow-primitives.md` |
 | CQRS 架构 | `docs/canon/cqrs-projection.md` |
 | Event Sourcing | `docs/canon/event-sourcing.md` |
->>>>>>>> c20fc87ec173e49be645ea287f4bb54ecd975935:docs/decisions/0006-multi-agent-evolution.md
 | Claude Code 多智能体源码 | `~/Code/claude-code/src/utils/swarm/` |
 | 架构约束 | `CLAUDE.md`（仓库根目录） |

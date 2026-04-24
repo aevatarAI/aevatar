@@ -1,5 +1,6 @@
 using Aevatar.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -108,6 +109,51 @@ public class ScriptCapabilityHostExtensionsTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Invalid boolean value*");
+    }
+
+    [Fact]
+    public void AddScriptingProjectionReadModelProviders_ShouldFillMissingReadersWhenPartialRegistrationExists()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        services.AddScriptingProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>().Should().NotBeNull();
+        services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ScriptReadModelDocument, string>)).Should().Be(1);
+    }
+
+    [Fact]
+    public void AddScriptingProjectionReadModelProviders_ShouldRejectPartialRegistrationFromDifferentProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        var act = () => services.AddScriptingProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ScriptReadModelDocument*different provider*");
     }
 
     [Fact]

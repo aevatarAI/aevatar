@@ -232,6 +232,26 @@ describe('StudioMemberBindPanel', () => {
       snippetsTitle.compareDocumentPosition(supportingDetailsTitle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    const bindSurfaceStyle =
+      screen.getByTestId('studio-bind-surface').getAttribute('style') || '';
+    expect(bindSurfaceStyle).not.toContain('overflow');
+    expect(bindSurfaceStyle).not.toContain('height');
+    const primaryGrid = screen.getByTestId('studio-bind-primary-grid');
+    expect(primaryGrid).toHaveStyle({
+      alignItems: 'start',
+      display: 'grid',
+    });
+    expect(primaryGrid.contains(supportingDetailsTitle)).toBe(false);
+    const primaryGridStyle = primaryGrid.getAttribute('style') || '';
+    expect(primaryGridStyle).not.toContain('height');
+    expect(primaryGridStyle).not.toContain('grid-auto-rows');
+    expect(screen.getByTestId('studio-bind-contract-section')).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-smoke-test-section')).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-snippet-section')).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-supporting-section')).toBeTruthy();
+    fireEvent.click(screen.getByText('Published contract source'));
+    expect(await screen.findByText('Published service')).toBeTruthy();
+    expect(primaryGrid.contains(screen.getByText('Published service'))).toBe(false);
     expect(screen.queryByText('Binding Contract')).toBeNull();
     expect(screen.queryByText('Current contract')).toBeNull();
     expect(screen.queryByText('Published contract context')).toBeNull();
