@@ -101,6 +101,7 @@ public static class ServiceCollectionExtensions
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<Aevatar.GAgents.NyxidChat.INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelPlatformReplyService>();
