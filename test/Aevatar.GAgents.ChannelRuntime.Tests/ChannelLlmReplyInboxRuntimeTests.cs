@@ -53,6 +53,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-1",
         });
 
         replyGenerator.CaptureSucceeded.Should().BeTrue();
@@ -131,6 +132,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-throw",
         });
 
         handled.Should().NotBeNull();
@@ -170,6 +172,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-empty",
         });
 
         handled.Should().NotBeNull();
@@ -177,6 +180,98 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
         ready.ErrorCode.Should().Be("empty_reply");
         ready.Outbound.Text.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ShouldEchoReplyTokenIntoLlmReplyReadyEvent()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        var expiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds();
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-echo",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-echo",
+            ReplyTokenExpiresAtUnixMs = expiresAtUnixMs,
+        });
+
+        handled.Should().NotBeNull();
+        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.ReplyToken.Should().Be("relay-token-echo");
+        ready.ReplyTokenExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ShouldDropRelayRequest_WhenInboxCarriesNoReplyToken()
+    {
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        // Relay activity but no inbox-carried ReplyToken — simulates a request rehydrated
+        // from persisted state after a pod restart, where the original token capture is gone.
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-no-token",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+        });
+
+        replyGenerator.CaptureSucceeded.Should().BeFalse();
+        await actorRuntime.DidNotReceiveWithAnyArgs().GetAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ShouldDropRequest_WhenOlderThanMaxAge()
+    {
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        var requestedAtUnixMs = DateTimeOffset.UtcNow
+            .AddMilliseconds(-(ChannelLlmReplyInboxRuntime.MaxInboxRequestAgeMs + 60_000))
+            .ToUnixTimeMilliseconds();
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stale",
+            RequestedAtUnixMs = requestedAtUnixMs,
+        });
+
+        replyGenerator.CaptureSucceeded.Should().BeFalse();
+        await actorRuntime.DidNotReceiveWithAnyArgs().GetAsync(Arg.Any<string>());
     }
 
     [Fact]
