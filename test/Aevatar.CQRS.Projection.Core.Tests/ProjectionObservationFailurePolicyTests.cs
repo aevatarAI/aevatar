@@ -41,4 +41,49 @@ public sealed class ProjectionObservationFailurePolicyTests
 
         ProjectionObservationFailurePolicy.ShouldPropagate(aggregate).Should().BeFalse();
     }
+
+    [Fact]
+    public void ShouldPropagate_ShouldThrow_ForNullException()
+    {
+        Action act = () => ProjectionObservationFailurePolicy.ShouldPropagate(null!);
+
+        act.Should().Throw<ArgumentNullException>().And.ParamName.Should().Be("exception");
+    }
+
+    [Fact]
+    public void ShouldPropagate_ShouldReturnTrue_ForAggregateExceptionContainingOptimisticConcurrencyException()
+    {
+        var aggregate = new AggregateException(
+            new InvalidOperationException("unrelated"),
+            new EventStoreOptimisticConcurrencyException("actor-3", 1, 2));
+
+        ProjectionObservationFailurePolicy.ShouldPropagate(aggregate).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldPropagate_ShouldReturnFalse_ForAggregateExceptionWithOnlyDeterministicFailures()
+    {
+        var aggregate = new AggregateException(new InvalidOperationException("unrelated"));
+
+        ProjectionObservationFailurePolicy.ShouldPropagate(aggregate).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldPropagate_ShouldUnwrap_InnerExceptionChain()
+    {
+        var wrapped = new InvalidOperationException(
+            "outer",
+            new InvalidOperationException(
+                "middle",
+                new EventStoreOptimisticConcurrencyException("actor-4", 3, 4)));
+
+        ProjectionObservationFailurePolicy.ShouldPropagate(wrapped).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldPropagate_ShouldReturnFalse_ForDeterministicExceptionWithoutInner()
+    {
+        ProjectionObservationFailurePolicy.ShouldPropagate(new InvalidOperationException("boom"))
+            .Should().BeFalse();
+    }
 }
