@@ -504,6 +504,27 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldIgnoreCardAction_WhenNeitherWorkflowNorAgentBuilderMatches()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        // No agent_builder_action, no actor_id/run_id/step_id — an unknown card submit
+        // that must not become an LLM turn.
+        var activity = BuildCardActionActivity(
+            "evt-card-unknown-1",
+            ("unrelated_field", "value"));
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("ignored:unrecognized_card_action:evt-card-unknown-1");
+        result.LlmReplyRequest.Should().BeNull("unrecognized card_action must not trigger an LLM turn");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldMapWorkflowResumeValidationErrors()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

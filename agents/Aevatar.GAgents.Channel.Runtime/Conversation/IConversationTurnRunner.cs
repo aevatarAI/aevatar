@@ -133,6 +133,28 @@ public sealed record ConversationTurnResult(
             request?.Clone() ?? throw new ArgumentNullException(nameof(request)));
 
     /// <summary>
+    /// Ignored-inbound success factory. Used when the turn runner deliberately produces no
+    /// reply for a well-formed inbound activity (for example an unrecognized card action
+    /// that should not be promoted into an LLM turn). The <paramref name="reasonCode"/>
+    /// is stamped into <see cref="SentActivityId"/> as <c>ignored:{reasonCode}:{activityId}</c>
+    /// so observers can filter these no-op completions without guessing from an empty id.
+    /// </summary>
+    public static ConversationTurnResult Ignored(string reasonCode, string activityId, string detail = "") =>
+        new(
+            true,
+            string.IsNullOrWhiteSpace(activityId)
+                ? $"ignored:{reasonCode}"
+                : $"ignored:{reasonCode}:{activityId}",
+            new MessageContent(),
+            "bot",
+            null,
+            string.Empty,
+            detail ?? string.Empty,
+            FailureKind.Unspecified,
+            null,
+            null);
+
+    /// <summary>
     /// Transient failure factory.
     /// </summary>
     public static ConversationTurnResult TransientFailure(string errorCode, string errorSummary, TimeSpan? retryAfter = null) =>

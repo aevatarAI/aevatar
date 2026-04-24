@@ -57,10 +57,20 @@ public sealed class NyxIdRelayTransport
         var conversationType = payload.Conversation?.Type ?? payload.Conversation?.ConversationType;
         if (!NyxIdRelayConversationTypeMap.TryMap(conversationType, out var scope))
         {
-            return NyxIdRelayParseResult.IgnoredPayload(
-                payload,
-                "unsupported_conversation_type",
-                $"Relay conversation.type '{conversationType ?? "<empty>"}' is not supported by channel runtime.");
+            if (!isCardAction)
+            {
+                return NyxIdRelayParseResult.IgnoredPayload(
+                    payload,
+                    "unsupported_conversation_type",
+                    $"Relay conversation.type '{conversationType ?? "<empty>"}' is not supported by channel runtime.");
+            }
+
+            // Card actions carry their own correlation keys (actor_id/run_id/step_id or
+            // agent_builder_action) and aren't anchored to a specific conversation scope.
+            // When the relay omits or uses an unfamiliar conversation.type for a card
+            // submission, keep the activity flowing with an Unspecified scope so downstream
+            // routing still sees the typed CardActionSubmission.
+            scope = ConversationScope.Unspecified;
         }
 
         var platform = NormalizePlatform(payload.Platform);
