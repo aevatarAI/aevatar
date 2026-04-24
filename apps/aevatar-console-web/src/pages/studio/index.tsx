@@ -62,6 +62,7 @@ import {
   connectStepToTarget,
   insertStepByType,
   removeStep,
+  removeSteps,
   suggestBranchLabelForStep,
   type StudioStepInspectorDraft,
 } from '@/shared/studio/document';
@@ -913,6 +914,30 @@ function buildStudioFocusKey(input: {
   return '';
 }
 
+function resolveStudioServiceDefaultEndpointId(
+  service:
+    | {
+        readonly endpoints?:
+          | readonly {
+              readonly endpointId: string;
+            }[]
+          | null;
+      }
+    | null
+    | undefined,
+): string {
+  if (!service?.endpoints?.length) {
+    return '';
+  }
+
+  return (
+    service.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
+      ?.endpointId ||
+    service.endpoints[0]?.endpointId ||
+    ''
+  );
+}
+
 function formatStudioAssetMeta(input: {
   primary?: string | null;
   secondary?: string | null;
@@ -1044,6 +1069,7 @@ const StudioPage: React.FC = () => {
   const [executionStopPending, setExecutionStopPending] = useState(false);
   const [executionNotice, setExecutionNotice] = useState<StudioNotice | null>(null);
   const [logsPopoutMode] = useState(() => readStudioRouteState().logsMode);
+  const [recentlyBoundServiceId, setRecentlyBoundServiceId] = useState('');
   const [appliedRouteSnapshot, setAppliedRouteSnapshot] = useState(
     locationSnapshot,
   );
@@ -2384,7 +2410,7 @@ const StudioPage: React.FC = () => {
       : buildSurface === 'gagent'
         ? 'gagent'
         : 'workflow';
-  const pendingBindCandidate = useMemo(() => {
+  const buildPendingBindCandidate = useMemo(() => {
     if (
       activeBuildMode !== 'workflow' ||
       !resolvedStudioScopeId ||
@@ -2413,11 +2439,11 @@ const StudioPage: React.FC = () => {
     resolvedStudioScopeId,
   ]);
   const handleBindPendingCandidate = useCallback(async () => {
-    if (!pendingBindCandidate || !resolvedStudioScopeId) {
+    if (!buildPendingBindCandidate || !resolvedStudioScopeId) {
       throw new Error('Resolve the current scope before binding this member.');
     }
 
-    if (pendingBindCandidate.kind !== 'workflow') {
+    if (buildPendingBindCandidate.kind !== 'workflow') {
       throw new Error(
         'Studio can only publish workflow revisions from this surface right now.',
       );
@@ -2425,7 +2451,7 @@ const StudioPage: React.FC = () => {
 
     const result = await studioApi.bindScopeWorkflow({
       scopeId: resolvedStudioScopeId,
-      displayName: pendingBindCandidate.displayName,
+      displayName: buildPendingBindCandidate.displayName,
       workflowYamls: await buildWorkflowYamlBundle(),
     });
     const [bindingStatusResult, servicesResult] = await Promise.all([
@@ -2437,14 +2463,13 @@ const StudioPage: React.FC = () => {
       trimOptional(bindingStatusResult.data?.serviceId);
 
     if (boundServiceId) {
+      setRecentlyBoundServiceId(boundServiceId);
       const selectedService = (servicesResult.data ?? []).find(
         (service) => service.serviceId === boundServiceId,
       );
-      const defaultEndpointId =
-        selectedService?.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
-          ?.endpointId ||
-        selectedService?.endpoints[0]?.endpointId ||
-        '';
+      const defaultEndpointId = resolveStudioServiceDefaultEndpointId(
+        selectedService,
+      );
 
       bindingSelectionRef.current = {
         serviceId: boundServiceId,
@@ -2470,7 +2495,7 @@ const StudioPage: React.FC = () => {
   }, [
     activeBuildFocusKey,
     buildWorkflowYamlBundle,
-    pendingBindCandidate,
+    buildPendingBindCandidate,
     resolvedStudioScopeId,
     scopeBindingQuery,
     scopeServicesQuery,
@@ -3464,6 +3489,35 @@ const StudioPage: React.FC = () => {
     effectiveSelectedGraphNodeId,
     resolveEditableWorkflowDocument,
   ]);
+  const handleRemoveWorkflowNodes = useCallback(
+    async (nodeIds: string[]) => {
+      const stepIds = Array.from(
+        new Set(
+          nodeIds
+            .map((nodeId) =>
+              trimOptional(nodeId).startsWith('step:')
+                ? trimOptional(nodeId).slice('step:'.length)
+                : '',
+            )
+            .filter(Boolean),
+        ),
+      );
+      if (stepIds.length === 0) {
+        return;
+      }
+
+      const document = await resolveEditableWorkflowDocument();
+      if (!document) {
+        return;
+      }
+
+      const result = removeSteps(document, stepIds);
+      await applySerializedWorkflowDocument(result.document, {
+        selectedNodeId: result.nodeId,
+      });
+    },
+    [applySerializedWorkflowDocument, resolveEditableWorkflowDocument],
+  );
   const handleAutoLayoutWorkflow = useCallback(() => {
     setDraftWorkflowLayout(null);
   }, []);
@@ -3589,9 +3643,17 @@ const StudioPage: React.FC = () => {
         serviceId,
         endpointId,
       };
+      history.replace(
+        buildStudioRoute({
+          scopeId: resolvedStudioScopeId || undefined,
+          memberId: serviceId || undefined,
+          step: 'invoke',
+          tab: 'invoke',
+        }),
+      );
       applyStudioTarget('invoke');
     },
-    [applyStudioTarget],
+    [applyStudioTarget, history, resolvedStudioScopeId],
   );
   const handleSelectLifecycleStep = useCallback(
     async (stepKey: string) => {
@@ -3761,6 +3823,15 @@ const StudioPage: React.FC = () => {
   const routeSelectedMemberKey = trimOptional(routeState.memberId)
     ? `member:${trimOptional(routeState.memberId)}`
     : '';
+  const lifecycleSurfaceMemberKey =
+    routeSelectedMemberKey ||
+    (focusedPublishedServiceId ? `member:${focusedPublishedServiceId}` : '') ||
+    (selectedBuildRepresentsBoundMember && currentScopeBindingServiceId
+      ? `member:${currentScopeBindingServiceId}`
+      : '') ||
+    currentFocusMemberKey;
+  const workbenchMemberKey =
+    studioSurface === 'build' ? currentFocusMemberKey : lifecycleSurfaceMemberKey;
   const buildSurfaceSelectedMemberKey =
     studioSurface === 'build' &&
     (currentFocusMemberKey.startsWith('workflow:') ||
@@ -3771,25 +3842,41 @@ const StudioPage: React.FC = () => {
       : '';
   const selectedRailMemberKey =
     buildSurfaceSelectedMemberKey ||
-    routeSelectedMemberKey ||
-    (selectedBuildRepresentsBoundMember && currentScopeBindingServiceId
-      ? `member:${currentScopeBindingServiceId}`
-      : currentFocusMemberKey);
+    (studioSurface === 'build' ? lifecycleSurfaceMemberKey : workbenchMemberKey);
   const effectiveSelectedMemberKey = trimOptional(
     selectedRailMemberKey || currentFocusMemberKey,
   );
+  const workbenchPublishedServiceId = useMemo(
+    () => readServiceIdFromMemberKey(workbenchMemberKey),
+    [workbenchMemberKey],
+  );
+  const workbenchPublishedService = useMemo(
+    () =>
+      workbenchPublishedServiceId
+        ? publishedScopeServices.find(
+            (service) => service.serviceId === workbenchPublishedServiceId,
+          ) ?? null
+        : null,
+    [publishedScopeServices, workbenchPublishedServiceId],
+  );
+  const workbenchPublishedServiceRevision = useMemo(() => {
+    const serviceId = trimOptional(workbenchPublishedService?.serviceId);
+    return serviceId
+      ? currentServiceRevisionByServiceId.get(serviceId) ?? null
+      : null;
+  }, [currentServiceRevisionByServiceId, workbenchPublishedService?.serviceId]);
   const hasSelectedMemberFocus =
-    Boolean(currentFocusMemberKey) ||
+    Boolean(workbenchMemberKey) ||
     Boolean(trimOptional(currentScopeBindingRevision?.revisionId));
   const currentMemberLabel = !hasSelectedMemberFocus
     ? 'Select a member'
-    : currentFocusMemberKey.startsWith('workflow:')
+    : workbenchMemberKey.startsWith('workflow:')
         ? trimOptional(activeWorkflowName) || 'Workflow member'
-        : currentFocusMemberKey.startsWith('script:')
+        : workbenchMemberKey.startsWith('script:')
           ? trimOptional(selectedScriptId) || 'Script member'
-          : currentFocusMemberKey.startsWith('member:')
-            ? trimOptional(focusedPublishedService?.displayName) ||
-              trimOptional(focusedPublishedService?.serviceId) ||
+          : workbenchMemberKey.startsWith('member:')
+            ? trimOptional(workbenchPublishedService?.displayName) ||
+              trimOptional(workbenchPublishedService?.serviceId) ||
               trimOptional(routeState.memberId) ||
               trimOptional(scopeBindingQuery.data?.displayName) ||
               'Current member'
@@ -3799,9 +3886,9 @@ const StudioPage: React.FC = () => {
               'Current member';
   const currentMemberImplementationLabel = !hasSelectedMemberFocus
     ? ''
-    : currentFocusMemberKey.startsWith('member:')
+    : workbenchMemberKey.startsWith('member:')
       ? describeMemberImplementationLabel(
-          focusedPublishedServiceRevision?.implementationKind,
+          workbenchPublishedServiceRevision?.implementationKind,
         )
       : isBuildGAgentSurface
         ? 'GAgent implementation'
@@ -3818,7 +3905,7 @@ const StudioPage: React.FC = () => {
                 : 'Member implementation';
   const currentMemberDescription = !hasSelectedMemberFocus
     ? 'Choose a member from Team members, or create a new member to start building.'
-    : currentFocusMemberKey.startsWith('workflow:')
+    : workbenchMemberKey.startsWith('workflow:')
         ? formatStudioAssetMeta({
             primary: currentMemberImplementationLabel,
             secondary:
@@ -3826,19 +3913,19 @@ const StudioPage: React.FC = () => {
               trimOptional(selectedWorkflowSummary?.fileName) ||
               'Current workflow draft',
           }) || 'Studio is tracking the current workflow-backed member.'
-        : currentFocusMemberKey.startsWith('script:')
+        : workbenchMemberKey.startsWith('script:')
           ? formatStudioAssetMeta({
               primary: currentMemberImplementationLabel,
               secondary: trimOptional(selectedScriptId) || 'Current script member',
             }) || 'Studio is tracking the current script-backed member.'
-          : currentFocusMemberKey.startsWith('member:')
+          : workbenchMemberKey.startsWith('member:')
             ? formatStudioAssetMeta({
                 primary: currentMemberImplementationLabel,
                 secondary:
-                  trimOptional(focusedPublishedService?.serviceId) ||
+                  trimOptional(workbenchPublishedService?.serviceId) ||
                   trimOptional(routeState.memberId) ||
-                  trimOptional(focusedPublishedServiceRevision?.revisionId) ||
-                  trimOptional(focusedPublishedService?.deploymentStatus) ||
+                  trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
+                  trimOptional(workbenchPublishedService?.deploymentStatus) ||
                   'Published member',
               }) || 'Published member ready for Bind, Invoke, or Observe.'
             : formatStudioAssetMeta({
@@ -3853,8 +3940,8 @@ const StudioPage: React.FC = () => {
   const currentMemberTone: 'live' | 'draft' | 'idle' =
     !hasSelectedMemberFocus
       ? 'idle'
-      : currentFocusMemberKey.startsWith('member:')
-        ? resolveServiceMemberTone(focusedPublishedService?.deploymentStatus)
+      : workbenchMemberKey.startsWith('member:')
+        ? resolveServiceMemberTone(workbenchPublishedService?.deploymentStatus)
         : activeBuildFocusKey
           ? 'draft'
           : currentScopeBindingRevision?.isActiveServing
@@ -3865,8 +3952,8 @@ const StudioPage: React.FC = () => {
       ? currentMemberImplementationLabel || 'Member focus'
       : '',
     secondary: hasSelectedMemberFocus
-      ? trimOptional(focusedPublishedServiceRevision?.revisionId) ||
-        trimOptional(focusedPublishedService?.serviceId) ||
+      ? trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
+        trimOptional(workbenchPublishedService?.serviceId) ||
         currentScopeBindingRevision?.revisionId ||
         trimOptional(routeState.memberId) ||
         activeBuildFocusKey
@@ -3885,8 +3972,39 @@ const StudioPage: React.FC = () => {
     invokeSelectionRef.current.endpointId,
   );
   const currentSelectedMemberServiceId =
-    focusedPublishedServiceId ||
+    workbenchPublishedServiceId ||
     (selectedBuildRepresentsBoundMember ? currentScopeBindingServiceId : '');
+  const bindSelectedMemberServiceId =
+    (isBindSurface ? trimOptional(recentlyBoundServiceId) : '') ||
+    currentSelectedMemberServiceId;
+  const bindTargetService = useMemo(
+    () =>
+      bindSelectedMemberServiceId
+        ? publishedScopeServices.find(
+            (service) => service.serviceId === bindSelectedMemberServiceId,
+          ) ?? null
+        : null,
+    [bindSelectedMemberServiceId, publishedScopeServices],
+  );
+  const bindTargetServices = useMemo(
+    () => (bindTargetService ? [bindTargetService] : []),
+    [bindTargetService],
+  );
+  const bindTargetDefaultEndpointId = useMemo(
+    () => resolveStudioServiceDefaultEndpointId(bindTargetService),
+    [bindTargetService],
+  );
+  const bindPendingCandidate =
+    bindSelectedMemberServiceId ||
+    !currentFocusMemberKey.startsWith('workflow:')
+      ? null
+      : buildPendingBindCandidate;
+  const bindInitialEndpointId = bindSelectedMemberServiceId
+    ? currentBindingSelectionServiceId === bindSelectedMemberServiceId &&
+      currentBindingSelectionEndpointId
+      ? currentBindingSelectionEndpointId
+      : bindTargetDefaultEndpointId
+    : '';
   const hasInvokeTargetMemberSelection =
     Boolean(trimOptional(routeState.memberId)) ||
     Boolean(currentSelectedMemberServiceId) ||
@@ -3942,28 +4060,28 @@ const StudioPage: React.FC = () => {
 
     if (hasSelectedMemberFocus && !hasInvokeTargetMemberSelection) {
       return {
-        message: 'The current selection is not ready to invoke yet.',
+        message: '当前选择还不能直接调用。',
         description:
-          'Invoke stays pinned to published members only. Finish Bind for this member, then come back here.',
+          '调用页面只会固定到已发布的成员。请先为这个成员完成绑定，再回到这里继续调用。',
         type: 'info' as const,
       };
     }
 
     if (!hasInvokeTargetMemberSelection) {
       return {
-        message: 'Select a member to invoke.',
+        message: '请选择要调用的成员。',
         description:
-          'Choose a member from Team members or continue from Bind so Invoke stays pinned to one member.',
+          '请先在“团队成员”里选择成员，或从绑定页面继续进入，这样调用页面才会稳定固定到单个成员。',
         type: 'info' as const,
       };
     }
 
     return {
       message: `${
-        invokeTargetLabel || 'The selected member'
-      } is not ready to invoke yet.`,
+        invokeTargetLabel || '当前成员'
+      } 还不能直接调用。`,
       description:
-        'The selected member does not expose a published invoke contract in the current team context yet.',
+        '当前团队上下文里，这个成员还没有暴露可调用的已发布调用契约。',
       type: 'warning' as const,
     };
   }, [
@@ -3991,6 +4109,23 @@ const StudioPage: React.FC = () => {
     });
   }, []);
   useEffect(() => {
+    const normalizedRecentlyBoundServiceId = trimOptional(recentlyBoundServiceId);
+    if (!normalizedRecentlyBoundServiceId) {
+      return;
+    }
+
+    if (studioSurface !== 'bind') {
+      setRecentlyBoundServiceId('');
+      return;
+    }
+
+    const routeMemberId = trimOptional(routeState.memberId);
+    if (routeMemberId && routeMemberId !== normalizedRecentlyBoundServiceId) {
+      setRecentlyBoundServiceId('');
+    }
+  }, [recentlyBoundServiceId, routeState.memberId, studioSurface]);
+
+  useEffect(() => {
     if (!effectiveSelectedMemberKey) {
       return;
     }
@@ -3998,10 +4133,26 @@ const StudioPage: React.FC = () => {
     touchMemberRecency(effectiveSelectedMemberKey);
   }, [effectiveSelectedMemberKey, touchMemberRecency]);
   useEffect(() => {
-    const preferredServiceId =
-      trimOptional(routeState.memberId) ||
-      (selectedBuildRepresentsBoundMember ? currentScopeBindingServiceId : '');
+    const preferredServiceId = currentSelectedMemberServiceId;
     if (!preferredServiceId) {
+      if (
+        scopeBindingQuery.isLoading ||
+        scopeBindingQuery.isFetching ||
+        scopeServicesQuery.isLoading ||
+        scopeServicesQuery.isFetching
+      ) {
+        return;
+      }
+
+      if (
+        bindingSelectionRef.current.serviceId ||
+        bindingSelectionRef.current.endpointId
+      ) {
+        bindingSelectionRef.current = {
+          serviceId: '',
+          endpointId: '',
+        };
+      }
       return;
     }
 
@@ -4009,14 +4160,20 @@ const StudioPage: React.FC = () => {
       (service) => service.serviceId === preferredServiceId,
     );
     if (!selectedService) {
+      if (scopeServicesQuery.isLoading || scopeServicesQuery.isFetching) {
+        return;
+      }
+
+      bindingSelectionRef.current = {
+        serviceId: '',
+        endpointId: '',
+      };
       return;
     }
 
-    const fallbackEndpointId =
-      selectedService.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
-        ?.endpointId ||
-      selectedService.endpoints[0]?.endpointId ||
-      '';
+    const fallbackEndpointId = resolveStudioServiceDefaultEndpointId(
+      selectedService,
+    );
     if (!fallbackEndpointId) {
       return;
     }
@@ -4026,11 +4183,6 @@ const StudioPage: React.FC = () => {
       bindingSelectionRef.current.endpointId
         ? bindingSelectionRef.current.endpointId
         : fallbackEndpointId;
-    const currentInvokeSelection =
-      invokeSelectionRef.current.serviceId === preferredServiceId &&
-      invokeSelectionRef.current.endpointId
-        ? invokeSelectionRef.current.endpointId
-        : currentBindingSelection;
 
     if (
       bindingSelectionRef.current.serviceId !== preferredServiceId ||
@@ -4041,30 +4193,41 @@ const StudioPage: React.FC = () => {
         endpointId: currentBindingSelection,
       };
     }
-
-    if (
-      invokeSelectionRef.current.serviceId !== preferredServiceId ||
-      invokeSelectionRef.current.endpointId !== currentInvokeSelection
-    ) {
-      invokeSelectionRef.current = {
-        serviceId: preferredServiceId,
-        endpointId: currentInvokeSelection,
-      };
-    }
   }, [
-    currentScopeBindingServiceId,
+    currentSelectedMemberServiceId,
     publishedScopeServices,
-    routeState.memberId,
-    selectedBuildRepresentsBoundMember,
+    scopeBindingQuery.isFetching,
+    scopeBindingQuery.isLoading,
+    scopeServicesQuery.isFetching,
+    scopeServicesQuery.isLoading,
   ]);
-  const renameableWorkflowMemberKey = useMemo(
-    () => (selectedWorkflowId ? `workflow:${selectedWorkflowId}` : ''),
-    [selectedWorkflowId],
+  const selectedInventoryMemberKey = useMemo(
+    () =>
+      effectiveSelectedMemberKey.startsWith('workflow:')
+        ? effectiveSelectedMemberKey
+        : '',
+    [effectiveSelectedMemberKey],
   );
-  const renameableWorkflowLabel =
-    trimOptional(activeWorkflowName) ||
-    trimOptional(currentMemberLabel) ||
-    'current workflow member';
+  const selectedInventoryWorkflowId = trimOptional(
+    selectedInventoryMemberKey.startsWith('workflow:')
+      ? selectedInventoryMemberKey.slice('workflow:'.length)
+      : '',
+  );
+  const renameableWorkflowLabel = useMemo(() => {
+    if (!selectedInventoryWorkflowId) {
+      return 'current workflow member';
+    }
+
+    const selectedWorkflowSummaryForInventory = visibleWorkflowSummaries.find(
+      (workflow) =>
+        trimOptional(workflow.workflowId) === selectedInventoryWorkflowId,
+    );
+    return (
+      trimOptional(selectedWorkflowSummaryForInventory?.name) ||
+      trimOptional(selectedWorkflowSummaryForInventory?.fileName) ||
+      'current workflow member'
+    );
+  }, [selectedInventoryWorkflowId, visibleWorkflowSummaries]);
   const handleSelectStudioMember = useCallback(
     async (memberKey: string) => {
       const normalizedMemberKey = trimOptional(memberKey);
@@ -4376,11 +4539,11 @@ const StudioPage: React.FC = () => {
     visibleWorkflowSummaries,
   ]);
   const selectedMemberCanBind =
-    Boolean(currentFocusMemberKey) &&
+    Boolean(workbenchMemberKey) &&
     Boolean(
       selectedWorkflowId ||
         selectedScriptId ||
-        focusedPublishedService ||
+        workbenchPublishedService ||
         currentScopeBindingRevision ||
         (isBuildGAgentSurface && trimOptional(selectedGAgentTypeName))
     );
@@ -4684,7 +4847,9 @@ const StudioPage: React.FC = () => {
             ? currentMemberLabel
             : 'Select a member'
         : isBindSurface
-          ? scopeBindingQuery.data?.displayName || '成员绑定'
+          ? hasSelectedMemberFocus
+            ? currentMemberLabel
+            : '成员绑定'
           : isInvokeSurface
             ? scopeBindingQuery.data?.displayName || '成员调用'
             : pageTitle;
@@ -4735,7 +4900,6 @@ const StudioPage: React.FC = () => {
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
   const createMemberButtonDisabled = inventoryBusyKey === 'create';
-  const selectedInventoryMemberKey = renameableWorkflowMemberKey;
   const selectedInventoryMemberBusy =
     inventoryBusyKey === selectedInventoryMemberKey;
   const selectedInventoryBusyAction = selectedInventoryMemberBusy
@@ -4959,6 +5123,7 @@ const StudioPage: React.FC = () => {
       onInsertStep={handleInsertWorkflowStep}
       onApplyStepDraft={handleApplyWorkflowStepDraft}
       onRemoveSelectedStep={handleRemoveWorkflowStep}
+      onDeleteWorkflowNodes={handleRemoveWorkflowNodes}
       onAutoLayout={handleAutoLayoutWorkflow}
       onConnectNodes={handleWorkflowConnectNodes}
       onNodeLayoutChange={handleWorkflowNodeLayoutChange}
@@ -5100,21 +5265,17 @@ const StudioPage: React.FC = () => {
             ? buildWorkflowYamlBundle
             : null
         }
-        initialEndpointId={bindingSelectionRef.current.endpointId}
-        initialServiceId={bindingSelectionRef.current.serviceId}
+        initialEndpointId={bindInitialEndpointId}
+        initialServiceId={currentSelectedMemberServiceId}
         onBindPendingCandidate={handleBindPendingCandidate}
         onContinueToInvoke={handleUseBindingEndpoint}
         onSelectionChange={handleBindingSelectionChange}
-        pendingBindingCandidate={pendingBindCandidate}
-        preferredServiceId={
-          scopeBindingQuery.data?.available
-            ? scopeBindingQuery.data.serviceId
-            : ''
-        }
+        pendingBindingCandidate={bindPendingCandidate}
+        preferredServiceId={currentSelectedMemberServiceId}
         scopeBinding={scopeBindingQuery.data}
         scopeId={resolvedStudioScopeId}
         servicesLoading={scopeServicesQuery.isLoading || scopeServicesQuery.isFetching}
-        services={publishedScopeServices}
+        services={bindTargetServices}
       />
     ) : isInvokeSurface ? (
       <StudioMemberInvokePanel

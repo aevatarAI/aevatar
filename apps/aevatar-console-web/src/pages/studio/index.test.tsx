@@ -1227,6 +1227,18 @@ jest.mock("./components/StudioBuildPanels", () => {
           )
         )
       ),
+      mockReact.createElement(
+        "button",
+        {
+          key: "canvas-delete-selected-step",
+          type: "button",
+          onClick: () =>
+            props.onDeleteWorkflowNodes?.(
+              props.selectedGraphNodeId ? [props.selectedGraphNodeId] : []
+            ),
+        },
+        "Delete selected step on canvas"
+      ),
       detailsMode === "yaml"
         ? mockReact.createElement("div", { key: "yaml-title" }, "Workflow YAML")
         : mockReact.createElement("div", { key: "step-title" }, "Step Detail"),
@@ -1652,7 +1664,16 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
       React.createElement(
         "div",
         { key: "service" },
-        props.initialServiceId || props.preferredServiceId || "no-service"
+        `service:${props.initialServiceId || props.preferredServiceId || "no-service"}`
+      ),
+      React.createElement(
+        "div",
+        { key: "services" },
+        `services:${
+          Array.isArray(props.services) && props.services.length > 0
+            ? props.services.map((service: any) => service.serviceId).join(",")
+            : "none"
+        }`
       ),
       React.createElement(
         "div",
@@ -3185,6 +3206,13 @@ describe("StudioPage", () => {
         }),
       );
     });
+    await waitFor(() => {
+      expect(screen.getByText("service:default")).toBeTruthy();
+      expect(screen.getByText("services:default")).toBeTruthy();
+      expect(screen.getByText("candidate:none")).toBeTruthy();
+    });
+    expect(screen.queryByText("service:no-service")).toBeNull();
+    expect(screen.queryByText("services:none")).toBeNull();
 
     const rail = await screen.findByLabelText("Team members");
     await waitFor(() => {
@@ -3192,6 +3220,169 @@ describe("StudioPage", () => {
         within(rail).getAllByRole("button", { name: "workspace-demo" })
       ).toHaveLength(1);
     });
+  });
+
+  it("keeps Bind pinned to the selected member after leaving a workflow build surface", async () => {
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      name: "draft1",
+      fileName: "draft1.yaml",
+      filePath: "/tmp/workflows/draft1.yaml",
+      yaml: "name: draft1\nsteps: []\n",
+      document: {
+        ...mockParsedDocument,
+        name: "draft1",
+      },
+    };
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "workflow-1",
+        name: "draft1",
+        description: "Current draft member",
+        fileName: "draft1.yaml",
+        filePath: "/tmp/workflows/draft1.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+    ]);
+    mockServicesApi.listServices.mockResolvedValueOnce([
+      {
+        serviceId: "joker",
+        displayName: "joker",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-joker",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with joker.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: "scope-1",
+      serviceId: "joker",
+      displayName: "joker",
+      serviceKey: "scope-1:default:joker",
+      defaultServingRevisionId: "rev-joker",
+      activeServingRevisionId: "rev-joker",
+      deploymentId: "dep-joker",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-joker",
+      updatedAt: "2026-03-26T08:00:00Z",
+      revisions: [],
+    });
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementationOnce(
+      async () =>
+        mockBuildServiceRevisionCatalog({
+          serviceId: "joker",
+          displayName: "joker",
+          workflowName: "joker",
+        })
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&memberId=joker&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    const rail = await screen.findByLabelText("Team members");
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-context-title")).toHaveTextContent("joker");
+      expect(screen.getByText("service:joker")).toBeTruthy();
+      expect(screen.getByText("services:joker")).toBeTruthy();
+      expect(screen.getByText("candidate:none")).toBeTruthy();
+      expect(within(rail).getByRole("button", { name: "joker" })).toHaveAttribute(
+        "aria-current",
+        "true"
+      );
+    });
+    expect(within(rail).getByRole("button", { name: "draft1" })).not.toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+  });
+
+  it("pins Bind to the selected published member instead of the scope default route target", async () => {
+    mockServicesApi.listServices.mockResolvedValueOnce([
+      {
+        serviceId: "default",
+        displayName: "workspace-demo",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-default",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with workspace-demo.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+      {
+        serviceId: "joker",
+        displayName: "joker",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-joker",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with joker.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: "scope-1",
+      serviceId: "default",
+      displayName: "workspace-demo",
+      serviceKey: "scope-1:default:workspace-demo",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-default",
+      updatedAt: "2026-03-26T08:00:00Z",
+      revisions: [],
+    });
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
+      async (_scopeId: string, serviceId: string) =>
+        mockBuildServiceRevisionCatalog({
+          serviceId,
+          displayName: serviceId === "joker" ? "joker" : "workspace-demo",
+          workflowName: serviceId === "joker" ? "joker" : "workspace-demo",
+        })
+    );
+
+    renderStudioPage("/studio?scopeId=scope-1&memberId=joker&step=bind&tab=bindings");
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-context-title")).toHaveTextContent("joker");
+      expect(screen.getByText("service:joker")).toBeTruthy();
+      expect(screen.getByText("services:joker")).toBeTruthy();
+    });
+    expect(screen.queryByText("services:default,joker")).toBeNull();
+    expect(screen.getByText("candidate:none")).toBeTruthy();
   });
 
   it("does not resurrect a deleted workflow step when another node is selected afterwards", async () => {
@@ -3219,6 +3410,34 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
       expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
+    });
+  });
+
+  it("does not resurrect a canvas-deleted workflow step after adding another node", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "approve_step" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "approve_step" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Step ID")).toHaveValue("approve_step");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected step on canvas" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
+      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add step" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
+      expect(screen.getByRole("button", { name: "llm_call" })).toBeTruthy();
     });
   });
 
@@ -3973,7 +4192,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:no-service")).toBeTruthy();
     expect(screen.getByText("services:none")).toBeTruthy();
-    expect(screen.getByText("empty:Select a member to invoke.")).toBeTruthy();
+    expect(screen.getByText("empty:请选择要调用的成员。")).toBeTruthy();
   });
 
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {
@@ -3983,8 +4202,10 @@ describe("StudioPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Continue to Invoke" }));
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
-    expect(screen.getByText("service:default")).toBeTruthy();
-    expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("service:default")).toBeTruthy();
+      expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+    });
   });
 
   it("filters Observe to the current member instead of showing unrelated runs", async () => {
