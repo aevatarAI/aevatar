@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -51,7 +52,7 @@ internal static class NyxRelayAgentBuilderFlow
         return TryResolveKnownCommand(command, tokens, evt.ConversationId, out decision);
     }
 
-    public static string FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
+    public static MessageContent FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
@@ -61,22 +62,24 @@ internal static class NyxRelayAgentBuilderFlow
             return decision.ToolAction switch
             {
                 "create_daily_report" => FormatCreateDailyReportResult(doc.RootElement),
-                "create_social_media" => FormatCreateSocialMediaResult(doc.RootElement),
-                "list_templates" => FormatListTemplatesResult(doc.RootElement),
-                "list_agents" => FormatListAgentsResult(doc.RootElement),
-                "agent_status" => FormatAgentStatusResult(doc.RootElement),
-                "run_agent" => FormatRunAgentResult(doc.RootElement),
-                "disable_agent" => FormatLifecycleStatusResult("Agent disabled.", doc.RootElement),
-                "enable_agent" => FormatLifecycleStatusResult("Agent enabled.", doc.RootElement),
-                "delete_agent" => FormatDeleteAgentResult(doc.RootElement),
-                _ => toolResultJson,
+                "create_social_media" => TextContent(FormatCreateSocialMediaResult(doc.RootElement)),
+                "list_templates" => TextContent(FormatListTemplatesResult(doc.RootElement)),
+                "list_agents" => TextContent(FormatListAgentsResult(doc.RootElement)),
+                "agent_status" => TextContent(FormatAgentStatusResult(doc.RootElement)),
+                "run_agent" => TextContent(FormatRunAgentResult(doc.RootElement)),
+                "disable_agent" => TextContent(FormatLifecycleStatusResult("Agent disabled.", doc.RootElement)),
+                "enable_agent" => TextContent(FormatLifecycleStatusResult("Agent enabled.", doc.RootElement)),
+                "delete_agent" => TextContent(FormatDeleteAgentResult(doc.RootElement)),
+                _ => TextContent(toolResultJson),
             };
         }
         catch (JsonException)
         {
-            return toolResultJson;
+            return TextContent(toolResultJson);
         }
     }
+
+    private static MessageContent TextContent(string text) => new() { Text = text };
 
     private static bool IsKnownCommand(string command) =>
         command is DailyCommand
@@ -143,8 +146,8 @@ internal static class NyxRelayAgentBuilderFlow
     {
         decision = null;
         var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
-        var githubUsername = GetOptional(args, "github_username")
-                             ?? FirstPositionalArgument(tokens);
+        var githubUsername = NormalizeOptional(
+            GetOptional(args, "github_username") ?? FirstPositionalArgument(tokens));
 
         if (!TryResolveSchedule(args, out var scheduleCron, out var scheduleTimezone, out var error))
         {
@@ -154,13 +157,17 @@ internal static class NyxRelayAgentBuilderFlow
 
         var repositories = GetOptional(args, "repositories");
         var runImmediately = ResolveRunImmediately(args);
+        // When the user typed a positional username we persist it as their default so the next /daily
+        // call auto-resolves via the saved preference fallback inside AgentBuilderTool.
+        var savePreference = githubUsername is not null;
         decision = AgentBuilderFlowDecision.ToolCall(
             "create_daily_report",
             JsonSerializer.Serialize(new
             {
                 action = "create_agent",
                 template = "daily_report",
-                github_username = NormalizeOptional(githubUsername),
+                github_username = githubUsername,
+                save_github_username_preference = savePreference,
                 repositories,
                 schedule_cron = scheduleCron,
                 schedule_timezone = scheduleTimezone,
@@ -283,39 +290,8 @@ internal static class NyxRelayAgentBuilderFlow
         return true;
     }
 
-    private static string FormatCreateDailyReportResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"Create daily report agent failed: {error}";
-
-        var status = ReadString(root, "status") ?? "accepted";
-        if (string.Equals(status, "credentials_required", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase))
-        {
-            var providerId = ReadString(root, "provider_id") ?? "unknown-provider";
-            var url = ReadString(root, "authorization_url")
-                      ?? ReadString(root, "auth_url")
-                      ?? ReadString(root, "url")
-                      ?? ReadString(root, "documentation_url");
-            var note = ReadString(root, "note") ?? "Finish the GitHub authorization step, then run /daily again.";
-
-            return BuildTextBlock(
-                string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase)
-                    ? "GitHub authorization required."
-                    : "GitHub credentials required.",
-                note,
-                $"Provider ID: {providerId}",
-                string.IsNullOrWhiteSpace(url) ? null : $"Open: {url}",
-                BuildDailyReportHelpText());
-        }
-
-        return BuildTextBlock(
-            "Daily report agent registered.",
-            $"Agent ID: {ReadString(root, "agent_id") ?? "unknown-agent"}",
-            $"Next scheduled run: {ReadString(root, "next_scheduled_run") ?? "pending"}",
-            NormalizeOptional(ReadString(root, "note")),
-            "Next commands: /agents, /agent-status <agent_id>, /run-agent <agent_id>");
-    }
+    private static MessageContent FormatCreateDailyReportResult(JsonElement root) =>
+        AgentBuilderCardContent.FormatDailyReportToolReply(root);
 
     private static string FormatCreateSocialMediaResult(JsonElement root)
     {
