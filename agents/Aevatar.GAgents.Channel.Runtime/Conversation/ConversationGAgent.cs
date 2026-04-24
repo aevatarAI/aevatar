@@ -594,8 +594,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         SweepExpiredNyxRelayReplyTokens();
 
         var outboundDelivery = activity.OutboundDelivery;
-        var correlationId = NormalizeOptional(relayActivity.CorrelationId) ??
-                            NormalizeOptional(outboundDelivery?.CorrelationId);
+        var correlationId = NormalizeOptional(outboundDelivery?.CorrelationId) ??
+                            NormalizeOptional(relayActivity.CorrelationId);
         var replyToken = NormalizeOptional(relayActivity.ReplyToken);
         var replyMessageId = NormalizeOptional(outboundDelivery?.ReplyMessageId);
         if (correlationId is null || replyToken is null || replyMessageId is null)
@@ -690,8 +690,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private void RemoveNyxRelayReplyToken(string? correlationId, ChatActivity? activity)
     {
-        var normalizedCorrelationId = NormalizeOptional(correlationId) ??
-                                      NormalizeOptional(activity?.OutboundDelivery?.CorrelationId);
+        var normalizedCorrelationId = NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
+                                      NormalizeOptional(correlationId);
         if (normalizedCorrelationId is not null)
             _nyxRelayReplyTokens.Remove(normalizedCorrelationId);
     }
