@@ -55,6 +55,7 @@ public sealed class ChannelAbstractionsProtoTests
                 NyxAgentApiKeyId = "nyx-key-1",
                 NyxPlatform = "lark",
                 NyxConversationId = "nyx-conv-1",
+                NyxPlatformMessageId = "om_123",
             },
         };
         activity.Mentions.Add(new ParticipantRef
@@ -96,6 +97,7 @@ public sealed class ChannelAbstractionsProtoTests
         parsed.Conversation.Scope.ShouldBe(ConversationScope.Thread);
         parsed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
         parsed.TransportExtras.NyxAgentApiKeyId.ShouldBe("nyx-key-1");
+        parsed.TransportExtras.NyxPlatformMessageId.ShouldBe("om_123");
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ChatActivity));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)

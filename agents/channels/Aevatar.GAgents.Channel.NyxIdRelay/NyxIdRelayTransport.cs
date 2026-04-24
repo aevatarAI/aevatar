@@ -54,6 +54,7 @@ public sealed class NyxIdRelayTransport
         var partition = conversationIdentity;
         var timestamp = ParseTimestamp(payload.Timestamp);
         var botId = payload.Agent?.ApiKeyId?.Trim();
+        var platformMessageId = ResolvePlatformMessageId(payload, platform);
 
         var activity = new ChatActivity
         {
@@ -92,6 +93,7 @@ public sealed class NyxIdRelayTransport
                 NyxAgentApiKeyId = payload.Agent?.ApiKeyId?.Trim() ?? string.Empty,
                 NyxPlatform = platform,
                 NyxConversationId = payload.Conversation?.Id?.Trim() ?? conversationIdentity,
+                NyxPlatformMessageId = platformMessageId,
             },
         };
 
@@ -101,6 +103,60 @@ public sealed class NyxIdRelayTransport
 
     private static string NormalizePlatform(string? platform) =>
         string.IsNullOrWhiteSpace(platform) ? "unknown" : platform.Trim().ToLowerInvariant();
+
+    private static string ResolvePlatformMessageId(NyxIdRelayCallbackPayload payload, string platform)
+    {
+        var directPlatformId = payload.PlatformMessageId?.Trim();
+        if (!string.IsNullOrWhiteSpace(directPlatformId))
+            return directPlatformId;
+
+        if (payload.RawPlatformData is not { } rawPlatformData)
+            return string.Empty;
+
+        return platform switch
+        {
+            "lark" or "feishu" => ResolveLarkPlatformMessageId(rawPlatformData),
+            _ => string.Empty,
+        };
+    }
+
+    private static string ResolveLarkPlatformMessageId(JsonElement rawPlatformData)
+    {
+        if (TryReadJsonString(rawPlatformData, out var replyTarget, "event", "context", "open_message_id"))
+            return replyTarget;
+
+        if (TryReadJsonString(rawPlatformData, out var messageId, "event", "message", "message_id"))
+            return messageId;
+
+        return string.Empty;
+    }
+
+    private static bool TryReadJsonString(
+        JsonElement element,
+        out string value,
+        params string[] path)
+    {
+        value = string.Empty;
+        var current = element;
+        foreach (var segment in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object ||
+                !current.TryGetProperty(segment, out current))
+            {
+                return false;
+            }
+        }
+
+        if (current.ValueKind != JsonValueKind.String)
+            return false;
+
+        var parsed = current.GetString()?.Trim();
+        if (string.IsNullOrWhiteSpace(parsed))
+            return false;
+
+        value = parsed;
+        return true;
+    }
 
     private static string ResolveConversationIdentity(string platform, NyxIdRelayCallbackPayload payload)
     {

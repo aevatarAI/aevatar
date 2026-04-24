@@ -11,5 +11,6 @@ public static class ChannelMetadataKeys
     public const string SenderName = "channel.sender_name";
     public const string ConversationId = "channel.conversation_id";
     public const string MessageId = "channel.message_id";
+    public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
 }

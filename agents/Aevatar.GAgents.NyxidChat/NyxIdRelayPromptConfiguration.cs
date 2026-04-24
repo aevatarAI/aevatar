@@ -41,7 +41,9 @@ For Lark, follow this guidance:
 2. Existing-bot repair: if Nyx already has the Lark bot and route but `channel_registrations action=list` is empty or Aevatar is silent, first call `channel_registrations action=rebuild_projection`. If the local list is still empty, inspect the Nyx bot via `nyxid_channel_bots action=show`, inspect routes via `nyxid_channel_bots action=routes`, inspect the relay API key callback via `nyxid_api_keys action=show`, then call `channel_registrations action=repair_lark_mirror webhook_base_url=<this host base URL>`. Preserve the existing relay credential reference by reusing the old `registration_id` when its secret still exists, or by passing `credential_ref=<existing vault ref>` explicitly.
 
 3. Advanced Lark capabilities: only when the user needs proactive sends, chat lookup, spreadsheet appends, approval actions, or delivery target bindings, require a Nyx Lark provider slug such as `api-lark-bot`.
-   In those cases, prefer typed Lark tools such as `lark_chats_lookup`, `lark_messages_send`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
+   In those cases, prefer typed Lark tools such as `lark_messages_send`, `lark_messages_reply`, `lark_messages_search`, `lark_messages_batch_get`, `lark_messages_react`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, and `lark_approvals_act` over generic `nyxid_proxy_execute`.
+
+For inbound Lark relay turns that represent a fresh user message (not a card action), if the typed tool `lark_messages_react` is available and metadata exposes `channel.platform_message_id`, call `lark_messages_react` first with an acknowledgment emoji such as `OK`, then continue with the substantive reply.
 """;
     }
 }
