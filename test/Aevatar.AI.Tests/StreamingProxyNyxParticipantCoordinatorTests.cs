@@ -204,6 +204,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
         messageEvents.Should().HaveCount(1);
         messageEvents.Single().Content.Should().Contain("streamed reply from");
+        messageEvents.Single().SessionId.Should().Be("session-1");
         leftEvents.Should().BeEmpty();
     }
 

@@ -11,6 +11,8 @@ using Aevatar.Studio.Infrastructure.Storage;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Tools.Cli.Tests;
@@ -50,6 +52,29 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         forbidden.Value.Should().BeEquivalentTo(new
         {
             message = "Requested scope does not match the authenticated Studio scope.",
+        });
+    }
+
+    [Fact]
+    public async Task GetSettings_WhenQueryFallbackIsEnabledOutsideDevelopment_ReturnsUnauthorized()
+    {
+        var controller = CreateController(
+            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver(),
+            new StudioHostingOptions
+            {
+                AllowUnauthenticatedScopeQueryFallback = true,
+            },
+            Environments.Production);
+
+        var result = await controller.GetSettings("scope-1", CancellationToken.None);
+
+        var unauthorized = result.Result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
+        unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        unauthorized.Value.Should().BeEquivalentTo(new
+        {
+            message = "Studio authentication is required before accessing a scoped workflow workspace.",
         });
     }
 
@@ -108,7 +133,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     }
 
     [Fact]
-    public async Task DeleteDraft_WhenQueryFallbackIsEnabled_UsesRequestedScopeId()
+    public async Task DeleteDraft_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
     {
         var storagePort = new RecordingWorkflowDraftStore();
         var workflowId = $"workflow-{Guid.NewGuid():N}";
@@ -123,10 +148,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
         var result = await controller.DeleteDraft(workflowId, "scope-1", CancellationToken.None);
 
-        result.Should().BeOfType<NoContentResult>();
-        storagePort.DeletedWorkflows.Should().ContainSingle();
-        storagePort.DeletedWorkflows[0].ScopeId.Should().Be("scope-1");
-        storagePort.DeletedWorkflows[0].WorkflowId.Should().Be(workflowId);
+        var unauthorized = result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
+        unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        unauthorized.Value.Should().BeEquivalentTo(new
+        {
+            message = "Studio authentication is required before mutating a scoped workflow workspace.",
+        });
+        storagePort.DeletedWorkflows.Should().BeEmpty();
     }
 
     [Fact]
@@ -148,9 +176,72 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
         unauthorized.Value.Should().BeEquivalentTo(new
         {
-            message = "Studio authentication is required before accessing a scoped workflow workspace.",
+            message = "Studio authentication is required before mutating a scoped workflow workspace.",
         });
         storagePort.DeletedWorkflows.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateDraft_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
+    {
+        var storagePort = new RecordingWorkflowDraftStore();
+        var controller = CreateController(
+            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(storagePort),
+            new StubScopeResolver(),
+            new StudioHostingOptions
+            {
+                AllowUnauthenticatedScopeQueryFallback = true,
+            });
+
+        var result = await controller.CreateDraft(
+            new SaveWorkflowDraftRequest(
+                DirectoryId: "scope:scope-1",
+                WorkflowName: "workflow-1",
+                FileName: null,
+                Yaml: "name: workflow-1\nsteps: []\n"),
+            "scope-1",
+            CancellationToken.None);
+
+        var unauthorized = result.Result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
+        unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        unauthorized.Value.Should().BeEquivalentTo(new
+        {
+            message = "Studio authentication is required before mutating a scoped workflow workspace.",
+        });
+        storagePort.SavedWorkflows.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateDraft_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
+    {
+        var storagePort = new RecordingWorkflowDraftStore();
+        var controller = CreateController(
+            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(storagePort),
+            new StubScopeResolver(),
+            new StudioHostingOptions
+            {
+                AllowUnauthenticatedScopeQueryFallback = true,
+            });
+
+        var result = await controller.UpdateDraft(
+            "workflow-1",
+            new SaveWorkflowDraftRequest(
+                DirectoryId: "scope:scope-1",
+                WorkflowName: "workflow-1",
+                FileName: null,
+                Yaml: "name: workflow-1\nsteps: []\n"),
+            "scope-1",
+            CancellationToken.None);
+
+        var unauthorized = result.Result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
+        unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        unauthorized.Value.Should().BeEquivalentTo(new
+        {
+            message = "Studio authentication is required before mutating a scoped workflow workspace.",
+        });
+        storagePort.SavedWorkflows.Should().BeEmpty();
     }
 
     [Fact]
@@ -236,6 +327,31 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     }
 
     [Fact]
+    public async Task AddDirectory_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
+    {
+        var controller = CreateController(
+            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver(),
+            new StudioHostingOptions
+            {
+                AllowUnauthenticatedScopeQueryFallback = true,
+            });
+
+        var result = await controller.AddDirectory(
+            new AddWorkflowDirectoryRequest(Path.Combine(Path.GetTempPath(), $"scoped-dir-{Guid.NewGuid():N}"), "Scoped"),
+            "scope-1",
+            CancellationToken.None);
+
+        var unauthorized = result.Result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
+        unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        unauthorized.Value.Should().BeEquivalentTo(new
+        {
+            message = "Studio authentication is required before mutating a scoped workflow workspace.",
+        });
+    }
+
+    [Fact]
     public async Task RemoveDirectory_WhenScopeIsResolved_ReturnsBadRequest()
     {
         var controller = CreateController(
@@ -250,6 +366,28 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         badRequest.Value.Should().BeEquivalentTo(new
         {
             message = "Workflow directories are unavailable when workflows are scoped to the current login.",
+        });
+    }
+
+    [Fact]
+    public async Task RemoveDirectory_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
+    {
+        var controller = CreateController(
+            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver(),
+            new StudioHostingOptions
+            {
+                AllowUnauthenticatedScopeQueryFallback = true,
+            });
+
+        var result = await controller.RemoveDirectory("dir-1", "scope-1", CancellationToken.None);
+
+        var unauthorized = result.Result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
+        unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        unauthorized.Value.Should().BeEquivalentTo(new
+        {
+            message = "Studio authentication is required before mutating a scoped workflow workspace.",
         });
     }
 
@@ -558,8 +696,12 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         WorkspaceService workspaceService,
         AppScopedWorkflowService scopeWorkflowService,
         IAppScopeResolver scopeResolver,
-        StudioHostingOptions? hostingOptions = null)
+        StudioHostingOptions? hostingOptions = null,
+        string environmentName = "Development")
     {
+        var services = new ServiceCollection()
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment { EnvironmentName = environmentName })
+            .BuildServiceProvider();
         var controller = new WorkspaceController(
             workspaceService,
             scopeWorkflowService,
@@ -568,10 +710,21 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext(),
+                HttpContext = new DefaultHttpContext
+                {
+                    RequestServices = services,
+                },
             },
         };
         return controller;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ApplicationName { get; set; } = "Aevatar.Tools.Cli.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     private static AppScopedWorkflowService CreateScopeWorkflowService(IWorkflowDraftStore? workflowDraftStore) =>
@@ -664,10 +817,14 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
     private sealed class RecordingWorkflowDraftStore : IWorkflowDraftStore
     {
+        public List<ScopedWorkflowSave> SavedWorkflows { get; } = [];
         public List<ScopedWorkflowDelete> DeletedWorkflows { get; } = [];
 
-        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
+        {
+            SavedWorkflows.Add(new ScopedWorkflowSave(scopeId, workflowId, workflowName, yaml));
+            return Task.CompletedTask;
+        }
 
         public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
@@ -716,6 +873,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             Task.FromException(_exception);
     }
 
+    private sealed record ScopedWorkflowSave(string ScopeId, string WorkflowId, string WorkflowName, string Yaml);
     private sealed record ScopedWorkflowDelete(string ScopeId, string WorkflowId);
 
     private sealed class RecordingWorkspaceStore : IStudioWorkspaceStore

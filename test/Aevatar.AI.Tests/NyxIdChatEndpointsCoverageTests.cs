@@ -33,6 +33,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Microsoft.AspNetCore.Authorization;
 
 namespace Aevatar.AI.Tests;
 
@@ -41,6 +42,7 @@ using RelayOptions = Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions;
 public class NyxIdChatEndpointsCoverageTests
 {
     private static readonly System.Type EndpointsType = typeof(NyxIdChatEndpoints);
+    private const string NyxRefreshTokenMetadataKey = "nyxid.refresh_token";
 
     [Fact]
     public void MapNyxIdChatEndpoints_ShouldRegisterExpectedRoutes()
@@ -68,22 +70,11 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task NyxRelayDiagRoute_ShouldReturnGuidance_WhenTokenIsMissing()
+    public void NyxRelayDiagRoute_ShouldNotAllowAnonymous()
     {
         var endpoint = BuildRouteEndpoint("/api/webhooks/nyxid-relay/diag");
-        var context = new DefaultHttpContext
-        {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddSingleton(new NyxIdToolOptions())
-                .BuildServiceProvider(),
-        };
-        context.Request.Method = HttpMethods.Post;
 
-        var response = await ExecuteEndpointAsync(endpoint, context);
-
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("Provide token via X-Test-Token header");
+        endpoint.Metadata.OfType<IAllowAnonymous>().Should().BeEmpty();
     }
 
     [Fact]
@@ -257,13 +248,11 @@ public class NyxIdChatEndpointsCoverageTests
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("actor store unavailable");
-        historyStore.DeletedConversations.Should().ContainSingle(entry =>
-            entry.ScopeId == "scope-a" &&
-            entry.ConversationId == "actor-1");
+        historyStore.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleDeleteConversationAsync_ShouldNotRemoveActor_WhenHistoryDeleteFails()
+    public async Task HandleDeleteConversationAsync_ShouldRestoreActorRegistration_WhenHistoryDeleteFails()
     {
         var actorStore = new StubGAgentActorStore();
         var historyStore = new StubChatHistoryStore
@@ -282,7 +271,14 @@ public class NyxIdChatEndpointsCoverageTests
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("history unavailable");
-        actorStore.RemovedActors.Should().BeEmpty();
+        actorStore.RemovedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == "actor-1");
+        actorStore.AddedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == "actor-1");
     }
 
     [Fact]
@@ -378,6 +374,7 @@ public class NyxIdChatEndpointsCoverageTests
                 .BuildServiceProvider(),
         };
         context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
         context.Response.Body = new MemoryStream();
 
         var runtime = new StubActorRuntime();
@@ -409,6 +406,7 @@ public class NyxIdChatEndpointsCoverageTests
         chatRequest.Prompt.Should().Be("hello there");
         chatRequest.ScopeId.Should().Be("scope-a");
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("valid-token");
+        chatRequest.Metadata.Should().NotContainKey(NyxRefreshTokenMetadataKey);
         chatRequest.Metadata["scope_id"].Should().Be("scope-a");
         chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("relay-model");
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/relay-route");
@@ -845,11 +843,12 @@ public class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("accepted");
         response.Body.Should().Contain("msg-1");
+        var expectedActorId = BuildScopedRelayConversationActorId("scope-a", "slack:group:room-1");
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(ConversationGAgent) &&
-            call.Id == "channel-conversation:slack:group:room-1");
-        runtime.Actors.Should().ContainKey("channel-conversation:slack:group:room-1");
-        var actor = (StubActor)runtime.Actors["channel-conversation:slack:group:room-1"];
+            call.Id == expectedActorId);
+        runtime.Actors.Should().ContainKey(expectedActorId);
+        var actor = (StubActor)runtime.Actors[expectedActorId];
         actor.HandledEnvelopes.Should().ContainSingle(envelope =>
             envelope.Payload != null &&
             envelope.Payload.Is(NyxRelayInboundActivity.Descriptor));
@@ -948,10 +947,11 @@ public class NyxIdChatEndpointsCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var expectedActorId = BuildScopedRelayConversationActorId("scope-b", "discord:channel:conv-1");
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(ConversationGAgent) &&
-            call.Id == "channel-conversation:discord:channel:conv-1");
-        runtime.Actors.Should().ContainKey("channel-conversation:discord:channel:conv-1");
+            call.Id == expectedActorId);
+        runtime.Actors.Should().ContainKey(expectedActorId);
     }
 
     [Fact]
@@ -1321,6 +1321,13 @@ public class NyxIdChatEndpointsCoverageTests
         };
     }
 
+    private static string BuildScopedRelayConversationActorId(string scopeId, string canonicalKey)
+    {
+        var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
+            .ToLowerInvariant();
+        return $"channel-conversation:{canonicalKey}:scope:{scopeHash}";
+    }
+
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
     {
         var context = new DefaultHttpContext
@@ -1428,6 +1435,7 @@ public class NyxIdChatEndpointsCoverageTests
             Audience = "channel-relay/callback",
             Subject = new ClaimsIdentity(
             [
+                new Claim(JwtRegisteredClaimNames.Sub, relayApiKeyId),
                 new Claim("api_key_id", relayApiKeyId),
                 new Claim("message_id", messageId),
                 new Claim("platform", platform),

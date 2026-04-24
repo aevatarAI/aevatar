@@ -1,4 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -73,6 +75,13 @@ public static partial class NyxIdChatEndpoints
             }
 
             http.User = validation.Principal;
+            if (string.IsNullOrWhiteSpace(validation.ScopeId))
+            {
+                logger.LogWarning(
+                    "Relay callback authentication succeeded but did not produce a canonical scope id: message={MessageId}",
+                    payload.MessageId);
+                return Results.Unauthorized();
+            }
 
             var contentType = NyxIdRelayPayloads.NormalizeContentType(payload.Content?.ContentType ?? payload.Content?.Type);
             if (string.Equals(contentType, RelayCardActionContentType, StringComparison.Ordinal))
@@ -134,7 +143,7 @@ public static partial class NyxIdChatEndpoints
                 CorrelationId = activity.OutboundDelivery.CorrelationId,
             };
 
-            var actorId = ConversationGAgent.BuildActorId(activity.Conversation.CanonicalKey);
+            var actorId = BuildScopedRelayConversationActorId(validation.ScopeId, activity.Conversation.CanonicalKey);
             var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
             var command = new EventEnvelope
             {
@@ -238,6 +247,16 @@ public static partial class NyxIdChatEndpoints
                 },
             Timestamp = payload.Timestamp,
         };
+
+    private static string BuildScopedRelayConversationActorId(string? scopeId, string canonicalKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalKey);
+
+        var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
+            .ToLowerInvariant();
+        return $"{ConversationGAgent.BuildActorId(canonicalKey)}:scope:{scopeHash}";
+    }
 
     private static string ClassifyError(string error) => NyxIdRelayReplies.ClassifyError(error);
 }
