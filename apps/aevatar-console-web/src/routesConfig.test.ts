@@ -48,7 +48,8 @@ describe("console routes", () => {
     expect(findRoute(routes, "/teams").hideInMenu).toBe(false);
     expect(findRoute(routes, "/studio").hideInMenu).toBe(true);
     expect(findRoute(routes, "/chat").hideInMenu).toBe(true);
-    expect(findRoute(routes, "/runtime/runs").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/runtime/runs").hideInMenu).toBeUndefined();
+    expect(findRoute(routes, "/runtime/runs").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
     expect(findRoute(routes, "/teams").name).toBe("My Teams");
     expect(findRoute(routes, "/teams").component).toBe("./teams");
@@ -71,6 +72,7 @@ describe("console routes", () => {
     expect(findRoute(routes, "/gagents").redirect).toBe("/runtime/gagents");
     expect(hasRoute(routes, "/mission-control")).toBe(true);
     expect(findRoute(routes, "/mission-control").redirect).toBe("/runtime/mission-control");
+    expect(findRoute(routes, "/runtime/mission-control").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/explorer").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/runtime/explorer/detail").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/explorer/detail").parentKeys).toEqual([
