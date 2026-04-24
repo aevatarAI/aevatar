@@ -513,12 +513,77 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("link", { name: "Teams" })).toBeTruthy();
     expect(screen.getByText("scopeId")).toBeTruthy();
     expect(screen.getByText("scope-1")).toBeTruthy();
+    const currentPostureHeading = screen.getByText("当前态势");
+    const trustHeading = screen.getByText("信任态势");
+    const governanceHeading = screen.getByText("治理快照");
+    const compareHeading = screen.getByText("Run Compare / Change Diff");
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("运行摘要")).toBeTruthy();
-    expect(screen.getByText("当前态势")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "运行记录" })).toBeTruthy();
+    expect(currentPostureHeading).toBeTruthy();
+    expect(trustHeading).toBeTruthy();
+    expect(
+      await screen.findByText("Comparing run run-current against baseline run-good."),
+    ).toBeTruthy();
+    expect(screen.getByText("需要人工处理后继续")).toBeTruthy();
+    expect(screen.getByText("等待人工")).toBeTruthy();
+    expect(governanceHeading).toBeTruthy();
+    expect(compareHeading).toBeTruthy();
+    expect(
+      currentPostureHeading.compareDocumentPosition(trustHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      governanceHeading.compareDocumentPosition(compareHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText("Runtime deltas")).toBeTruthy();
+    expect(await screen.findByText("Step deltas")).toBeTruthy();
+    expect(await screen.findByText("Handoff deltas")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "本次对话" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
+  });
+
+  it("keeps compare honest when no successful baseline exists", async () => {
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateRunsCatalog(),
+      runs: [mockCreateRunsCatalog().runs[0]],
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("信任态势")).toBeTruthy();
+    expect(
+      (await screen.findAllByText("No successful baseline is available yet.")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("等待基线")).toBeTruthy();
+    expect(screen.getByText("无基线")).toBeTruthy();
+    expect(screen.getByText("暂无成功基线运行")).toBeTruthy();
+  });
+
+  it("keeps selected run facts aligned without inventing a failed baseline", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&runId=run-good",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(
+      (await screen.findAllByText("No successful baseline is available yet.")).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByText("Comparing run run-current against baseline run-good."),
+    ).toBeNull();
+
+    await waitFor(() => {
+      const auditedRunIds = (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mock.calls.map(
+        (call) => call[2],
+      );
+      expect(auditedRunIds).toContain("run-good");
+      expect(auditedRunIds).not.toContain("run-current");
+    });
   });
 
   it("prefers the explicit workflow display name for the team heading", async () => {
@@ -842,6 +907,27 @@ describe("TeamDetailPage", () => {
     expect(params.get("serviceId")).toBe("default");
   });
 
+  it("opens Mission Control from the team event stream with run context", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "服务映射" });
+    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
+    await screen.findByText("当前任务事件流");
+    await screen.findByText(/Current playback is centered on risk_review/);
+    fireEvent.click(await screen.findByRole("button", { name: "打开 Mission Control" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/mission-control");
+    });
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("actorId")).toBe("actor-intake");
+    expect(params.get("autoStream")).toBe("true");
+    expect(params.get("prompt")).toBe("hello");
+    expect(params.get("runId")).toBe("run-current");
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("serviceId")).toBe("default");
+  });
+
   it("updates the topology depth selection when the focus member is available", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -938,6 +1024,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByText("Support Escalation Triage");
     fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
 
     await waitFor(() => {
@@ -945,16 +1032,17 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("member")).toBe("workflow:workflow-1");
+    expect(params.get("memberId")).toBeNull();
+    expect(params.get("focus")).toBeNull();
     expect(params.get("tab")).toBe("studio");
-    if (params.get("focus")) {
-      expect(params.get("focus")).toBe("workflow:workflow-1");
-    }
   });
 
   it("opens workflow and script Studio deep links from assets with scope context", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByText("Support Escalation Triage");
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
     await screen.findByText("当前 Team 资产");
 
@@ -964,7 +1052,8 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain(
+    expect(window.location.search).toContain("member=workflow%3Aworkflow-1");
+    expect(window.location.search).not.toContain(
       "focus=workflow%3Aworkflow-1",
     );
 
@@ -979,7 +1068,8 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("focus=script%3Ascript-1");
+    expect(window.location.search).toContain("member=script%3Ascript-1");
+    expect(window.location.search).not.toContain("focus=script%3Ascript-1");
     expect(window.location.search).toContain("tab=scripts");
   });
 

@@ -22,7 +22,8 @@ message ChannelBotRegistrationEntry {
   string nyx_channel_bot_id = 9;
   string nyx_agent_api_key_id = 10;
   string nyx_conversation_route_id = 11;
-  string credential_ref = 12;
+  reserved 12;
+  reserved "credential_ref";
 }
 
 message ChannelBotRegistrationStoreState {
@@ -116,15 +117,25 @@ message ChannelBotRegisterCommand {
   string nyx_channel_bot_id = 6;
   string nyx_agent_api_key_id = 7;
   string nyx_conversation_route_id = 8;
-  string credential_ref = 9;
+  reserved 9;
+  reserved "credential_ref";
 }
 
 message ChannelBotUnregisterCommand {
   string registration_id = 1;
 }
 
+message ChannelBotRebuildProjectionCommand {
+  string reason = 1;
+}
+
 message ChannelBotCompactTombstonesCommand {
   int64 safe_state_version = 1;
+}
+
+message ChannelBotProjectionRebuildRequestedEvent {
+  string reason = 1;
+  google.protobuf.Timestamp requested_at = 2;
 }
 
 message ChannelBotTombstonesCompactedEvent {
@@ -146,7 +157,8 @@ message ChannelBotRegistrationDocument {
   string nyx_channel_bot_id = 10;
   string nyx_agent_api_key_id = 11;
   string nyx_conversation_route_id = 12;
-  string credential_ref = 13;
+  reserved 13;
+  reserved "credential_ref";
 }
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───

@@ -78,8 +78,6 @@ public static partial class NyxIdChatEndpoints
                 }
 
                 chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
-                if (TryExtractRefreshToken(http) is { } refreshToken)
-                    chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRefreshToken] = refreshToken;
                 chatRequest.Metadata["scope_id"] = scopeId;
                 await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, runCt);
                 await InjectUserMemoryAsync(http, chatRequest.Metadata, runCt);

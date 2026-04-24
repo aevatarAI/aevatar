@@ -61,22 +61,69 @@ public class AuthenticationHostCoverageTests
     }
 
     [Fact]
-    public void AddAevatarAuthentication_WhenDisabled_ShouldSkipAuthenticationRegistration()
+    public async Task AddAevatarAuthentication_WhenDisabled_ShouldRegisterFallbackAuthenticationSchemeWithoutClaimsTransformation()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = Environments.Development,
         });
 
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
         builder.AddAevatarAuthentication();
 
         using var app = builder.Build();
         var provider = app.Services;
 
         using var scope = provider.CreateScope();
-        scope.ServiceProvider.GetService<IAuthenticationService>().Should().BeNull();
+        scope.ServiceProvider.GetService<IAuthenticationService>().Should().NotBeNull();
+        var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
+        (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be(DisabledAuthenticationScheme);
+        (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be(DisabledAuthenticationScheme);
         scope.ServiceProvider.GetServices<IClaimsTransformation>()
-            .Should().BeEmpty();
+            .Should().NotContain(x => x.GetType().Name == "AevatarClaimsTransformation");
+    }
+
+    [Fact]
+    public async Task AddAevatarAuthentication_WhenEnabledFlagIsMissing_ShouldDefaultToJwtBearerAuthentication()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://id.example.com";
+
+        builder.AddAevatarAuthentication();
+
+        using var app = builder.Build();
+        using var scope = app.Services.CreateScope();
+        var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
+
+        (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be("Bearer");
+        (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be("Bearer");
+        scope.ServiceProvider.GetServices<IClaimsTransformation>()
+            .Should().ContainSingle(x => x.GetType().Name == "AevatarClaimsTransformation");
+    }
+
+    [Fact]
+    public async Task AddAevatarAuthentication_WhenDisabledOutsideDevelopment_ShouldStillUseJwtBearerAuthentication()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://id.example.com";
+
+        builder.AddAevatarAuthentication();
+
+        using var app = builder.Build();
+        using var scope = app.Services.CreateScope();
+        var schemeProvider = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
+
+        (await schemeProvider.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be("Bearer");
+        (await schemeProvider.GetDefaultChallengeSchemeAsync())!.Name.Should().Be("Bearer");
     }
 
     [Fact]
@@ -87,6 +134,7 @@ public class AuthenticationHostCoverageTests
             EnvironmentName = Environments.Development,
         });
 
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
         builder.AddAevatarAuthentication();
         using var app = builder.Build();
 
@@ -156,9 +204,59 @@ public class AuthenticationHostCoverageTests
             .And.Contain(c => c.Value == "existing-scope");
     }
 
+    [Fact]
+    public void ResolveAuthenticationEnabled_ShouldHonorDevelopmentAndProductionRules()
+    {
+        InvokeResolveAuthenticationEnabled(null, new HostEnvironmentStub(Environments.Development))
+            .Should().BeTrue();
+        InvokeResolveAuthenticationEnabled("false", new HostEnvironmentStub(Environments.Development))
+            .Should().BeFalse();
+        InvokeResolveAuthenticationEnabled("false", new HostEnvironmentStub(Environments.Production))
+            .Should().BeTrue();
+        InvokeResolveAuthenticationEnabled("true", new HostEnvironmentStub(Environments.Production))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResolveAuthenticationEnabled_ShouldThrowForInvalidConfigurationOrMissingEnvironment()
+    {
+        var invalidAct = () => InvokeResolveAuthenticationEnabled("nope", new HostEnvironmentStub(Environments.Development));
+        invalidAct.Should().Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .WithMessage("Invalid boolean value 'nope' for Aevatar:Authentication:Enabled.");
+
+        var nullEnvironmentAct = () => InvokeResolveAuthenticationEnabled("true", null);
+        nullEnvironmentAct.Should().Throw<TargetInvocationException>()
+            .WithInnerException<ArgumentNullException>();
+    }
+
     private static IReadOnlyList<Claim> Transform(NyxIdClaimsTransformer transformer, IEnumerable<Claim> claims)
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims));
         return transformer.TransformClaims(principal).ToList();
+    }
+
+    private static bool InvokeResolveAuthenticationEnabled(string? configuredValue, IHostEnvironment? environment)
+    {
+        var method = typeof(AevatarAuthenticationHostExtensions).GetMethod(
+            "ResolveAuthenticationEnabled",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("ResolveAuthenticationEnabled not found.");
+
+        return (bool)method.Invoke(null, [configuredValue, environment!])!;
+    }
+
+    private static string DisabledAuthenticationScheme =>
+        (string)typeof(AevatarAuthenticationHostExtensions)
+            .GetField("DisabledAuthenticationScheme", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetValue(null)!;
+
+    private sealed class HostEnvironmentStub(string environmentName) : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = environmentName;
+        public string ApplicationName { get; set; } = "Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 }

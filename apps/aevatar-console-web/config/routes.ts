@@ -87,7 +87,7 @@ export default [
     path: "/runtime/runs",
     name: "Event Stream",
     component: "./runs",
-    hideInMenu: true,
+    menuGroupKey: "platform",
   },
   {
     path: "/runtime/mission-control",

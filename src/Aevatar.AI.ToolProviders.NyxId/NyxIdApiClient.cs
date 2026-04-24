@@ -17,7 +17,8 @@ public sealed record NyxIdChannelRelayReplyResult(
     bool Succeeded,
     string? MessageId = null,
     string? PlatformMessageId = null,
-    string? Detail = null);
+    string? Detail = null,
+    bool EditUnsupported = false);
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient
@@ -506,6 +507,90 @@ public sealed class NyxIdApiClient
             return new { text = body.Text };
 
         return new { metadata = new { card = body.Metadata!.Card } };
+    }
+
+    /// <summary>
+    /// Edits a previously sent channel-relay reply so the downstream platform sees updated content
+    /// (per NyxID #480 / #483: <c>POST /api/v1/channel-relay/reply/update</c>).
+    /// </summary>
+    /// <param name="platformMessageId">
+    /// The upstream platform-owned message identifier (for Lark, the <c>om_xxx</c> value) returned
+    /// by a prior send call.
+    /// </param>
+    /// <remarks>
+    /// Callers must treat <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> as a terminal
+    /// signal and stop issuing edits against this message for the remainder of the turn.
+    /// </remarks>
+    public async Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayReplyAsync(
+        string token,
+        string platformMessageId,
+        ChannelRelayReplyBody body,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
+        if (string.IsNullOrWhiteSpace(token))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+        if (string.IsNullOrWhiteSpace(platformMessageId))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_platform_message_id");
+        if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
+
+        var response = await PostAsync(
+            token,
+            "/api/v1/channel-relay/reply/update",
+            JsonSerializer.Serialize(new
+            {
+                message_id = platformMessageId,
+                reply = BuildReplyNode(body),
+            }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+        {
+            var editUnsupported =
+                errorDetail.Contains("edit_unsupported", StringComparison.Ordinal) ||
+                errorDetail.Contains("nyx_status=501", StringComparison.Ordinal);
+            return new NyxIdChannelRelayReplyResult(
+                false,
+                Detail: errorDetail,
+                EditUnsupported: editUnsupported);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var upstream = root.TryGetProperty("upstream_message_id", out var upstreamProp) &&
+                           upstreamProp.ValueKind == JsonValueKind.String
+                ? upstreamProp.GetString()
+                : null;
+            return new NyxIdChannelRelayReplyResult(
+                true,
+                MessageId: null,
+                PlatformMessageId: upstream);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Nyx channel relay reply update returned invalid JSON");
+            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_update_response");
+        }
+    }
+
+    /// <summary>
+    /// Text-only convenience wrapper over
+    /// <see cref="UpdateChannelRelayReplyAsync(string, string, ChannelRelayReplyBody, CancellationToken)"/>.
+    /// </summary>
+    public Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayTextReplyAsync(
+        string token,
+        string platformMessageId,
+        string text,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+
+        return UpdateChannelRelayReplyAsync(token, platformMessageId, new ChannelRelayReplyBody(text), ct);
     }
 
     // ─── Admin Invite Codes ───

@@ -12,6 +12,7 @@ public static class StreamingProxyDefaults
     public const int InitialResponseTimeoutMs = 15000;
     public const int PostTopicTimeoutMs = 5000;
     public const int IdleCompletionTimeoutMs = 1500;
+    public const int TerminalCompletionTimeoutMs = 5000;
 
     public static string GenerateRoomId() =>
         $"{ActorIdPrefix}-{Guid.NewGuid():N}";

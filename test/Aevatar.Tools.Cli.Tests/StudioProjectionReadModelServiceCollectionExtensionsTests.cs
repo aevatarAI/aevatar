@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
@@ -29,6 +30,7 @@ public sealed class StudioProjectionReadModelServiceCollectionExtensionsTests
         typeof(GAgentRegistryCurrentStateDocument),
         typeof(UserMemoryCurrentStateDocument),
         typeof(StreamingProxyParticipantCurrentStateDocument),
+        typeof(UserConfigCurrentStateDocument),
     ];
 
     [Fact]
@@ -167,9 +169,48 @@ public sealed class StudioProjectionReadModelServiceCollectionExtensionsTests
         var countAfterFirstCall = services.Count;
         services.AddStudioProjectionReadModelProviders(configuration);
 
-        // Second call must short-circuit via the canary check on
-        // IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string>.
+        // Second call must short-circuit once the full Studio reader set is present.
         services.Count.Should().Be(countAfterFirstCall);
+    }
+
+    [Fact]
+    public void AddStudioProjectionReadModelProviders_WhenPartialRegistrationExists_ShouldFillMissingReaders()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration();
+
+        services.AddInMemoryDocumentProjectionStore<RoleCatalogCurrentStateDocument, string>(
+            keySelector: static readModel => readModel.ActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        services.AddStudioProjectionReadModelProviders(configuration);
+
+        AssertReaderAndWriterRegistered(services, typeof(ChatConversationCurrentStateDocument));
+        AssertReaderAndWriterRegistered(services, typeof(UserConfigCurrentStateDocument));
+        services.Count(descriptor => descriptor.ServiceType == typeof(IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string>)).Should().Be(1);
+    }
+
+    [Fact]
+    public void AddStudioProjectionReadModelProviders_WhenPartialRegistrationUsesDifferentProvider_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+        });
+
+        services.AddInMemoryDocumentProjectionStore<RoleCatalogCurrentStateDocument, string>(
+            keySelector: static readModel => readModel.ActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
+
+        Action act = () => services.AddStudioProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*RoleCatalogCurrentStateDocument*different provider*");
     }
 
     [Fact]

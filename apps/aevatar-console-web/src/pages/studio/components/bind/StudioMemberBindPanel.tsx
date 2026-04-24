@@ -25,7 +25,6 @@ import {
   describeStudioScopeBindingRevisionTarget,
   formatStudioScopeBindingImplementationKind,
   type StudioAuthSession,
-  type StudioScopeBindingStatus,
 } from '@/shared/studio/models';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_INTERACTIVE_CHIP_CLASS } from '@/shared/ui/interactionStandards';
@@ -59,7 +58,6 @@ type StudioMemberBindPanelProps = {
   readonly preferredServiceId?: string;
   readonly authSession?: StudioAuthSession | null;
   readonly servicesLoading?: boolean;
-  readonly scopeBinding?: StudioScopeBindingStatus | null;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
 };
@@ -245,7 +243,6 @@ function buildBindingSectionTitle(count: number): string {
 const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   buildWorkflowYamls,
   scopeId,
-  scopeBinding,
   services,
   initialServiceId,
   initialEndpointId,
@@ -375,19 +372,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     () => getScopeServiceCurrentRevision(revisionsQuery.data),
     [revisionsQuery.data],
   );
-  const isSelectedServiceCurrentRouteTarget =
-    Boolean(scopeBinding?.available) &&
-    trimOptional(scopeBinding?.serviceId) === trimOptional(selectedService?.serviceId);
-  const routingStatusMessage = !selectedService
-    ? 'Select a published contract first to inspect routing status.'
-    : !scopeBinding?.available
-      ? 'No default scope route target is configured yet. This member is published, but not selected as the current default route target.'
-      : isSelectedServiceCurrentRouteTarget
-        ? 'This member is the current default route target in this scope.'
-        : `${scopeBinding.displayName || scopeBinding.serviceId} is currently serving as the default route target for this scope.`;
-  const routingStatusType: 'success' | 'info' = isSelectedServiceCurrentRouteTarget
-    ? 'success'
-    : 'info';
 
   const bindContract = useMemo<StudioBindContract | null>(
     () =>
@@ -395,14 +379,12 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         authSession,
         endpoint: selectedEndpoint,
         revision: currentPublishedRevision,
-        scopeBinding,
         scopeId,
         service: selectedService,
       }),
     [
       authSession,
       currentPublishedRevision,
-      scopeBinding,
       scopeId,
       selectedEndpoint,
       selectedService,
@@ -576,29 +558,69 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const bindingList = bindingCatalog?.bindings ?? [];
   const hasMultiplePublishedServices = services.length > 1;
   const revisionList = revisionsQuery.data?.revisions ?? [];
+  const bindSurfaceIdentity = useMemo(() => {
+    const pendingCandidateIdentity = pendingBindingCandidate
+      ? `candidate:${scopeId}:${pendingBindingCandidate.kind}:${pendingBindingCandidate.displayName}`
+      : '';
+    if (pendingCandidateIdentity) {
+      return pendingCandidateIdentity;
+    }
+
+    const currentServiceIdentity =
+      trimOptional(initialServiceId) ||
+      trimOptional(preferredServiceId) ||
+      trimOptional(selectedService?.serviceId);
+    if (currentServiceIdentity) {
+      return `service:${scopeId}:${currentServiceIdentity}`;
+    }
+
+    return `scope:${scopeId}:empty`;
+  }, [
+    initialServiceId,
+    pendingBindingCandidate,
+    preferredServiceId,
+    scopeId,
+    selectedService?.serviceId,
+  ]);
+  const bindSurfaceIdentityRef = React.useRef(bindSurfaceIdentity);
+
+  useEffect(() => {
+    bindSurfaceIdentityRef.current = bindSurfaceIdentity;
+    setPendingBindBusy(false);
+    setPendingBindNotice(null);
+  }, [bindSurfaceIdentity]);
 
   const handleBindPendingCandidate = useCallback(async () => {
     if (!onBindPendingCandidate || !pendingBindingCandidate) {
       return;
     }
 
+    const requestBindIdentity = bindSurfaceIdentity;
     setPendingBindBusy(true);
     setPendingBindNotice(null);
     try {
       await onBindPendingCandidate();
+      if (bindSurfaceIdentityRef.current !== requestBindIdentity) {
+        return;
+      }
       setPendingBindNotice({
         message: `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
         type: 'success',
       });
     } catch (error) {
+      if (bindSurfaceIdentityRef.current !== requestBindIdentity) {
+        return;
+      }
       setPendingBindNotice({
         message: error instanceof Error ? error.message : String(error),
         type: 'error',
       });
     } finally {
-      setPendingBindBusy(false);
+      if (bindSurfaceIdentityRef.current === requestBindIdentity) {
+        setPendingBindBusy(false);
+      }
     }
-  }, [onBindPendingCandidate, pendingBindingCandidate]);
+  }, [bindSurfaceIdentity, onBindPendingCandidate, pendingBindingCandidate]);
 
   if (!scopeId) {
     return (
@@ -1130,56 +1152,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                     description="Keep one published contract in focus to review its details."
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
-                ),
-              },
-              {
-                key: 'routing-status',
-                label: 'Routing status',
-                children: (
-                  <div style={{ display: 'grid', gap: 12 }}>
-                    <Alert showIcon message={routingStatusMessage} type={routingStatusType} />
-                    <div style={parameterGridStyle}>
-                      <div style={valueCardStyle}>
-                        <Typography.Text type="secondary">Current member</Typography.Text>
-                        <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                          {selectedService?.displayName ||
-                            selectedService?.serviceId ||
-                            'No published contract'}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          {selectedService?.serviceId || 'Select a contract to inspect routing.'}
-                        </Typography.Text>
-                      </div>
-                      <div style={valueCardStyle}>
-                        <Typography.Text type="secondary">Current scope route target</Typography.Text>
-                        <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                          {scopeBinding?.available
-                            ? scopeBinding.displayName || scopeBinding.serviceId
-                            : 'No default route target'}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          {scopeBinding?.available
-                            ? `Revision ${scopeBinding.activeServingRevisionId || scopeBinding.defaultServingRevisionId || 'n/a'}`
-                            : 'Studio cannot resolve a default route target for this scope yet.'}
-                        </Typography.Text>
-                      </div>
-                      <div style={valueCardStyle}>
-                        <Typography.Text type="secondary">Routing posture</Typography.Text>
-                        <Space wrap size={[6, 6]}>
-                          <Tag color={isSelectedServiceCurrentRouteTarget ? 'green' : 'default'}>
-                            {isSelectedServiceCurrentRouteTarget
-                              ? 'default route target'
-                              : 'not default'}
-                          </Tag>
-                          {scopeBinding?.available ? (
-                            <Tag color="blue">
-                              deployment · {scopeBinding.deploymentStatus || 'unknown'}
-                            </Tag>
-                          ) : null}
-                        </Space>
-                      </div>
-                    </div>
-                  </div>
                 ),
               },
               {

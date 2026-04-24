@@ -18,17 +18,67 @@ public interface IConversationTurnRunner
     /// <summary>
     /// Executes one bot turn for an inbound activity.
     /// </summary>
-    Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct);
+    Task<ConversationTurnResult> RunInboundAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
 
     /// <summary>
     /// Executes the outbound leg after an asynchronous LLM reply has been generated.
     /// </summary>
-    Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct);
+    Task<ConversationTurnResult> RunLlmReplyAsync(
+        LlmReplyReadyEvent reply,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
 
     /// <summary>
     /// Executes one bot turn for a proactive continue command.
     /// </summary>
     Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct);
+
+    /// <summary>
+    /// Delivers one progressive streaming chunk to the downstream platform. If
+    /// <paramref name="currentPlatformMessageId"/> is <c>null</c>, the chunk is dispatched as the
+    /// initial placeholder send; otherwise it is dispatched as an edit targeting that upstream
+    /// platform message. Only invoked by <see cref="ConversationGAgent"/> while it holds the reply
+    /// token in-memory.
+    /// </summary>
+    Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
+}
+
+/// <summary>
+/// Outcome of one progressive streaming chunk dispatch.
+/// </summary>
+public sealed record ConversationStreamChunkResult(
+    bool Success,
+    string? PlatformMessageId,
+    bool EditUnsupported,
+    string ErrorCode,
+    string ErrorSummary)
+{
+    public static ConversationStreamChunkResult Succeeded(string? platformMessageId) =>
+        new(true, platformMessageId, false, string.Empty, string.Empty);
+
+    public static ConversationStreamChunkResult Failed(
+        string errorCode,
+        string errorSummary,
+        bool editUnsupported = false) =>
+        new(false, null, editUnsupported, errorCode, errorSummary);
+}
+
+public sealed record NyxRelayReplyTokenContext(
+    string CorrelationId,
+    string ReplyToken,
+    string ReplyMessageId,
+    DateTimeOffset ExpiresAtUtc);
+
+public sealed record ConversationTurnRuntimeContext(NyxRelayReplyTokenContext? NyxRelayReplyToken)
+{
+    public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }
 
 /// <summary>
@@ -121,14 +171,28 @@ public sealed record ConversationTurnResult(
 public sealed class NullConversationTurnRunner : IConversationTurnRunner
 {
     /// <inheritdoc />
-    public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
+    public Task<ConversationTurnResult> RunInboundAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
         Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
 
     /// <inheritdoc />
-    public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct) =>
+    public Task<ConversationTurnResult> RunLlmReplyAsync(
+        LlmReplyReadyEvent reply,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
         Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
 
     /// <inheritdoc />
     public Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct) =>
         Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
+
+    /// <inheritdoc />
+    public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
+        Task.FromResult(ConversationStreamChunkResult.Failed("no_runner", "no IConversationTurnRunner registered"));
 }

@@ -13,9 +13,15 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 internal interface IConversationReplyGenerator
 {
+    /// <summary>
+    /// Generates the full LLM reply text. If <paramref name="streamingSink"/> is supplied, the
+    /// generator forwards progressive deltas as the stream advances; implementations must tolerate
+    /// a null sink by simply accumulating the final text.
+    /// </summary>
     Task<string?> GenerateReplyAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
+        IStreamingReplySink? streamingSink,
         CancellationToken ct);
 }
 
@@ -60,6 +66,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
     public async Task<string?> GenerateReplyAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
+        IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -98,6 +105,18 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
             agentName: "NyxIdConversationReply",
             streamBufferCapacity: StreamBufferCapacity);
 
+        // Emit a placeholder immediately so the user sees a message within the outbound RTT,
+        // regardless of LLM cold-start, router selection, or tool-call latency before the
+        // first real delta. The first real delta overwrites this placeholder via edit-in-place;
+        // if no delta ever arrives (tool-only or empty turn), the caller's FinalizeAsync edits
+        // the placeholder to the final text. Disabled by setting the option to empty/whitespace.
+        if (streamingSink is not null)
+        {
+            var placeholder = _relayOptions?.StreamingPlaceholderText;
+            if (!string.IsNullOrWhiteSpace(placeholder))
+                await streamingSink.OnDeltaAsync(placeholder, ct);
+        }
+
         var output = new StringBuilder();
         await foreach (var chunk in runtime.ChatStreamAsync(
                            activity.Content.Text,
@@ -106,8 +125,12 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
                            effectiveMetadata,
                            ct))
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                output.Append(chunk.DeltaContent);
+            if (string.IsNullOrEmpty(chunk.DeltaContent))
+                continue;
+
+            output.Append(chunk.DeltaContent);
+            if (streamingSink is not null)
+                await streamingSink.OnDeltaAsync(output.ToString(), ct);
         }
 
         return output.ToString();

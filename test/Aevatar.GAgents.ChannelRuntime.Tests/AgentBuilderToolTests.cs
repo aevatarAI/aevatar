@@ -182,6 +182,9 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-1");
             doc.RootElement.GetProperty("api_key_id").GetString().Should().Be("key-1");
+            doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
+            doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeTrue();
+            doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeFalse();
 
             await skillRunnerActor.Received(1).HandleEventAsync(
                 Arg.Is<EventEnvelope>(e =>
@@ -584,6 +587,9 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+            doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
+            doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeTrue();
+            doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeFalse();
 
             await userConfigCommandService.Received(1)
                 .SaveGithubUsernameAsync("scope-1", "alice", Arg.Any<CancellationToken>());
@@ -861,7 +867,7 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult(new UserAgentCatalogMaterializationRuntimeLease(new UserAgentCatalogMaterializationContext
             {
                 RootActorId = UserAgentCatalogGAgent.WellKnownId,
-                ProjectionKind = "agent-registry",
+                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
             })));
         var projectionPort = new UserAgentCatalogProjectionPort(activationService);
 
@@ -951,7 +957,7 @@ public sealed class AgentBuilderToolTests
             await activationService.Received(1).EnsureAsync(
                 Arg.Is<ProjectionScopeStartRequest>(request =>
                     request.RootActorId == UserAgentCatalogGAgent.WellKnownId &&
-                    request.ProjectionKind == "agent-registry"),
+                    request.ProjectionKind == UserAgentCatalogProjectionPort.ProjectionKind),
                 Arg.Any<CancellationToken>());
 
             var apiKeyRequest = handler.Requests.Should()

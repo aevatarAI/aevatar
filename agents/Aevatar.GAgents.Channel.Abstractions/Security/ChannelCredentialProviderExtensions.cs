@@ -8,23 +8,6 @@ namespace Aevatar.GAgents.Channel.Abstractions;
 public static class ChannelCredentialProviderExtensions
 {
     /// <summary>
-    /// Resolves the bot credential referenced by one transport binding.
-    /// </summary>
-    public static Task<string?> ResolveBotCredentialAsync(
-        this ICredentialProvider credentialProvider,
-        ChannelTransportBinding binding,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(credentialProvider);
-        ArgumentNullException.ThrowIfNull(binding);
-
-        if (string.IsNullOrWhiteSpace(binding.CredentialRef))
-            throw new ArgumentException("Transport binding must carry a credential reference.", nameof(binding));
-
-        return credentialProvider.ResolveAsync(binding.CredentialRef, ct);
-    }
-
-    /// <summary>
     /// Resolves the delegated user credential referenced by one auth context.
     /// </summary>
     public static Task<string?> ResolveUserCredentialAsync(

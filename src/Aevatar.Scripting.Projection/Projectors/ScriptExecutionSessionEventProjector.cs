@@ -17,8 +17,14 @@ public sealed class ScriptExecutionSessionEventProjector
         ScriptExecutionProjectionContext context,
         EventEnvelope envelope)
     {
-        if (string.IsNullOrWhiteSpace(context.RootActorId))
+        if (string.IsNullOrWhiteSpace(context.RootActorId) || string.IsNullOrWhiteSpace(context.SessionId))
             return EmptyEntries;
+
+        if (!IsLegacyActorScopedSession(context) &&
+            !string.Equals(envelope.Propagation?.CorrelationId, context.SessionId, StringComparison.Ordinal))
+        {
+            return EmptyEntries;
+        }
 
         return
         [
@@ -28,4 +34,7 @@ public sealed class ScriptExecutionSessionEventProjector
                 envelope)
         ];
     }
+
+    private static bool IsLegacyActorScopedSession(ScriptExecutionProjectionContext context) =>
+        string.Equals(context.RootActorId, context.SessionId, StringComparison.Ordinal);
 }

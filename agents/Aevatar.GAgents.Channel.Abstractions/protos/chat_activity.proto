@@ -264,10 +264,13 @@ message MessageContent {
 
 // Carries the transport-issued facts required to deliver one async reply back through the same boundary.
 message OutboundDeliveryContext {
+  reserved 2;
+  reserved "reply_access_token";
+
   // The opaque reply target identifier that the transport expects when publishing the async reply.
   string reply_message_id = 1;
-  // The opaque credential or access token that authorizes reply delivery on the current transport.
-  string reply_access_token = 2;
+  // The one-turn correlation key used to locate runtime-only reply credentials inside the actor.
+  string correlation_id = 3;
 }
 
 // Carries transport-specific ingress facts that must survive normalization without polluting core conversation semantics.
@@ -282,6 +285,8 @@ message TransportExtras {
   string nyx_conversation_id = 4;
   // The short-lived Nyx user access token carried by the relay callback for downstream proxy calls.
   string nyx_user_access_token = 5;
+  // The platform-native message id of the originating user message when Nyx relay can recover it.
+  string nyx_platform_message_id = 6;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

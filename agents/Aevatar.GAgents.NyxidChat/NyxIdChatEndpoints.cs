@@ -25,9 +25,9 @@ public static partial class NyxIdChatEndpoints
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
-        // this callback; auth is carried via X-NyxID-User-Token rather than the JWT bearer we
-        // validate in the fallback policy, so the route must stay anonymous. The diag + health
-        // routes under the same prefix are operator probes that also must stay open.
+        // this callback and authenticates it with the dedicated X-NyxID-Callback-Token JWT, so
+        // the route must stay anonymous to the normal bearer policy. The diag + health routes
+        // under the same prefix are operator probes that also must stay open.
         app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync)
             .WithTags("NyxIdRelay")
             .AllowAnonymous();
@@ -71,8 +71,7 @@ public static partial class NyxIdChatEndpoints
                 responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
             });
         })
-            .WithTags("NyxIdRelay")
-            .AllowAnonymous();
+            .WithTags("NyxIdRelay");
 
         // Access control for relay is handled by NyxID's route configuration.
 
@@ -122,9 +121,40 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
-        await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
         await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        try
+        {
+            await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
+        }
+        catch
+        {
+            await TryRestoreConversationRegistrationAsync(http, scopeId, actorId, actorStore);
+            throw;
+        }
+
         return Results.Ok();
+    }
+
+    private static async Task TryRestoreConversationRegistrationAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        IGAgentActorStore actorStore)
+    {
+        try
+        {
+            await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            http.RequestServices.GetService<ILoggerFactory>()
+                ?.CreateLogger("Aevatar.NyxId.Chat.DeleteConversation")
+                .LogError(
+                    ex,
+                    "Failed to restore NyxId chat conversation registration after history deletion failure: scope={ScopeId}, actor={ActorId}",
+                    scopeId,
+                    actorId);
+        }
     }
 
     private static async Task InjectUserConfigMetadataAsync(
@@ -196,24 +226,6 @@ public static partial class NyxIdChatEndpoints
 
         if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             return authHeader["Bearer ".Length..].Trim();
-
-        return null;
-    }
-
-    private static string? TryExtractRefreshToken(HttpContext http)
-    {
-        if (http.Request.Headers.TryGetValue("X-Nyx-Refresh-Token", out var headerValue))
-        {
-            var token = headerValue.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(token))
-                return token.Trim();
-        }
-
-        if (http.Request.Cookies.TryGetValue("nyx_refresh_token", out var cookieValue) &&
-            !string.IsNullOrWhiteSpace(cookieValue))
-        {
-            return cookieValue.Trim();
-        }
 
         return null;
     }

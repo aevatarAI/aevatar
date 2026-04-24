@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Channel;
-using Aevatar.Configuration;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -35,7 +35,6 @@ public static class ServiceCollectionExtensions
         Aevatar.GAgents.Channel.Runtime.ChannelRuntimeServiceCollectionExtensions.AddChannelRuntime(services);
 
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
-        services.TryAddSingleton<IAevatarSecretsStore, AevatarSecretsStore>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, EventStoreProjectionScopeWatermarkQueryPort>();
         if (configuration != null)
@@ -103,9 +102,12 @@ public static class ServiceCollectionExtensions
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<Aevatar.GAgents.NyxidChat.INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelPlatformReplyService>();
+        services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<INyxRelayApiKeyOwnershipVerifier, NyxRelayApiKeyOwnershipVerifier>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
         services.AddHostedService<ChannelBotRegistrationStartupService>();
@@ -199,12 +201,11 @@ public static class ServiceCollectionExtensions
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
-        services.TryAddSingleton<INyxIdRelayRegistrationCredentialResolver, NyxIdRelayRegistrationCredentialResolver>();
         services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>
         {
             var relayOptions = sp.GetService<NyxIdRelayOptions>() ?? new NyxIdRelayOptions();
             return new NyxIdRelayReplayGuard(
-                TimeSpan.FromSeconds(Math.Max(1, relayOptions.ReplayWindowSeconds)),
+                TimeSpan.FromSeconds(Math.Max(1, relayOptions.CallbackReplayWindowSeconds)),
                 TimeProvider.System);
         });
         services.TryAddSingleton<ConversationDispatchMiddleware>();

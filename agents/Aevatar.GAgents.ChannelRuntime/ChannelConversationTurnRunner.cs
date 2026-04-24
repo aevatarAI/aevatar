@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -44,7 +45,10 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct)
+    public async Task<ConversationTurnResult> RunInboundAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
 
@@ -52,13 +56,15 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
+        _ = TrySendImmediateLarkReactionAsync(activity, registration, ct);
+
         var inbound = ToInboundMessage(activity);
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
 
-        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, ct) is { } agentBuilderResult)
+        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, ct) is { } agentBuilderResult)
             return agentBuilderResult;
 
         if (string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
@@ -68,10 +74,17 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 "Conversation routing target is missing.");
         }
 
-        return ConversationTurnResult.LlmReplyRequested(BuildLlmReplyRequest(activity, registration, inboundEvent));
+        return ConversationTurnResult.LlmReplyRequested(
+            BuildLlmReplyRequest(activity, registration, inboundEvent, runtimeContext));
     }
 
-    public async Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct)
+    public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
+        RunInboundAsync(activity, ConversationTurnRuntimeContext.Empty, ct);
+
+    public async Task<ConversationTurnResult> RunLlmReplyAsync(
+        LlmReplyReadyEvent reply,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(reply);
 
@@ -114,8 +127,12 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             reply.Activity.Conversation,
             inbound,
             registration,
+            runtimeContext,
             ct);
     }
+
+    public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct) =>
+        RunLlmReplyAsync(reply, ConversationTurnRuntimeContext.Empty, ct);
 
     public async Task<ConversationTurnResult> RunContinueAsync(
         ConversationContinueRequestedEvent command,
@@ -155,13 +172,92 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             command.Conversation,
             inbound,
             registration,
+            ConversationTurnRuntimeContext.Empty,
             ct);
+    }
+
+    public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+
+        if (chunk.Activity is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "activity_required",
+                "Stream chunk event is missing the source activity.");
+        }
+
+        var inbound = ToInboundMessage(chunk.Activity);
+        if (!HasRelayDelivery(inbound))
+        {
+            return ConversationStreamChunkResult.Failed(
+                "invalid_delivery",
+                "Stream chunk requires a relay outbound delivery context.");
+        }
+
+        var relayDelivery = inbound.OutboundDelivery!.Clone();
+        var relayToken = ResolveRelayReplyToken(relayDelivery, runtimeContext);
+        if (relayToken is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "reply_token_missing_or_expired",
+                "Nyx relay reply token is missing or expired for this streaming chunk.");
+        }
+
+        var conversation = chunk.Activity.Conversation;
+        var platform = ResolveRelayPlatform(inbound, conversation);
+        var content = new MessageContent { Text = NormalizeReplyText(chunk.AccumulatedText) };
+
+        EmitResult emit;
+        if (string.IsNullOrWhiteSpace(currentPlatformMessageId))
+        {
+            emit = await _relayOutboundPort.SendAsync(
+                platform,
+                conversation?.Clone() ?? new ConversationReference(),
+                content,
+                relayDelivery,
+                relayToken,
+                ct);
+        }
+        else
+        {
+            emit = await _relayOutboundPort.UpdateAsync(
+                platform,
+                conversation?.Clone() ?? new ConversationReference(),
+                content,
+                relayDelivery,
+                currentPlatformMessageId,
+                relayToken,
+                ct);
+        }
+
+        if (!emit.Success)
+        {
+            var editUnsupported = string.Equals(
+                emit.ErrorCode,
+                "relay_reply_edit_unsupported",
+                StringComparison.Ordinal);
+            return ConversationStreamChunkResult.Failed(
+                string.IsNullOrWhiteSpace(emit.ErrorCode) ? "stream_chunk_rejected" : emit.ErrorCode,
+                emit.ErrorMessage ?? "Relay stream chunk rejected.",
+                editUnsupported);
+        }
+
+        var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
+            ? currentPlatformMessageId
+            : emit.PlatformMessageId;
+        return ConversationStreamChunkResult.Succeeded(resolvedPlatformMessageId);
     }
 
     private async Task<ConversationTurnResult?> TryHandleAgentBuilderAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
         ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         AgentBuilderFlowDecision? decision = null;
@@ -178,7 +274,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (decision is null)
             return null;
 
-        var replyPayload = decision.ReplyPayload;
+        var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
             var previousMetadata = AgentToolRequestContext.CurrentMetadata;
@@ -190,7 +286,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     ResolveUserAccessToken(activity));
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_services);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyPayload = relayDecisionMatched
+                replyContent = relayDecisionMatched
                     ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
                     : AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
             }
@@ -200,11 +296,18 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             }
         }
 
-        var result = await SendReplyAsync(replyPayload, activity, ToInboundMessage(activity), registration, ct);
+        var result = await SendReplyAsync(
+            replyContent,
+            activity.Id,
+            activity.Conversation,
+            ToInboundMessage(activity),
+            registration,
+            runtimeContext,
+            ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
-                outbound: new MessageContent { Text = replyPayload },
+                outbound: replyContent.Clone(),
                 authPrincipal: "bot",
                 outboundDelivery: result.OutboundDelivery?.Clone())
             : result;
@@ -215,6 +318,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChatActivity activity,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct) =>
         await SendReplyAsync(
             new MessageContent { Text = replyText },
@@ -222,6 +326,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             activity.Conversation,
             inbound,
             registration,
+            runtimeContext,
             ct);
 
     private async Task<ConversationTurnResult> SendReplyAsync(
@@ -230,6 +335,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationReference? conversation,
         InboundMessage inbound,
         ChannelBotRegistrationEntry? registration,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(outboundIntent);
@@ -237,12 +343,21 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (HasRelayDelivery(inbound))
         {
             var relayDelivery = inbound.OutboundDelivery!.Clone();
+            var relayToken = ResolveRelayReplyToken(relayDelivery, runtimeContext);
+            if (relayToken is null)
+            {
+                return ConversationTurnResult.PermanentFailure(
+                    "reply_token_missing_or_expired",
+                    "Nyx relay reply token is missing or expired for this conversation turn.");
+            }
+
             if (await TrySendInteractiveRelayReplyAsync(
                     outboundIntent,
                     sentActivitySeed,
                     conversation,
                     inbound,
                     relayDelivery,
+                    relayToken,
                     ct) is { } interactiveResult)
             {
                 return interactiveResult;
@@ -253,6 +368,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 conversation?.Clone() ?? new ConversationReference(),
                 outboundIntent,
                 relayDelivery,
+                relayToken,
                 ct);
             return emit.Success
                 ? BuildRelaySentResult(
@@ -321,6 +437,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationReference? conversation,
         InboundMessage inbound,
         OutboundDeliveryContext relayDelivery,
+        string relayToken,
         CancellationToken ct)
     {
         if (!HasInteractiveContent(outboundIntent))
@@ -338,13 +455,14 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 conversation,
                 inbound,
                 relayDelivery,
+                relayToken,
                 ct);
         }
 
         var dispatch = await _interactiveReplyDispatcher.DispatchAsync(
             ResolveRelayChannel(inbound, conversation),
             relayDelivery.ReplyMessageId,
-            relayDelivery.ReplyAccessToken,
+            relayToken,
             outboundIntent,
             new ComposeContext
             {
@@ -373,6 +491,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             conversation,
             inbound,
             relayDelivery,
+            relayToken,
             ct);
     }
 
@@ -382,6 +501,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationReference? conversation,
         InboundMessage inbound,
         OutboundDeliveryContext relayDelivery,
+        string relayToken,
         CancellationToken ct)
     {
         var outbound = new MessageContent { Text = NormalizeReplyText(fallbackText) };
@@ -390,6 +510,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             conversation?.Clone() ?? new ConversationReference(),
             outbound,
             relayDelivery,
+            relayToken,
             ct);
         return emit.Success
             ? BuildRelaySentResult(
@@ -412,7 +533,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(activity);
 
-        var nyxAgentApiKeyId = activity.TransportExtras?.NyxAgentApiKeyId;
+        var nyxAgentApiKeyId = NormalizeOptional(activity.TransportExtras?.NyxAgentApiKeyId);
         if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId) &&
             _registrationQueryByNyxIdentityPort is not null)
         {
@@ -421,9 +542,25 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 ct);
             if (byNyxIdentity is not null)
                 return byNyxIdentity;
+
+            if (IsNyxRelayActivity(activity, nyxAgentApiKeyId))
+            {
+                var byBoundedScan = await ResolveRegistrationByNyxIdentityScanAsync(nyxAgentApiKeyId, ct);
+                if (byBoundedScan is not null)
+                    return byBoundedScan;
+            }
         }
 
         return await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+    }
+
+    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationByNyxIdentityScanAsync(
+        string nyxAgentApiKeyId,
+        CancellationToken ct)
+    {
+        var registrations = await _registrationQueryPort.QueryAllAsync(ct);
+        return registrations.FirstOrDefault(entry =>
+            string.Equals(NormalizeOptional(entry.NyxAgentApiKeyId), nyxAgentApiKeyId, StringComparison.Ordinal));
     }
 
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationForReplyAsync(
@@ -510,9 +647,11 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             authPrincipal: "bot");
     }
 
-    private static IReadOnlyDictionary<string, string> BuildReplyMetadata(ChannelInboundEvent inboundEvent)
+    private static IReadOnlyDictionary<string, string> BuildReplyMetadata(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity? activity = null)
     {
-        return new Dictionary<string, string>(StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
@@ -522,6 +661,12 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.MessageId] = inboundEvent.MessageId,
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
+
+        var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
+        if (!string.IsNullOrWhiteSpace(platformMessageId))
+            metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
+
+        return metadata;
     }
 
     private static IReadOnlyDictionary<string, string> BuildAgentBuilderMetadata(
@@ -529,7 +674,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelInboundEvent inboundEvent,
         string? userAccessToken)
     {
-        var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent), StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent, activity), StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
@@ -611,7 +756,8 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static NeedsLlmReplyEvent BuildLlmReplyRequest(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
-        ChannelInboundEvent inboundEvent)
+        ChannelInboundEvent inboundEvent,
+        ConversationTurnRuntimeContext runtimeContext)
     {
         var request = new NeedsLlmReplyEvent
         {
@@ -622,7 +768,19 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-        foreach (var pair in BuildReplyMetadata(inboundEvent))
+        // Carry the relay reply credential through the inbox as transient inbox-only
+        // fields. ConversationGAgent strips these before persisting NeedsLlmReplyEvent;
+        // ChannelLlmReplyInboxRuntime echoes them into the LlmReplyReadyEvent so the
+        // outbound reply does not depend on the actor's in-memory token dict surviving
+        // deactivation.
+        if (runtimeContext.NyxRelayReplyToken is { } token &&
+            token.ExpiresAtUtc > DateTimeOffset.UtcNow)
+        {
+            request.ReplyToken = token.ReplyToken;
+            request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
+        }
+
+        foreach (var pair in BuildReplyMetadata(inboundEvent, activity))
             request.Metadata[pair.Key] = pair.Value;
 
         return request;
@@ -675,7 +833,35 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         inbound.OutboundDelivery is
         {
             ReplyMessageId.Length: > 0,
+            CorrelationId.Length: > 0,
         };
+
+    private static string? ResolveRelayReplyToken(
+        OutboundDeliveryContext relayDelivery,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var tokenContext = runtimeContext.NyxRelayReplyToken;
+        if (tokenContext is null || tokenContext.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+            return null;
+
+        if (!string.Equals(
+                NormalizeOptional(relayDelivery.CorrelationId),
+                NormalizeOptional(tokenContext.CorrelationId),
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (!string.Equals(
+                NormalizeOptional(relayDelivery.ReplyMessageId),
+                NormalizeOptional(tokenContext.ReplyMessageId),
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return NormalizeOptional(tokenContext.ReplyToken);
+    }
 
     private static string? ResolveUserAccessToken(ChatActivity activity) =>
         NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
@@ -699,6 +885,150 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             : platform;
     }
 
+    private static bool IsNyxRelayActivity(ChatActivity activity, string nyxAgentApiKeyId) =>
+        activity.OutboundDelivery is
+        {
+            ReplyMessageId.Length: > 0,
+            CorrelationId.Length: > 0,
+        } &&
+        string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
+
+    private async Task TrySendImmediateLarkReactionAsync(
+        ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
+        CancellationToken ct)
+    {
+        if (!ShouldSendImmediateLarkReaction(activity, registration, out var accessToken, out var providerSlug, out var platformMessageId))
+            return;
+
+        try
+        {
+            var response = await _nyxClient.ProxyRequestAsync(
+                accessToken!,
+                providerSlug!,
+                $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions",
+                "POST",
+                """{"reaction_type":{"emoji_type":"OK"}}""",
+                null,
+                ct);
+
+            if (TryGetProxyError(response, out var detail))
+            {
+                _logger.LogWarning(
+                    "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, detail={Detail}",
+                    providerSlug,
+                    platformMessageId,
+                    detail);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Immediate Lark acknowledgment reaction threw: provider={ProviderSlug}, message={MessageId}",
+                providerSlug,
+                platformMessageId);
+        }
+    }
+
+    private static bool ShouldSendImmediateLarkReaction(
+        ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
+        out string? accessToken,
+        out string? providerSlug,
+        out string? platformMessageId)
+    {
+        accessToken = null;
+        providerSlug = null;
+        platformMessageId = null;
+
+        if (activity.Type != ActivityType.Message)
+            return false;
+
+        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform) ??
+                       NormalizeOptional(registration.Platform) ??
+                       NormalizeOptional(activity.ChannelId?.Value);
+        if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        accessToken = NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
+        providerSlug = NormalizeOptional(registration.NyxProviderSlug);
+        platformMessageId = NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId);
+
+        return !string.IsNullOrWhiteSpace(accessToken) &&
+               !string.IsNullOrWhiteSpace(providerSlug) &&
+               !string.IsNullOrWhiteSpace(platformMessageId) &&
+               platformMessageId.StartsWith("om_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetProxyError(string? response, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("error", out var errorProperty))
+            {
+                if (errorProperty.ValueKind == JsonValueKind.True)
+                {
+                    detail = TryReadJsonString(root, "message") ??
+                             TryReadJsonString(root, "body") ??
+                             "proxy_error";
+                    return true;
+                }
+
+                if (errorProperty.ValueKind == JsonValueKind.String)
+                {
+                    var error = errorProperty.GetString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        detail = error;
+                        return true;
+                    }
+                }
+            }
+
+            if (root.TryGetProperty("code", out var codeProperty) &&
+                codeProperty.ValueKind == JsonValueKind.Number &&
+                codeProperty.TryGetInt32(out var code) &&
+                code != 0)
+            {
+                detail = TryReadJsonString(root, "msg") ?? $"code={code}";
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore invalid bodies for best-effort acknowledgment.
+        }
+
+        return false;
+    }
+
+    private static string? TryReadJsonString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var value = property.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
     private static ConversationTurnResult ToRelayFailure(EmitResult emit)
     {
         var errorCode = string.IsNullOrWhiteSpace(emit.ErrorCode) ? "relay_reply_rejected" : emit.ErrorCode;
@@ -708,7 +1038,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         return errorCode switch
         {
-            "missing_reply_access_token" or "missing_reply_message_id" or "empty_reply" =>
+            "reply_token_missing_or_expired" or "missing_reply_message_id" or "empty_reply" =>
                 ConversationTurnResult.PermanentFailure(errorCode, errorMessage),
             _ when emit.RetryAfterTimeSpan is { } retryAfter =>
                 ConversationTurnResult.TransientFailure(errorCode, errorMessage, retryAfter),
@@ -744,6 +1074,6 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             outboundDelivery: new OutboundDeliveryContext
             {
                 ReplyMessageId = relayDelivery.ReplyMessageId,
-                ReplyAccessToken = relayDelivery.ReplyAccessToken,
+                CorrelationId = relayDelivery.CorrelationId,
             });
 }
