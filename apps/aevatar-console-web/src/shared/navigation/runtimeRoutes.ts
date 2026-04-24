@@ -2,6 +2,7 @@ const runtimePaths = {
   workflows: "/runtime/workflows",
   primitives: "/runtime/primitives",
   runs: "/runtime/runs",
+  missionControl: "/runtime/mission-control",
   explorer: "/runtime/explorer",
   explorerDetail: "/runtime/explorer/detail",
   gagents: "/runtime/gagents",
@@ -72,6 +73,28 @@ export function buildRuntimeRunsHref(options?: {
     actorId: options?.actorId,
     draftKey: options?.draftKey,
     returnTo: options?.returnTo,
+  });
+}
+
+export function buildRuntimeMissionControlHref(options?: {
+  actorId?: string;
+  autoStream?: boolean;
+  endpointId?: string;
+  prompt?: string;
+  runId?: string;
+  scopeId?: string;
+  serviceId?: string;
+  serviceOverrideId?: string;
+}): string {
+  return buildHref(runtimePaths.missionControl, {
+    actorId: options?.actorId,
+    autoStream:
+      options?.autoStream === undefined ? undefined : String(options.autoStream),
+    endpointId: options?.endpointId,
+    prompt: options?.prompt,
+    runId: options?.runId,
+    scopeId: options?.scopeId,
+    serviceId: options?.serviceId ?? options?.serviceOverrideId,
   });
 }
 

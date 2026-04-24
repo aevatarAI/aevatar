@@ -36,6 +36,7 @@ import {
 } from "@/shared/navigation/teamRoutes";
 import {
   buildRuntimeExplorerHref,
+  buildRuntimeMissionControlHref,
   buildRuntimeRunsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
@@ -1485,6 +1486,38 @@ const TeamDetailPage: React.FC = () => {
     [lens.playback.currentRunId, lens.playback.rootActorId, runtimeServiceId, scopeId],
   );
 
+  const handleOpenMissionControl = React.useCallback(() => {
+    const runId =
+      trimText(lens.currentRun?.runId) || trimText(lens.playback.currentRunId);
+    if (!scopeId || !runId) {
+      return;
+    }
+
+    const actorId =
+      trimText(lens.currentRun?.actorId) ||
+      trimText(lens.playback.rootActorId) ||
+      trimText(lens.graph.focusActorId) ||
+      undefined;
+
+    history.push(
+      buildRuntimeMissionControlHref({
+        actorId,
+        endpointId: "chat",
+        runId,
+        scopeId,
+        serviceId: runtimeServiceId,
+      }),
+    );
+  }, [
+    lens.currentRun?.actorId,
+    lens.currentRun?.runId,
+    lens.graph.focusActorId,
+    lens.playback.currentRunId,
+    lens.playback.rootActorId,
+    runtimeServiceId,
+    scopeId,
+  ]);
+
   const teamHeading = resolveTeamHeading({
     scopeId,
     workflowId: activeWorkflowSummary?.workflowId,
@@ -1532,7 +1565,10 @@ const TeamDetailPage: React.FC = () => {
         ? "来自 workflow 更新时间"
         : "当前还没有可见更新时间";
   const activeRunId =
-    lens.currentRun?.runId || focusedOperationalUnit?.latestRun?.runId || "";
+    lens.currentRun?.runId ||
+    lens.playback.currentRunId ||
+    focusedOperationalUnit?.latestRun?.runId ||
+    "";
   const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "--";
   const currentRevisionStatus =
     trimText(lens.activeRevision?.servingState) ||
@@ -3370,6 +3406,7 @@ const TeamDetailPage: React.FC = () => {
         onOpenAudit={() =>
           handleOpenPlaybackActor(lens.currentRun?.actorId, activeRunId)
         }
+        onOpenMissionControl={handleOpenMissionControl}
         onSelectRun={handleSelectRun}
         openAuditButtonStyle={resolveActionButtonStyle(token)}
         playbackSummary={formatPlaybackSummary(lens.playback.summary)}
@@ -3377,6 +3414,7 @@ const TeamDetailPage: React.FC = () => {
         provenanceStyle={resolveObservationPillStyle(token, playbackProvenance.status)}
         runSwitchOptions={runSwitchDisplayOptions}
         showOpenAudit={Boolean(activeRunId)}
+        showOpenMissionControl={Boolean(activeRunId)}
       />
     );
   };
