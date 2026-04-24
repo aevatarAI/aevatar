@@ -1,7 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -18,14 +17,13 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static partial class NyxIdChatEndpoints
 {
-    private const string RelayCardActionContentType = "card_action";
-    private static readonly JsonSerializerOptions RelayJsonOptions = NyxIdRelayPayloads.JsonOptions;
-
     /// <summary>
     /// Receives forwarded platform messages from NyxID Channel Bot Relay.
-    /// Validates the Nyx relay callback JWT, dispatches the inbound turn into ConversationGAgent,
-    /// and returns 202 immediately. Workflow card actions still short-circuit through the
-    /// dedicated relay card handler because they are not message turns.
+    /// Validates the relay callback, asks the relay transport to normalize the payload into
+    /// a <see cref="ChatActivity"/> (text messages and card actions alike), then publishes it
+    /// into the scoped <see cref="ConversationGAgent"/> inbox. All downstream business routing
+    /// (slash commands, agent-builder cards, workflow resume cards) is the responsibility of
+    /// <c>ChannelConversationTurnRunner</c> so the webhook stays a thin adapter.
     /// </summary>
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
@@ -47,24 +45,17 @@ public static partial class NyxIdChatEndpoints
                 bodyBytes = body.ToArray();
             }
 
-            NyxIdRelayCallbackPayload? payload;
-            RelayMessage? relayMessage;
-            try
+            var parsed = relayTransport.Parse(bodyBytes);
+            if (parsed.Payload is null)
             {
-                payload = JsonSerializer.Deserialize<NyxIdRelayCallbackPayload>(bodyBytes, RelayJsonOptions);
-                relayMessage = JsonSerializer.Deserialize<RelayMessage>(bodyBytes, RelayJsonOptions);
-            }
-            catch (JsonException ex)
-            {
-                logger.LogWarning(ex, "Failed to parse relay payload");
-                return Results.BadRequest(new { error = "invalid_relay_payload" });
+                return Results.BadRequest(new
+                {
+                    error = string.IsNullOrWhiteSpace(parsed.ErrorCode) ? "invalid_relay_payload" : parsed.ErrorCode,
+                    detail = parsed.ErrorSummary,
+                });
             }
 
-            if (payload is null)
-                return Results.BadRequest(new { error = "missing_relay_payload" });
-            if (string.IsNullOrWhiteSpace(payload.MessageId))
-                return Results.BadRequest(new { error = "missing_message_id" });
-
+            var payload = parsed.Payload;
             var validation = await relayAuthValidator.ValidateAsync(http, bodyBytes, payload, ct);
             if (!validation.Succeeded || validation.Principal is null)
             {
@@ -91,46 +82,26 @@ public static partial class NyxIdChatEndpoints
                 return Results.Unauthorized();
             }
 
-            var contentType = NyxIdRelayPayloads.NormalizeContentType(payload.Content?.ContentType ?? payload.Content?.Type);
-            if (string.Equals(contentType, RelayCardActionContentType, StringComparison.Ordinal))
+            if (parsed.Ignored)
             {
-                relayMessage ??= BuildRelayMessage(payload);
-                if (await TryHandleRelayWorkflowCardActionAsync(http, relayMessage, logger, ct) is { } workflowResult)
-                    return workflowResult;
-
-                logger.LogInformation(
-                    "Ignored unsupported relay card action: message={MessageId}, conversation={ConversationId}",
-                    payload.MessageId,
-                    payload.Conversation?.Id ?? payload.Conversation?.PlatformId);
                 return Results.Accepted(value: new
                 {
                     status = "ignored",
-                    reason = "unsupported_card_action",
-                    message_id = payload.MessageId,
-                });
-            }
-
-            var parsed = relayTransport.Parse(bodyBytes);
-            if (!parsed.Success)
-            {
-                if (parsed.Ignored)
-                {
-                    return Results.Accepted(value: new
-                    {
-                        status = "ignored",
-                        reason = parsed.ErrorCode,
-                        detail = parsed.ErrorSummary,
-                    });
-                }
-
-                return Results.BadRequest(new
-                {
-                    error = parsed.ErrorCode,
+                    reason = parsed.ErrorCode,
                     detail = parsed.ErrorSummary,
                 });
             }
 
-            var activity = parsed.Activity!.Clone();
+            if (!parsed.Success || parsed.Activity is null)
+            {
+                return Results.BadRequest(new
+                {
+                    error = string.IsNullOrWhiteSpace(parsed.ErrorCode) ? "invalid_relay_payload" : parsed.ErrorCode,
+                    detail = parsed.ErrorSummary,
+                });
+            }
+
+            var activity = parsed.Activity.Clone();
             if (string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
             {
                 return Results.BadRequest(new
@@ -167,10 +138,11 @@ public static partial class NyxIdChatEndpoints
             await actor.HandleEventAsync(command, ct);
 
             logger.LogInformation(
-                "Accepted relay callback into channel conversation backbone: message={MessageId}, actor={ActorId}, platform={Platform}",
+                "Accepted relay callback into channel conversation backbone: message={MessageId}, actor={ActorId}, platform={Platform}, activity={ActivityType}",
                 activity.Id,
                 actorId,
-                activity.ChannelId?.Value);
+                activity.ChannelId?.Value,
+                activity.Type);
 
             return Results.Accepted(value: new
             {
@@ -189,13 +161,6 @@ public static partial class NyxIdChatEndpoints
             return Results.StatusCode(StatusCodes.Status500InternalServerError);
         }
     }
-
-    private static async Task<IResult?> TryHandleRelayWorkflowCardActionAsync(
-        HttpContext http,
-        RelayMessage message,
-        ILogger logger,
-        CancellationToken ct) =>
-        await NyxIdRelayWorkflowCards.TryHandleAsync(http, message, logger, ct);
 
     private static long ResolveReplyTokenExpiresAtUnixMs(
         string? replyToken,
@@ -217,44 +182,6 @@ public static partial class NyxIdChatEndpoints
             return fallback.ToUnixTimeMilliseconds();
         }
     }
-
-    private static RelayMessage BuildRelayMessage(NyxIdRelayCallbackPayload payload) =>
-        new()
-        {
-            MessageId = payload.MessageId,
-            Platform = payload.Platform,
-            Agent = payload.Agent is null
-                ? null
-                : new RelayAgent
-                {
-                    ApiKeyId = payload.Agent.ApiKeyId,
-                    Name = payload.Agent.Name,
-                },
-            Conversation = payload.Conversation is null
-                ? null
-                : new RelayConversation
-                {
-                    Id = payload.Conversation.Id,
-                    PlatformId = payload.Conversation.PlatformId,
-                    Type = payload.Conversation.Type ?? payload.Conversation.ConversationType,
-                },
-            Sender = payload.Sender is null
-                ? null
-                : new RelaySender
-                {
-                    PlatformId = payload.Sender.PlatformId,
-                    DisplayName = payload.Sender.DisplayName,
-                },
-            Content = payload.Content is null
-                ? null
-                : new RelayContent
-                {
-                    ContentType = payload.Content.ContentType,
-                    Type = payload.Content.Type,
-                    Text = payload.Content.Text,
-                },
-            Timestamp = payload.Timestamp,
-        };
 
     private static async Task<string?> ResolveRelayScopeIdAsync(
         string? validatedScopeId,

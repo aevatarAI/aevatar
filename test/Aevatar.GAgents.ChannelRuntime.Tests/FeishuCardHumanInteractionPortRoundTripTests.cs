@@ -8,10 +8,11 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 /// <summary>
 /// The outbound approval card is parsed back on the inbound side by
-/// <c>NyxIdRelayWorkflowCards</c>, which flattens <c>action.value</c> and <c>action.form_value</c>
-/// into a single scalar map keyed by property name. These tests pin that the migrated
-/// composer output still carries the correlation keys in the exact locations the parser reads,
-/// so the approval flow keeps working end-to-end.
+/// <c>NyxIdRelayTransport</c>, which normalizes <c>content.text.value</c> into the strongly typed
+/// <c>CardActionSubmission.Arguments</c> map and <c>content.text.form_value</c> into
+/// <c>CardActionSubmission.FormFields</c>. These tests pin that the composer output still carries
+/// the correlation keys in the exact locations the transport reads, so <c>ChannelCardActionRouting</c>
+/// can rebuild the workflow resume command end-to-end.
 /// </summary>
 public sealed class FeishuCardHumanInteractionPortRoundTripTests
 {
