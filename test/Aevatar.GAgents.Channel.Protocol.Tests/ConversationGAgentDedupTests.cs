@@ -281,6 +281,7 @@ public sealed class ConversationGAgentDedupTests
 
         inbox.Enqueued.Count.ShouldBe(1);
         inbox.Enqueued[0].CorrelationId.ShouldBe("act-direct");
+        inbox.Enqueued[0].TargetActorId.ShouldBe(agent.Id);
     }
 
     [Fact]
@@ -369,6 +370,109 @@ public sealed class ConversationGAgentDedupTests
                 return true;
         }
         return false;
+    }
+
+    [Fact]
+    public async Task HandleDeferredLlmReplyDispatchRequestedAsync_RehydratesRelayTokenUsingOutboundDeliveryCorrelation()
+    {
+        // NyxID's message_id and callback correlation_id are distinct. Pending LLM
+        // requests are tracked by message_id, while reply tokens are keyed by the
+        // callback correlation_id carried in OutboundDelivery.
+        const string sentinelReplyToken = "sentinel-retry-token-7c10";
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "stale-unscoped-actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner", inbox);
+
+        var inboundActivity = CreateActivity("nyx-msg-1", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "nyx-msg-1",
+            CorrelationId = "callback-jti-1",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+            CorrelationId = "legacy-callback-jti-1",
+        });
+
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].ReplyToken.ShouldBe(sentinelReplyToken);
+        inbox.Enqueued[0].TargetActorId.ShouldBe(agent.Id);
+        inbox.Enqueued.Clear();
+
+        await agent.HandleDeferredLlmReplyDispatchRequestedAsync(new DeferredLlmReplyDispatchRequestedEvent
+        {
+            CorrelationId = "nyx-msg-1",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].CorrelationId.ShouldBe("nyx-msg-1");
+        inbox.Enqueued[0].ReplyToken.ShouldBe(sentinelReplyToken);
+        inbox.Enqueued[0].TargetActorId.ShouldBe(agent.Id);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_RemovesRelayTokenUsingOutboundDeliveryCorrelation()
+    {
+        const string sentinelReplyToken = "sentinel-cleanup-token-6d41";
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "stale-unscoped-actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner");
+
+        var inboundActivity = CreateActivity("nyx-msg-cleanup", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "nyx-msg-cleanup",
+            CorrelationId = "callback-jti-cleanup",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+            CorrelationId = "legacy-callback-jti-cleanup",
+        });
+
+        GetNyxRelayReplyTokenCount(agent).ShouldBe(1);
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "nyx-msg-cleanup",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = inboundActivity.Clone(),
+            Outbound = new MessageContent { Text = "reply-from-llm" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        GetNyxRelayReplyTokenCount(agent).ShouldBe(0);
     }
 
     [Fact]
@@ -507,7 +611,7 @@ public sealed class ConversationGAgentDedupTests
 
         await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
-            CorrelationId = "corr-inbox-echo",
+            CorrelationId = "nyx-msg-inbox-echo",
             RegistrationId = "reg-1",
             SourceActorId = "llm-worker-1",
             Activity = activity.Clone(),
@@ -667,6 +771,17 @@ public sealed class ConversationGAgentDedupTests
         }
 
         throw new InvalidOperationException("Unable to set agent id via reflection.");
+    }
+
+    private static int GetNyxRelayReplyTokenCount(ConversationGAgent agent)
+    {
+        var field = typeof(ConversationGAgent).GetField(
+            "_nyxRelayReplyTokens",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        field.ShouldNotBeNull();
+        var value = field.GetValue(agent);
+        value.ShouldNotBeNull();
+        return (int)value.GetType().GetProperty("Count")!.GetValue(value)!;
     }
 
     private static ChatActivity CreateActivity(string id, string canonicalKey) => new()
