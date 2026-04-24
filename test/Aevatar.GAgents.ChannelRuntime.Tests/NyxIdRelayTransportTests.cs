@@ -232,4 +232,81 @@ public sealed class NyxIdRelayTransportTests
         parsed.Success.Should().BeTrue();
         parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_raw");
     }
+
+    [Fact]
+    public void Parse_ShouldPopulateCardAction_ForAgentBuilderFormSubmit()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"agent_builder_action\":\"create_daily_report\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Type.Should().Be(ActivityType.CardAction);
+        parsed.Activity.Content.Text.Should().BeEmpty();
+        var cardAction = parsed.Activity.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.Arguments.Should().ContainKey("agent_builder_action")
+            .WhoseValue.Should().Be("create_daily_report");
+        cardAction.FormFields.Should().ContainKey("github_username")
+            .WhoseValue.Should().Be("eanzhao");
+        cardAction.FormFields.Should().ContainKey("schedule_time")
+            .WhoseValue.Should().Be("09:00");
+        cardAction.ActionId.Should().Be("create_daily_report");
+    }
+
+    [Fact]
+    public void Parse_ShouldAcceptEmptyCardActionText_AsEmptySubmission()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-empty",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": { "content_type": "card_action", "text": "   " }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Type.Should().Be(ActivityType.CardAction);
+        parsed.Activity.Content.CardAction.Should().NotBeNull();
+        parsed.Activity.Content.CardAction!.Arguments.Should().BeEmpty();
+        parsed.Activity.Content.CardAction.FormFields.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_ShouldReportIgnored_ForCardActionWithNonJsonText()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-bad",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": { "content_type": "card_action", "text": "not json" }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeFalse();
+        parsed.Ignored.Should().BeTrue();
+        parsed.ErrorCode.Should().Be("invalid_card_action_payload");
+    }
 }

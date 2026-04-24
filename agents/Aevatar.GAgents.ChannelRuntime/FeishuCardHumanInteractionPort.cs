@@ -159,10 +159,13 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     /// </summary>
     /// <remarks>
     /// The outbound button-value payload must stay byte-compatible with the inbound card-action
-    /// parser in <c>NyxIdRelayWorkflowCards</c>: the parser flattens <c>action.value</c> and
-    /// <c>action.form_value</c>, so the correlation keys (<c>actor_id</c>, <c>run_id</c>,
-    /// <c>step_id</c>, <c>approved</c>) are carried via the new <c>ActionElement.Arguments</c> map
-    /// and form-input names (<c>edited_content</c>, <c>user_input</c>) are carried as action ids.
+    /// parser in <see cref="Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayTransport"/>, which maps
+    /// <c>content.text.value</c> into <see cref="CardActionSubmission.Arguments"/> and
+    /// <c>content.text.form_value</c> into <see cref="CardActionSubmission.FormFields"/>. The
+    /// correlation keys (<c>actor_id</c>, <c>run_id</c>, <c>step_id</c>, <c>approved</c>) are
+    /// carried via the <c>ActionElement.Arguments</c> map and form-input names
+    /// (<c>edited_content</c>, <c>user_input</c>) are carried as action ids, so
+    /// <see cref="ChannelCardActionRouting"/> can rebuild the workflow resume command downstream.
     /// </remarks>
     internal static string BuildCardJson(HumanInteractionRequest request) =>
         BuildCardJson(request, new LarkMessageComposer());

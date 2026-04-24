@@ -484,6 +484,26 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteAgentBuilderCardAction_WhenCardPayloadCarriesAgentBuilderAction()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var activity = BuildCardActionActivity("evt-card-builder-1");
+        activity.Content.CardAction.Arguments["agent_builder_action"] = "open_daily_report_form";
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:evt-card-builder-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].Inbound.ChatType.Should().Be("card_action");
+        adapter.Replies[0].Inbound.Extra.Should().ContainKey("agent_builder_action")
+            .WhoseValue.Should().Be("open_daily_report_form");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldMapWorkflowResumeValidationErrors()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

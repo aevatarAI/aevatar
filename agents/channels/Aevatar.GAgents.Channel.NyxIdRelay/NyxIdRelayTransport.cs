@@ -34,9 +34,25 @@ public sealed class NyxIdRelayTransport
         if (string.IsNullOrWhiteSpace(payload.MessageId))
             return NyxIdRelayParseResult.Invalid("missing_message_id", "Relay payload is missing message_id.");
 
+        var normalizedContentType = NormalizeContentType(payload.Content);
+        var isCardAction = string.Equals(normalizedContentType, CardActionContentType, StringComparison.Ordinal);
+
         var text = payload.Content?.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(text))
+        if (!isCardAction && string.IsNullOrWhiteSpace(text))
             return NyxIdRelayParseResult.IgnoredPayload(payload, "empty_text", "Relay payload does not contain text content.");
+
+        CardActionSubmission? cardAction = null;
+        if (isCardAction)
+        {
+            cardAction = BuildCardActionSubmission(text, payload);
+            if (cardAction is null)
+            {
+                return NyxIdRelayParseResult.IgnoredPayload(
+                    payload,
+                    "invalid_card_action_payload",
+                    "Relay card_action payload text is not a JSON object.");
+            }
+        }
 
         var conversationType = payload.Conversation?.Type ?? payload.Conversation?.ConversationType;
         if (!NyxIdRelayConversationTypeMap.TryMap(conversationType, out var scope))
@@ -59,10 +75,17 @@ public sealed class NyxIdRelayTransport
             ? payload.MessageId.Trim()
             : payload.CorrelationId.Trim();
 
+        var content = new MessageContent
+        {
+            Text = isCardAction ? string.Empty : text ?? string.Empty,
+        };
+        if (cardAction is not null)
+            content.CardAction = cardAction;
+
         var activity = new ChatActivity
         {
             Id = payload.MessageId.Trim(),
-            Type = ActivityType.Message,
+            Type = isCardAction ? ActivityType.CardAction : ActivityType.Message,
             ChannelId = ChannelId.From(platform),
             Bot = BotInstanceId.From(string.IsNullOrWhiteSpace(botId) ? "nyx-relay-bot" : botId),
             Conversation = ConversationReference.Create(
@@ -80,10 +103,7 @@ public sealed class NyxIdRelayTransport
                 DisplayName = payload.Sender?.DisplayName?.Trim() ?? string.Empty,
             },
             Timestamp = Timestamp.FromDateTimeOffset(timestamp),
-            Content = new MessageContent
-            {
-                Text = text,
-            },
+            Content = content,
             RawPayloadBlobRef = $"{platform}-raw:{ComputeBodyHash(bodyBytes)}",
             OutboundDelivery = new OutboundDeliveryContext
             {
@@ -102,6 +122,106 @@ public sealed class NyxIdRelayTransport
 
         activity.Conversation.CanonicalKey = canonicalKey;
         return NyxIdRelayParseResult.Parsed(payload, activity);
+    }
+
+    private const string CardActionContentType = "card_action";
+
+    private static string NormalizeContentType(NyxIdRelayContentPayload? content)
+    {
+        var value = content?.ContentType;
+        if (string.IsNullOrWhiteSpace(value))
+            value = content?.Type;
+        return (value ?? string.Empty).Trim().ToLowerInvariant();
+    }
+
+    private static CardActionSubmission? BuildCardActionSubmission(string? rawText, NyxIdRelayCallbackPayload payload)
+    {
+        var submission = new CardActionSubmission();
+        if (!string.IsNullOrWhiteSpace(payload.PlatformMessageId))
+            submission.SourceMessageId = payload.PlatformMessageId.Trim();
+
+        if (string.IsNullOrWhiteSpace(rawText))
+            return submission;
+
+        JsonElement root;
+        try
+        {
+            using var document = JsonDocument.Parse(rawText);
+            root = document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (TryReadString(root, "action_id", out var actionId))
+            submission.ActionId = actionId;
+        if (TryReadString(root, "submitted_value", out var submittedValue))
+            submission.SubmittedValue = submittedValue;
+        if (string.IsNullOrEmpty(submission.SourceMessageId) &&
+            TryReadString(root, "source_message_id", out var sourceMessageId))
+        {
+            submission.SourceMessageId = sourceMessageId;
+        }
+
+        if (root.TryGetProperty("value", out var valueElement))
+            CopyScalarMap(valueElement, submission.Arguments);
+        if (root.TryGetProperty("form_value", out var formValueElement))
+            CopyScalarMap(formValueElement, submission.FormFields);
+        if (root.TryGetProperty("arguments", out var argumentsElement))
+            CopyScalarMap(argumentsElement, submission.Arguments);
+        if (root.TryGetProperty("form_fields", out var formFieldsElement))
+            CopyScalarMap(formFieldsElement, submission.FormFields);
+
+        if (string.IsNullOrEmpty(submission.ActionId) &&
+            submission.Arguments.TryGetValue("agent_builder_action", out var builderAction) &&
+            !string.IsNullOrWhiteSpace(builderAction))
+        {
+            submission.ActionId = builderAction;
+        }
+
+        return submission;
+    }
+
+    private static void CopyScalarMap(JsonElement element, Google.Protobuf.Collections.MapField<string, string> target)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var property in element.EnumerateObject())
+        {
+            switch (property.Value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    target[property.Name] = property.Value.GetString() ?? string.Empty;
+                    break;
+                case JsonValueKind.Number:
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    target[property.Name] = property.Value.ToString();
+                    break;
+            }
+        }
+    }
+
+    private static bool TryReadString(JsonElement root, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!root.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var parsed = property.GetString()?.Trim();
+        if (string.IsNullOrWhiteSpace(parsed))
+            return false;
+
+        value = parsed;
+        return true;
     }
 
     private static string NormalizePlatform(string? platform) =>
