@@ -603,11 +603,12 @@ public sealed class ScopeGAgentEndpointsTests
     [Fact]
     public async Task HandleActorStoreEndpoints_ShouldCoverSuccessAndFailureBranches()
     {
+        var actorTypeName = typeof(FakeAgent).AssemblyQualifiedName!;
         var store = new RecordingGAgentActorStore
         {
             Actors =
             [
-                new GAgentActorGroup("gagent-a", ["actor-1", "actor-2"])
+                new GAgentActorGroup(actorTypeName, ["actor-1", "actor-2"])
             ]
         };
         var logger = LoggerFactory.Create(_ => { });
@@ -620,28 +621,28 @@ public sealed class ScopeGAgentEndpointsTests
         var addResult = await InvokeHandleAddActorAsync(
             context,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("gagent-a", "actor-3"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(actorTypeName, "actor-3"),
             store,
             logger,
             CancellationToken.None);
         ((IStatusCodeHttpResult)addResult).StatusCode.Should().Be((int)HttpStatusCode.OK);
         store.AddedActors.Should().ContainSingle(x =>
             x.ScopeId == "scope-a" &&
-            x.GAgentType == "gagent-a" &&
+            x.GAgentType == actorTypeName &&
             x.ActorId == "actor-3");
 
         var removeResult = await InvokeHandleRemoveActorAsync(
             context,
             "scope-a",
             "actor-1",
-            "gagent-a",
+            actorTypeName,
             store,
             logger,
             CancellationToken.None);
         ((IStatusCodeHttpResult)removeResult).StatusCode.Should().Be((int)HttpStatusCode.OK);
         store.RemovedActors.Should().ContainSingle(x =>
             x.ScopeId == "scope-a" &&
-            x.GAgentType == "gagent-a" &&
+            x.GAgentType == actorTypeName &&
             x.ActorId == "actor-1");
 
         var invalidAdd = await InvokeHandleAddActorAsync(
@@ -663,6 +664,15 @@ public sealed class ScopeGAgentEndpointsTests
             CancellationToken.None);
         ((IStatusCodeHttpResult)invalidRemove).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
 
+        var unknownTypeAdd = await InvokeHandleAddActorAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("not.a.real.agent.type", "actor-4"),
+            store,
+            logger,
+            CancellationToken.None);
+        ((IStatusCodeHttpResult)unknownTypeAdd).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
+
         var throwingStore = new RecordingGAgentActorStore { ThrowOnGet = new InvalidOperationException("get failed") };
         var throwList = await InvokeHandleListActorsAsync(context, "scope-a", throwingStore, logger, CancellationToken.None);
         ((IStatusCodeHttpResult)throwList).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
@@ -670,7 +680,7 @@ public sealed class ScopeGAgentEndpointsTests
         var throwAdd = await InvokeHandleAddActorAsync(
             context,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("gagent-a", "actor-1"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(actorTypeName, "actor-1"),
             new RecordingGAgentActorStore { ThrowOnAdd = new InvalidOperationException("add failed") },
             logger,
             CancellationToken.None);
@@ -680,11 +690,38 @@ public sealed class ScopeGAgentEndpointsTests
             context,
             "scope-a",
             "actor-1",
-            "gagent-a",
+            actorTypeName,
             new RecordingGAgentActorStore { ThrowOnRemove = new InvalidOperationException("remove failed") },
             logger,
             CancellationToken.None);
         ((IStatusCodeHttpResult)throwRemove).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
+
+        var throwListUnexpected = await InvokeHandleListActorsAsync(
+            context,
+            "scope-a",
+            new RecordingGAgentActorStore { ThrowOnGet = new Exception("boom") },
+            logger,
+            CancellationToken.None);
+        ((IStatusCodeHttpResult)throwListUnexpected).StatusCode.Should().Be((int)HttpStatusCode.InternalServerError);
+
+        var throwAddUnexpected = await InvokeHandleAddActorAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(actorTypeName, "actor-1"),
+            new RecordingGAgentActorStore { ThrowOnAdd = new Exception("boom") },
+            logger,
+            CancellationToken.None);
+        ((IStatusCodeHttpResult)throwAddUnexpected).StatusCode.Should().Be((int)HttpStatusCode.InternalServerError);
+
+        var throwRemoveUnexpected = await InvokeHandleRemoveActorAsync(
+            context,
+            "scope-a",
+            "actor-1",
+            actorTypeName,
+            new RecordingGAgentActorStore { ThrowOnRemove = new Exception("boom") },
+            logger,
+            CancellationToken.None);
+        ((IStatusCodeHttpResult)throwRemoveUnexpected).StatusCode.Should().Be((int)HttpStatusCode.InternalServerError);
     }
 
     [Fact]
@@ -700,7 +737,7 @@ public sealed class ScopeGAgentEndpointsTests
         var addResult = await InvokeHandleAddActorAsync(
             deniedContext,
             "scope-a",
-            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("gagent-a", "actor-1"),
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(typeof(FakeAgent).AssemblyQualifiedName!, "actor-1"),
             store,
             logger,
             CancellationToken.None);
@@ -710,7 +747,7 @@ public sealed class ScopeGAgentEndpointsTests
             deniedContext,
             "scope-a",
             "actor-1",
-            "gagent-a",
+            typeof(FakeAgent).AssemblyQualifiedName!,
             store,
             logger,
             CancellationToken.None);

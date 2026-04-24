@@ -27,7 +27,13 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
     public async Task PrepareAsync_ShouldReuseExistingActor_WithoutRegisteringAgain()
     {
         var runtime = new StubActorRuntime(id => id == "existing-actor" ? new StubActor(id) : null);
-        var actorStore = new RecordingGAgentActorStore();
+        var actorStore = new RecordingGAgentActorStore
+        {
+            Actors =
+            [
+                new GAgentActorGroup(typeof(FakeAgent).AssemblyQualifiedName!, ["existing-actor"])
+            ]
+        };
         var service = new GAgentDraftRunActorPreparationService(runtime, actorStore);
 
         var result = await service.PrepareAsync(
@@ -43,6 +49,25 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
             typeof(FakeAgent).AssemblyQualifiedName!,
             "existing-actor",
             false));
+        actorStore.AddedActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PrepareAsync_ShouldRejectExistingActor_WhenItIsNotRegisteredInRequestedScope()
+    {
+        var runtime = new StubActorRuntime(id => id == "existing-actor" ? new StubActor(id) : null);
+        var actorStore = new RecordingGAgentActorStore();
+        var service = new GAgentDraftRunActorPreparationService(runtime, actorStore);
+
+        var result = await service.PrepareAsync(
+            new GAgentDraftRunPreparationRequest(
+                "scope-a",
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "existing-actor"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
         actorStore.AddedActors.Should().BeEmpty();
     }
 
@@ -112,14 +137,15 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
 
     private sealed class RecordingGAgentActorStore : IGAgentActorStore
     {
+        public List<GAgentActorGroup> Actors { get; set; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
+            Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Actors);
 
         public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(string scopeId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
+            Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Actors);
 
         public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
         {

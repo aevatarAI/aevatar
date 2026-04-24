@@ -112,7 +112,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         return participants;
     }
 
-    public async Task GenerateRepliesAsync(
+    public async Task<int> GenerateRepliesAsync(
         IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
         IActor actor,
         string prompt,
@@ -123,18 +123,19 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string? roomId = null)
     {
         if (participants.Count == 0)
-            return;
+            return 0;
 
         if (!_llmProviderFactory.GetAvailableProviders().Contains(NyxIdProviderName, StringComparer.OrdinalIgnoreCase))
         {
             _logger.LogWarning("NyxID provider '{ProviderName}' is not registered; skip Streaming Proxy participants.", NyxIdProviderName);
-            return;
+            return 0;
         }
 
         var provider = _llmProviderFactory.GetProvider(NyxIdProviderName);
         var transcript = new List<(string Speaker, string Content)>();
         var activeParticipants = participants.ToList();
         var rounds = activeParticipants.Count > 1 ? StreamingProxyDefaults.MaxDiscussionRounds : 1;
+        var totalSuccessfulReplies = 0;
 
         for (var round = 1; round <= rounds && activeParticipants.Count > 0; round++)
         {
@@ -203,6 +204,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
                     transcript.Add((participant.DisplayName, content));
                     successfulReplies++;
+                    totalSuccessfulReplies++;
                     await DispatchAsync(actor, new GroupChatMessageEvent
                     {
                         AgentId = participant.ParticipantId,
@@ -245,6 +247,8 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             if (activeParticipants.Count < 2)
                 break;
         }
+
+        return totalSuccessfulReplies;
     }
 
     private async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> ResolveParticipantsAsync(

@@ -260,7 +260,7 @@ public static class StreamingProxyEndpoints
 
                 if (participants.Count > 0 && !string.IsNullOrWhiteSpace(accessToken))
                 {
-                    await participantCoordinator.GenerateRepliesAsync(
+                    var successfulReplies = await participantCoordinator.GenerateRepliesAsync(
                         participants,
                         actor,
                         prompt,
@@ -269,11 +269,12 @@ public static class StreamingProxyEndpoints
                         ct,
                         participantStore,
                         roomId);
+                    var participantTerminalState = DetermineParticipantTerminalState(successfulReplies);
                     await PublishTerminalStateAsync(
                         actor,
                         sessionId,
-                        StreamingProxyChatSessionTerminalStatus.Completed,
-                        null,
+                        participantTerminalState.Status,
+                        participantTerminalState.ErrorMessage,
                         ct);
                     await FinalizeFromLiveOrDurableCompletionAsync(
                         actor.Id,
@@ -317,11 +318,12 @@ public static class StreamingProxyEndpoints
                     }
                 }
 
+                var idleTerminalState = DetermineIdleTerminalState(sawAgentMessage);
                 await PublishTerminalStateAsync(
                     actor,
                     sessionId,
-                    StreamingProxyChatSessionTerminalStatus.Completed,
-                    null,
+                    idleTerminalState.Status,
+                    idleTerminalState.ErrorMessage,
                     ct);
                 await FinalizeFromLiveOrDurableCompletionAsync(
                     actor.Id,
@@ -364,6 +366,12 @@ public static class StreamingProxyEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "StreamingProxy chat failed for room {RoomId}", roomId);
+            await TryPublishFailedTerminalStateAsync(
+                actor,
+                sessionId,
+                "StreamingProxy chat failed before completion.",
+                durableCompletionResolver,
+                logger);
             if (!writer.Started)
             {
                 http.Response.StatusCode = StatusCodes.Status500InternalServerError;
@@ -710,6 +718,18 @@ public static class StreamingProxyEndpoints
         await actor.HandleEventAsync(envelope, ct);
     }
 
+    private static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
+        int successfulReplies) =>
+        successfulReplies > 0
+            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
+            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
+
+    private static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineIdleTerminalState(
+        bool sawAgentMessage) =>
+        sawAgentMessage
+            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
+            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat timed out without any agent replies.");
+
     private static async Task FinalizeFromLiveOrDurableCompletionAsync(
         string actorId,
         string sessionId,
@@ -719,45 +739,23 @@ public static class StreamingProxyEndpoints
         TimeSpan? terminalCompletionTimeout,
         CancellationToken ct)
     {
-        var deadline = DateTimeOffset.UtcNow + (terminalCompletionTimeout ?? TimeSpan.FromMilliseconds(StreamingProxyDefaults.TerminalCompletionTimeoutMs));
-        var signalWaitWindow = TimeSpan.FromSeconds(2);
-        while (!ct.IsCancellationRequested)
+        var timeout = terminalCompletionTimeout ?? TimeSpan.FromMilliseconds(StreamingProxyDefaults.TerminalCompletionTimeoutMs);
+        if (await WaitForTerminalSignalAsync(signalReader, timeout, ct))
+            return;
+
+        var durableCompletion = await durableCompletionResolver.ResolveAsync(actorId, sessionId, ct);
+        switch (durableCompletion)
         {
-            var remaining = deadline - DateTimeOffset.UtcNow;
-            if (remaining <= TimeSpan.Zero)
-            {
+            case StreamingProxyProjectionCompletionStatus.Failed:
+                await writer.WriteRunErrorAsync("StreamingProxy chat failed.", CancellationToken.None);
+                return;
+            case StreamingProxyProjectionCompletionStatus.Completed:
+                await writer.WriteRunFinishedAsync(CancellationToken.None);
+                return;
+            case StreamingProxyProjectionCompletionStatus.Unknown:
+            default:
                 await writer.WriteRunErrorAsync("StreamingProxy completion timed out.", CancellationToken.None);
                 return;
-            }
-
-            var boundedWaitWindow = remaining < signalWaitWindow
-                ? remaining
-                : signalWaitWindow;
-            if (await WaitForTerminalSignalAsync(signalReader, boundedWaitWindow, ct))
-                return;
-
-            var durableCompletion = await durableCompletionResolver.ResolveAsync(actorId, sessionId, ct);
-            switch (durableCompletion)
-            {
-                case StreamingProxyProjectionCompletionStatus.Failed:
-                    await writer.WriteRunErrorAsync("StreamingProxy chat failed.", CancellationToken.None);
-                    return;
-                case StreamingProxyProjectionCompletionStatus.Completed:
-                    await writer.WriteRunFinishedAsync(CancellationToken.None);
-                    return;
-                case StreamingProxyProjectionCompletionStatus.Unknown:
-                default:
-                    signalWaitWindow = TimeSpan.FromMilliseconds(200);
-                    remaining = deadline - DateTimeOffset.UtcNow;
-                    if (remaining <= TimeSpan.Zero)
-                    {
-                        await writer.WriteRunErrorAsync("StreamingProxy completion timed out.", CancellationToken.None);
-                        return;
-                    }
-
-                    await Task.Delay(remaining < signalWaitWindow ? remaining : signalWaitWindow, ct);
-                    break;
-            }
         }
     }
 
@@ -788,6 +786,39 @@ public static class StreamingProxyEndpoints
             logger.LogWarning(
                 ex,
                 "Failed to publish terminal cancellation state for room {RoomId}, session {SessionId}",
+                actor.Id,
+                sessionId);
+        }
+    }
+
+    private static async Task TryPublishFailedTerminalStateAsync(
+        IActor? actor,
+        string? sessionId,
+        string errorMessage,
+        StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
+        ILogger logger)
+    {
+        if (actor is null || string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        try
+        {
+            var durableCompletion = await durableCompletionResolver.ResolveAsync(actor.Id, sessionId, CancellationToken.None);
+            if (durableCompletion is StreamingProxyProjectionCompletionStatus.Completed or StreamingProxyProjectionCompletionStatus.Failed)
+                return;
+
+            await PublishTerminalStateAsync(
+                actor,
+                sessionId,
+                StreamingProxyChatSessionTerminalStatus.Failed,
+                errorMessage,
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to publish terminal failure state for room {RoomId}, session {SessionId}",
                 actor.Id,
                 sessionId);
         }

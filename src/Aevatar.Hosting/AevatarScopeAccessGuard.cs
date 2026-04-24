@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Hosting;
@@ -14,8 +15,8 @@ public static class AevatarScopeAccessGuard
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        var configuration = services.GetService(typeof(IConfiguration)) as IConfiguration;
-        var environment = services.GetService(typeof(IHostEnvironment)) as IHostEnvironment;
+        var configuration = services.GetService<IConfiguration>();
+        var environment = services.GetService<IHostEnvironment>();
         var configuredValue = configuration?[AuthenticationEnabledKey];
         return ResolveAuthenticationEnabled(configuredValue, environment);
     }
@@ -108,6 +109,8 @@ public static class AevatarScopeAccessGuard
 
     private static bool ResolveAuthenticationEnabled(string? configuredValue, IHostEnvironment? environment)
     {
+        ArgumentNullException.ThrowIfNull(environment);
+
         if (string.IsNullOrWhiteSpace(configuredValue))
             return true;
 
@@ -115,10 +118,7 @@ public static class AevatarScopeAccessGuard
             throw new InvalidOperationException(
                 $"Invalid boolean value '{configuredValue}' for {AuthenticationEnabledKey}.");
 
-        if (!enabled && environment is null)
-            return true;
-
-        if (!enabled && environment is { } hostEnvironment && !hostEnvironment.IsDevelopment())
+        if (!enabled && !environment.IsDevelopment())
             return true;
 
         return enabled;

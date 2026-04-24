@@ -545,7 +545,9 @@ public static class ScopeGAgentEndpoints
         {
             loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
                 .LogWarning(ex, "Failed to list GAgent actors from storage");
-            return Results.Ok(Array.Empty<GAgentActorGroup>());
+            return Results.Json(
+                new { code = "GAGENT_ACTOR_STORE_ERROR", message = "Failed to list GAgent actors from storage." },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
     }
 
@@ -565,7 +567,17 @@ public static class ScopeGAgentEndpoints
             if (string.IsNullOrWhiteSpace(request.GAgentType) || string.IsNullOrWhiteSpace(request.ActorId))
                 return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType and actorId are required." });
 
-            await actorStore.AddActorAsync(scopeId, request.GAgentType.Trim(), request.ActorId.Trim(), ct);
+            var normalizedTypeName = request.GAgentType.Trim();
+            if (ScopeGAgentActorTypeResolver.Resolve(normalizedTypeName) is null)
+            {
+                return Results.BadRequest(new
+                {
+                    code = "UNKNOWN_GAGENT_TYPE",
+                    message = $"Unknown GAgent type '{normalizedTypeName}'.",
+                });
+            }
+
+            await actorStore.AddActorAsync(scopeId, normalizedTypeName, request.ActorId.Trim(), ct);
             return Results.Ok();
         }
         catch (InvalidOperationException ex)
@@ -576,7 +588,9 @@ public static class ScopeGAgentEndpoints
         {
             loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
                 .LogWarning(ex, "Failed to persist GAgent actor to storage");
-            return Results.Ok();
+            return Results.Json(
+                new { code = "GAGENT_ACTOR_STORE_ERROR", message = "Failed to persist GAgent actor to storage." },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
     }
 
@@ -608,7 +622,9 @@ public static class ScopeGAgentEndpoints
         {
             loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
                 .LogWarning(ex, "Failed to remove GAgent actor from storage");
-            return Results.Ok();
+            return Results.Json(
+                new { code = "GAGENT_ACTOR_STORE_ERROR", message = "Failed to remove GAgent actor from storage." },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
     }
 

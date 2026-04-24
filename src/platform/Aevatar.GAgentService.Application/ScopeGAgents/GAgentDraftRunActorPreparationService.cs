@@ -40,6 +40,9 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         var existingActor = await _actorRuntime.GetAsync(actorId);
         if (existingActor is not null)
         {
+            if (!await IsRegisteredInScopeAsync(scopeId, actorTypeName, actorId, ct))
+                return GAgentDraftRunPreparationResult.Failure(GAgentDraftRunStartError.ActorTypeMismatch);
+
             return GAgentDraftRunPreparationResult.Success(
                 new GAgentDraftRunPreparedActor(
                     scopeId,
@@ -87,5 +90,24 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         {
             _logger?.LogWarning(ex, "Failed to remove draft-run actor {ActorId} from registry during rollback", preparedActor.ActorId);
         }
+    }
+
+    private async Task<bool> IsRegisteredInScopeAsync(
+        string scopeId,
+        string actorTypeName,
+        string actorId,
+        CancellationToken ct)
+    {
+        var groups = await _actorStore.GetAsync(scopeId, ct);
+        foreach (var group in groups)
+        {
+            if (!string.Equals(group.GAgentType, actorTypeName, StringComparison.Ordinal))
+                continue;
+
+            if (group.ActorIds.Any(candidate => string.Equals(candidate, actorId, StringComparison.Ordinal)))
+                return true;
+        }
+
+        return false;
     }
 }

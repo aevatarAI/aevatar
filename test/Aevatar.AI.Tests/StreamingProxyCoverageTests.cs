@@ -449,7 +449,7 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task FinalizeFromLiveOrDurableCompletionAsync_ShouldKeepWaiting_UntilDurableCompletionBecomesVisible()
+    public async Task FinalizeFromLiveOrDurableCompletionAsync_ShouldUseSingleDurableFallback_AfterLiveTimeout()
     {
         var context = new DefaultHttpContext();
         context.Response.Body = new MemoryStream();
@@ -457,14 +457,7 @@ public class StreamingProxyCoverageTests
             typeof(StreamingProxyGAgent).Assembly,
             "Aevatar.GAgents.StreamingProxy.StreamingProxySseWriter",
             context.Response);
-        var terminalQueryPort = new SequencedTerminalQueryPort(
-            firstSnapshot: null,
-            nextSnapshot: new StreamingProxyChatSessionTerminalSnapshot
-            {
-                RootActorId = "room-a",
-                SessionId = "session-123",
-                Status = StreamingProxyChatSessionTerminalStatus.Completed,
-            });
+        var terminalQueryPort = new StubTerminalQueryPort(StreamingProxyChatSessionTerminalStatus.Completed);
         var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(terminalQueryPort);
         var signalChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
         signalChannel.Writer.TryComplete();
@@ -473,20 +466,15 @@ public class StreamingProxyCoverageTests
             "FinalizeFromLiveOrDurableCompletionAsync",
             BindingFlags.NonPublic | BindingFlags.Static)!;
 
-        var finalizeTask = InvokeTaskAsync(method.Invoke(
+        await InvokeTaskAsync(method.Invoke(
             null,
-            ["room-a", "session-123", signalChannel.Reader, durableCompletionResolver, writer, null, CancellationToken.None]));
-
-        await terminalQueryPort.FirstQueryObserved.Task;
-        finalizeTask.IsCompleted.Should().BeFalse();
-
-        terminalQueryPort.ReleaseNextQuery.TrySetResult(true);
-        await finalizeTask;
+            ["room-a", "session-123", signalChannel.Reader, durableCompletionResolver, writer, TimeSpan.FromMilliseconds(50), CancellationToken.None]));
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_FINISHED");
         body.Should().NotContain("RUN_ERROR");
+        terminalQueryPort.QueryCount.Should().Be(1);
     }
 
     [Fact]
@@ -522,6 +510,78 @@ public class StreamingProxyCoverageTests
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_ERROR");
         body.Should().Contain("StreamingProxy completion timed out.");
+    }
+
+    [Fact]
+    public void DetermineParticipantTerminalState_ShouldFail_WhenNoRepliesWereProduced()
+    {
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "DetermineParticipantTerminalState",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        var failed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [0])!;
+        failed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
+        failed.ErrorMessage.Should().Be("StreamingProxy chat completed without any participant replies.");
+
+        var completed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [1])!;
+        completed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
+        completed.ErrorMessage.Should().BeNull();
+    }
+
+    [Fact]
+    public void DetermineIdleTerminalState_ShouldFail_WhenNoAgentMessageWasObserved()
+    {
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "DetermineIdleTerminalState",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        var failed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [false])!;
+        failed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
+        failed.ErrorMessage.Should().Be("StreamingProxy chat timed out without any agent replies.");
+
+        var completed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [true])!;
+        completed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
+        completed.ErrorMessage.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TryPublishFailedTerminalStateAsync_ShouldEmitFailedTerminalEvent_WhenCompletionIsUnknown()
+    {
+        var actor = new StubActor("room-a");
+        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
+        var logger = NullLogger.Instance;
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "TryPublishFailedTerminalStateAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        await InvokeTaskAsync(method.Invoke(
+            null,
+            [actor, "session-123", "StreamingProxy chat failed before completion.", durableCompletionResolver, logger]));
+
+        actor.ReceivedEnvelopes.Should().Contain(envelope =>
+            envelope.Payload.Is(StreamingProxyChatSessionTerminalStateChanged.Descriptor) &&
+            envelope.Payload.Unpack<StreamingProxyChatSessionTerminalStateChanged>().SessionId == "session-123" &&
+            envelope.Payload.Unpack<StreamingProxyChatSessionTerminalStateChanged>().Status == StreamingProxyChatSessionTerminalStatus.Failed &&
+            envelope.Payload.Unpack<StreamingProxyChatSessionTerminalStateChanged>().ErrorMessage == "StreamingProxy chat failed before completion.");
+    }
+
+    [Fact]
+    public async Task TryPublishFailedTerminalStateAsync_ShouldNotEmitTerminalEvent_WhenCompletionAlreadyVisible()
+    {
+        var actor = new StubActor("room-a");
+        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(
+            new StubTerminalQueryPort(StreamingProxyChatSessionTerminalStatus.Completed));
+        var logger = NullLogger.Instance;
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "TryPublishFailedTerminalStateAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        await InvokeTaskAsync(method.Invoke(
+            null,
+            [actor, "session-123", "StreamingProxy chat failed before completion.", durableCompletionResolver, logger]));
+
+        actor.ReceivedEnvelopes.Should().NotContain(envelope =>
+            envelope.Payload.Is(StreamingProxyChatSessionTerminalStateChanged.Descriptor));
     }
 
     [Fact]
@@ -1460,6 +1520,8 @@ public class StreamingProxyCoverageTests
             };
         }
 
+        public int QueryCount { get; private set; }
+
         public Task<StreamingProxyChatSessionTerminalSnapshot?> GetAsync(
             string rootActorId,
             string sessionId,
@@ -1468,46 +1530,8 @@ public class StreamingProxyCoverageTests
             _ = rootActorId;
             _ = sessionId;
             _ = ct;
+            QueryCount++;
             return Task.FromResult(_snapshot);
-        }
-    }
-
-    private sealed class SequencedTerminalQueryPort : IStreamingProxyChatSessionTerminalQueryPort
-    {
-        private readonly StreamingProxyChatSessionTerminalSnapshot? _firstSnapshot;
-        private readonly StreamingProxyChatSessionTerminalSnapshot? _nextSnapshot;
-        private int _callCount;
-
-        public SequencedTerminalQueryPort(
-            StreamingProxyChatSessionTerminalSnapshot? firstSnapshot,
-            StreamingProxyChatSessionTerminalSnapshot? nextSnapshot)
-        {
-            _firstSnapshot = firstSnapshot;
-            _nextSnapshot = nextSnapshot;
-        }
-
-        public TaskCompletionSource<bool> FirstQueryObserved { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public TaskCompletionSource<bool> ReleaseNextQuery { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async Task<StreamingProxyChatSessionTerminalSnapshot?> GetAsync(
-            string rootActorId,
-            string sessionId,
-            CancellationToken ct = default)
-        {
-            _ = rootActorId;
-            _ = sessionId;
-            var callCount = Interlocked.Increment(ref _callCount);
-            if (callCount == 1)
-            {
-                FirstQueryObserved.TrySetResult(true);
-                return _firstSnapshot;
-            }
-
-            await ReleaseNextQuery.Task.WaitAsync(ct);
-            return _nextSnapshot;
         }
     }
 

@@ -10,20 +10,33 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class ScopeEndpointAccessTests
 {
-    private static HttpContext CreateContext(bool authenticated, params Claim[] claims)
+    private static HttpContext CreateContext(bool authenticated, params Claim[] claims) =>
+        CreateContext(authenticated, configuredAuthenticationEnabled: null, includeEnvironment: true, claims);
+
+    private static HttpContext CreateContext(
+        bool authenticated,
+        string? configuredAuthenticationEnabled = null,
+        bool includeEnvironment = true,
+        params Claim[] claims)
     {
         var identity = authenticated
             ? new ClaimsIdentity(claims, "test")
             : new ClaimsIdentity(claims);
         var principal = new ClaimsPrincipal(identity);
+        var settings = configuredAuthenticationEnabled is null
+            ? null
+            : new Dictionary<string, string?> { ["Aevatar:Authentication:Enabled"] = configuredAuthenticationEnabled };
         var services = new ServiceCollection()
-            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
-            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
-            .BuildServiceProvider();
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(settings ?? [])
+                .Build());
+        if (includeEnvironment)
+            services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+
         var context = new DefaultHttpContext
         {
             User = principal,
-            RequestServices = services,
+            RequestServices = services.BuildServiceProvider(),
         };
         return context;
     }
@@ -101,5 +114,19 @@ public sealed class ScopeEndpointAccessTests
         var http = CreateContext(true, new Claim("scope_id", "scope-1"));
         var denied = await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, "scope-1", CancellationToken.None);
         denied.Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryCreateScopeAccessDeniedResult_ShouldThrow_WhenAuthDisabledButEnvironmentMissing()
+    {
+        var http = CreateContext(
+            authenticated: true,
+            configuredAuthenticationEnabled: "false",
+            includeEnvironment: false,
+            claims: new Claim("scope_id", "scope-1"));
+
+        var act = () => AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, "scope-1", out _);
+
+        act.Should().Throw<ArgumentNullException>();
     }
 }
