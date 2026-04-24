@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -84,6 +85,9 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         // Conversation creation is fail-fast on IGAgentActorStore persistence.
         // NyxId chat depends on the registry being available; there is no
         // degraded mode where a conversation can run without being registered.
@@ -98,6 +102,9 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         try
         {
             var groups = await actorStore.GetAsync(scopeId, ct);
@@ -121,6 +128,12 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        if (!await IsConversationRegisteredAsync(scopeId, actorId, actorStore, ct))
+            return ConversationNotFoundResult();
+
         await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
         try
         {
@@ -134,6 +147,27 @@ public static partial class NyxIdChatEndpoints
 
         return Results.Ok();
     }
+
+    private static async Task<bool> IsConversationRegisteredAsync(
+        string scopeId,
+        string actorId,
+        IGAgentActorStore actorStore,
+        CancellationToken ct)
+    {
+        var groups = await actorStore.GetAsync(scopeId, ct);
+        return groups.Any(group =>
+            string.Equals(group.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal) &&
+            group.ActorIds.Any(registeredActorId => string.Equals(registeredActorId, actorId, StringComparison.Ordinal)));
+    }
+
+    private static IResult ConversationNotFoundResult() =>
+        Results.Json(
+            new
+            {
+                code = "NYXID_CHAT_CONVERSATION_NOT_FOUND",
+                message = "NyxID chat conversation is not registered in the requested scope.",
+            },
+            statusCode: StatusCodes.Status404NotFound);
 
     private static async Task TryRestoreConversationRegistrationAsync(
         HttpContext http,
