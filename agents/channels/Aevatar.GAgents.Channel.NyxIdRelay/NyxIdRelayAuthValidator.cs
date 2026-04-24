@@ -30,6 +30,12 @@ public sealed class NyxIdRelayAuthValidator
         IReadOnlyList<SecurityKey> SigningKeys,
         DateTimeOffset ExpiresAtUtc);
 
+    private sealed record SignatureValidationResult(
+        bool Succeeded,
+        string SigningSecretSource,
+        bool SignatureHeaderPresent,
+        int SignatureHeaderLength);
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly NyxIdRelayOptions _relayOptions;
@@ -130,8 +136,20 @@ public sealed class NyxIdRelayAuthValidator
                 ErrorSummary: "Relay callback registration credential lookup failed.");
         }
 
-        if (!ValidateSignature(http, bodyBytes, registrationCredential))
+        var signatureValidation = ValidateSignatureInternal(http, bodyBytes, registrationCredential);
+        if (!signatureValidation.Succeeded)
         {
+            _logger.LogWarning(
+                "Nyx relay signature verification failed: relay_api_key_id={RelayApiKeyId}, payload_agent_api_key_id={PayloadAgentApiKeyId}, message_id={MessageId}, registration_id={RegistrationId}, credential_resolved={CredentialResolved}, signing_secret_source={SigningSecretSource}, signature_header_present={SignatureHeaderPresent}, signature_header_length={SignatureHeaderLength}, body_length={BodyLength}",
+                jwtValidation.RelayApiKeyId,
+                NormalizeOptional(payload.Agent?.ApiKeyId),
+                NormalizeOptional(payload.MessageId),
+                NormalizeOptional(registrationCredential?.RegistrationId),
+                registrationCredential is not null,
+                signatureValidation.SigningSecretSource,
+                signatureValidation.SignatureHeaderPresent,
+                signatureValidation.SignatureHeaderLength,
+                bodyBytes.Length);
             return new NyxIdRelayAuthenticationResult(
                 false,
                 ErrorCode: "invalid_signature",
@@ -155,30 +173,64 @@ public sealed class NyxIdRelayAuthValidator
         HttpContext http,
         byte[] bodyBytes,
         NyxIdRelayRegistrationCredential? registrationCredential = null)
+        => ValidateSignatureInternal(http, bodyBytes, registrationCredential).Succeeded;
+
+    private SignatureValidationResult ValidateSignatureInternal(
+        HttpContext http,
+        byte[] bodyBytes,
+        NyxIdRelayRegistrationCredential? registrationCredential = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(bodyBytes);
 
         if (_relayOptions.SkipSignatureVerification)
-            return true;
+        {
+            return new SignatureValidationResult(
+                true,
+                SigningSecretSource: "skipped",
+                SignatureHeaderPresent: false,
+                SignatureHeaderLength: 0);
+        }
 
-        var signingSecret = NormalizeOptional(registrationCredential?.RelayApiKeyHash)
-                            ?? NormalizeOptional(_relayOptions.HmacSecret);
+        var registrationSigningSecret = NormalizeOptional(registrationCredential?.RelayApiKeyHash);
+        var globalSigningSecret = NormalizeOptional(_relayOptions.HmacSecret);
+        var signingSecret = registrationSigningSecret ?? globalSigningSecret;
+        var signingSecretSource = registrationSigningSecret is not null
+            ? "registration_credential"
+            : globalSigningSecret is not null
+                ? "global_hmac_secret"
+                : "missing";
         if (signingSecret is null)
-            return false;
+        {
+            return new SignatureValidationResult(
+                false,
+                SigningSecretSource: signingSecretSource,
+                SignatureHeaderPresent: false,
+                SignatureHeaderLength: 0);
+        }
 
         if (!http.Request.Headers.TryGetValue("X-NyxID-Signature", out var signatureHeader) ||
             string.IsNullOrWhiteSpace(signatureHeader))
         {
-            return false;
+            return new SignatureValidationResult(
+                false,
+                SigningSecretSource: signingSecretSource,
+                SignatureHeaderPresent: false,
+                SignatureHeaderLength: 0);
         }
 
+        var normalizedSignature = signatureHeader.ToString().Trim().ToLowerInvariant();
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(signingSecret));
         var computedHash = hmac.ComputeHash(bodyBytes);
         var computedSignature = Convert.ToHexString(computedHash).ToLowerInvariant();
-        return CryptographicOperations.FixedTimeEquals(
+        var succeeded = CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(computedSignature),
-            Encoding.UTF8.GetBytes(signatureHeader.ToString().Trim().ToLowerInvariant()));
+            Encoding.UTF8.GetBytes(normalizedSignature));
+        return new SignatureValidationResult(
+            succeeded,
+            SigningSecretSource: signingSecretSource,
+            SignatureHeaderPresent: true,
+            SignatureHeaderLength: normalizedSignature.Length);
     }
 
     private async Task<NyxIdRelayAuthenticationResult> ValidateJwtAsync(string token, CancellationToken ct)
