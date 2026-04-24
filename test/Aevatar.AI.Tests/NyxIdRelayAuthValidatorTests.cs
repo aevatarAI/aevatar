@@ -46,6 +46,9 @@ public sealed class NyxIdRelayAuthValidatorTests
         result.RelayApiKeyId.Should().Be("api-key-123");
         result.UserAccessToken.Should().Be("user-token-1");
         result.Principal.Should().NotBeNull();
+        result.Principal!.Claims.Should().Contain(claim =>
+            string.Equals(claim.Type, "scope_id", StringComparison.Ordinal) &&
+            string.Equals(claim.Value, "scope-123", StringComparison.Ordinal));
     }
 
     [Fact]

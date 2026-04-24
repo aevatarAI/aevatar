@@ -14,4 +14,10 @@ public interface IScriptExecutionProjectionPort
     Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
         string actorId,
         CancellationToken ct = default);
+
+    Task<IScriptExecutionProjectionLease?> EnsureRunProjectionAsync(
+        string actorId,
+        string runId,
+        CancellationToken ct = default) =>
+        EnsureActorProjectionAsync(actorId, ct);
 }

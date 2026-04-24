@@ -255,6 +255,13 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                 "Projection:Graph:Providers:Neo4j is enabled but Uri is empty.");
         }
 
+        if (string.IsNullOrWhiteSpace(options.Password))
+        {
+            throw new InvalidOperationException(
+                "Projection:Graph:Providers:Neo4j is enabled but Password is empty. " +
+                "Inject it via environment variable AEVATAR_Projection__Graph__Providers__Neo4j__Password.");
+        }
+
         return options;
     }
 

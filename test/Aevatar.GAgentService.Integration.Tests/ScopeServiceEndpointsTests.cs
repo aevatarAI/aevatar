@@ -6,12 +6,14 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -19,6 +21,9 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Ports;
+using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -1639,6 +1644,14 @@ public sealed class ScopeServiceEndpointsTests
             },
             RevisionId = "rev-1",
             ImplementationKind = ServiceImplementationKind.Scripting,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                ScriptingPlan = new ScriptingServiceDeploymentPlan
+                {
+                    Revision = "rev-1",
+                    DefinitionActorId = "definition-1",
+                },
+            },
             Endpoints =
             {
                 new ServiceEndpointDescriptor
@@ -1670,8 +1683,8 @@ public sealed class ScopeServiceEndpointsTests
                 "session-1",
                 "scope-a",
                 new Dictionary<string, string>(),
-                new NoOpActorRuntime(),
-                new NoOpActorEventSubscriptionProvider(),
+                new NoOpScriptRuntimeCommandPort(),
+                new NoOpScriptExecutionProjectionPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -1692,6 +1705,14 @@ public sealed class ScopeServiceEndpointsTests
             },
             RevisionId = "rev-1",
             ImplementationKind = ServiceImplementationKind.Scripting,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                ScriptingPlan = new ScriptingServiceDeploymentPlan
+                {
+                    Revision = "rev-1",
+                    DefinitionActorId = "definition-1",
+                },
+            },
             Endpoints =
             {
                 new ServiceEndpointDescriptor
@@ -1723,8 +1744,8 @@ public sealed class ScopeServiceEndpointsTests
                 "session-1",
                 "scope-a",
                 new Dictionary<string, string>(),
-                new MissingActorRuntime(),
-                new NoOpActorEventSubscriptionProvider(),
+                new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'script-runtime-1' could not be resolved. The service may not be activated.")),
+                new NoOpScriptExecutionProjectionPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -1735,6 +1756,89 @@ public sealed class ScopeServiceEndpointsTests
     public async Task InvokeStreamEndpoint_ShouldResolveExplicitServiceAndDelegateToWorkflowPipeline()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var service = BuildService("scope-a", "orders", "definition-actor-orders");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-orders-1",
+                            "rev-orders-1",
+                            "definition-actor-orders",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-orders-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "orders",
+                },
+                RevisionId = "rev-orders-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "orders",
+                        WorkflowYaml = "name: orders\nsteps:\n  - run: echo orders",
+                        DefinitionActorId = "definition-actor-orders",
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-orders", "orders", "cmd-orders", "corr-orders");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat:stream", new
+        {
+            prompt = "hello orders",
+            headers = new Dictionary<string, string> { ["channel"] = "tests" },
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        body.Should().Contain("aevatar.run.context");
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
+        host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+    }
+
+    [Fact]
+    public async Task InvokeStreamEndpoint_WhenAuthenticationIsDisabled_ShouldExecuteExplicitServiceFlowWithoutClaims()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync(authenticationEnabled: false);
         var service = BuildService("scope-a", "orders", "definition-actor-orders");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
@@ -3470,13 +3574,14 @@ public sealed class ScopeServiceEndpointsTests
 
         public RecordingStopDispatchService StopDispatchService { get; }
 
-        public static async Task<ScopeServiceEndpointTestHost> StartAsync()
+        public static async Task<ScopeServiceEndpointTestHost> StartAsync(bool authenticationEnabled = true)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
                 EnvironmentName = Environments.Development,
             });
             builder.WebHost.UseUrls("http://127.0.0.1:0");
+            builder.Configuration["Aevatar:Authentication:Enabled"] = authenticationEnabled ? "true" : "false";
 
             var commandPort = new RecordingServiceGovernanceCommandPort();
             var queryPort = new RecordingServiceGovernanceQueryPort();
@@ -3489,6 +3594,9 @@ public sealed class ScopeServiceEndpointsTests
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
             var artifactStore = new FakeServiceRevisionArtifactStore();
             var interactionService = new FakeCommandInteractionService();
+            var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
+            var scriptRuntimeCommandPort = new NoOpScriptRuntimeCommandPort();
+            var scriptExecutionProjectionPort = new NoOpScriptExecutionProjectionPort();
             var workflowQueryService = new FakeWorkflowExecutionQueryApplicationService();
             var runBindingReader = new FakeWorkflowRunBindingReader();
             var resumeDispatchService = new RecordingResumeDispatchService();
@@ -3509,6 +3617,9 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
             builder.Services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(interactionService);
+            builder.Services.AddSingleton<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(gagentDraftRunInteractionService);
+            builder.Services.AddSingleton<IScriptRuntimeCommandPort>(scriptRuntimeCommandPort);
+            builder.Services.AddSingleton<IScriptExecutionProjectionPort>(scriptExecutionProjectionPort);
             builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
             builder.Services.AddSingleton<IWorkflowRunBindingReader>(runBindingReader);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
@@ -3523,41 +3634,47 @@ public sealed class ScopeServiceEndpointsTests
                     ServiceAppId = "default",
                     ServiceNamespace = "default",
                 }));
-            builder.Services.AddAuthentication("Test")
-                .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
             builder.Services.AddAuthorization();
+            if (authenticationEnabled)
+            {
+                builder.Services.AddAuthentication("Test")
+                    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
+            }
 
             var app = builder.Build();
-            app.UseAuthentication();
-            app.Use(async (http, next) =>
+            if (authenticationEnabled)
             {
-                var hasExplicitAuthenticationHeader = http.Request.Headers.TryGetValue("X-Test-Authenticated", out var authenticatedValues);
-                var shouldAuthenticate = !hasExplicitAuthenticationHeader ||
-                    (bool.TryParse(authenticatedValues, out var authenticated) && authenticated);
-                if (shouldAuthenticate)
+                app.UseAuthentication();
+                app.Use(async (http, next) =>
                 {
-                    var claims = new List<Claim>();
-                    if (http.Request.Headers.TryGetValue("X-Test-Scope-Id", out var claimedScopeValues))
+                    var hasExplicitAuthenticationHeader = http.Request.Headers.TryGetValue("X-Test-Authenticated", out var authenticatedValues);
+                    var shouldAuthenticate = !hasExplicitAuthenticationHeader ||
+                        (bool.TryParse(authenticatedValues, out var authenticated) && authenticated);
+                    if (shouldAuthenticate)
                     {
-                        var claimedScopeIds = claimedScopeValues
-                            .ToString()
-                            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                        foreach (var claimedScopeId in claimedScopeIds)
+                        var claims = new List<Claim>();
+                        if (http.Request.Headers.TryGetValue("X-Test-Scope-Id", out var claimedScopeValues))
                         {
-                            claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, claimedScopeId));
+                            var claimedScopeIds = claimedScopeValues
+                                .ToString()
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                            foreach (var claimedScopeId in claimedScopeIds)
+                            {
+                                claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, claimedScopeId));
+                            }
                         }
-                    }
-                    else if (!hasExplicitAuthenticationHeader &&
-                        TryGetRequestedScopeId(http.Request.Path.Value, out var requestedScopeId))
-                    {
-                        claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, requestedScopeId));
+                        else if (!hasExplicitAuthenticationHeader &&
+                            TryGetRequestedScopeId(http.Request.Path.Value, out var requestedScopeId))
+                        {
+                            claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, requestedScopeId));
+                        }
+
+                        http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
                     }
 
-                    http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
-                }
-
-                await next();
-            });
+                    await next();
+                });
+            }
             app.UseAuthorization();
             app.MapScopeServiceEndpoints();
             await app.StartAsync();
@@ -4001,6 +4118,115 @@ public sealed class ScopeServiceEndpointsTests
             return ResultFactory(request, emitAsync, onAcceptedAsync, ct);
         }
     }
+
+    private sealed class FakeGAgentDraftRunInteractionService
+        : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
+    {
+        public Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
+            GAgentDraftRunCommand request,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            _ = emitAsync;
+            _ = onAcceptedAsync;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
+                    .Failure(GAgentDraftRunStartError.UnknownActorType));
+        }
+    }
+
+    private sealed class NoOpScriptRuntimeCommandPort : IScriptRuntimeCommandPort
+    {
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct)
+        {
+            _ = runtimeActorId;
+            _ = runId;
+            _ = inputPayload;
+            _ = scriptRevision;
+            _ = definitionActorId;
+            _ = requestedEventType;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingScriptRuntimeCommandPort(Exception exception) : IScriptRuntimeCommandPort
+    {
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct)
+        {
+            _ = runtimeActorId;
+            _ = runId;
+            _ = inputPayload;
+            _ = scriptRevision;
+            _ = definitionActorId;
+            _ = requestedEventType;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException(exception);
+        }
+    }
+
+    private sealed class NoOpScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    {
+        public bool ProjectionEnabled => true;
+
+        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
+        }
+
+        public Task AttachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DetachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IScriptExecutionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
 
     private sealed class AllowAllInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
     {

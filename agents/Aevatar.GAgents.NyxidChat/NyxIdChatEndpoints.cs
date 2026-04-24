@@ -71,8 +71,7 @@ public static partial class NyxIdChatEndpoints
                 responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
             });
         })
-            .WithTags("NyxIdRelay")
-            .AllowAnonymous();
+            .WithTags("NyxIdRelay");
 
         // Access control for relay is handled by NyxID's route configuration.
 
@@ -122,9 +121,40 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
-        await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
         await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        try
+        {
+            await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
+        }
+        catch
+        {
+            await TryRestoreConversationRegistrationAsync(http, scopeId, actorId, actorStore);
+            throw;
+        }
+
         return Results.Ok();
+    }
+
+    private static async Task TryRestoreConversationRegistrationAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        IGAgentActorStore actorStore)
+    {
+        try
+        {
+            await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            http.RequestServices.GetService<ILoggerFactory>()
+                ?.CreateLogger("Aevatar.NyxId.Chat.DeleteConversation")
+                .LogError(
+                    ex,
+                    "Failed to restore NyxId chat conversation registration after history deletion failure: scope={ScopeId}, actor={ActorId}",
+                    scopeId,
+                    actorId);
+        }
     }
 
     private static async Task InjectUserConfigMetadataAsync(
@@ -196,24 +226,6 @@ public static partial class NyxIdChatEndpoints
 
         if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             return authHeader["Bearer ".Length..].Trim();
-
-        return null;
-    }
-
-    private static string? TryExtractRefreshToken(HttpContext http)
-    {
-        if (http.Request.Headers.TryGetValue("X-Nyx-Refresh-Token", out var headerValue))
-        {
-            var token = headerValue.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(token))
-                return token.Trim();
-        }
-
-        if (http.Request.Cookies.TryGetValue("nyx_refresh_token", out var cookieValue) &&
-            !string.IsNullOrWhiteSpace(cookieValue))
-        {
-            return cookieValue.Trim();
-        }
 
         return null;
     }

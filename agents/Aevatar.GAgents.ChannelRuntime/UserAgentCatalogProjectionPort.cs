@@ -6,7 +6,7 @@ namespace Aevatar.GAgents.ChannelRuntime;
 public sealed class UserAgentCatalogProjectionPort
     : MaterializationProjectionPortBase<UserAgentCatalogMaterializationRuntimeLease>
 {
-    public const string ProjectionKind = UserAgentCatalogStorageContracts.ProjectionKind;
+    public const string ProjectionKind = UserAgentCatalogStorageContracts.DurableProjectionKind;
 
     public UserAgentCatalogProjectionPort(
         IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> activationService)
