@@ -855,6 +855,139 @@ public sealed class ConversationGAgentDedupTests
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
     }
 
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_InterimEditFailureAfterTokenConsumed_SuppressesSubsequentChunksWithoutDisablingFinalEdit()
+    {
+        // Regression for PR#374 P1 review: once the first chunk consumes the NyxID /reply token,
+        // an interim /reply/update failure must NOT mark the turn as fallback-safe. Marking it
+        // Disabled would send the final LlmReplyReady path into RunLlmReplyAsync, which re-uses
+        // the already-consumed JTI and yields 401. Instead the state must be SuppressInterim so
+        // later interim chunks are dropped but the final edit can still reconcile the user
+        // message.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_first_consumed");
+                return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
+            },
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-suppress");
+        SeedReplyToken(agent, "act-stream-suppress", "token-1", "relay-msg-1");
+
+        // First chunk consumes the reply token.
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello"));
+        // Interim edit fails after token consumed.
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world"));
+        // Later interim chunk must be dropped (not dispatched to runner).
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world again"));
+
+        callCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenTokenAlreadyConsumedAndInterimEditFailed_RetriesFinalEditInsteadOfReusingToken()
+    {
+        // Regression for PR#374 P1 review: final LlmReplyReady must try the final /reply/update
+        // via RunStreamChunkAsync instead of falling through to RunLlmReplyAsync (which would
+        // reuse the already-consumed reply token and 401).
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_first_consumed");
+                if (callCount == 2)
+                    return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
+                // Third call is the final edit initiated by TryCompleteStreamedReplyAsync.
+                return ConversationStreamChunkResult.Succeeded(pmid ?? "om_first_consumed");
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-retry");
+        SeedReplyToken(agent, "act-stream-final-retry", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello world"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-final-retry",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-final-retry", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello world final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        // Must not fall back to RunLlmReplyAsync — the token is already consumed.
+        runner.LlmReplyCount.ShouldBe(0);
+        // Third RunStreamChunkAsync call is the final edit.
+        callCount.ShouldBe(3);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.Outbound.Text.ShouldBe("hello world final");
+        completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenTokenConsumedAndFinalEditAlsoFails_PersistsLastFlushedPartialAsTerminalWithoutReusingToken()
+    {
+        // Regression for PR#374 P1 review: if the final edit also fails after the token was
+        // consumed, the actor must not fall back to RunLlmReplyAsync (would 401 on dead token).
+        // Instead it persists the last flushed partial as the terminal user-visible state so the
+        // pipeline stops spinning on a guaranteed-failing send.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_first_consumed");
+                return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-degraded");
+        SeedReplyToken(agent, "act-stream-final-degraded", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial more"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-final-degraded",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-final-degraded", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello partial more final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        runner.LlmReplyCount.ShouldBe(0);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        // The user sees the last successfully flushed partial, not the final LLM text.
+        completed.Outbound.Text.ShouldBe("hello partial");
+    }
+
     private static LlmReplyStreamChunkEvent CreateStreamChunk(string correlationId, string replyMessageId, string accumulatedText) =>
         new()
         {

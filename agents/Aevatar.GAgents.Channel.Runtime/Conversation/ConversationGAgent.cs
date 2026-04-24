@@ -43,17 +43,37 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     /// <summary>
     /// Actor-scoped, in-memory streaming state for one conversation turn. Never persisted: tracks
-    /// the upstream platform message id of the placeholder send and whether a subsequent failure
-    /// has disabled the streaming path for this turn. Keyed by <c>correlation_id</c>, same
+    /// the upstream platform message id of the placeholder send and the two distinct failure
+    /// modes that can disable parts of the streaming path. Keyed by <c>correlation_id</c>, same
     /// lifecycle as <see cref="NyxRelayReplyTokenContext"/>.
     /// </summary>
+    /// <remarks>
+    /// The two failure flags carry different semantics with respect to the NyxID reply token:
+    /// <list type="bullet">
+    /// <item><c>Disabled</c> means streaming was aborted <em>before</em> any successful send, so
+    /// the reply token is still available and the actor may safely fall back to a single-shot
+    /// <c>/reply</c> via <see cref="IConversationTurnRunner.RunLlmReplyAsync"/>.</item>
+    /// <item><c>SuppressInterim</c> means the first chunk already consumed the reply token (the
+    /// placeholder or first delta landed) but a later interim edit failed. The final edit must
+    /// still be attempted via <c>/reply/update</c>; falling back to <c>/reply</c> would reuse a
+    /// dead token and turn the partial into the user-visible terminal state.</item>
+    /// </list>
+    /// </remarks>
     private sealed record NyxRelayStreamingState(
         string? PlatformMessageId,
         string LastFlushedText,
         int EditCount,
-        bool Disabled)
+        bool Disabled,
+        bool SuppressInterim)
     {
-        public static NyxRelayStreamingState Initial { get; } = new(null, string.Empty, 0, false);
+        public static NyxRelayStreamingState Initial { get; } = new(null, string.Empty, 0, false, false);
+
+        /// <summary>
+        /// True once the first successful send has landed: the NyxID reply token has been
+        /// consumed and any further outbound must go through <c>/reply/update</c>. Used as the
+        /// "token is dead, don't fall back to <c>/reply</c>" guard.
+        /// </summary>
+        public bool ReplyTokenConsumed => !string.IsNullOrEmpty(PlatformMessageId);
     }
 
     /// <summary>
@@ -426,7 +446,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
 
         var state = _nyxRelayStreamingStates.GetValueOrDefault(correlationId) ?? NyxRelayStreamingState.Initial;
-        if (state.Disabled)
+        if (state.Disabled || state.SuppressInterim)
             return;
 
         if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
@@ -453,12 +473,30 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CancellationToken.None);
         if (!result.Success)
         {
-            Logger.LogInformation(
-                "Streaming chunk delivery failed; disabling streaming for turn. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
-                evt.CorrelationId,
-                result.ErrorCode,
-                result.EditUnsupported);
-            _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
+            if (state.ReplyTokenConsumed)
+            {
+                // First chunk already consumed the reply token. Skip further interim edits but
+                // preserve PlatformMessageId so the final edit on LlmReplyReady can still try
+                // to reconcile the user-visible message. Falling back to /reply would reuse a
+                // dead token.
+                Logger.LogInformation(
+                    "Streaming interim edit failed after token consumed; suppressing interim edits, final edit will still be attempted. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
+                    evt.CorrelationId,
+                    result.ErrorCode,
+                    result.EditUnsupported);
+                _nyxRelayStreamingStates[correlationId] = state with { SuppressInterim = true };
+            }
+            else
+            {
+                // First send itself failed, so the reply token is still usable. Let
+                // LlmReplyReady fall back to a single-shot /reply via RunLlmReplyAsync.
+                Logger.LogInformation(
+                    "Streaming initial send failed before token consumed; disabling streaming and allowing /reply fallback. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
+                    evt.CorrelationId,
+                    result.ErrorCode,
+                    result.EditUnsupported);
+                _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
+            }
             return;
         }
 
@@ -489,19 +527,28 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         if (!_nyxRelayStreamingStates.TryGetValue(correlationId, out var state))
             return false;
+        // Disabled means the initial send never landed, so the reply token is still usable
+        // and the caller may fall back to a single-shot /reply. A missing PlatformMessageId
+        // with SuppressInterim would be inconsistent, but treat it the same for safety.
         if (state.Disabled || string.IsNullOrEmpty(state.PlatformMessageId))
             return false;
 
+        var platformMessageId = state.PlatformMessageId!;
         var finalText = evt.Outbound?.Text ?? string.Empty;
         if (string.IsNullOrWhiteSpace(finalText))
         {
-            // Streaming already rendered something partial but the LLM reported empty; fall back so
-            // the user sees the safety-net text instead of a stale placeholder.
-            _nyxRelayStreamingStates.Remove(correlationId);
-            return false;
+            // Streaming rendered something partial but the LLM reported empty; the reply token
+            // is dead (first chunk consumed it), so we cannot fall back to /reply. Accept the
+            // last flushed text as the terminal user-visible state rather than spinning on a
+            // dead token.
+            Logger.LogWarning(
+                "Streaming LLM reply final text was empty; persisting last flushed partial as terminal. correlation={CorrelationId} platformMessageId={PlatformMessageId}",
+                evt.CorrelationId,
+                platformMessageId);
+            await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
+            return true;
         }
 
-        var platformMessageId = state.PlatformMessageId!;
         var edits = state.EditCount;
         if (!string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal))
         {
@@ -521,16 +568,34 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 CancellationToken.None);
             if (!finalResult.Success)
             {
+                // The reply token was already consumed by the first chunk, so falling back to
+                // a fresh /reply via RunLlmReplyAsync would reuse a dead JTI and surface as 401
+                // to the user. Persist the last flushed partial as the terminal state instead —
+                // the user sees the stale partial, but we don't spin on a guaranteed-failing
+                // send. Retries cannot help here.
                 Logger.LogWarning(
-                    "Streaming final flush failed; falling back to full send. correlation={CorrelationId}, code={Code}",
+                    "Streaming final flush failed after token consumed; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
                     evt.CorrelationId,
-                    finalResult.ErrorCode);
-                _nyxRelayStreamingStates.Remove(correlationId);
-                return false;
+                    finalResult.ErrorCode,
+                    platformMessageId);
+                await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
+                return true;
             }
             edits += 1;
         }
 
+        await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, finalText, edits);
+        return true;
+    }
+
+    private async Task PersistStreamedCompletionAsync(
+        LlmReplyReadyEvent evt,
+        string commandId,
+        ChatActivity? referenceActivity,
+        string platformMessageId,
+        string outboundText,
+        int edits)
+    {
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var completed = new ConversationTurnCompletedEvent
         {
@@ -541,7 +606,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             Conversation = evt.Activity?.Conversation?.Clone()
                            ?? State.Conversation?.Clone()
                            ?? new ConversationReference(),
-            Outbound = new MessageContent { Text = finalText },
+            Outbound = new MessageContent { Text = outboundText },
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
         };
@@ -553,7 +618,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             platformMessageId,
             edits,
             completed.Conversation?.CanonicalKey);
-        return true;
     }
 
     [EventHandler]

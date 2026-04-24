@@ -43,4 +43,12 @@ public class NyxIdRelayOptions
     /// always bypasses this throttle so the user sees the complete text once the stream ends.
     /// </summary>
     public int StreamingFlushIntervalMs { get; set; } = 750;
+
+    /// <summary>
+    /// Placeholder text emitted as the first streaming chunk before the LLM produces any delta.
+    /// Guarantees a visible "working" state within the outbound RTT even when the LLM suffers
+    /// cold-start, router handoff, or tool-call latency before the first token. Set to empty
+    /// to disable and instead wait for the first real delta (slower time-to-first-visible).
+    /// </summary>
+    public string StreamingPlaceholderText { get; set; } = "…";
 }

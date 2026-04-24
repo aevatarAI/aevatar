@@ -105,6 +105,18 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
             agentName: "NyxIdConversationReply",
             streamBufferCapacity: StreamBufferCapacity);
 
+        // Emit a placeholder immediately so the user sees a message within the outbound RTT,
+        // regardless of LLM cold-start, router selection, or tool-call latency before the
+        // first real delta. The first real delta overwrites this placeholder via edit-in-place;
+        // if no delta ever arrives (tool-only or empty turn), the caller's FinalizeAsync edits
+        // the placeholder to the final text. Disabled by setting the option to empty/whitespace.
+        if (streamingSink is not null)
+        {
+            var placeholder = _relayOptions?.StreamingPlaceholderText;
+            if (!string.IsNullOrWhiteSpace(placeholder))
+                await streamingSink.OnDeltaAsync(placeholder, ct);
+        }
+
         var output = new StringBuilder();
         await foreach (var chunk in runtime.ChatStreamAsync(
                            activity.Content.Text,
