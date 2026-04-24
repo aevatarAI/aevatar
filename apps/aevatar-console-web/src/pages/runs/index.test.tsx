@@ -15,7 +15,22 @@ import RunsPage from "./index";
 
 const mockDispatch = jest.fn();
 const mockReset = jest.fn();
-const mockSession = {
+type MockRunSession = {
+  activeSteps: Set<string>;
+  context?: {
+    actorId?: string;
+    commandId?: string;
+    workflowName?: string;
+  };
+  error?: string;
+  events: unknown[];
+  messages: unknown[];
+  pendingHumanInput?: unknown;
+  runId: string;
+  status: string;
+};
+
+const mockSession: MockRunSession = {
   context: undefined,
   status: "idle",
   messages: [],
@@ -331,6 +346,9 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Actor explorer" })
     ).toBeTruthy();
     expect(
+      screen.getByRole("button", { name: "Mission Control" })
+    ).toBeDisabled();
+    expect(
       screen.queryByRole("button", { name: "Open observability hub" })
     ).toBeNull();
     expect(
@@ -406,8 +424,18 @@ describe("RunsPage", () => {
   });
 
   it("shows the trace workbench and primary run actions after the run starts", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&prompt=Watch%20this%20run",
+    );
     mockSession.status = "running";
     mockSession.runId = "run-1";
+    mockSession.context = {
+      actorId: "actor-1",
+      commandId: "cmd-1",
+      workflowName: "direct",
+    };
 
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
@@ -415,6 +443,16 @@ describe("RunsPage", () => {
     expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Conversation" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mission Control" }));
+
+    expect(window.location.pathname).toBe("/runtime/mission-control");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("actorId")).toBe("actor-1");
+    expect(params.get("autoStream")).toBe("true");
+    expect(params.get("prompt")).toBe("Watch this run");
+    expect(params.get("runId")).toBe("run-1");
+    expect(params.get("scopeId")).toBe("scope-1");
   });
 
   it("surfaces pending human interaction inline in the main workspace", async () => {

@@ -3,6 +3,7 @@ package aevatar.gagents.streamingproxy;
 option csharp_namespace = "Aevatar.GAgents.StreamingProxy";
 
 import "google/protobuf/timestamp.proto";
+import "agent_messages.proto";
 
 // ─── State ───
 
@@ -26,9 +27,23 @@ message StreamingProxyGAgentState {
   repeated StreamingProxyParticipant participants = 2;
   repeated StreamingProxyChatMessage messages = 3;
   int64 next_sequence = 4;
+  map<string, StreamingProxyChatSessionTerminalRecord> terminal_sessions = 5;
+}
+
+message StreamingProxyChatSessionTerminalRecord {
+  string session_id = 1;
+  StreamingProxyChatSessionTerminalStatus status = 2;
+  google.protobuf.Timestamp terminal_at = 3;
+  string error_message = 4;
 }
 
 // ─── Events ───
+
+enum StreamingProxyChatSessionTerminalStatus {
+  UNSPECIFIED = 0;
+  COMPLETED = 1;
+  FAILED = 2;
+}
 
 message GroupChatRoomInitializedEvent {
   string room_name = 1;
@@ -53,4 +68,28 @@ message GroupChatParticipantJoinedEvent {
 
 message GroupChatParticipantLeftEvent {
   string agent_id = 1;
+}
+
+message StreamingProxyChatSessionTerminalStateChanged {
+  string session_id = 1;
+  StreamingProxyChatSessionTerminalStatus status = 2;
+  google.protobuf.Timestamp terminal_at = 3;
+  string error_message = 4;
+}
+
+message StreamingProxyRoomSessionEnvelope {
+  aevatar.EventEnvelope envelope = 1;
+}
+
+message StreamingProxyChatSessionTerminalSnapshot {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string root_actor_id = 6;
+  string session_id = 7;
+  StreamingProxyChatSessionTerminalStatus status = 8;
+  google.protobuf.Timestamp terminal_at = 9;
+  string error_message = 10;
 }

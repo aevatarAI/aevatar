@@ -28,8 +28,11 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// </remarks>
 public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
 {
-    private static readonly TimeSpan InitialDeferredLlmDispatchDelay = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan DeferredLlmDispatchRetryDelay = TimeSpan.FromSeconds(5);
+    // Orleans Reminders (the durable scheduler backing ScheduleSelfDurableTimeoutAsync)
+    // round dueTime up to the local reminder service tick (typically ~1 minute), so
+    // sub-minute schedules are unreliable. The inbox dispatch happens inline via
+    // IChannelLlmReplyInbox; the durable timer is reserved for retry/rehydration.
+    private static readonly TimeSpan DeferredLlmDispatchRetryDelay = TimeSpan.FromSeconds(60);
     private readonly Dictionary<string, NyxRelayReplyTokenContext> _nyxRelayReplyTokens = new(StringComparer.Ordinal);
     private readonly Dictionary<string, NyxRelayStreamingState> _nyxRelayStreamingStates = new(StringComparer.Ordinal);
 
@@ -118,10 +121,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (result.LlmReplyRequest is not null)
         {
             await PersistDomainEventAsync(result.LlmReplyRequest);
-            await ScheduleDeferredLlmReplyDispatchAsync(
-                result.LlmReplyRequest,
-                InitialDeferredLlmDispatchDelay,
-                CancellationToken.None);
+            await DispatchPendingLlmReplyAsync(result.LlmReplyRequest, CancellationToken.None);
             Logger.LogInformation(
                 "Accepted inbound activity for deferred LLM reply: activity={ActivityId} conversation={Key}",
                 activity.Id,
@@ -182,33 +182,36 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
+        await DispatchPendingLlmReplyAsync(pendingRequest, CancellationToken.None);
+    }
+
+    private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+    {
         var inbox = Services.GetService<IChannelLlmReplyInbox>();
         if (inbox is null)
         {
             Logger.LogWarning(
-                "Deferred LLM reply inbox not registered; rescheduling dispatch: correlation={CorrelationId}",
-                evt.CorrelationId);
-            await ScheduleDeferredLlmReplyDispatchAsync(
-                pendingRequest,
-                DeferredLlmDispatchRetryDelay,
-                CancellationToken.None);
+                "Channel LLM reply inbox not registered; scheduling durable retry: correlation={CorrelationId}",
+                request.CorrelationId);
+            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
             return;
         }
 
         try
         {
-            await inbox.EnqueueAsync(pendingRequest.Clone(), CancellationToken.None);
+            await inbox.EnqueueAsync(request.Clone(), ct);
+            Logger.LogInformation(
+                "Enqueued LLM reply request to inbox: correlation={CorrelationId} conversation={Key}",
+                request.CorrelationId,
+                request.Activity?.Conversation?.CanonicalKey);
         }
         catch (Exception ex)
         {
             Logger.LogError(
                 ex,
-                "Failed to enqueue deferred LLM reply request; rescheduling dispatch: correlation={CorrelationId}",
-                evt.CorrelationId);
-            await ScheduleDeferredLlmReplyDispatchAsync(
-                pendingRequest,
-                DeferredLlmDispatchRetryDelay,
-                CancellationToken.None);
+                "Failed to enqueue LLM reply request; scheduling durable retry: correlation={CorrelationId}",
+                request.CorrelationId);
+            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }
     }
 
@@ -282,9 +285,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (failed.RetryPolicyCase != ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable &&
             pendingRequest is not null)
         {
-            var retryAfter = failed.RetryAfterMs > 0
+            var requested = failed.RetryAfterMs > 0
                 ? TimeSpan.FromMilliseconds(failed.RetryAfterMs)
                 : DeferredLlmDispatchRetryDelay;
+            // Floor the retry delay to the durable scheduler's reliable granularity. Orleans
+            // Reminders effectively round sub-minute schedules up to the next tick, so any
+            // shorter requested delay would silently miss; honour at least DeferredLlmDispatchRetryDelay.
+            var retryAfter = requested < DeferredLlmDispatchRetryDelay
+                ? DeferredLlmDispatchRetryDelay
+                : requested;
             await ScheduleDeferredLlmReplyDispatchAsync(
                 pendingRequest,
                 retryAfter,
@@ -568,7 +577,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         await ScheduleSelfDurableTimeoutAsync(
             BuildDeferredLlmReplyCallbackId(request.CorrelationId),
-            dueTime <= TimeSpan.Zero ? InitialDeferredLlmDispatchDelay : dueTime,
+            dueTime <= TimeSpan.Zero ? DeferredLlmDispatchRetryDelay : dueTime,
             new DeferredLlmReplyDispatchRequestedEvent
             {
                 CorrelationId = request.CorrelationId,
@@ -598,10 +607,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         foreach (var request in State.PendingLlmReplyRequests)
         {
-            await ScheduleDeferredLlmReplyDispatchAsync(
-                request,
-                InitialDeferredLlmDispatchDelay,
-                ct);
+            await DispatchPendingLlmReplyAsync(request, ct);
         }
     }
 

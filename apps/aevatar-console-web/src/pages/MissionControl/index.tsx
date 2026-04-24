@@ -26,6 +26,9 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import { history } from '@/shared/navigation/history';
+import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
+import { buildTeamDetailHref } from '@/shared/navigation/teamRoutes';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useMissionControlRuntime, type UseMissionControlRuntimeResult } from './hooks/useMissionControlRuntime';
 import InspectorPanel from './InspectorPanel';
@@ -224,6 +227,7 @@ function MissionHeaderBar({
   liveMode,
   loading,
   onRefresh,
+  routeContext,
   snapshot,
   stageView,
   onStageViewChange,
@@ -233,6 +237,7 @@ function MissionHeaderBar({
   liveMode: boolean;
   loading: boolean;
   onRefresh: () => void;
+  routeContext: UseMissionControlRuntimeResult['routeContext'];
   snapshot: MissionControlSnapshot;
   stageView: MissionStageView;
   onStageViewChange: (value: MissionStageView) => void;
@@ -307,7 +312,35 @@ function MissionHeaderBar({
             Sync now
           </Button>
         ) : (
-          <Tag color="default">Attach a live run first</Tag>
+          <>
+            {routeContext.scopeId ? (
+              <Button
+                onClick={() =>
+                  history.push(
+                    buildTeamDetailHref({
+                      scopeId: routeContext.scopeId ?? '',
+                      tab: 'events',
+                    }),
+                  )
+                }
+              >
+                Back to Team
+              </Button>
+            ) : null}
+            <Button
+              type="primary"
+              onClick={() =>
+                history.push(
+                  buildRuntimeRunsHref({
+                    scopeId: routeContext.scopeId,
+                    serviceId: routeContext.serviceId,
+                  }),
+                )
+              }
+            >
+              Open Event Stream
+            </Button>
+          </>
         )}
         {ui.interventionRequired ? (
           <Button type="primary" onClick={ui.openInterventionPanel}>
@@ -767,6 +800,7 @@ function MissionControlCanvas({
         onRefresh={() => {
           void runtime.refresh();
         }}
+        routeContext={runtime.routeContext}
         onStageViewChange={setStageView}
         snapshot={snapshot}
         stageView={stageView}

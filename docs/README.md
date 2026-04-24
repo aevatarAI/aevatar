@@ -34,6 +34,7 @@ Immutable records of architectural choices and their rationale.
 - [Channel Runtime Multi-Token Credential Routing](decisions/0008-channel-runtime-multi-token-routing.md)
 - [Channel Bot Callback Architecture — Lessons from Lark Integration](decisions/0009-channel-bot-callback-architecture.md)
 - [Channel Phase 0 Persistent Provider Validation Result](decisions/0010-channel-phase0-provider-validation.md)
+- [AGUI / SSE Projection Session Pipeline](decisions/0011-agui-sse-projection-session-pipeline.md)
 
 ## History
 
@@ -49,6 +50,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ### 2026-04
 
 - [2026-04-09-scripting-authority-write-path-cqrs-closure](history/2026-04/2026-04-09-scripting-authority-write-path-cqrs-closure.md)
+- [2026-04-17-issue-204-agui-sse-projection-session-design](history/2026-04/2026-04-17-issue-204-agui-sse-projection-session-design.md)
 - [2026-04-17-nyxid-chat-registry-lifecycle](history/2026-04/2026-04-17-nyxid-chat-registry-lifecycle.md)
 - [claude-code-architecture-learnings](history/2026-04/claude-code-architecture-learnings.md)
 - [nyxid-chat-console-design](history/2026-04/nyxid-chat-console-design.md)

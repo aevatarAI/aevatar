@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddChannelRuntime_RegistersOnlyPublicRegistrationProjectionServices_ForInMemoryStore()
+    public void AddChannelRuntime_RegistersRegistrationProjectionServices_ForInMemoryStore()
     {
         var services = new ServiceCollection();
 
