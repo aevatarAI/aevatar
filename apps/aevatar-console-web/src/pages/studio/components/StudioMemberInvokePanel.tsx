@@ -1,14 +1,11 @@
 import {
   ClearOutlined,
-  CodeOutlined,
-  DeploymentUnitOutlined,
   LinkOutlined,
   PlayCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Empty, Input, Select, Space, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Grid, Input, Select, Tabs, Typography } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RuntimeEventPreviewPanel } from '@/shared/agui/runtimeConversationPresentation';
 import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
@@ -17,12 +14,11 @@ import {
   type RuntimeToolCallInfo,
 } from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { RuntimeEventPreviewPanel } from '@/shared/agui/runtimeConversationPresentation';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { history } from '@/shared/navigation/history';
 import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
-import {
-  saveObservedRunSessionPayload,
-} from '@/shared/runs/draftRunSession';
+import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
 import {
   createNyxIdChatBindingInput,
   extractRuntimeInvokeReceipt,
@@ -30,17 +26,14 @@ import {
   isChatServiceEndpoint,
   type ScopeConsoleServiceOption,
 } from '@/shared/runs/scopeConsole';
+import { studioApi } from '@/shared/studio/api';
 import {
   describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
   getStudioScopeBindingCurrentRevision,
   type StudioScopeBindingStatus,
 } from '@/shared/studio/models';
-import { studioApi } from '@/shared/studio/api';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
-
-type InvokeDockTab = 'chat' | 'events' | 'output';
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
@@ -89,21 +82,35 @@ type StudioInvokeChatMessage = {
   readonly timestamp: number;
 };
 
+type CurrentRunRequest = {
+  readonly mode: 'stream' | 'invoke';
+  readonly payloadBase64: string;
+  readonly payloadTypeUrl: string;
+  readonly prompt: string;
+  readonly startedAt: number;
+};
+
 type InvokeHistoryEntry = {
+  readonly completedAt: number;
   readonly createdAt: number;
   readonly endpointId: string;
   readonly endpointLabel: string;
+  readonly errorDetail: string;
   readonly eventCount: number;
   readonly id: string;
   readonly mode: 'stream' | 'invoke';
   readonly payloadBase64: string;
   readonly payloadTypeUrl: string;
   readonly prompt: string;
-  readonly responsePreview: string;
   readonly runId: string;
   readonly serviceId: string;
-  readonly serviceLabel: string;
+  readonly startedAt: number;
   readonly status: 'success' | 'error';
+  readonly summary: string;
+  readonly snapshot: {
+    readonly chatMessages: StudioInvokeChatMessage[];
+    readonly result: InvokeResultState;
+  };
 };
 
 const monoFontFamily =
@@ -120,6 +127,49 @@ function createClientId(prefix: string): string {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
+}
+
+function trimPreview(value: string, limit = 180): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
+}
+
+function truncateMiddle(value: string, head = 18, tail = 12): string {
+  if (value.length <= head + tail + 3) {
+    return value;
+  }
+
+  return `${value.slice(0, head)}...${value.slice(-tail)}`;
+}
+
+function formatHistoryTimestamp(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '刚刚';
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short',
+  }).format(value);
+}
+
+function formatDuration(startedAt: number, completedAt: number): string {
+  if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt)) {
+    return '未知';
+  }
+
+  const durationMs = Math.max(0, completedAt - startedAt);
+  if (durationMs < 1000) {
+    return `${durationMs} ms`;
+  }
+
+  return `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)} s`;
 }
 
 function createIdleResult(): InvokeResultState {
@@ -142,57 +192,196 @@ function createIdleResult(): InvokeResultState {
   };
 }
 
+function cloneInvokeResult(result: InvokeResultState): InvokeResultState {
+  return {
+    ...result,
+    events: [...result.events],
+    steps: [...result.steps],
+    toolCalls: [...result.toolCalls],
+  };
+}
+
+function cloneChatMessages(
+  messages: readonly StudioInvokeChatMessage[],
+): StudioInvokeChatMessage[] {
+  return messages.map((message) => ({ ...message }));
+}
+
+function getCurrentResultStatusLabel(status: InvokeResultState['status']): string {
+  switch (status) {
+    case 'running':
+      return '运行中';
+    case 'success':
+      return '成功';
+    case 'error':
+      return '失败';
+    default:
+      return '空闲';
+  }
+}
+
+function getCurrentResultStatusStyle(
+  status: InvokeResultState['status'],
+): React.CSSProperties {
+  if (status === 'running') {
+    return {
+      background: '#eff6ff',
+      border: '1px solid #bfdbfe',
+      color: '#1d4ed8',
+    };
+  }
+
+  if (status === 'success') {
+    return {
+      background: '#f0fdf4',
+      border: '1px solid #86efac',
+      color: '#15803d',
+    };
+  }
+
+  if (status === 'error') {
+    return {
+      background: '#fef2f2',
+      border: '1px solid #fecaca',
+      color: '#b91c1c',
+    };
+  }
+
+  return {
+    background: '#f8fafc',
+    border: '1px solid #e5e7eb',
+    color: '#475569',
+  };
+}
+
+function getContractStatusLabel(options: {
+  hasEndpoint: boolean;
+  hasMember: boolean;
+  hasPrompt: boolean;
+  hasTypedPayload: boolean;
+  isChatEndpoint: boolean;
+}): string {
+  if (!options.hasMember || !options.hasEndpoint) {
+    return '未选中成员';
+  }
+
+  if (options.isChatEndpoint) {
+    return options.hasPrompt ? '就绪' : '缺少提示词';
+  }
+
+  return options.hasPrompt || options.hasTypedPayload ? '就绪' : '待输入';
+}
+
 const surfaceStyle: React.CSSProperties = {
   display: 'flex',
   flex: 1,
   flexDirection: 'column',
   gap: 16,
   minHeight: 0,
-  overflow: 'auto',
-  paddingBottom: 8,
+  minWidth: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto',
+  paddingBottom: 12,
 };
 
-const summaryGridStyle: React.CSSProperties = {
+const contractGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 12,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+  minWidth: 0,
 };
 
-const summaryLabelStyle: React.CSSProperties = {
-  color: '#6b7280',
-  fontSize: 12,
-  fontWeight: 600,
-  lineHeight: '18px',
+const contractFieldStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+};
+
+const contractLabelStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.4,
+  lineHeight: '16px',
   textTransform: 'uppercase',
 };
 
-const summaryValueStyle: React.CSSProperties = {
+const contractValueStyle: React.CSSProperties = {
   color: '#111827',
+  display: 'block',
   fontSize: 13,
   fontWeight: 600,
   lineHeight: '20px',
+  minWidth: 0,
   overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+};
+
+const contractStatusPillBaseStyle: React.CSSProperties = {
+  borderRadius: 999,
+  display: 'inline-flex',
+  fontSize: 12,
+  fontWeight: 700,
+  lineHeight: '18px',
+  padding: '4px 10px',
+  width: 'fit-content',
+};
+
+const helperTextStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 13,
+  lineHeight: 1.6,
+  minWidth: 0,
+};
+
+const playgroundActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  justifyContent: 'flex-start',
 };
 
 const controlsGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 12,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+  gap: 14,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+  minWidth: 0,
 };
 
-const bodyGridStyle: React.CSSProperties = {
-  alignItems: 'start',
+const requestSummaryStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
   display: 'grid',
-  flex: 1,
-  gap: 16,
-  gridTemplateColumns: 'minmax(0, 1.1fr) minmax(280px, 340px)',
-  minHeight: 0,
+  gap: 8,
+  minWidth: 0,
+  padding: '12px 14px',
 };
 
-const listColumnStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
+const requestSummaryRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+};
+
+const consoleFrameStyle: React.CSSProperties = {
+  display: 'grid',
   gap: 12,
+  minHeight: 0,
+  minWidth: 0,
+};
+
+const consolePaneStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+  minHeight: 320,
+  minWidth: 0,
+};
+
+const resultSurfaceStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
   minHeight: 0,
   minWidth: 0,
 };
@@ -201,8 +390,9 @@ const transcriptStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 12,
-  maxHeight: 420,
-  minHeight: 220,
+  maxHeight: 360,
+  minHeight: 0,
+  minWidth: 0,
   overflowY: 'auto',
   paddingRight: 4,
 };
@@ -214,55 +404,22 @@ const bubbleBaseStyle: React.CSSProperties = {
   flexDirection: 'column',
   gap: 8,
   maxWidth: '88%',
+  minWidth: 0,
   padding: '12px 14px',
 };
 
-const sidePanelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  minHeight: 0,
-};
-
-const metricCardsStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 12,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
-};
-
-const metricCardStyle: React.CSSProperties = {
-  border: '1px solid #eef2f7',
-  borderRadius: 12,
-  display: 'grid',
-  gap: 4,
+const plainResultStyle: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 14,
+  color: '#111827',
   minWidth: 0,
-  padding: 12,
+  padding: '14px 16px',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
 };
 
-const historyCardStyle: React.CSSProperties = {
-  border: '1px solid #eef2f7',
-  borderRadius: 12,
-  cursor: 'pointer',
-  display: 'grid',
-  gap: 8,
-  padding: 12,
-  textAlign: 'left',
-  width: '100%',
-};
-
-const compactEmptyStateStyle: React.CSSProperties = {
-  alignItems: 'center',
-  border: '1px dashed #d9d9d9',
-  borderRadius: 12,
-  color: '#6b7280',
-  display: 'grid',
-  gap: 6,
-  justifyItems: 'center',
-  padding: '18px 16px',
-  textAlign: 'center',
-};
-
-const receiptStyle: React.CSSProperties = {
+const rawOutputStyle: React.CSSProperties = {
   background: '#0f172a',
   borderRadius: 14,
   color: '#e2e8f0',
@@ -270,41 +427,89 @@ const receiptStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.6,
   margin: 0,
-  maxHeight: 420,
-  minHeight: 220,
+  maxHeight: 360,
+  minHeight: 0,
+  minWidth: 0,
   overflow: 'auto',
   padding: 16,
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
 };
 
-const metricRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  gridTemplateColumns: '20px minmax(0, 1fr)',
+const emptyConsoleTextStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 14,
+  lineHeight: 1.7,
+  minWidth: 0,
 };
 
-function trimPreview(value: string, limit = 180): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '';
+const runsListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+  minWidth: 0,
+};
+
+const historyCardStyle: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
+  cursor: 'pointer',
+  display: 'grid',
+  gap: 8,
+  minWidth: 0,
+  padding: '12px 14px',
+  textAlign: 'left',
+  width: '100%',
+};
+
+const historyMetaStyle: React.CSSProperties = {
+  color: '#6b7280',
+  display: 'flex',
+  flexWrap: 'wrap',
+  fontSize: 12,
+  gap: 8,
+  minWidth: 0,
+};
+
+const inlineDetailStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
+  display: 'grid',
+  gap: 10,
+  minWidth: 0,
+  padding: '12px 14px',
+};
+
+const detailRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+};
+
+const consoleTabLabelStyle: React.CSSProperties = {
+  fontWeight: 600,
+};
+
+const CompactCopyableValue: React.FC<{
+  readonly fallback?: string;
+  readonly value?: string;
+}> = ({ fallback = '—', value }) => {
+  const normalized = trimOptional(value);
+  if (!normalized) {
+    return (
+      <Typography.Text style={helperTextStyle} type="secondary">
+        {fallback}
+      </Typography.Text>
+    );
   }
 
-  return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
-}
-
-function formatHistoryTimestamp(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) {
-    return 'just now';
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'short',
-    day: 'numeric',
-  }).format(value);
-}
+  return (
+    <Typography.Text copyable={{ text: normalized }} style={contractValueStyle}>
+      {truncateMiddle(normalized)}
+    </Typography.Text>
+  );
+};
 
 const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
@@ -317,6 +522,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   initialEndpointId,
   onSelectionChange,
 }) => {
+  const screens = Grid.useBreakpoint();
   const abortControllerRef = useRef<AbortController | null>(null);
   const nyxIdChatBoundRef = useRef(false);
   const previousBindingKeyRef = useRef('');
@@ -328,15 +534,21 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(initialEndpointId),
   );
   const [prompt, setPrompt] = useState('');
+  const [formError, setFormError] = useState('');
   const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
   const [payloadBase64, setPayloadBase64] = useState('');
-  const [activeTab, setActiveTab] = useState<InvokeDockTab>('output');
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
+  const [currentRunRequest, setCurrentRunRequest] = useState<CurrentRunRequest | null>(
+    null,
+  );
   const [chatMessages, setChatMessages] = useState<StudioInvokeChatMessage[]>([]);
   const [requestHistory, setRequestHistory] = useState<InvokeHistoryEntry[]>([]);
-  const [focusedHistoryId, setFocusedHistoryId] = useState('');
+  const [expandedHistoryId, setExpandedHistoryId] = useState('');
+  const [consoleTab, setConsoleTab] = useState<'result' | 'trace' | 'raw'>(
+    'result',
+  );
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -359,18 +571,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       ),
     [scopeBinding?.available, scopeBinding?.serviceId, services],
   );
-  const currentBindingTarget = describeStudioScopeBindingRevisionTarget(
-    currentBindingRevision,
-  );
   const currentBindingContext = describeStudioScopeBindingRevisionContext(
     currentBindingRevision,
   );
+  const currentBindingActorId = trimOptional(currentBindingRevision?.primaryActorId);
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
     trimOptional(selectedService?.displayName) ||
     trimOptional(selectedService?.serviceId) ||
-    'Current member';
-  const observedEvents = invokeResult.events;
+    '当前成员';
   const canInvoke = Boolean(scopeId && selectedService && selectedEndpoint);
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =
@@ -381,22 +590,75 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
     return requestHistory.filter((entry) => entry.serviceId === currentServiceId);
   }, [initialServiceId, requestHistory, selectedService?.serviceId]);
-  const latestHistoryEntry = visibleRequestHistory[0] ?? null;
-  const currentRequestStatus =
-    invokeResult.status === 'running'
-      ? 'running'
-      : invokeResult.status === 'success'
-        ? 'completed'
-        : invokeResult.status === 'error'
-          ? 'failed'
-          : 'idle';
-  const observedErrorCount = useMemo(
-    () =>
-      invokeResult.status === 'error'
-        ? 1
-        : invokeResult.steps.filter((step) => step.status === 'error').length,
-    [invokeResult.status, invokeResult.steps],
-  );
+  const expandedHistoryEntry =
+    visibleRequestHistory.find((entry) => entry.id === expandedHistoryId) ?? null;
+  const currentRunHasData =
+    invokeResult.status !== 'idle' ||
+    Boolean(currentRunRequest?.prompt) ||
+    Boolean(currentRunRequest?.payloadBase64) ||
+    Boolean(currentRunRequest?.payloadTypeUrl) ||
+    Boolean(invokeResult.runId) ||
+    Boolean(invokeResult.commandId) ||
+    Boolean(invokeResult.actorId) ||
+    Boolean(invokeResult.error) ||
+    Boolean(invokeResult.responseJson) ||
+    Boolean(invokeResult.assistantText) ||
+    chatMessages.length > 0 ||
+    invokeResult.events.length > 0;
+  const currentResultStatusLabel = getCurrentResultStatusLabel(invokeResult.status);
+  const currentContractStatusLabel = getContractStatusLabel({
+    hasEndpoint: Boolean(selectedEndpoint),
+    hasMember: Boolean(selectedService),
+    hasPrompt: Boolean(prompt.trim()),
+    hasTypedPayload: Boolean(payloadBase64.trim()),
+    isChatEndpoint,
+  });
+  const currentRawOutput = useMemo(() => {
+    if (invokeResult.responseJson) {
+      return invokeResult.responseJson;
+    }
+
+    if (!currentRunHasData) {
+      return '';
+    }
+
+    return JSON.stringify(
+      {
+        actorId: invokeResult.actorId || undefined,
+        commandId: invokeResult.commandId || undefined,
+        endpointId: invokeResult.endpointId || selectedEndpointId || undefined,
+        error: invokeResult.error || undefined,
+        eventCount: invokeResult.eventCount || invokeResult.events.length,
+        mode: invokeResult.mode || currentRunRequest?.mode,
+        runId: invokeResult.runId || undefined,
+        serviceId: invokeResult.serviceId || selectedServiceId || undefined,
+        status: invokeResult.status,
+        stepCount: invokeResult.steps.length,
+        toolCallCount: invokeResult.toolCalls.length,
+      },
+      null,
+      2,
+    );
+  }, [
+    currentRunHasData,
+    currentRunRequest?.mode,
+    invokeResult.actorId,
+    invokeResult.commandId,
+    invokeResult.endpointId,
+    invokeResult.error,
+    invokeResult.eventCount,
+    invokeResult.events.length,
+    invokeResult.mode,
+    invokeResult.responseJson,
+    invokeResult.runId,
+    invokeResult.serviceId,
+    invokeResult.status,
+    invokeResult.steps.length,
+    invokeResult.toolCalls.length,
+    selectedEndpointId,
+    selectedServiceId,
+  ]);
+  const consoleMinHeight = screens.xl || screens.lg ? 420 : 320;
 
   useEffect(() => {
     if (!services.length) {
@@ -467,8 +729,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
   useEffect(() => {
     onSelectionChange?.({
-      serviceId: selectedServiceId,
       endpointId: selectedEndpointId,
+      serviceId: selectedServiceId,
     });
   }, [onSelectionChange, selectedEndpointId, selectedServiceId]);
 
@@ -499,13 +761,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
     previousBindingKeyRef.current = nextBindingKey;
     setChatMessages([]);
+    setCurrentRunRequest(null);
+    setExpandedHistoryId('');
+    setFormError('');
     setInvokeResult(createIdleResult());
-    setActiveTab(isChatEndpoint ? 'chat' : 'output');
-  }, [isChatEndpoint, scopeId, selectedEndpointId, selectedServiceId]);
-
-  useEffect(() => {
-    setActiveTab(isChatEndpoint ? 'chat' : 'output');
-  }, [isChatEndpoint]);
+    setConsoleTab('result');
+  }, [scopeId, selectedEndpointId, selectedServiceId]);
 
   useEffect(
     () => () => {
@@ -522,16 +783,24 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [chatMessages]);
 
   useEffect(() => {
-    if (!focusedHistoryId) {
+    if (!expandedHistoryId) {
       return;
     }
 
-    if (visibleRequestHistory.some((entry) => entry.id === focusedHistoryId)) {
+    if (visibleRequestHistory.some((entry) => entry.id === expandedHistoryId)) {
       return;
     }
 
-    setFocusedHistoryId('');
-  }, [focusedHistoryId, visibleRequestHistory]);
+    setExpandedHistoryId('');
+  }, [expandedHistoryId, visibleRequestHistory]);
+
+  useEffect(() => {
+    if (!formError) {
+      return;
+    }
+
+    setFormError('');
+  }, [payloadBase64, payloadTypeUrl, prompt, selectedEndpointId, selectedServiceId]);
 
   const ensureNyxIdChatBound = useCallback(async () => {
     if (!scopeId || nyxIdChatBoundRef.current) {
@@ -548,31 +817,23 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ...entry,
         id: createClientId('request'),
       };
-      setFocusedHistoryId(nextEntry.id);
+      setExpandedHistoryId(nextEntry.id);
       setRequestHistory((current) => [nextEntry, ...current].slice(0, 8));
     },
     [],
   );
 
-  const handleRestoreRequest = useCallback(
-    (entry: InvokeHistoryEntry) => {
-      setFocusedHistoryId(entry.id);
-      setSelectedServiceId(entry.serviceId);
-      setSelectedEndpointId(entry.endpointId);
-      setPrompt(entry.prompt);
-      setPayloadTypeUrl(entry.payloadTypeUrl);
-      setPayloadBase64(entry.payloadBase64);
-      setActiveTab(entry.mode === 'stream' ? 'chat' : 'output');
-    },
-    [],
-  );
+  const handleSelectHistoryEntry = useCallback((entryId: string) => {
+    setExpandedHistoryId((current) => (current === entryId ? '' : entryId));
+  }, []);
 
   const handleAbort = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    setConsoleTab('result');
     setInvokeResult((current) => ({
       ...current,
-      error: 'Invocation aborted by operator.',
+      error: '调用已中止。',
       status: 'error',
     }));
   }, []);
@@ -582,36 +843,67 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       return;
     }
 
+    const trimmedPrompt = prompt.trim();
+    const trimmedPayloadTypeUrl = payloadTypeUrl.trim();
+    const trimmedPayloadBase64 = payloadBase64.trim();
+    const startedAt = Date.now();
+
+    if (isChatServiceEndpoint(selectedEndpoint) && !trimmedPrompt) {
+      setFormError('请输入提示词后再开始对话。');
+      return;
+    }
+
+    if (
+      !isChatServiceEndpoint(selectedEndpoint) &&
+      !trimmedPrompt &&
+      !trimmedPayloadBase64
+    ) {
+      setFormError('请输入提示词或载荷后再执行调用。');
+      return;
+    }
+
+    setFormError('');
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    setConsoleTab('result');
+    setCurrentRunRequest({
+      mode: isChatServiceEndpoint(selectedEndpoint) ? 'stream' : 'invoke',
+      payloadBase64: trimmedPayloadBase64,
+      payloadTypeUrl: trimmedPayloadTypeUrl,
+      prompt: trimmedPrompt,
+      startedAt,
+    });
 
     if (isChatServiceEndpoint(selectedEndpoint)) {
       const userMessageId = createClientId('user');
       const assistantMessageId = createClientId('assistant');
-      const trimmedPrompt = prompt.trim();
       const controller = new AbortController();
       const accumulator = createRuntimeEventAccumulator();
-
-      abortControllerRef.current = controller;
-      setChatMessages((current) => [
-        ...current,
+      const buildChatRunMessages = (
+        assistantStatus: StudioInvokeChatMessage['status'],
+        assistantError?: string,
+      ): StudioInvokeChatMessage[] => [
         {
           content: trimmedPrompt,
           id: userMessageId,
           role: 'user',
           status: 'complete',
-          timestamp: Date.now(),
+          timestamp: startedAt,
         },
         {
-          content: '',
+          content: accumulator.assistantText,
+          error: assistantError,
           id: assistantMessageId,
           role: 'assistant',
-          status: 'streaming',
-          timestamp: Date.now(),
+          status: assistantStatus,
+          thinking: accumulator.thinking || undefined,
+          timestamp: startedAt + 1,
         },
-      ]);
+      ];
+
+      abortControllerRef.current = controller;
+      setChatMessages(buildChatRunMessages('streaming'));
       setPrompt('');
-      setActiveTab('chat');
       setInvokeResult({
         ...createIdleResult(),
         endpointId: selectedEndpoint.endpointId,
@@ -640,17 +932,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           signal: controller.signal,
         })) {
           applyRuntimeEvent(accumulator, event);
-          setChatMessages((current) =>
-            current.map((message) =>
-              message.id === assistantMessageId
-                ? {
-                    ...message,
-                    content: accumulator.assistantText,
-                    error: accumulator.errorText || undefined,
-                    status: accumulator.errorText ? 'error' : 'streaming',
-                    thinking: accumulator.thinking || undefined,
-                  }
-                : message,
+          setChatMessages(
+            buildChatRunMessages(
+              accumulator.errorText ? 'error' : 'streaming',
+              accumulator.errorText || undefined,
             ),
           );
           setInvokeResult({
@@ -673,20 +958,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         }
 
         if (!controller.signal.aborted) {
-          setChatMessages((current) =>
-            current.map((message) =>
-              message.id === assistantMessageId
-                ? {
-                    ...message,
-                    content: accumulator.assistantText,
-                    error: accumulator.errorText || undefined,
-                    status: accumulator.errorText ? 'error' : 'complete',
-                    thinking: accumulator.thinking || undefined,
-                  }
-                : message,
-            ),
+          const completedAt = Date.now();
+          const finalChatMessages = buildChatRunMessages(
+            accumulator.errorText ? 'error' : 'complete',
+            accumulator.errorText || undefined,
           );
-          setInvokeResult({
+          const finalResult: InvokeResultState = {
             actorId: accumulator.actorId,
             assistantText: accumulator.assistantText,
             commandId: accumulator.commandId,
@@ -702,45 +979,41 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             steps: [...accumulator.steps],
             thinking: accumulator.thinking,
             toolCalls: [...accumulator.toolCalls],
-          });
+          };
+          setChatMessages(finalChatMessages);
+          setInvokeResult(finalResult);
           appendRequestHistory({
-            createdAt: Date.now(),
+            completedAt,
+            createdAt: completedAt,
             endpointId: selectedEndpoint.endpointId,
             endpointLabel:
               selectedEndpoint.displayName || selectedEndpoint.endpointId,
+            errorDetail: accumulator.errorText,
             eventCount: accumulator.events.length,
             mode: 'stream',
             payloadBase64: '',
             payloadTypeUrl: '',
             prompt: trimmedPrompt,
-            responsePreview:
-              accumulator.errorText ||
-              accumulator.assistantText ||
-              'Model returned an empty response.',
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            serviceLabel: selectedService.displayName || selectedService.serviceId,
+            startedAt,
             status: accumulator.errorText ? 'error' : 'success',
+            summary:
+              accumulator.errorText ||
+              accumulator.assistantText ||
+              '这轮对话没有返回额外文本。',
+            snapshot: {
+              chatMessages: cloneChatMessages(finalChatMessages),
+              result: cloneInvokeResult(finalResult),
+            },
           });
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          setChatMessages((current) =>
-            current.map((entry) =>
-              entry.id === assistantMessageId
-                ? {
-                    ...entry,
-                    content: accumulator.assistantText,
-                    error: message,
-                    status: 'error',
-                    thinking: accumulator.thinking || undefined,
-                  }
-                : entry,
-            ),
-          );
-          setInvokeResult({
+          const message = error instanceof Error ? error.message : String(error);
+          const completedAt = Date.now();
+          const finalChatMessages = buildChatRunMessages('error', message);
+          const finalResult: InvokeResultState = {
             ...createIdleResult(),
             actorId: accumulator.actorId,
             assistantText: accumulator.assistantText,
@@ -756,22 +1029,30 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             steps: [...accumulator.steps],
             thinking: accumulator.thinking,
             toolCalls: [...accumulator.toolCalls],
-          });
+          };
+          setChatMessages(finalChatMessages);
+          setInvokeResult(finalResult);
           appendRequestHistory({
-            createdAt: Date.now(),
+            completedAt,
+            createdAt: completedAt,
             endpointId: selectedEndpoint.endpointId,
             endpointLabel:
               selectedEndpoint.displayName || selectedEndpoint.endpointId,
+            errorDetail: message,
             eventCount: accumulator.events.length,
             mode: 'stream',
             payloadBase64: '',
             payloadTypeUrl: '',
             prompt: trimmedPrompt,
-            responsePreview: message,
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            serviceLabel: selectedService.displayName || selectedService.serviceId,
+            startedAt,
             status: 'error',
+            summary: message,
+            snapshot: {
+              chatMessages: cloneChatMessages(finalChatMessages),
+              result: cloneInvokeResult(finalResult),
+            },
           });
         }
       } finally {
@@ -783,6 +1064,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       return;
     }
 
+    setChatMessages([]);
     setInvokeResult({
       ...createIdleResult(),
       endpointId: selectedEndpoint.endpointId,
@@ -790,21 +1072,21 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       serviceId: selectedService.serviceId,
       status: 'running',
     });
-    setActiveTab('output');
 
     try {
       const response = await runtimeRunsApi.invokeEndpoint(
         scopeId,
         {
           endpointId: selectedEndpoint.endpointId,
-          payloadBase64: payloadBase64.trim() || undefined,
-          payloadTypeUrl: payloadTypeUrl.trim() || undefined,
-          prompt: prompt.trim(),
+          payloadBase64: trimmedPayloadBase64 || undefined,
+          payloadTypeUrl: trimmedPayloadTypeUrl || undefined,
+          prompt: trimmedPrompt,
         },
         {
           serviceId: selectedService.serviceId,
         },
       );
+      const completedAt = Date.now();
       const {
         actorId,
         commandId,
@@ -815,7 +1097,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         {
           runId: runId || undefined,
           threadId: correlationId || undefined,
-          timestamp: Date.now(),
+          timestamp: completedAt,
           type: 'RUN_STARTED',
         } as RuntimeEvent,
       ];
@@ -823,7 +1105,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       if (actorId || commandId) {
         events.push({
           name: 'RunContext',
-          timestamp: Date.now(),
+          timestamp: completedAt,
           type: 'CUSTOM',
           value: {
             actorId: actorId || undefined,
@@ -832,7 +1114,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         } as RuntimeEvent);
       }
 
-      setInvokeResult({
+      const finalResult: InvokeResultState = {
         ...createIdleResult(),
         actorId,
         commandId,
@@ -844,46 +1126,64 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         runId,
         serviceId: selectedService.serviceId,
         status: 'success',
-      });
+      };
+      setInvokeResult(finalResult);
       appendRequestHistory({
-        createdAt: Date.now(),
+        completedAt,
+        createdAt: completedAt,
         endpointId: selectedEndpoint.endpointId,
         endpointLabel: selectedEndpoint.displayName || selectedEndpoint.endpointId,
+        errorDetail: '',
         eventCount: events.length,
         mode: 'invoke',
-        payloadBase64: payloadBase64.trim(),
-        payloadTypeUrl: payloadTypeUrl.trim(),
-        prompt: prompt.trim(),
-        responsePreview: trimPreview(JSON.stringify(response, null, 2)),
+        payloadBase64: trimmedPayloadBase64,
+        payloadTypeUrl: trimmedPayloadTypeUrl,
+        prompt: trimmedPrompt,
         runId,
         serviceId: selectedService.serviceId,
-        serviceLabel: selectedService.displayName || selectedService.serviceId,
+        startedAt,
         status: 'success',
+        summary:
+          trimPreview(trimmedPrompt, 72) ||
+          trimPreview(trimmedPayloadTypeUrl, 72) ||
+          '结构化调用',
+        snapshot: {
+          chatMessages: [],
+          result: cloneInvokeResult(finalResult),
+        },
       });
     } catch (error) {
+      const completedAt = Date.now();
       const message = error instanceof Error ? error.message : String(error);
-      setInvokeResult({
+      const finalResult: InvokeResultState = {
         ...createIdleResult(),
         endpointId: selectedEndpoint.endpointId,
         error: message,
         mode: 'invoke',
         serviceId: selectedService.serviceId,
         status: 'error',
-      });
+      };
+      setInvokeResult(finalResult);
       appendRequestHistory({
-        createdAt: Date.now(),
+        completedAt,
+        createdAt: completedAt,
         endpointId: selectedEndpoint.endpointId,
         endpointLabel: selectedEndpoint.displayName || selectedEndpoint.endpointId,
+        errorDetail: message,
         eventCount: 0,
         mode: 'invoke',
-        payloadBase64: payloadBase64.trim(),
-        payloadTypeUrl: payloadTypeUrl.trim(),
-        prompt: prompt.trim(),
-        responsePreview: message,
+        payloadBase64: trimmedPayloadBase64,
+        payloadTypeUrl: trimmedPayloadTypeUrl,
+        prompt: trimmedPrompt,
         runId: '',
         serviceId: selectedService.serviceId,
-        serviceLabel: selectedService.displayName || selectedService.serviceId,
+        startedAt,
         status: 'error',
+        summary: message,
+        snapshot: {
+          chatMessages: [],
+          result: cloneInvokeResult(finalResult),
+        },
       });
     }
   }, [
@@ -902,22 +1202,22 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       return;
     }
 
-    const currentPrompt = prompt.trim() || latestHistoryEntry?.prompt || '';
+    const currentPrompt = currentRunRequest?.prompt || prompt.trim() || '';
     const currentPayloadTypeUrl =
+      currentRunRequest?.payloadTypeUrl ||
       (!isChatServiceEndpoint(selectedEndpoint) && payloadTypeUrl.trim()) ||
-      latestHistoryEntry?.payloadTypeUrl ||
       '';
     const currentPayloadBase64 =
+      currentRunRequest?.payloadBase64 ||
       (!isChatServiceEndpoint(selectedEndpoint) && payloadBase64.trim()) ||
-      latestHistoryEntry?.payloadBase64 ||
       '';
     const observedDraftKey =
-      observedEvents.length > 0
+      invokeResult.events.length > 0
         ? saveObservedRunSessionPayload({
             actorId: invokeResult.actorId || undefined,
             commandId: invokeResult.commandId || undefined,
             endpointId: invokeResult.endpointId || selectedEndpoint.endpointId,
-            events: observedEvents,
+            events: invokeResult.events,
             payloadBase64: currentPayloadBase64 || undefined,
             payloadTypeUrl: currentPayloadTypeUrl || undefined,
             prompt: currentPrompt,
@@ -940,14 +1240,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       }),
     );
   }, [
+    currentRunRequest?.payloadBase64,
+    currentRunRequest?.payloadTypeUrl,
+    currentRunRequest?.prompt,
     invokeResult.actorId,
     invokeResult.commandId,
     invokeResult.endpointId,
+    invokeResult.events,
     invokeResult.runId,
-    latestHistoryEntry?.payloadBase64,
-    latestHistoryEntry?.payloadTypeUrl,
-    latestHistoryEntry?.prompt,
-    observedEvents,
     payloadBase64,
     payloadTypeUrl,
     prompt,
@@ -959,174 +1259,245 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
   const handleClear = useCallback(() => {
     setChatMessages([]);
+    setConsoleTab('result');
+    setCurrentRunRequest(null);
+    setFormError('');
     setInvokeResult(createIdleResult());
-    setActiveTab(isChatEndpoint ? 'chat' : 'output');
-  }, [isChatEndpoint]);
+  }, []);
 
   const endpointOptions = (selectedService?.endpoints ?? []).map((endpoint) => ({
     label: endpoint.displayName || endpoint.endpointId,
     value: endpoint.endpointId,
   }));
 
-  const activeTabItems = useMemo(() => {
-    const items: {
-      key: InvokeDockTab;
-      label: string;
-      children: React.ReactNode;
-    }[] = [];
-
-    if (isChatEndpoint) {
-      items.push({
-        key: 'chat',
-        label: `Transcript (${chatMessages.length})`,
-        children:
-          chatMessages.length > 0 ? (
-            <div style={transcriptStyle}>
-              {chatMessages.map((message) => {
-                const isAssistant = message.role === 'assistant';
-                return (
-                  <div
-                    key={message.id}
+  const consoleItems = useMemo(
+    () => [
+      {
+        children: (
+          <div style={{ ...consolePaneStyle, minHeight: consoleMinHeight }}>
+            {currentRunHasData ? (
+              <div style={resultSurfaceStyle}>
+                <div
+                  style={{
+                    alignItems: 'center',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 10,
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span
                     style={{
-                      alignItems: isAssistant ? 'flex-start' : 'flex-end',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 4,
+                      ...contractStatusPillBaseStyle,
+                      ...getCurrentResultStatusStyle(invokeResult.status),
                     }}
                   >
-                    <div
-                      style={{
-                        ...bubbleBaseStyle,
-                        background: isAssistant ? '#ffffff' : '#eff6ff',
-                        borderColor: isAssistant ? '#e5e7eb' : '#bfdbfe',
-                      }}
-                    >
-                      <div
-                        style={{
-                          color: '#6b7280',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          textTransform: 'uppercase',
-                        }}
-                      >
-                        {isAssistant ? 'Assistant' : 'You'}
+                    {currentResultStatusLabel}
+                  </span>
+                  {currentRunRequest?.startedAt ? (
+                    <Typography.Text style={helperTextStyle} type="secondary">
+                      开始于 {formatHistoryTimestamp(currentRunRequest.startedAt)}
+                    </Typography.Text>
+                  ) : null}
+                </div>
+
+                {currentRunRequest ? (
+                  <div style={requestSummaryStyle}>
+                    <div style={requestSummaryRowStyle}>
+                      <Typography.Text type="secondary">当前输入</Typography.Text>
+                      <div style={contractValueStyle}>
+                        {currentRunRequest.prompt ||
+                          trimPreview(currentRunRequest.payloadTypeUrl, 96) ||
+                          '这次调用使用了类型化载荷。'}
                       </div>
-                      <div
-                        style={{
-                          color: message.error ? '#b91c1c' : '#111827',
-                          lineHeight: 1.7,
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        {message.content || (message.status === 'streaming' ? '...' : '')}
+                    </div>
+                    {!isChatEndpoint &&
+                    (currentRunRequest.payloadTypeUrl ||
+                      currentRunRequest.payloadBase64) ? (
+                      <div style={requestSummaryRowStyle}>
+                        {currentRunRequest.payloadTypeUrl ? (
+                          <Typography.Text style={helperTextStyle} type="secondary">
+                            类型：{currentRunRequest.payloadTypeUrl}
+                          </Typography.Text>
+                        ) : null}
+                        {currentRunRequest.payloadBase64 ? (
+                          <Typography.Text style={helperTextStyle} type="secondary">
+                            已附带 payloadBase64
+                          </Typography.Text>
+                        ) : null}
                       </div>
-                      {message.thinking ? (
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {invokeResult.status === 'error' && invokeResult.error ? (
+                  <Alert
+                    showIcon
+                    message="这次调用失败了。"
+                    description={invokeResult.error}
+                    type="error"
+                  />
+                ) : null}
+
+                {chatMessages.length > 0 ? (
+                  <div
+                    data-testid="studio-invoke-chat-transcript"
+                    style={transcriptStyle}
+                  >
+                    {chatMessages.map((message) => {
+                      const isAssistant = message.role === 'assistant';
+                      return (
                         <div
+                          key={message.id}
                           style={{
-                            borderTop: '1px solid #e5e7eb',
-                            color: '#6b7280',
-                            fontSize: 12,
-                            lineHeight: 1.6,
-                            paddingTop: 8,
-                            whiteSpace: 'pre-wrap',
+                            alignItems: isAssistant ? 'flex-start' : 'flex-end',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 4,
                           }}
                         >
-                          {message.thinking}
+                          <div
+                            style={{
+                              ...bubbleBaseStyle,
+                              background: isAssistant ? '#ffffff' : '#eff6ff',
+                              borderColor: isAssistant ? '#e5e7eb' : '#bfdbfe',
+                            }}
+                          >
+                            <div
+                              style={{
+                                color: '#6b7280',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {isAssistant ? '成员响应' : '你'}
+                            </div>
+                            <div
+                              style={{
+                                color: message.error ? '#b91c1c' : '#111827',
+                                lineHeight: 1.7,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {message.content ||
+                                (message.status === 'streaming' ? '正在响应…' : '')}
+                            </div>
+                            {message.thinking ? (
+                              <div
+                                style={{
+                                  borderTop: '1px solid #e5e7eb',
+                                  color: '#6b7280',
+                                  fontSize: 12,
+                                  lineHeight: 1.6,
+                                  paddingTop: 8,
+                                  whiteSpace: 'pre-wrap',
+                                }}
+                              >
+                                {message.thinking}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
-                      ) : null}
-                    </div>
+                      );
+                    })}
+                    <div ref={transcriptAnchorRef} />
                   </div>
-                );
-              })}
-              <div ref={transcriptAnchorRef} />
-            </div>
-          ) : (
-            <Empty
-              description="No chat content has been observed yet."
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-            />
-          ),
-      });
-    }
+                ) : invokeResult.status === 'running' ? (
+                  <Typography.Text style={emptyConsoleTextStyle} type="secondary">
+                    调用已经发出，当前结果会在这里持续更新。
+                  </Typography.Text>
+                ) : invokeResult.responseJson ? (
+                  <Typography.Text style={emptyConsoleTextStyle} type="secondary">
+                    这次结构化调用已经返回结果。切到“原始”可以查看完整返回体。
+                  </Typography.Text>
+                ) : invokeResult.assistantText ? (
+                  <div style={plainResultStyle}>{invokeResult.assistantText}</div>
+                ) : invokeResult.status === 'error' ? (
+                  <Typography.Text style={emptyConsoleTextStyle} type="secondary">
+                    这次调用失败了，没有额外结果文本。
+                  </Typography.Text>
+                ) : null}
+              </div>
+            ) : (
+              <Typography.Text style={emptyConsoleTextStyle} type="secondary">
+                还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。
+              </Typography.Text>
+            )}
+          </div>
+        ),
+        key: 'result',
+        label: <span style={consoleTabLabelStyle}>结果</span>,
+      },
+      {
+        children: (
+          <div style={{ ...consolePaneStyle, minHeight: consoleMinHeight }}>
+            {invokeResult.events.length > 0 ? (
+              <RuntimeEventPreviewPanel
+                events={invokeResult.events}
+                title={`观测事件（${invokeResult.events.length}）`}
+              />
+            ) : (
+              <Typography.Text style={emptyConsoleTextStyle} type="secondary">
+                当前 run 还没有可展示的追踪事件。
+              </Typography.Text>
+            )}
 
-    items.push({
-      key: 'events',
-      label: `Events (${observedEvents.length})`,
-      children: observedEvents.length > 0 ? (
-        <RuntimeEventPreviewPanel
-          events={observedEvents}
-          title={`Observed Events (${observedEvents.length})`}
-        />
-      ) : (
-        <Empty
-          description="No events have been observed yet."
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-        />
-      ),
-    });
-
-    items.push({
-      key: 'output',
-      label: 'Output',
-      children: invokeResult.responseJson || invokeResult.assistantText ? (
-        <pre style={receiptStyle}>
-          {invokeResult.responseJson || invokeResult.assistantText}
-        </pre>
-      ) : (
-        <Empty
-          description="Run an invocation to inspect the latest receipt."
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-        />
-      ),
-    });
-
-    return items;
-  }, [chatMessages, invokeResult.assistantText, invokeResult.responseJson, isChatEndpoint, observedEvents]);
-
-  const latestOutput =
-    invokeResult.responseJson ||
-    invokeResult.assistantText ||
-    latestHistoryEntry?.responsePreview ||
-    '';
-  const activeSelectionLabel = selectedEndpoint
-    ? `${currentMemberLabel} / ${
-        selectedEndpoint.displayName || selectedEndpoint.endpointId
-      }`
-    : 'Select the current member endpoint';
-  const invokeNotice =
-    invokeResult.status !== 'idle' ? (
-      <Alert
-        showIcon
-        message={
-          invokeResult.status === 'error'
-            ? 'Invocation returned an error.'
-            : invokeResult.status === 'success'
-              ? 'Invocation completed.'
-              : 'Invocation in progress.'
-        }
-        description={
-          invokeResult.error ||
-          `${invokeResult.serviceId || selectedServiceId} / ${
-            invokeResult.endpointId || selectedEndpointId || 'endpoint'
-          }`
-        }
-        type={
-          invokeResult.status === 'error'
-            ? 'error'
-            : invokeResult.status === 'success'
-              ? 'success'
-              : 'info'
-        }
-      />
-    ) : null;
+            {(invokeResult.steps.length > 0 || invokeResult.toolCalls.length > 0) && (
+              <div style={requestSummaryStyle}>
+                <Typography.Text type="secondary">调试概览</Typography.Text>
+                <Typography.Text style={contractValueStyle}>
+                  步骤 {invokeResult.steps.length} 个，工具调用{' '}
+                  {invokeResult.toolCalls.length} 个。
+                </Typography.Text>
+              </div>
+            )}
+          </div>
+        ),
+        key: 'trace',
+        label: <span style={consoleTabLabelStyle}>追踪</span>,
+      },
+      {
+        children: (
+          <div style={{ ...consolePaneStyle, minHeight: consoleMinHeight }}>
+            {currentRawOutput ? (
+              <pre style={rawOutputStyle}>{currentRawOutput}</pre>
+            ) : (
+              <Typography.Text style={emptyConsoleTextStyle} type="secondary">
+                当前 run 没有额外原始输出。
+              </Typography.Text>
+            )}
+          </div>
+        ),
+        key: 'raw',
+        label: <span style={consoleTabLabelStyle}>原始</span>,
+      },
+    ],
+    [
+      consoleMinHeight,
+      currentRawOutput,
+      currentResultStatusLabel,
+      currentRunHasData,
+      currentRunRequest,
+      invokeResult.assistantText,
+      invokeResult.error,
+      invokeResult.events,
+      invokeResult.responseJson,
+      invokeResult.status,
+      invokeResult.steps.length,
+      invokeResult.toolCalls.length,
+      isChatEndpoint,
+      chatMessages,
+    ],
+  );
 
   return (
     <div data-testid="studio-member-invoke-panel" style={surfaceStyle}>
       {!scopeId ? (
         <Alert
           showIcon
-          message="Resolve a team scope before invoking this member."
+          message="请先确定团队作用域，再调用这个成员。"
           type="info"
         />
       ) : emptyState ? (
@@ -1139,386 +1510,291 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       ) : services.length === 0 ? (
         <Alert
           showIcon
-          message="No published member services are available in this scope yet."
-          description="Finish binding a member revision first, then come back to invoke it here."
+          message="当前作用域里还没有可调用的已发布成员服务。"
+          description="请先为成员完成绑定并发布版本，然后再回到这里调用。"
           type="warning"
         />
       ) : (
         <>
           <AevatarPanel
             layoutMode="document"
-            padding={14}
-            title="Invocation Contract"
-            titleHelp="Keep the current member, endpoint, and action posture visible while you move from a quick probe into full runtime observation."
-            extra={
-              <Space wrap size={[8, 8]}>
-                <Button
-                  size="small"
-                  icon={<PlayCircleOutlined />}
-                  onClick={() => void handleInvoke()}
-                  type="primary"
-                  disabled={!canInvoke || invokeResult.status === 'running'}
-                >
-                  {isChatEndpoint ? 'Start chat' : 'Invoke'}
-                </Button>
-                <Button
-                  size="small"
-                  icon={<StopOutlined />}
-                  onClick={handleAbort}
-                  disabled={invokeResult.status !== 'running'}
-                >
-                  Abort
-                </Button>
-                <Button
-                  size="small"
-                  icon={<LinkOutlined />}
-                  onClick={handleOpenRuns}
-                  disabled={!scopeId || !selectedEndpoint}
-                >
-                  Open Runs
-                </Button>
-                <Button size="small" icon={<ClearOutlined />} onClick={handleClear}>
-                  Clear
-                </Button>
-              </Space>
-            }
+            padding={10}
+            title="调用契约"
+            titleHelp="这里只保留当前调用对象和选择状态，不展示运行结果。"
           >
-            <div style={{ display: 'grid', gap: 14 }}>
-              {invokeNotice}
-              <div style={controlsGridStyle}>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  <Typography.Text strong>Current member</Typography.Text>
-                  <div style={summaryValueStyle}>{currentMemberLabel}</div>
-                  <Typography.Text type="secondary">
-                    Invoke stays pinned to the selected member. Change the member from
-                    Team members or Bind before returning here.
-                  </Typography.Text>
-                </div>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  <Typography.Text strong>Endpoint</Typography.Text>
-                  <Select
-                    placeholder="Select an endpoint"
-                    options={endpointOptions}
-                    value={selectedEndpointId || undefined}
-                    onChange={(value) => setSelectedEndpointId(String(value || ''))}
-                    disabled={!selectedService}
-                  />
+            <div style={contractGridStyle}>
+              <div style={contractFieldStyle}>
+                <div style={contractLabelStyle}>状态</div>
+                <span
+                  style={{
+                    ...contractStatusPillBaseStyle,
+                    ...getCurrentResultStatusStyle(
+                      currentContractStatusLabel === '就绪' ? 'success' : 'idle',
+                    ),
+                  }}
+                >
+                  {currentContractStatusLabel}
+                </span>
+              </div>
+              <div style={contractFieldStyle}>
+                <div style={contractLabelStyle}>Member</div>
+                <div style={contractValueStyle}>{currentMemberLabel}</div>
+              </div>
+              <div style={contractFieldStyle}>
+                <div style={contractLabelStyle}>Endpoint</div>
+                <div style={contractValueStyle}>
+                  {selectedEndpoint?.displayName || selectedEndpointId || '未选择'}
                 </div>
               </div>
-
-              <div style={summaryGridStyle}>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={summaryLabelStyle}>Bound Member</div>
-                  <div style={summaryValueStyle}>{currentBindingTarget}</div>
-                </div>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={summaryLabelStyle}>Binding Context</div>
-                  <div style={summaryValueStyle}>
-                    {currentBindingContext || 'Not configured'}
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={summaryLabelStyle}>Revision</div>
-                  <div style={summaryValueStyle}>
-                    {currentBindingRevision?.revisionId || 'Not serving yet'}
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={summaryLabelStyle}>Selection</div>
-                  <div style={summaryValueStyle}>{activeSelectionLabel}</div>
-                </div>
-              </div>
-
-              <Space wrap size={[8, 8]}>
-                <AevatarStatusTag
-                  domain="run"
-                  label="request"
-                  status={currentRequestStatus}
+              <div style={contractFieldStyle}>
+                <div style={contractLabelStyle}>Revision</div>
+                <CompactCopyableValue
+                  fallback="尚未开始服务"
+                  value={currentBindingRevision?.revisionId}
                 />
-                <Tag>{isChatEndpoint ? 'chat transcript' : 'typed invoke'}</Tag>
-                {!isChatEndpoint && selectedEndpoint?.requestTypeUrl ? (
-                  <Tag color="geekblue">
-                    Request · {selectedEndpoint.requestTypeUrl}
-                  </Tag>
-                ) : null}
-                {!isChatEndpoint && selectedEndpoint?.responseTypeUrl ? (
-                  <Tag>Response · {selectedEndpoint.responseTypeUrl}</Tag>
-                ) : null}
-              </Space>
-              {selectedEndpoint?.description ? (
-                <Typography.Text type="secondary">
-                  {selectedEndpoint.description}
-                </Typography.Text>
-              ) : null}
+              </div>
+              <div style={contractFieldStyle}>
+                <div style={contractLabelStyle}>Binding Context</div>
+                <CompactCopyableValue
+                  fallback="尚未配置"
+                  value={currentBindingContext}
+                />
+              </div>
+              <div style={contractFieldStyle}>
+                <div style={contractLabelStyle}>Actor ID</div>
+                <CompactCopyableValue
+                  fallback="尚未分配"
+                  value={currentBindingActorId}
+                />
+              </div>
             </div>
           </AevatarPanel>
 
-          <div style={bodyGridStyle}>
-            <div style={listColumnStyle}>
-              <AevatarPanel
-                layoutMode="document"
-                padding={14}
-                title="Playground"
-                titleHelp="Invoke is where full requests live: prompt, typed payload, transcript, events, and the latest receipt stay in one surface."
-              >
-                <div style={{ display: 'grid', gap: 12 }}>
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    <Typography.Text strong>
-                      {isChatEndpoint ? 'Prompt' : 'Prompt or command input'}
-                    </Typography.Text>
+          <AevatarPanel
+            layoutMode="document"
+            padding={14}
+            title="调试台"
+            titleHelp="先输入 prompt 或载荷，再直接执行当前成员调用。"
+          >
+            <div style={{ display: 'grid', gap: 12 }}>
+              <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+                <Typography.Text strong>
+                  {isChatEndpoint ? '提示词' : '提示词或命令输入'}
+                </Typography.Text>
+                <Input.TextArea
+                  aria-label="调用请求输入"
+                  autoSize={{ minRows: 4, maxRows: 8 }}
+                  placeholder={
+                    isChatEndpoint
+                      ? '输入你想发给当前成员的消息...'
+                      : '这里可以填写补充提示词；如果端点需要类型化载荷，请在下方填写 payloadBase64。'
+                  }
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                />
+                {formError ? (
+                  <Typography.Text type="danger">{formError}</Typography.Text>
+                ) : isChatEndpoint ? (
+                  <Typography.Text style={helperTextStyle} type="secondary">
+                    这是当前成员的对话输入区。开始对话后，结果会直接显示在下方工作台。
+                  </Typography.Text>
+                ) : null}
+              </div>
+
+              {!isChatEndpoint ? (
+                <div style={controlsGridStyle}>
+                  <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+                    <Typography.Text strong>载荷类型 URL</Typography.Text>
+                    <Input
+                      placeholder="type.googleapis.com/example.Command"
+                      value={payloadTypeUrl}
+                      onChange={(event) => setPayloadTypeUrl(event.target.value)}
+                    />
+                  </div>
+                  <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+                    <Typography.Text strong>载荷 Base64</Typography.Text>
                     <Input.TextArea
-                      aria-label="Invoke request input"
-                      autoSize={{ minRows: 4, maxRows: 7 }}
-                      placeholder={
-                        isChatEndpoint
-                          ? 'Message the selected member...'
-                          : 'Optional prompt text. Use payloadBase64 below when the endpoint needs a typed payload.'
-                      }
-                      value={prompt}
-                      onChange={(event) => setPrompt(event.target.value)}
+                      autoSize={{ minRows: 4, maxRows: 8 }}
+                      placeholder="如需类型化调用，请粘贴预编码的 protobuf payload。"
+                      value={payloadBase64}
+                      onChange={(event) => setPayloadBase64(event.target.value)}
                     />
                   </div>
-
-                  {!isChatEndpoint ? (
-                    <div style={controlsGridStyle}>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        <Typography.Text strong>Payload Type URL</Typography.Text>
-                        <Input
-                          placeholder="type.googleapis.com/example.Command"
-                          value={payloadTypeUrl}
-                          onChange={(event) => setPayloadTypeUrl(event.target.value)}
-                        />
-                      </div>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        <Typography.Text strong>Payload Base64</Typography.Text>
-                        <Input.TextArea
-                          autoSize={{ minRows: 4, maxRows: 7 }}
-                          placeholder="Paste a pre-encoded protobuf payload when needed."
-                          value={payloadBase64}
-                          onChange={(event) => setPayloadBase64(event.target.value)}
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <Alert
-                      showIcon
-                      message="Streaming chat endpoint"
-                      description="The transcript and AGUI events stay attached to this workbench while the selected member responds."
-                      type="info"
-                    />
-                  )}
                 </div>
-              </AevatarPanel>
+              ) : null}
 
-              <AevatarPanel
-                layoutMode="document"
-                padding={14}
-                title="Live Trace"
-                titleHelp="Keep transcript, runtime frames, and the latest output together so operators can pivot without leaving the invoke flow."
+              <div
+                data-testid="studio-invoke-playground-actions"
+                style={playgroundActionsStyle}
               >
-                <div style={{ display: 'grid', gap: 14 }}>
-                  <div style={metricCardsStyle}>
-                    <div style={metricCardStyle}>
-                      <Typography.Text type="secondary">Run state</Typography.Text>
-                      <Typography.Text strong style={summaryValueStyle}>
-                        {currentRequestStatus}
-                      </Typography.Text>
-                    </div>
-                    <div style={metricCardStyle}>
-                      <Typography.Text type="secondary">Latest run</Typography.Text>
-                      <Typography.Text strong style={summaryValueStyle}>
-                        {invokeResult.runId || latestHistoryEntry?.runId || 'n/a'}
-                      </Typography.Text>
-                    </div>
-                    <div style={metricCardStyle}>
-                      <Typography.Text type="secondary">Observed events</Typography.Text>
-                      <Typography.Text strong style={summaryValueStyle}>
-                        {String(observedEvents.length)}
-                      </Typography.Text>
-                    </div>
-                    <div style={metricCardStyle}>
-                      <Typography.Text type="secondary">Steps / tools</Typography.Text>
-                      <Typography.Text strong style={summaryValueStyle}>
-                        {invokeResult.steps.length} / {invokeResult.toolCalls.length}
-                      </Typography.Text>
-                    </div>
-                    <div style={metricCardStyle}>
-                      <Typography.Text type="secondary">Errors</Typography.Text>
-                      <Typography.Text strong style={summaryValueStyle}>
-                        {String(observedErrorCount)}
-                      </Typography.Text>
-                    </div>
-                  </div>
-
-                  <Tabs
-                    activeKey={activeTab}
-                    items={activeTabItems}
-                    onChange={(value) => setActiveTab(value as InvokeDockTab)}
-                  />
-                </div>
-              </AevatarPanel>
+                <Button
+                  disabled={!canInvoke || invokeResult.status === 'running'}
+                  icon={<PlayCircleOutlined />}
+                  onClick={() => void handleInvoke()}
+                  type="primary"
+                >
+                  {isChatEndpoint ? '开始对话' : '执行调用'}
+                </Button>
+                <Button
+                  disabled={invokeResult.status !== 'running'}
+                  icon={<StopOutlined />}
+                  onClick={handleAbort}
+                >
+                  中止
+                </Button>
+                <Button
+                  disabled={!scopeId || !selectedEndpoint}
+                  icon={<LinkOutlined />}
+                  onClick={handleOpenRuns}
+                >
+                  打开运行记录
+                </Button>
+                <Button icon={<ClearOutlined />} onClick={handleClear}>
+                  清空
+                </Button>
+              </div>
             </div>
+          </AevatarPanel>
 
-            <div style={sidePanelStyle}>
-              <AevatarPanel
-                layoutMode="document"
-                padding={14}
-                title={`Request History (${visibleRequestHistory.length})`}
-                titleHelp="Keep recent requests nearby so you can quickly replay a payload or jump back to a prior contract without leaving Studio."
-              >
-                {visibleRequestHistory.length > 0 ? (
-                  <div style={{ display: 'grid', gap: 10 }}>
-                    {visibleRequestHistory.map((entry) => {
-                      const isFocused = entry.id === focusedHistoryId;
-                      return (
-                        <button
-                          aria-pressed={isFocused}
-                          className={AEVATAR_PRESSABLE_CARD_CLASS}
-                          key={entry.id}
-                          type="button"
-                          onClick={() => handleRestoreRequest(entry)}
+          <AevatarPanel
+            layoutMode="document"
+            padding={14}
+            title="当前结果"
+            titleHelp="这是唯一的结果展示区。默认看结果，追踪和原始信息作为调试视图延后展示。"
+          >
+            <div style={consoleFrameStyle}>
+              <Tabs
+                activeKey={consoleTab}
+                items={consoleItems}
+                onChange={(value) =>
+                  setConsoleTab(value as 'result' | 'trace' | 'raw')
+                }
+              />
+            </div>
+          </AevatarPanel>
+
+          {visibleRequestHistory.length > 0 ? (
+            <AevatarPanel
+              layoutMode="document"
+              padding={14}
+              title={`Runs（${visibleRequestHistory.length}）`}
+              titleHelp="这里只保留历史运行列表和技术详情，不再重复展示结果内容。"
+            >
+              <div data-testid="studio-invoke-history-scroll" style={runsListStyle}>
+                {visibleRequestHistory.map((entry) => {
+                  const isExpanded = expandedHistoryId === entry.id;
+                  return (
+                    <div key={entry.id} style={runsListStyle}>
+                      <button
+                        aria-expanded={isExpanded}
+                        aria-pressed={isExpanded}
+                        className={AEVATAR_PRESSABLE_CARD_CLASS}
+                        style={{
+                          ...historyCardStyle,
+                          background: isExpanded ? '#f5f7ff' : '#ffffff',
+                          borderColor: isExpanded ? '#91caff' : '#e5e7eb',
+                        }}
+                        type="button"
+                        onClick={() => handleSelectHistoryEntry(entry.id)}
+                      >
+                        <div
                           style={{
-                            ...historyCardStyle,
-                            background: isFocused ? '#f5f7ff' : '#ffffff',
-                            borderColor: isFocused ? '#91caff' : '#eef2f7',
+                            alignItems: 'center',
+                            display: 'flex',
+                            gap: 8,
+                            justifyContent: 'space-between',
+                            minWidth: 0,
                           }}
                         >
-                          <div
-                            style={{
-                              alignItems: 'center',
-                              display: 'flex',
-                              gap: 8,
-                              justifyContent: 'space-between',
-                            }}
+                          <Typography.Text
+                            strong
+                            style={{ ...contractValueStyle, flex: 1 }}
                           >
-                            <Typography.Text strong>
-                              {entry.serviceLabel} / {entry.endpointLabel}
-                            </Typography.Text>
-                            <AevatarStatusTag
-                              domain="run"
-                              label={entry.mode === 'stream' ? 'chat' : 'invoke'}
-                              status={entry.status}
-                            />
-                          </div>
-                          <Typography.Text type="secondary">
-                            {trimPreview(entry.prompt || entry.payloadTypeUrl || 'No prompt')}
+                            {trimPreview(entry.prompt || entry.summary, 72)}
                           </Typography.Text>
-                          <div
-                            style={{
-                              color: '#6b7280',
-                              display: 'flex',
-                              flexWrap: 'wrap',
-                              fontSize: 12,
-                              gap: 8,
-                            }}
-                          >
-                            <span>{formatHistoryTimestamp(entry.createdAt)}</span>
-                            {entry.runId ? <span>Run {entry.runId}</span> : null}
-                            <span>{entry.eventCount} events</span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div style={compactEmptyStateStyle}>
-                    <Typography.Text strong>No requests yet</Typography.Text>
-                    <Typography.Text type="secondary">
-                      Start a request for the current member and the latest prompt,
-                      payload, and receipt will stay here.
-                    </Typography.Text>
-                  </div>
-                )}
-              </AevatarPanel>
-
-              <AevatarPanel
-                layoutMode="document"
-                padding={14}
-                title="Current Contract"
-                titleHelp="Keep the current endpoint contract, latest runtime identifiers, and serving posture visible while you iterate."
-              >
-                <div style={{ display: 'grid', gap: 12 }}>
-                  <div style={metricRowStyle}>
-                    <DeploymentUnitOutlined style={{ color: '#6b7280', marginTop: 2 }} />
-                    <div style={{ display: 'grid', gap: 2 }}>
-                      <Typography.Text type="secondary">Actor ID</Typography.Text>
-                      <div style={summaryValueStyle}>{invokeResult.actorId || 'n/a'}</div>
-                    </div>
-                  </div>
-                  <div style={metricRowStyle}>
-                    <CodeOutlined style={{ color: '#6b7280', marginTop: 2 }} />
-                    <div style={{ display: 'grid', gap: 2 }}>
-                      <Typography.Text type="secondary">Command ID</Typography.Text>
-                      <div style={summaryValueStyle}>{invokeResult.commandId || 'n/a'}</div>
-                    </div>
-                  </div>
-                  <div style={metricRowStyle}>
-                    <LinkOutlined style={{ color: '#6b7280', marginTop: 2 }} />
-                    <div style={{ display: 'grid', gap: 2 }}>
-                      <Typography.Text type="secondary">Endpoint</Typography.Text>
-                      <div style={summaryValueStyle}>
-                        {selectedEndpoint?.displayName || selectedEndpoint?.endpointId || 'n/a'}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={metricRowStyle}>
-                    <PlayCircleOutlined style={{ color: '#6b7280', marginTop: 2 }} />
-                    <div style={{ display: 'grid', gap: 2 }}>
-                      <Typography.Text type="secondary">Latest output</Typography.Text>
-                      <div style={summaryValueStyle}>
-                        {trimPreview(latestOutput || 'No receipt observed yet.')}
-                      </div>
-                    </div>
-                  </div>
-                  {selectedEndpoint ? (
-                    <>
-                      <div
-                        style={{
-                          borderTop: '1px solid #eef2f7',
-                          marginTop: 2,
-                          paddingTop: 10,
-                        }}
-                      >
-                        <Typography.Text strong>Endpoint</Typography.Text>
-                      </div>
-                      <div style={{ display: 'grid', gap: 10 }}>
-                        <div style={summaryValueStyle}>
-                          {selectedEndpoint.displayName || selectedEndpoint.endpointId}
+                          <AevatarStatusTag
+                            domain="run"
+                            label={entry.status === 'success' ? '成功' : '失败'}
+                            status={entry.status}
+                          />
                         </div>
-                        <Typography.Text type="secondary">
-                          {selectedEndpoint.description || 'No endpoint description available.'}
-                        </Typography.Text>
-                        <Space wrap size={[8, 8]}>
-                          <Tag>{currentMemberLabel}</Tag>
-                          <Tag>
-                            revision · {currentBindingRevision?.revisionId || 'not serving'}
-                          </Tag>
-                        </Space>
-                        {!isChatEndpoint && selectedEndpoint.requestTypeUrl ? (
-                          <Typography.Text type="secondary">
-                            Request: {selectedEndpoint.requestTypeUrl}
-                          </Typography.Text>
-                        ) : null}
-                        {!isChatEndpoint && selectedEndpoint.responseTypeUrl ? (
-                          <Typography.Text type="secondary">
-                            Response: {selectedEndpoint.responseTypeUrl}
-                          </Typography.Text>
-                        ) : null}
-                      </div>
-                    </>
-                  ) : (
-                    <div style={compactEmptyStateStyle}>
-                      <Typography.Text strong>No endpoint selected</Typography.Text>
-                      <Typography.Text type="secondary">
-                        Pick an endpoint on the current member to keep its contract
-                        details here.
-                      </Typography.Text>
+                        <div style={historyMetaStyle}>
+                          <span>{formatHistoryTimestamp(entry.createdAt)}</span>
+                          <span>{entry.eventCount} 个事件</span>
+                          <span>{entry.endpointLabel}</span>
+                        </div>
+                      </button>
+
+                      {isExpanded ? (
+                        <div
+                          data-testid="studio-invoke-inline-detail"
+                          style={inlineDetailStyle}
+                        >
+                          {entry.snapshot.result.commandId ? (
+                            <div style={detailRowStyle}>
+                              <Typography.Text type="secondary">
+                                Command ID
+                              </Typography.Text>
+                              <CompactCopyableValue
+                                value={entry.snapshot.result.commandId}
+                              />
+                            </div>
+                          ) : null}
+                          {entry.snapshot.result.actorId ? (
+                            <div style={detailRowStyle}>
+                              <Typography.Text type="secondary">
+                                Actor ID
+                              </Typography.Text>
+                              <CompactCopyableValue
+                                value={entry.snapshot.result.actorId}
+                              />
+                            </div>
+                          ) : null}
+                          {(entry.runId || entry.snapshot.result.runId) ? (
+                            <div style={detailRowStyle}>
+                              <Typography.Text type="secondary">
+                                Metadata
+                              </Typography.Text>
+                              <CompactCopyableValue
+                                value={entry.runId || entry.snapshot.result.runId}
+                              />
+                            </div>
+                          ) : null}
+                          <div style={detailRowStyle}>
+                            <Typography.Text type="secondary">
+                              Duration
+                            </Typography.Text>
+                            <div style={contractValueStyle}>
+                              {formatDuration(entry.startedAt, entry.completedAt)}
+                            </div>
+                          </div>
+                          <div style={detailRowStyle}>
+                            <Typography.Text type="secondary">
+                              Timestamps
+                            </Typography.Text>
+                            <div style={helperTextStyle}>
+                              开始：{formatHistoryTimestamp(entry.startedAt)}
+                            </div>
+                            <div style={helperTextStyle}>
+                              完成：{formatHistoryTimestamp(entry.completedAt)}
+                            </div>
+                          </div>
+                          {entry.errorDetail ? (
+                            <div style={detailRowStyle}>
+                              <Typography.Text type="secondary">
+                                Error Detail
+                              </Typography.Text>
+                              <div style={contractValueStyle}>{entry.errorDetail}</div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                  )}
-                </div>
-              </AevatarPanel>
-            </div>
-          </div>
+                  );
+                })}
+              </div>
+            </AevatarPanel>
+          ) : null}
         </>
       )}
     </div>
