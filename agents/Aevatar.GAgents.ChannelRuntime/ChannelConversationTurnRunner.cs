@@ -74,7 +74,8 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 "Conversation routing target is missing.");
         }
 
-        return ConversationTurnResult.LlmReplyRequested(BuildLlmReplyRequest(activity, registration, inboundEvent));
+        return ConversationTurnResult.LlmReplyRequested(
+            BuildLlmReplyRequest(activity, registration, inboundEvent, runtimeContext));
     }
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
@@ -671,7 +672,8 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static NeedsLlmReplyEvent BuildLlmReplyRequest(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
-        ChannelInboundEvent inboundEvent)
+        ChannelInboundEvent inboundEvent,
+        ConversationTurnRuntimeContext runtimeContext)
     {
         var request = new NeedsLlmReplyEvent
         {
@@ -681,6 +683,18 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             Activity = activity.Clone(),
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
+
+        // Carry the relay reply credential through the inbox as transient inbox-only
+        // fields. ConversationGAgent strips these before persisting NeedsLlmReplyEvent;
+        // ChannelLlmReplyInboxRuntime echoes them into the LlmReplyReadyEvent so the
+        // outbound reply does not depend on the actor's in-memory token dict surviving
+        // deactivation.
+        if (runtimeContext.NyxRelayReplyToken is { } token &&
+            token.ExpiresAtUtc > DateTimeOffset.UtcNow)
+        {
+            request.ReplyToken = token.ReplyToken;
+            request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
+        }
 
         foreach (var pair in BuildReplyMetadata(inboundEvent, activity))
             request.Metadata[pair.Key] = pair.Value;

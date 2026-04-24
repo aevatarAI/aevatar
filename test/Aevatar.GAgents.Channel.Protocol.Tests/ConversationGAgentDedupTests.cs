@@ -372,6 +372,228 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_StripsReplyTokenFromPersistedNeedsLlmReplyEvent_ButKeepsItOnInboxCopy()
+    {
+        // Strip-on-persist invariant: NeedsLlmReplyEvent must keep reply_token on the
+        // copy enqueued to inbox so the LLM worker can echo it back, but the persisted
+        // copy that lands in event store must omit it.
+        const string sentinelReplyToken = "sentinel-strip-on-persist-1f8b3";
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ReplyToken = sentinelReplyToken,
+                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-strip-token", inbox);
+
+        var inboundActivity = CreateActivity("act-strip", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-strip",
+            CorrelationId = "corr-strip",
+        };
+        await agent.HandleInboundActivityAsync(inboundActivity);
+
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].ReplyToken.ShouldBe(sentinelReplyToken);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldNotBeEmpty();
+        var sentinelBytes = Encoding.UTF8.GetBytes(sentinelReplyToken);
+        foreach (var record in events)
+        {
+            var payloadBytes = record.EventData?.Value?.ToByteArray() ?? Array.Empty<byte>();
+            ContainsSubsequence(payloadBytes, sentinelBytes)
+                .ShouldBeFalse($"persisted event {record.EventType} must not contain reply_token bytes");
+        }
+    }
+
+    [Fact]
+    public async Task HandleDeferredLlmReplyDispatchRequestedAsync_ReEnrichesStrippedPendingRequestWithActorRuntimeToken()
+    {
+        // Regression for Codex review: the persisted NeedsLlmReplyEvent in
+        // State.PendingLlmReplyRequests always has an empty ReplyToken (strip-on-persist).
+        // On the retry / durable-reminder path we walk that state, so the inbox must see
+        // the token re-enriched from the actor's in-memory dict while the activation is
+        // still alive. Without enrichment the inbox subscriber's relay gate would drop
+        // the retry and permanently lose the reply.
+        const string sentinelReplyToken = "sentinel-retry-enrich-b3d7a";
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ReplyToken = sentinelReplyToken,
+                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-retry-enrich", inbox);
+
+        var inboundActivity = CreateActivity("act-retry", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-retry",
+            CorrelationId = "corr-retry",
+        };
+        var relayInbound = new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+            CorrelationId = "corr-retry",
+        };
+
+        // Inbound capture populates the actor runtime dict and enqueues with ReplyToken set directly.
+        await agent.HandleNyxRelayInboundActivityAsync(relayInbound);
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].ReplyToken.ShouldBe(sentinelReplyToken);
+
+        // Simulate the durable-reminder retry firing: pendingRequest is read from state
+        // where ReplyToken was stripped. DispatchPendingLlmReplyAsync must re-enrich
+        // from the actor dict so the inbox still receives the token.
+        await agent.HandleDeferredLlmReplyDispatchRequestedAsync(new DeferredLlmReplyDispatchRequestedEvent
+        {
+            CorrelationId = "corr-retry",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        inbox.Enqueued.Count.ShouldBe(2);
+        inbox.Enqueued[1].ReplyToken.ShouldBe(sentinelReplyToken);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_PrefersInboxEchoedReplyToken_OverActorRuntimeDict()
+    {
+        // After a pod restart the in-memory _nyxRelayReplyTokens dict is empty, so the
+        // outbound reply must be able to consume the inbox-echoed reply_token from
+        // LlmReplyReadyEvent directly. Capture the token observed by the runner to confirm.
+        ConversationTurnRuntimeContext? observedContext = null;
+        var runner = new RecordingTurnRunner
+        {
+            LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+                "sent:" + reply.CorrelationId,
+                new MessageContent { Text = "ack" },
+                "bot",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = reply.Activity?.OutboundDelivery?.ReplyMessageId ?? string.Empty,
+                    CorrelationId = reply.CorrelationId,
+                }),
+        };
+        runner.LlmReplyContextObserver = ctx => observedContext = ctx;
+        var (agent, _) = CreateAgent(runner, "conv-inbox-echo");
+
+        var activity = CreateActivity("act-inbox-echo", "conv:slack:C1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-echo",
+            CorrelationId = "corr-inbox-echo",
+        };
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-inbox-echo",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = activity.Clone(),
+            Outbound = new MessageContent { Text = "reply-from-llm" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ReplyToken = "inbox-echoed-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+        });
+
+        observedContext.ShouldNotBeNull();
+        observedContext!.NyxRelayReplyToken.ShouldNotBeNull();
+        observedContext.NyxRelayReplyToken!.ReplyToken.ShouldBe("inbox-echoed-token");
+        observedContext.NyxRelayReplyToken.CorrelationId.ShouldBe("corr-inbox-echo");
+        observedContext.NyxRelayReplyToken.ReplyMessageId.ShouldBe("relay-msg-echo");
+    }
+
+    [Fact]
+    public async Task HandleDeferredLlmReplyDroppedAsync_RetiresPendingRequestWithNotRetryableFailure()
+    {
+        // Inbox-side gates (stale-age, missing relay credential, malformed payload) need
+        // a way to tell the actor "stop tracking this pending request" so it doesn't
+        // silently accumulate in State.PendingLlmReplyRequests until the next
+        // rehydration. The actor's drop handler emits a NotRetryable
+        // ConversationContinueFailedEvent which routes through the existing state
+        // matcher to remove the pending entry.
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ReplyToken = "drop-test-token",
+                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-drop-clears", inbox);
+
+        var inboundActivity = CreateActivity("act-drop", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-drop",
+            CorrelationId = "corr-drop",
+        };
+        await agent.HandleInboundActivityAsync(inboundActivity);
+        agent.State.PendingLlmReplyRequests.ShouldContain(req => req.CorrelationId == "corr-drop");
+
+        await agent.HandleDeferredLlmReplyDroppedAsync(new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = "corr-drop",
+            Reason = "stale_inbox_request_dropped",
+            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        agent.State.PendingLlmReplyRequests.ShouldNotContain(req => req.CorrelationId == "corr-drop");
+        var events = await store.GetEventsAsync(agent.Id);
+        var lastEvent = events[^1];
+        lastEvent.EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
+        var failed = ConversationContinueFailedEvent.Parser.ParseFrom(lastEvent.EventData.Value);
+        failed.ErrorCode.ShouldBe("stale_inbox_request_dropped");
+        failed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public async Task HandleDeferredLlmReplyDroppedAsync_IgnoresUnknownCorrelationId()
+    {
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-drop-unknown");
+        var initialEvents = (await store.GetEventsAsync(agent.Id)).Count;
+
+        await agent.HandleDeferredLlmReplyDroppedAsync(new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = "corr-not-pending",
+            Reason = "stale_inbox_request_dropped",
+            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(initialEvents);
+    }
+
+    [Fact]
     public async Task HandleContinueCommandAsync_PermanentFailure_MarksCommandProcessed()
     {
         // Terminal (non-retryable) continue failures consume the command id so a buggy caller's
@@ -487,6 +709,7 @@ public sealed class ConversationGAgentDedupTests
         public int ContinueCount;
         public Func<ChatActivity, ConversationTurnResult>? InboundResultFactory { get; set; }
         public Func<LlmReplyReadyEvent, ConversationTurnResult>? LlmReplyResultFactory { get; set; }
+        public Action<ConversationTurnRuntimeContext>? LlmReplyContextObserver { get; set; }
         public Func<ConversationContinueRequestedEvent, ConversationTurnResult>? ContinueResultFactory { get; set; }
 
         public Task<ConversationTurnResult> RunInboundAsync(
@@ -507,6 +730,7 @@ public sealed class ConversationGAgentDedupTests
             CancellationToken ct)
         {
             Interlocked.Increment(ref LlmReplyCount);
+            LlmReplyContextObserver?.Invoke(runtimeContext);
             var result = LlmReplyResultFactory is null
                 ? ConversationTurnResult.Sent(
                     "sent:llm:" + reply.CorrelationId,

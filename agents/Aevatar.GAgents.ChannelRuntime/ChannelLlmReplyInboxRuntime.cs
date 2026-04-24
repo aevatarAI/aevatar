@@ -74,6 +74,8 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         await StopAsync(CancellationToken.None);
     }
 
+    internal const long MaxInboxRequestAgeMs = 5 * 60 * 1000;
+
     internal async Task ProcessAsync(NeedsLlmReplyEvent request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -89,6 +91,35 @@ internal sealed class ChannelLlmReplyInboxRuntime :
                 "Dropping malformed deferred LLM reply request: correlation={CorrelationId}, target={TargetActorId}",
                 request.CorrelationId,
                 request.TargetActorId);
+            await NotifyActorOfDropAsync(request, "malformed_deferred_llm_reply_request");
+            return;
+        }
+
+        // Stale gate: NyxID relay reply tokens have a ~30 min TTL and the user access
+        // token used for the LLM call expires inside ~15 min. A request that has been
+        // sitting in the stream for hours can't lead to a successful reply, so drop it
+        // here instead of spending an LLM round just to fail at the outbound stage.
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxInboxRequestAgeMs)
+        {
+            _logger.LogInformation(
+                "Dropping stale LLM reply request: correlation={CorrelationId} ageMs={AgeMs}",
+                request.CorrelationId,
+                nowMs - request.RequestedAtUnixMs);
+            await NotifyActorOfDropAsync(request, "stale_inbox_request_dropped");
+            return;
+        }
+
+        // Relay credential gate: relay turns require a fresh reply_token to send the
+        // outbound. A relay request with no inbox-carried token (e.g., rehydrated from
+        // persisted state after a pod restart that lost the original capture) cannot
+        // be delivered, so skip the LLM call entirely.
+        if (IsRelayRequest(request) && string.IsNullOrWhiteSpace(request.ReplyToken))
+        {
+            _logger.LogWarning(
+                "Dropping relay LLM reply request without inbox-carried reply_token: correlation={CorrelationId}",
+                request.CorrelationId);
+            await NotifyActorOfDropAsync(request, "missing_relay_reply_token");
             return;
         }
 
@@ -151,6 +182,11 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             ErrorCode = errorCode,
             ErrorSummary = errorSummary,
             ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            // Echo the inbox-only relay credential straight back so ConversationGAgent's
+            // outbound reply does not depend on its in-memory token dict still having the
+            // entry. The actor consumes these fields and never persists them.
+            ReplyToken = request.ReplyToken ?? string.Empty,
+            ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
         };
         var envelope = new EventEnvelope
         {
@@ -176,6 +212,74 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
         metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
         return metadata;
+    }
+
+    private static bool IsRelayRequest(NeedsLlmReplyEvent request) =>
+        request.Activity?.OutboundDelivery is
+        {
+            ReplyMessageId.Length: > 0,
+            CorrelationId.Length: > 0,
+        };
+
+    private async Task NotifyActorOfDropAsync(NeedsLlmReplyEvent request, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(request.TargetActorId) ||
+            string.IsNullOrWhiteSpace(request.CorrelationId))
+        {
+            return;
+        }
+
+        IActor? actor;
+        try
+        {
+            actor = await _actorRuntime.GetAsync(request.TargetActorId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve actor for inbox drop notification: correlation={CorrelationId} target={TargetActorId}",
+                request.CorrelationId,
+                request.TargetActorId);
+            return;
+        }
+
+        if (actor is null)
+        {
+            // No active actor means there is nothing pending to clean up; the request
+            // either was never persisted or the actor's state was already retired.
+            return;
+        }
+
+        var dropped = new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = request.CorrelationId,
+            Reason = reason,
+            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(dropped),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+
+        try
+        {
+            await actor.HandleEventAsync(envelope, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to deliver inbox drop notification: correlation={CorrelationId} reason={Reason}",
+                request.CorrelationId,
+                reason);
+        }
     }
 
     private bool ShouldCaptureInteractiveReply(ChatActivity? activity)
