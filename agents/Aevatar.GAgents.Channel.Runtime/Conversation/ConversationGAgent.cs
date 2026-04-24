@@ -112,7 +112,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             // The transient inbox copy keeps reply_token + expiry so the LLM worker can
             // echo them back inside LlmReplyReadyEvent; the persisted state copy must
             // not carry the credential into the event store / projection / read model.
-            var inboxCopy = result.LlmReplyRequest;
+            var inboxCopy = result.LlmReplyRequest.Clone();
+            inboxCopy.TargetActorId = Id;
             var persistedCopy = inboxCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
@@ -262,8 +263,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (!string.IsNullOrWhiteSpace(request.ReplyToken))
             return request;
 
-        var correlationId = NormalizeOptional(request.CorrelationId) ??
-                            NormalizeOptional(request.Activity?.OutboundDelivery?.CorrelationId);
+        var correlationId = NormalizeOptional(request.Activity?.OutboundDelivery?.CorrelationId) ??
+                            NormalizeOptional(request.CorrelationId);
         if (correlationId is null)
             return request;
 
@@ -618,8 +619,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         SweepExpiredNyxRelayReplyTokens();
 
-        var normalizedCorrelationId = NormalizeOptional(correlationId) ??
-                                      NormalizeOptional(activity?.OutboundDelivery?.CorrelationId);
+        var normalizedCorrelationId = NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
+                                      NormalizeOptional(correlationId);
         if (normalizedCorrelationId is null)
             return ConversationTurnRuntimeContext.Empty;
 
@@ -653,8 +654,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 : DateTimeOffset.UtcNow.AddMinutes(30);
             if (expiresAt > DateTimeOffset.UtcNow)
             {
-                var correlationId = NormalizeOptional(evt.CorrelationId) ??
-                                    NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
+                var correlationId = NormalizeOptional(activity?.OutboundDelivery?.CorrelationId) ??
+                                    NormalizeOptional(evt.CorrelationId) ??
                                     string.Empty;
                 var replyMessageId = NormalizeOptional(activity?.OutboundDelivery?.ReplyMessageId) ?? string.Empty;
                 return new ConversationTurnRuntimeContext(

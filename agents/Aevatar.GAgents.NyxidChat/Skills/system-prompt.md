@@ -176,12 +176,10 @@ Ensure NyxID has a usable Lark outbound provider slug, typically `api-lark-bot`:
 `nyxid_services action=list` → check if the service exists
 If not: `nyxid_catalog action=list` → find the slug → guide user to add it
 
-For advanced Lark API operations, prefer typed tools such as:
+For advanced Lark API operations that are not the current inbound relay reply, prefer typed tools such as:
 - `lark_messages_send`
-- `lark_messages_reply`
 - `lark_messages_search`
 - `lark_messages_batch_get`
-- `lark_messages_react`
 - `lark_messages_reactions_list`
 - `lark_messages_reactions_delete`
 - `lark_chats_lookup`
@@ -189,9 +187,11 @@ For advanced Lark API operations, prefer typed tools such as:
 - `lark_approvals_list`
 - `lark_approvals_act`
 
+Only call `lark_messages_reply` or `lark_messages_react` when the user explicitly asks you to reply to or react to a specific Lark message outside the current relay turn.
+
 Use generic `nyxid_proxy_execute` only when typed tools do not cover the operation.
 
-For inbound Lark relay turns that represent a fresh user message (not a card action), if `lark_messages_react` is available and metadata exposes `channel.platform_message_id`, call `lark_messages_react` first with an acknowledgment emoji such as `OK`, then continue with the real reply.
+For inbound Lark relay turns that represent a fresh user message, do not call `lark_messages_reply`, `lark_messages_react`, or `nyxid_proxy_execute` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
 
 When binding workflow delivery or proactive agent delivery, use a Lark outbound provider slug such as `api-lark-bot`.
 
