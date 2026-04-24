@@ -193,13 +193,21 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
+        // Retry and rehydration paths read `request` from State.PendingLlmReplyRequests,
+        // which always carries an empty ReplyToken (the inbound handler strips it before
+        // persist). If the actor is still alive and the in-memory dict still has the
+        // token for this correlation, re-enrich the inbox copy so the subscriber's relay
+        // credential gate does not mistake a legitimate retry for a dead request.
+        var enriched = EnrichWithRuntimeReplyTokenIfNeeded(request);
+
         try
         {
-            await inbox.EnqueueAsync(request.Clone(), ct);
+            await inbox.EnqueueAsync(enriched.Clone(), ct);
             Logger.LogInformation(
-                "Enqueued LLM reply request to inbox: correlation={CorrelationId} conversation={Key}",
-                request.CorrelationId,
-                request.Activity?.Conversation?.CanonicalKey);
+                "Enqueued LLM reply request to inbox: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
+                enriched.CorrelationId,
+                enriched.Activity?.Conversation?.CanonicalKey,
+                DescribeEnqueuedReplyTokenSource(request, enriched));
         }
         catch (Exception ex)
         {
@@ -209,6 +217,42 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }
+    }
+
+    private NeedsLlmReplyEvent EnrichWithRuntimeReplyTokenIfNeeded(NeedsLlmReplyEvent request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.ReplyToken))
+            return request;
+
+        var correlationId = NormalizeOptional(request.CorrelationId) ??
+                            NormalizeOptional(request.Activity?.OutboundDelivery?.CorrelationId);
+        if (correlationId is null)
+            return request;
+
+        if (!_nyxRelayReplyTokens.TryGetValue(correlationId, out var tokenContext))
+            return request;
+
+        if (tokenContext.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            _nyxRelayReplyTokens.Remove(correlationId);
+            return request;
+        }
+
+        var enriched = request.Clone();
+        enriched.ReplyToken = tokenContext.ReplyToken;
+        enriched.ReplyTokenExpiresAtUnixMs = tokenContext.ExpiresAtUtc.ToUnixTimeMilliseconds();
+        return enriched;
+    }
+
+    private static string DescribeEnqueuedReplyTokenSource(
+        NeedsLlmReplyEvent original,
+        NeedsLlmReplyEvent enriched)
+    {
+        if (!string.IsNullOrWhiteSpace(original.ReplyToken))
+            return "inbound-direct";
+        if (!string.IsNullOrWhiteSpace(enriched.ReplyToken))
+            return "actor-runtime-dict";
+        return "none";
     }
 
     [EventHandler]

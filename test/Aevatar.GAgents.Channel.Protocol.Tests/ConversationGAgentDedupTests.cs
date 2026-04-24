@@ -418,6 +418,65 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleDeferredLlmReplyDispatchRequestedAsync_ReEnrichesStrippedPendingRequestWithActorRuntimeToken()
+    {
+        // Regression for Codex review: the persisted NeedsLlmReplyEvent in
+        // State.PendingLlmReplyRequests always has an empty ReplyToken (strip-on-persist).
+        // On the retry / durable-reminder path we walk that state, so the inbox must see
+        // the token re-enriched from the actor's in-memory dict while the activation is
+        // still alive. Without enrichment the inbox subscriber's relay gate would drop
+        // the retry and permanently lose the reply.
+        const string sentinelReplyToken = "sentinel-retry-enrich-b3d7a";
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ReplyToken = sentinelReplyToken,
+                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-retry-enrich", inbox);
+
+        var inboundActivity = CreateActivity("act-retry", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-retry",
+            CorrelationId = "corr-retry",
+        };
+        var relayInbound = new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+            CorrelationId = "corr-retry",
+        };
+
+        // Inbound capture populates the actor runtime dict and enqueues with ReplyToken set directly.
+        await agent.HandleNyxRelayInboundActivityAsync(relayInbound);
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].ReplyToken.ShouldBe(sentinelReplyToken);
+
+        // Simulate the durable-reminder retry firing: pendingRequest is read from state
+        // where ReplyToken was stripped. DispatchPendingLlmReplyAsync must re-enrich
+        // from the actor dict so the inbox still receives the token.
+        await agent.HandleDeferredLlmReplyDispatchRequestedAsync(new DeferredLlmReplyDispatchRequestedEvent
+        {
+            CorrelationId = "corr-retry",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        inbox.Enqueued.Count.ShouldBe(2);
+        inbox.Enqueued[1].ReplyToken.ShouldBe(sentinelReplyToken);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_PrefersInboxEchoedReplyToken_OverActorRuntimeDict()
     {
         // After a pod restart the in-memory _nyxRelayReplyTokens dict is empty, so the
