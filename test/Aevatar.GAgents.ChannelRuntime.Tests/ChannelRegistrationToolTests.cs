@@ -134,6 +134,7 @@ public sealed class ChannelRegistrationToolTests
                 {
                     Id = "reg-1",
                     Platform = "lark",
+                    NyxAgentApiKeyId = "key-1",
                 },
             ]));
 
@@ -142,6 +143,53 @@ public sealed class ChannelRegistrationToolTests
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(actor));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var verifier = new RecordingOwnershipVerifier();
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(actorRuntime)
+            .AddSingleton((IActorDispatchPort)actorRuntime)
+            .AddSingleton<INyxRelayApiKeyOwnershipVerifier>(verifier)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug","registration_id":"reg-1"}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("observed_registrations_before_rebuild").GetInt32().Should().Be(1);
+        doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(1);
+        capturedEnvelopes.Should().HaveCount(2);
+        capturedEnvelopes[0].Payload.Unpack<ChannelBotRegisterCommand>().ScopeId.Should().Be("scope-1");
+        capturedEnvelopes[1].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
+        verifier.Calls.Should().ContainSingle()
+            .Which.Should().Be(("test-token", "scope-1", "key-1"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RebuildProjection_DoesNotBackfillEmptyScopeRegistrationWithoutSelector()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                },
+            ]));
+
+        List<EventEnvelope> capturedEnvelopes = [];
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
         ((IActorDispatchPort)actorRuntime).DispatchAsync(
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
@@ -161,10 +209,64 @@ public sealed class ChannelRegistrationToolTests
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         doc.RootElement.GetProperty("observed_registrations_before_rebuild").GetInt32().Should().Be(1);
-        doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(1);
-        capturedEnvelopes.Should().HaveCount(2);
-        capturedEnvelopes[0].Payload.Unpack<ChannelBotRegisterCommand>().ScopeId.Should().Be("scope-1");
-        capturedEnvelopes[1].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
+        doc.RootElement.GetProperty("empty_scope_registrations_observed").GetInt32().Should().Be(1);
+        doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(0);
+        doc.RootElement.GetProperty("note").GetString().Should().Contain("pass registration_id");
+        capturedEnvelopes.Should().HaveCount(1);
+        capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RebuildProjection_DoesNotBackfillEmptyScopeRegistrationsWhenForceHasNoSelector()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                    NyxAgentApiKeyId = "key-1",
+                },
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-2",
+                    Platform = "lark",
+                    NyxAgentApiKeyId = "key-2",
+                },
+            ]));
+
+        List<EventEnvelope> capturedEnvelopes = [];
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var verifier = new RecordingOwnershipVerifier();
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(actorRuntime)
+            .AddSingleton((IActorDispatchPort)actorRuntime)
+            .AddSingleton<INyxRelayApiKeyOwnershipVerifier>(verifier)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug","force":true}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("empty_scope_registrations_observed").GetInt32().Should().Be(2);
+        doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(0);
+        doc.RootElement.GetProperty("note").GetString().Should().Contain("force=true only applies");
+        capturedEnvelopes.Should().HaveCount(1);
+        capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
+        verifier.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -536,6 +638,21 @@ public sealed class ChannelRegistrationToolTests
         AgentToolRequestContext.CurrentMetadata = next;
 
         return new ResetMetadataScope(previous);
+    }
+
+    private sealed class RecordingOwnershipVerifier : INyxRelayApiKeyOwnershipVerifier
+    {
+        public List<(string AccessToken, string ExpectedScopeId, string NyxAgentApiKeyId)> Calls { get; } = [];
+
+        public Task<NyxRelayApiKeyOwnershipVerification> VerifyAsync(
+            string accessToken,
+            string expectedScopeId,
+            string nyxAgentApiKeyId,
+            CancellationToken ct)
+        {
+            Calls.Add((accessToken, expectedScopeId, nyxAgentApiKeyId));
+            return Task.FromResult(new NyxRelayApiKeyOwnershipVerification(true, "verified"));
+        }
     }
 
     private sealed class ResetMetadataScope(IReadOnlyDictionary<string, string>? previous) : IDisposable

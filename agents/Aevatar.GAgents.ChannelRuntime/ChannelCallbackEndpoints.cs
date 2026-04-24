@@ -190,6 +190,7 @@ public static class ChannelCallbackEndpoints
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] INyxRelayApiKeyOwnershipVerifier? apiKeyOwnershipVerifier,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -204,11 +205,17 @@ public static class ChannelCallbackEndpoints
             logger.LogWarning(ex, "Invalid channel registration rebuild request payload");
             return Results.BadRequest(new { error = "Invalid JSON" });
         }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "Unsupported channel registration rebuild request content type");
+            return Results.BadRequest(new { error = "Unsupported content type. Use application/json for rebuild request payloads." });
+        }
 
         var scopeResolution = ResolveScopeId(http, request?.ScopeId, required: false);
         if (scopeResolution.Error is not null)
             return Results.BadRequest(new { error = scopeResolution.Error });
 
+        var accessToken = ResolveBearerAccessToken(http);
         int? observedRegistrationsBeforeRebuild = null;
         ChannelBotRegistrationScopeBackfillResult? backfill = null;
         var note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.";
@@ -226,6 +233,9 @@ public static class ChannelCallbackEndpoints
                     request?.Force ?? false),
                 actorRuntime,
                 dispatchPort,
+                new ChannelBotRegistrationScopeBackfillAuthorization(
+                    accessToken,
+                    apiKeyOwnershipVerifier),
                 ct);
             if (backfill.EmptyScopeRegistrationsObserved > 0)
                 note = $"{note} {backfill.Note}";
@@ -253,6 +263,16 @@ public static class ChannelCallbackEndpoints
             empty_scope_registrations_backfilled = backfill?.BackfilledRegistrations,
             note,
         });
+    }
+
+    private static string? ResolveBearerAccessToken(HttpContext http)
+    {
+        var accessToken = http.Request.Headers.Authorization.ToString();
+        const string bearerPrefix = "Bearer ";
+        if (accessToken.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+            accessToken = accessToken[bearerPrefix.Length..].Trim();
+
+        return string.IsNullOrWhiteSpace(accessToken) ? null : accessToken;
     }
 
     private static async Task<IResult> HandleDeleteRegistrationAsync(

@@ -87,7 +87,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "force": {
               "type": "boolean",
-              "description": "For rebuild_projection only: repair all matching empty-scope registrations when more than one candidate exists. Prefer registration_id or nyx_agent_api_key_id for targeted repair."
+              "description": "For rebuild_projection only: when registration_id or nyx_agent_api_key_id matches multiple empty-scope registrations, deliberately repair all matched registrations after NyxID ownership verification."
             },
             "registration_id": {
               "type": "string",
@@ -115,7 +115,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             "list" => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
-            "rebuild_projection" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => RebuildProjectionAsync(queryPort, actorRuntime, dispatchPort, root, ct)),
+            "rebuild_projection" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => RebuildProjectionAsync(queryPort, actorRuntime, dispatchPort, token, root, ct)),
             "repair_lark_mirror" => await RepairLarkMirrorAsync(root, ct),
             "delete" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => DeleteAsync(queryPort, actorRuntime, dispatchPort, root, ct)),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
@@ -374,6 +374,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         IChannelBotRegistrationQueryPort queryPort,
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
+        string accessToken,
         JsonElement args,
         CancellationToken ct)
     {
@@ -397,6 +398,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
                     GetBool(args, "force")),
                 actorRuntime,
                 dispatchPort,
+                new ChannelBotRegistrationScopeBackfillAuthorization(
+                    accessToken,
+                    _serviceProvider.GetService<INyxRelayApiKeyOwnershipVerifier>()),
                 ct);
             if (backfill.EmptyScopeRegistrationsObserved > 0)
                 note = $"{note} {backfill.Note}";

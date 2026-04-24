@@ -192,6 +192,7 @@ public sealed class ChannelCallbackEndpointsTests
                 {
                     Id = "reg-1",
                     Platform = "lark",
+                    NyxAgentApiKeyId = "key-1",
                 },
             ]));
 
@@ -205,13 +206,17 @@ public sealed class ChannelCallbackEndpointsTests
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+        var verifier = new RecordingOwnershipVerifier();
+        var http = CreateJsonHttpContext("""{"registration_id":"reg-1"}""", "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
 
         var result = await InvokeAsync(
             "HandleRebuildRegistrationsAsync",
-            CreateHttpContext("scope-1"),
+            http,
             actorRuntime,
             (IActorDispatchPort)actorRuntime,
             queryPort,
+            verifier,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -223,6 +228,106 @@ public sealed class ChannelCallbackEndpointsTests
         capturedEnvelopes.Should().HaveCount(2);
         capturedEnvelopes[0].Payload.Unpack<ChannelBotRegisterCommand>().ScopeId.Should().Be("scope-1");
         capturedEnvelopes[1].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
+        verifier.Calls.Should().ContainSingle()
+            .Which.Should().Be(("test-token", "scope-1", "key-1"));
+    }
+
+    [Fact]
+    public async Task HandleRebuildRegistrationsAsync_DoesNotBackfillEmptyScopeRegistrationWithoutSelector()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                },
+            ]));
+
+        List<EventEnvelope> capturedEnvelopes = [];
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var result = await InvokeAsync(
+            "HandleRebuildRegistrationsAsync",
+            CreateHttpContext("scope-1"),
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime,
+            queryPort,
+            (INyxRelayApiKeyOwnershipVerifier?)null,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("\"empty_scope_registrations_observed\":1");
+        response.Body.Should().Contain("\"empty_scope_registrations_backfilled\":0");
+        response.Body.Should().Contain("pass registration_id");
+        capturedEnvelopes.Should().HaveCount(1);
+        capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
+    }
+
+    [Fact]
+    public async Task HandleRebuildRegistrationsAsync_ReturnsBadRequestForUnsupportedContentType()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var http = CreateHttpContext("scope-1");
+        http.Request.ContentType = "text/plain";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("registration_id=reg-1"));
+
+        var result = await InvokeAsync(
+            "HandleRebuildRegistrationsAsync",
+            http,
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime,
+            queryPort,
+            (INyxRelayApiKeyOwnershipVerifier?)null,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("Unsupported content type");
+        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
+        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
+            Arg.Any<string>(),
+            Arg.Any<EventEnvelope>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRebuildRegistrationsAsync_ReturnsBadRequestWhenBodyScopeConflictsWithClaim()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+
+        var result = await InvokeAsync(
+            "HandleRebuildRegistrationsAsync",
+            CreateJsonHttpContext("""{"scope_id":"scope-2","registration_id":"reg-1"}""", "scope-1"),
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime,
+            queryPort,
+            (INyxRelayApiKeyOwnershipVerifier?)null,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("scope_id does not match");
+        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
+        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
+            Arg.Any<string>(),
+            Arg.Any<EventEnvelope>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -248,6 +353,7 @@ public sealed class ChannelCallbackEndpointsTests
             actorRuntime,
             (IActorDispatchPort)actorRuntime,
             queryPort,
+            (INyxRelayApiKeyOwnershipVerifier?)null,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -378,7 +484,7 @@ public sealed class ChannelCallbackEndpointsTests
         return context;
     }
 
-    private static async Task<IResult> InvokeAsync(string methodName, params object[] args)
+    private static async Task<IResult> InvokeAsync(string methodName, params object?[] args)
     {
         var method = typeof(ChannelCallbackEndpoints)
             .GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic)
@@ -389,6 +495,21 @@ public sealed class ChannelCallbackEndpointsTests
             return await resultTask;
 
         throw new InvalidOperationException($"Method '{methodName}' did not return Task<IResult>.");
+    }
+
+    private sealed class RecordingOwnershipVerifier : INyxRelayApiKeyOwnershipVerifier
+    {
+        public List<(string AccessToken, string ExpectedScopeId, string NyxAgentApiKeyId)> Calls { get; } = [];
+
+        public Task<NyxRelayApiKeyOwnershipVerification> VerifyAsync(
+            string accessToken,
+            string expectedScopeId,
+            string nyxAgentApiKeyId,
+            CancellationToken ct)
+        {
+            Calls.Add((accessToken, expectedScopeId, nyxAgentApiKeyId));
+            return Task.FromResult(new NyxRelayApiKeyOwnershipVerification(true, "verified"));
+        }
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
