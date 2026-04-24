@@ -13,23 +13,21 @@ public class NyxIdRelayOptions
 
     public string? OidcDiscoveryUrl { get; set; }
 
-    public string? ExpectedAudience { get; set; }
+    public string? CallbackExpectedAudience { get; set; }
 
     public int JwtClockSkewSeconds { get; set; } = 60;
 
     public int OidcCacheTtlSeconds { get; set; } = 300;
 
+    public int JwksKidMissRefreshCooldownSeconds { get; set; } = 10;
+
+    public int CallbackReplayWindowSeconds { get; set; } = 6 * 60;
+
     public string? WebhookBaseUrl { get; set; }
-
-    public string? HmacSecret { get; set; }
-
-    public bool SkipSignatureVerification { get; set; }
 
     public bool RequireMessageIdHeader { get; set; } = true;
 
-    public bool RequireTimestampHeader { get; set; } = true;
-
-    public int ReplayWindowSeconds { get; set; } = 300;
+    public int RelayReplyTokenRuntimeTtlSeconds { get; set; } = 30 * 60;
 
     public bool InteractiveRepliesEnabled { get; set; } = true;
 }

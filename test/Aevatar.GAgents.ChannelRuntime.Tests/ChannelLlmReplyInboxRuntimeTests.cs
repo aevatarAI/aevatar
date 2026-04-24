@@ -240,7 +240,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             OutboundDelivery = new OutboundDeliveryContext
             {
                 ReplyMessageId = "relay-msg-1",
-                ReplyAccessToken = "relay-token-1",
+                CorrelationId = "corr-1",
             },
         };
 

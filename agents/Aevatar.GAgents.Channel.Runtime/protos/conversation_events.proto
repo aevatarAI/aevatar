@@ -34,6 +34,20 @@ message NeedsLlmReplyEvent {
   int64 requested_at_unix_ms = 6;
 }
 
+// Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single
+// inbound callback turn to ConversationGAgent together with the short-lived reply
+// credential. The actor MUST NOT persist this message or any of its fields into
+// event store, projection, read model, or any durable state. The handler is
+// expected to immediately move `reply_token` and `reply_token_expires_at_unix_ms`
+// into actor-owned in-memory runtime state (keyed by `correlation_id`) and only
+// persist downstream domain events that omit the reply credential entirely.
+message NyxRelayInboundActivity {
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 1;
+  string reply_token = 2;
+  int64 reply_token_expires_at_unix_ms = 3;
+  string correlation_id = 4;
+}
+
 enum LlmReplyTerminalState {
   LLM_REPLY_TERMINAL_STATE_UNSPECIFIED = 0;
   LLM_REPLY_TERMINAL_STATE_COMPLETED = 1;
@@ -53,6 +67,11 @@ message LlmReplyReadyEvent {
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {
+  string correlation_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
+message NyxRelayReplyTokenCleanupRequestedEvent {
   string correlation_id = 1;
   int64 requested_at_unix_ms = 2;
 }

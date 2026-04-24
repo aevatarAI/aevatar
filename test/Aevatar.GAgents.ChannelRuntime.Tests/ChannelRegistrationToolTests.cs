@@ -224,7 +224,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","credential_ref":"vault://channels/lark/registrations/reg-restore-1/relay-hmac","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
+            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
@@ -236,8 +236,7 @@ public sealed class ChannelRegistrationToolTests
                 request.WebhookBaseUrl == "https://aevatar.example.com" &&
                 request.NyxChannelBotId == "bot-1" &&
                 request.NyxAgentApiKeyId == "key-1" &&
-                request.NyxConversationRouteId == "route-1" &&
-                request.CredentialRef == "vault://channels/lark/registrations/reg-restore-1/relay-hmac"),
+                request.NyxConversationRouteId == "route-1"),
             Arg.Any<CancellationToken>());
     }
 
@@ -267,7 +266,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","credential_ref":"vault://channels/lark/registrations/reg-restore-1/relay-hmac","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
+            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
@@ -318,7 +317,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","credential_ref":"vault://channels/lark/registrations/reg-restore-1/relay-hmac","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
+            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");

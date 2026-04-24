@@ -11,7 +11,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxIdRelayOutboundPortTests
 {
     [Fact]
-    public async Task SendAsync_ShouldRejectMissingReplyAccessToken()
+    public async Task SendAsync_ShouldRejectMissingReplyToken()
     {
         var port = CreatePort(new RecordingJsonHandler());
 
@@ -23,10 +23,11 @@ public sealed class NyxIdRelayOutboundPortTests
             {
                 ReplyMessageId = "msg-1",
             },
+            string.Empty,
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
-        result.ErrorCode.Should().Be("missing_reply_access_token");
+        result.ErrorCode.Should().Be("reply_token_missing_or_expired");
     }
 
     [Fact]
@@ -41,9 +42,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello relay" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -67,8 +68,8 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -88,9 +89,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -110,9 +111,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -132,9 +133,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -153,9 +154,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello relay" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -175,9 +176,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello relay" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();

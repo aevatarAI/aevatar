@@ -86,7 +86,6 @@ public sealed class ChannelRuntimeProtoTests
                     Channel = new ChannelId { Value = "slack" },
                     ScopeId = "scope-1",
                 },
-                CredentialRef = "vault://bots/ops-bot",
                 VerificationToken = "verify-me",
             },
             WebhookUrl = "https://example.test/callback",
