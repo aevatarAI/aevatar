@@ -28,6 +28,7 @@ import {
 } from "@/shared/navigation/teamRoutes";
 import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
+import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
@@ -35,7 +36,11 @@ import {
   getStudioScopeBindingCurrentRevision,
   type StudioScopeBindingStatus,
 } from "@/shared/studio/models";
-import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
+import {
+  buildStudioWorkflowMemberKey,
+  buildStudioWorkflowEditorRoute,
+  buildStudioWorkflowWorkspaceRoute,
+} from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
@@ -404,6 +409,7 @@ function buildScopeBackedTeamPreview(input: {
   readonly runtimeAvailableByServiceId?: ReadonlySet<string>;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
+  readonly workflows: readonly ScopeWorkflowSummary[];
 }): ScopeBackedTeamPreview | null {
   const currentRevision = getStudioScopeBindingCurrentRevision(input.binding);
   const revisionTarget = describeStudioScopeBindingRevisionTarget(currentRevision);
@@ -451,6 +457,38 @@ function buildScopeBackedTeamPreview(input: {
       trimOptional(matchedService?.displayName),
       entryLabel,
     ) || "未命名团队";
+  const matchedWorkflow =
+    input.workflows.find((workflow) => {
+      const workflowServiceId = trimOptional(workflow.serviceKey).split(":").pop()?.trim() || "";
+      if (serviceId && workflowServiceId === serviceId) {
+        return true;
+      }
+
+      const workflowName = trimOptional(workflow.workflowName);
+      const workflowDisplayName = trimOptional(workflow.displayName);
+      return [
+        trimOptional(currentRevision?.workflowName),
+        trimOptional(input.binding?.displayName),
+        trimOptional(matchedService?.displayName),
+      ].some(
+        (candidate) =>
+          Boolean(candidate) &&
+          (candidate === workflowName || candidate === workflowDisplayName),
+      );
+    }) ?? null;
+  const studioHref = matchedWorkflow
+    ? buildStudioWorkflowEditorRoute({
+        scopeId: input.scopeId,
+        memberKey: buildStudioWorkflowMemberKey({
+          workflowId: matchedWorkflow.workflowId,
+          workflowName: matchedWorkflow.displayName || matchedWorkflow.workflowName,
+        }),
+        workflowId: matchedWorkflow.workflowId,
+      })
+    : buildStudioWorkflowWorkspaceRoute({
+        scopeId: input.scopeId,
+        memberKey: serviceId ? `member:${serviceId}` : undefined,
+      });
 
   let attention: WorkflowOperationalAttention = "draft";
   let attentionDetail = "当前团队入口还没有形成可运行状态。";
@@ -498,9 +536,6 @@ function buildScopeBackedTeamPreview(input: {
           serviceId,
         })
       : "";
-  const builderHref = buildStudioWorkflowWorkspaceRoute({
-    scopeId: input.scopeId,
-  });
   const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
   if (runtimeHref) {
     moreActions.push({
@@ -512,7 +547,7 @@ function buildScopeBackedTeamPreview(input: {
   moreActions.push({
     key: "builder",
     label: "进入 Studio",
-    onClick: () => history.push(builderHref),
+    onClick: () => history.push(studioHref),
   });
 
   return {
@@ -969,6 +1004,7 @@ const TeamsHomePage: React.FC = () => {
         runtimeAvailableByServiceId,
         scopeId,
         services: servicesQuery.data ?? [],
+        workflows: workflowsQuery.data ?? [],
       }),
     [
       bindingQuery.data,
@@ -977,6 +1013,7 @@ const TeamsHomePage: React.FC = () => {
       runtimeAvailableByServiceId,
       scopeId,
       servicesQuery.data,
+      workflowsQuery.data,
     ],
   );
 

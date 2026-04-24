@@ -1032,11 +1032,10 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("memberId")).toBe("default");
+    expect(params.get("member")).toBe("workflow:workflow-1");
+    expect(params.get("memberId")).toBeNull();
+    expect(params.get("focus")).toBeNull();
     expect(params.get("tab")).toBe("studio");
-    if (params.get("focus")) {
-      expect(params.get("focus")).toBe("workflow:workflow-1");
-    }
   });
 
   it("opens workflow and script Studio deep links from assets with scope context", async () => {
@@ -1053,8 +1052,8 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("memberId=default");
-    expect(window.location.search).toContain(
+    expect(window.location.search).toContain("member=workflow%3Aworkflow-1");
+    expect(window.location.search).not.toContain(
       "focus=workflow%3Aworkflow-1",
     );
 
@@ -1069,7 +1068,8 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("focus=script%3Ascript-1");
+    expect(window.location.search).toContain("member=script%3Ascript-1");
+    expect(window.location.search).not.toContain("focus=script%3Ascript-1");
     expect(window.location.search).toContain("tab=scripts");
   });
 

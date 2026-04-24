@@ -37,46 +37,31 @@ describe('StudioMemberInvokePanel', () => {
   it('renders the invoke workbench skeleton with a compact contract and a persistent console', async () => {
     render(
       React.createElement(StudioMemberInvokePanel, {
-        scopeBinding: {
-          activeServingRevisionId: 'rev-2',
-          available: true,
-          defaultServingRevisionId: 'rev-2',
+        memberRevision: {
+          allocationWeight: 100,
+          artifactHash: 'hash-2',
+          createdAt: '2026-03-26T07:00:00Z',
           deploymentId: 'dep-2',
-          deploymentStatus: 'Active',
-          displayName: 'workspace-demo',
+          failureReason: '',
+          implementationKind: 'workflow',
+          inlineWorkflowCount: 1,
+          isActiveServing: true,
+          isDefaultServing: true,
+          isServingTarget: true,
+          preparedAt: '2026-03-26T07:01:00Z',
           primaryActorId: 'actor-default',
-          revisions: [
-            {
-              allocationWeight: 100,
-              artifactHash: 'hash-2',
-              createdAt: '2026-03-26T07:00:00Z',
-              deploymentId: 'dep-2',
-              failureReason: '',
-              implementationKind: 'workflow',
-              inlineWorkflowCount: 1,
-              isActiveServing: true,
-              isDefaultServing: true,
-              isServingTarget: true,
-              preparedAt: '2026-03-26T07:01:00Z',
-              primaryActorId: 'actor-default',
-              publishedAt: '2026-03-26T07:02:00Z',
-              retiredAt: null,
-              revisionId: 'rev-2',
-              scriptDefinitionActorId: '',
-              scriptId: '',
-              scriptRevision: '',
-              scriptSourceHash: '',
-              servingState: 'Active',
-              staticActorTypeName: '',
-              status: 'Published',
-              workflowDefinitionActorId: 'scope-workflow:scope-1:default',
-              workflowName: 'workspace-demo',
-            },
-          ],
-          scopeId: 'scope-1',
-          serviceId: 'default',
-          serviceKey: 'scope-1:default:workspace-demo',
-          updatedAt: '2026-03-26T08:00:00Z',
+          publishedAt: '2026-03-26T07:02:00Z',
+          retiredAt: null,
+          revisionId: 'rev-2',
+          scriptDefinitionActorId: '',
+          scriptId: '',
+          scriptRevision: '',
+          scriptSourceHash: '',
+          servingState: 'Active',
+          staticActorTypeName: '',
+          status: 'Published',
+          workflowDefinitionActorId: 'scope-workflow:scope-1:default',
+          workflowName: 'workspace-demo',
         },
         scopeId: 'scope-1',
         selectedMemberLabel: 'workspace-demo',
@@ -108,7 +93,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('调试台')).toBeTruthy();
     expect(screen.getByText('当前结果')).toBeTruthy();
     expect(screen.getByText('Member')).toBeTruthy();
-    expect(screen.getByText('Binding Context')).toBeTruthy();
+    expect(screen.getByText('Published Context')).toBeTruthy();
     expect(screen.getByText('Revision')).toBeTruthy();
     expect(screen.getByText('已就绪')).toBeTruthy();
     expect(screen.queryByText('缺少提示词')).toBeNull();

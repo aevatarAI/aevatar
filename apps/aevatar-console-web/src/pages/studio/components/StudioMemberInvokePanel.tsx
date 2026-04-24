@@ -29,15 +29,14 @@ import {
 import { studioApi } from '@/shared/studio/api';
 import {
   describeStudioScopeBindingRevisionContext,
-  getStudioScopeBindingCurrentRevision,
-  type StudioScopeBindingStatus,
+  type StudioScopeBindingRevision,
 } from '@/shared/studio/models';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
-  readonly scopeBinding?: StudioScopeBindingStatus | null;
+  readonly memberRevision?: StudioScopeBindingRevision | null;
   readonly services: readonly ScopeConsoleServiceOption[];
   readonly selectedMemberLabel?: string;
   readonly emptyState?: {
@@ -519,7 +518,7 @@ const CompactCopyableValue: React.FC<{
 
 const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
-  scopeBinding,
+  memberRevision,
   services,
   selectedMemberLabel,
   emptyState,
@@ -565,22 +564,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const isChatEndpoint = Boolean(
     selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
-  const currentBindingRevision = useMemo(
-    () => getStudioScopeBindingCurrentRevision(scopeBinding),
-    [scopeBinding],
-  );
   const preferredServiceId = useMemo(
-    () =>
-      getPreferredScopeConsoleServiceId(
-        services,
-        scopeBinding?.available ? scopeBinding.serviceId : undefined,
-      ),
-    [scopeBinding?.available, scopeBinding?.serviceId, services],
+    () => getPreferredScopeConsoleServiceId(services),
+    [services],
   );
-  const currentBindingContext = describeStudioScopeBindingRevisionContext(
-    currentBindingRevision,
+  const currentMemberRevision = memberRevision ?? null;
+  const currentPublishedContext = describeStudioScopeBindingRevisionContext(
+    currentMemberRevision,
   );
-  const currentBindingActorId = trimOptional(currentBindingRevision?.primaryActorId);
+  const currentMemberActorId = trimOptional(currentMemberRevision?.primaryActorId);
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
     trimOptional(selectedService?.displayName) ||
@@ -1573,21 +1565,21 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 <div style={contractLabelStyle}>Revision</div>
                 <CompactCopyableValue
                   fallback="尚未开始服务"
-                  value={currentBindingRevision?.revisionId}
+                  value={currentMemberRevision?.revisionId}
                 />
               </div>
               <div style={contractFieldStyle}>
-                <div style={contractLabelStyle}>Binding Context</div>
+                <div style={contractLabelStyle}>Published Context</div>
                 <CompactCopyableValue
                   fallback="尚未配置"
-                  value={currentBindingContext}
+                  value={currentPublishedContext}
                 />
               </div>
               <div style={contractFieldStyle}>
                 <div style={contractLabelStyle}>Actor ID</div>
                 <CompactCopyableValue
                   fallback="尚未分配"
-                  value={currentBindingActorId}
+                  value={currentMemberActorId}
                 />
               </div>
             </div>
