@@ -424,7 +424,11 @@ describe("RunsPage", () => {
   });
 
   it("shows the trace workbench and primary run actions after the run starts", async () => {
-    window.history.replaceState({}, "", "/runtime/runs?scopeId=scope-1");
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&prompt=Watch%20this%20run",
+    );
     mockSession.status = "running";
     mockSession.runId = "run-1";
     mockSession.context = {
@@ -445,6 +449,8 @@ describe("RunsPage", () => {
     expect(window.location.pathname).toBe("/runtime/mission-control");
     const params = new URLSearchParams(window.location.search);
     expect(params.get("actorId")).toBe("actor-1");
+    expect(params.get("autoStream")).toBe("true");
+    expect(params.get("prompt")).toBe("Watch this run");
     expect(params.get("runId")).toBe("run-1");
     expect(params.get("scopeId")).toBe("scope-1");
   });

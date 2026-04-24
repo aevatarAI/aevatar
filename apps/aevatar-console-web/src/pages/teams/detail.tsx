@@ -1486,6 +1486,11 @@ const TeamDetailPage: React.FC = () => {
     [lens.playback.currentRunId, lens.playback.rootActorId, runtimeServiceId, scopeId],
   );
 
+  const missionControlPrompt =
+    trimText(lens.currentRunAudit?.audit.input) ||
+    trimText(lens.playback.launchPrompt) ||
+    trimText(lens.playback.prompt);
+
   const handleOpenMissionControl = React.useCallback(() => {
     const runId =
       trimText(lens.currentRun?.runId) || trimText(lens.playback.currentRunId);
@@ -1502,7 +1507,9 @@ const TeamDetailPage: React.FC = () => {
     history.push(
       buildRuntimeMissionControlHref({
         actorId,
+        autoStream: Boolean(missionControlPrompt),
         endpointId: "chat",
+        prompt: missionControlPrompt || undefined,
         runId,
         scopeId,
         serviceId: runtimeServiceId,
@@ -1514,6 +1521,7 @@ const TeamDetailPage: React.FC = () => {
     lens.graph.focusActorId,
     lens.playback.currentRunId,
     lens.playback.rootActorId,
+    missionControlPrompt,
     runtimeServiceId,
     scopeId,
   ]);
@@ -3414,7 +3422,7 @@ const TeamDetailPage: React.FC = () => {
         provenanceStyle={resolveObservationPillStyle(token, playbackProvenance.status)}
         runSwitchOptions={runSwitchDisplayOptions}
         showOpenAudit={Boolean(activeRunId)}
-        showOpenMissionControl={Boolean(activeRunId)}
+        showOpenMissionControl={Boolean(activeRunId && missionControlPrompt)}
       />
     );
   };

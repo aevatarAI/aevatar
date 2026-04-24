@@ -913,6 +913,7 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
     await screen.findByText("当前任务事件流");
+    await screen.findByText(/Current playback is centered on risk_review/);
     fireEvent.click(await screen.findByRole("button", { name: "打开 Mission Control" }));
 
     await waitFor(() => {
@@ -920,6 +921,8 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("actorId")).toBe("actor-intake");
+    expect(params.get("autoStream")).toBe("true");
+    expect(params.get("prompt")).toBe("hello");
     expect(params.get("runId")).toBe("run-current");
     expect(params.get("scopeId")).toBe("scope-1");
     expect(params.get("serviceId")).toBe("default");

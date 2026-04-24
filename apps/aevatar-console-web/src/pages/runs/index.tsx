@@ -1213,10 +1213,14 @@ const RunsPage: React.FC = () => {
       return;
     }
 
+    const prompt = activePrompt.trim();
+
     history.push(
       buildRuntimeMissionControlHref({
         actorId: actorId || undefined,
+        autoStream: true,
         endpointId: activeEndpointId || undefined,
+        prompt: prompt || undefined,
         runId,
         scopeId,
         serviceId: activeServiceOverrideId || undefined,
@@ -1224,6 +1228,7 @@ const RunsPage: React.FC = () => {
     );
   }, [
     activeEndpointId,
+    activePrompt,
     activeScopeId,
     activeServiceOverrideId,
     actorId,
