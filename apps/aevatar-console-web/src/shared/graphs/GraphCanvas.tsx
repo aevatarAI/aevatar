@@ -54,6 +54,7 @@ type GraphCanvasProps = {
   }) => void;
   onConnectNodes?: (sourceId: string, targetId: string) => void;
   onNodeLayoutChange?: (nodes: Node[]) => void;
+  onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
 };
 
 const SELF_MANAGED_SELECTION_CLASS = 'graph-canvas-self-managed-selection';
@@ -270,6 +271,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   onCanvasContextMenu,
   onConnectNodes,
   onNodeLayoutChange,
+  onDeleteNodes,
 }) => {
   const [localNodes, setLocalNodes] = useNodesState(nodes);
   const [localEdges, setLocalEdges] = useEdgesState(edges);
@@ -431,7 +433,28 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         nodesDraggable={isStudioVariant}
         nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
         elementsSelectable
+        deleteKeyCode={isStudioVariant && !onDeleteNodes ? null : undefined}
         onNodesChange={isStudioVariant ? handleNodesChange : undefined}
+        onBeforeDelete={
+          isStudioVariant && onDeleteNodes
+            ? async ({ nodes: nodesToDelete }) => {
+                const nodeIds = nodesToDelete
+                  .map((node) => String(node.id ?? '').trim())
+                  .filter(Boolean);
+                if (nodeIds.length === 0) {
+                  return false;
+                }
+
+                try {
+                  await onDeleteNodes(nodeIds);
+                } catch {
+                  // Keep the local graph unchanged until the parent document confirms deletion.
+                }
+
+                return false;
+              }
+            : undefined
+        }
         onNodeDragStop={
           isStudioVariant
             ? () =>

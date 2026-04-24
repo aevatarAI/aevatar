@@ -752,6 +752,7 @@ export type StudioWorkflowBuildPanelProps = {
     draft: StudioStepInspectorDraft,
   ) => Promise<void> | void;
   readonly onRemoveSelectedStep: () => Promise<void> | void;
+  readonly onDeleteWorkflowNodes: (nodeIds: string[]) => Promise<void> | void;
   readonly onAutoLayout: () => void;
   readonly onConnectNodes: (sourceNodeId: string, targetNodeId: string) => void;
   readonly onNodeLayoutChange: (
@@ -786,6 +787,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   onInsertStep,
   onApplyStepDraft,
   onRemoveSelectedStep,
+  onDeleteWorkflowNodes,
   onAutoLayout,
   onConnectNodes,
   onNodeLayoutChange,
@@ -806,6 +808,27 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   const abortControllerRef = React.useRef<AbortController | null>(null);
   const runPendingRef = React.useRef(false);
   const stepMutationPendingRef = React.useRef(false);
+  const stepDraftRef = React.useRef<StudioStepInspectorDraft | null>(null);
+  const updateStepDraft = React.useCallback(
+    (
+      updater:
+        | StudioStepInspectorDraft
+        | null
+        | ((
+            current: StudioStepInspectorDraft | null,
+          ) => StudioStepInspectorDraft | null),
+    ) => {
+      setStepDraft((current) => {
+        const nextDraft =
+          typeof updater === 'function'
+            ? updater(current)
+            : updater;
+        stepDraftRef.current = nextDraft;
+        return nextDraft;
+      });
+    },
+    [],
+  );
   const selectedStep = React.useMemo(() => {
     const stepId = selectedGraphNodeId.startsWith('step:')
       ? selectedGraphNodeId.slice('step:'.length)
@@ -830,6 +853,20 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           ? selectedGraphNodeId.slice('step:'.length)
           : '',
     [selectedGraphNodeId, selectedStep],
+  );
+  const selectedStepDraftSeed = React.useMemo(
+    () =>
+      selectedStep
+        ? createStepInspectorDraft(selectedStep)
+        : null,
+    [
+      selectedStep?.id,
+      selectedStep?.type,
+      selectedStep?.targetRole,
+      selectedStep?.next,
+      JSON.stringify(selectedStep?.parameters ?? {}),
+      JSON.stringify(selectedStep?.branches ?? {}),
+    ],
   );
   const workflowRoleIds = React.useMemo(
     () => workflowRoles.map((item) => item.id).filter(Boolean),
@@ -897,15 +934,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   }, [onSelectGraphNode, selectedNodeId, selectedStep]);
 
   React.useEffect(() => {
-    if (!selectedStep) {
-      setStepDraft(null);
+    if (!selectedStepDraftSeed) {
+      updateStepDraft(null);
       setStepMutationError('');
       return;
     }
 
-    setStepDraft(createStepInspectorDraft(selectedStep));
+    updateStepDraft(selectedStepDraftSeed);
     setStepMutationError('');
-  }, [selectedStep]);
+  }, [selectedStepDraftSeed, updateStepDraft]);
 
   React.useEffect(
     () => () => {
@@ -1026,7 +1063,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   }, [onInsertStep]);
 
   const handleApplyStepChanges = React.useCallback(async () => {
-    if (!stepDraft || stepMutationPendingRef.current) {
+    const currentStepDraft = stepDraftRef.current;
+    if (!currentStepDraft || stepMutationPendingRef.current) {
       return;
     }
 
@@ -1034,7 +1072,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     setStepMutationPending('apply');
     setStepMutationError('');
     try {
-      await onApplyStepDraft(stepDraft);
+      await onApplyStepDraft(currentStepDraft);
     } catch (error) {
       const visibleMessage = describeError(error);
       setStepMutationError(visibleMessage);
@@ -1043,7 +1081,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       stepMutationPendingRef.current = false;
       setStepMutationPending('');
     }
-  }, [onApplyStepDraft, stepDraft]);
+  }, [onApplyStepDraft]);
 
   const handleRemoveStep = React.useCallback(async () => {
     if (stepMutationPendingRef.current) {
@@ -1064,6 +1102,29 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       setStepMutationPending('');
     }
   }, [onRemoveSelectedStep]);
+
+  const handleDeleteNodes = React.useCallback(async (nodeIds: string[]) => {
+    const normalizedNodeIds = nodeIds
+      .map((nodeId) => String(nodeId ?? '').trim())
+      .filter(Boolean);
+    if (normalizedNodeIds.length === 0 || stepMutationPendingRef.current) {
+      return;
+    }
+
+    stepMutationPendingRef.current = true;
+    setStepMutationPending('remove');
+    setStepMutationError('');
+    try {
+      await onDeleteWorkflowNodes(normalizedNodeIds);
+    } catch (error) {
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
+    } finally {
+      stepMutationPendingRef.current = false;
+      setStepMutationPending('');
+    }
+  }, [onDeleteWorkflowNodes]);
 
   const workflowCanvasAutoFitKey = React.useMemo(
     () =>
@@ -1239,6 +1300,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   selectedNodeId={selectedNodeId || undefined}
                   onNodeSelect={onSelectGraphNode}
                   onConnectNodes={onConnectNodes}
+                  onDeleteNodes={handleDeleteNodes}
                   onNodeLayoutChange={onNodeLayoutChange}
                 />
               </div>
@@ -1302,7 +1364,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     aria-label="Step ID"
                     value={stepDraft.id}
                     onChange={(event) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1324,7 +1386,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     }))}
                     value={stepDraft.type}
                     onChange={(value) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1351,7 +1413,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     placeholder={workflowRoleIds[0] || 'Select role'}
                     value={stepDraft.targetRole || undefined}
                     onChange={(value) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1375,7 +1437,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     placeholder="No next step"
                     value={stepDraft.next || undefined}
                     onChange={(value) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1420,7 +1482,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                                 placeholder={parameter.default || 'Select value'}
                                 value={currentValue || undefined}
                                 onChange={(value) =>
-                                  setStepDraft((current) =>
+                                  updateStepDraft((current) =>
                                     current
                                       ? updateStepDraftParameterValue(
                                           current,
@@ -1439,7 +1501,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                                 placeholder={parameter.default || parameter.type || 'Value'}
                                 value={currentValue}
                                 onChange={(event) =>
-                                  setStepDraft((current) =>
+                                  updateStepDraft((current) =>
                                     current
                                       ? updateStepDraftParameterValue(
                                           current,
@@ -1478,7 +1540,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                         autoSize={{ minRows: 8, maxRows: 14 }}
                         value={stepDraft.parametersText}
                         onChange={(event) =>
-                          setStepDraft((current) =>
+                          updateStepDraft((current) =>
                             current
                               ? {
                                   ...current,
@@ -1506,7 +1568,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                         autoSize={{ minRows: 5, maxRows: 10 }}
                         value={stepDraft.branchesText}
                         onChange={(event) =>
-                          setStepDraft((current) =>
+                          updateStepDraft((current) =>
                             current
                               ? {
                                   ...current,

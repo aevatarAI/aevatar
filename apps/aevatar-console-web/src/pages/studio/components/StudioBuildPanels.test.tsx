@@ -261,6 +261,17 @@ function WorkflowBuildHarness({
           nextSelectedNodeId: result.nodeId,
         });
       }}
+      onDeleteWorkflowNodes={async (nodeIds: string[]) => {
+        const selectedNodeId = nodeIds[0]?.replace(/^step:/, '') || '';
+        if (!selectedNodeId) {
+          return;
+        }
+
+        const result = removeStep(document, selectedNodeId);
+        await commitDocument(result.document as typeof initialDocument, {
+          nextSelectedNodeId: result.nodeId,
+        });
+      }}
       runMetadata={{
         'aevatar.model_override': 'gpt-5.4-mini',
         'nyxid.route_preference': '/api/v1/proxy/s/openai',

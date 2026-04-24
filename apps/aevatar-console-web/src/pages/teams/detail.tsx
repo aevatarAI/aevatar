@@ -42,6 +42,7 @@ import {
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
 import {
+  buildStudioWorkflowMemberKey,
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
@@ -1365,14 +1366,36 @@ const TeamDetailPage: React.FC = () => {
     }),
     [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
   );
+  const selectedStudioMemberId =
+    trimText(runtimeServiceId) ||
+    trimText(bindingQuery.data?.serviceId) ||
+    trimText(preferredServiceId) ||
+    trimText(servicesQuery.data?.[0]?.serviceId) ||
+    trimText(activeWorkflowSummary?.serviceKey).split(":").pop()?.trim() ||
+    "";
+  const selectedStudioMemberKey =
+    trimText(activeWorkflowSummary?.workflowId).length > 0
+      ? buildStudioWorkflowMemberKey({
+          workflowId: activeWorkflowSummary?.workflowId,
+          workflowName:
+            trimText(activeWorkflowSummary?.displayName) ||
+            trimText(activeWorkflowSummary?.workflowName),
+        })
+      : selectedStudioMemberId
+        ? `member:${selectedStudioMemberId}`
+        : undefined;
 
   const teamBuilderRoute =
     trimText(activeWorkflowSummary?.workflowId).length > 0
       ? buildStudioWorkflowEditorRoute({
           scopeId,
+          memberKey: selectedStudioMemberKey,
           workflowId: activeWorkflowSummary?.workflowId,
         })
-      : buildStudioWorkflowWorkspaceRoute({ scopeId });
+      : buildStudioWorkflowWorkspaceRoute({
+          scopeId,
+          memberKey: selectedStudioMemberKey,
+        });
 
   const availableActorIds = React.useMemo(
     () =>
@@ -3266,6 +3289,8 @@ const TeamDetailPage: React.FC = () => {
       history.push(
         buildStudioWorkflowEditorRoute({
           scopeId,
+          memberKey:
+            trimText(workflowId).length > 0 ? `workflow:${trimText(workflowId)}` : undefined,
           workflowId,
         }),
       );
@@ -3277,6 +3302,8 @@ const TeamDetailPage: React.FC = () => {
       history.push(
         buildStudioScriptsWorkspaceRoute({
           scopeId,
+          memberKey:
+            trimText(scriptId).length > 0 ? `script:${trimText(scriptId)}` : undefined,
           scriptId,
         }),
       );
@@ -3478,6 +3505,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioScriptsWorkspaceRoute({
               scopeId,
+              memberKey: selectedStudioMemberKey,
             }),
           )
         }
@@ -3486,6 +3514,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioWorkflowWorkspaceRoute({
               scopeId,
+              memberKey: selectedStudioMemberKey,
             }),
           )
         }
