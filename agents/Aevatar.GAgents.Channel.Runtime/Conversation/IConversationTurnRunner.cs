@@ -18,17 +18,34 @@ public interface IConversationTurnRunner
     /// <summary>
     /// Executes one bot turn for an inbound activity.
     /// </summary>
-    Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct);
+    Task<ConversationTurnResult> RunInboundAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
 
     /// <summary>
     /// Executes the outbound leg after an asynchronous LLM reply has been generated.
     /// </summary>
-    Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct);
+    Task<ConversationTurnResult> RunLlmReplyAsync(
+        LlmReplyReadyEvent reply,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
 
     /// <summary>
     /// Executes one bot turn for a proactive continue command.
     /// </summary>
     Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct);
+}
+
+public sealed record NyxRelayReplyTokenContext(
+    string CorrelationId,
+    string ReplyToken,
+    string ReplyMessageId,
+    DateTimeOffset ExpiresAtUtc);
+
+public sealed record ConversationTurnRuntimeContext(NyxRelayReplyTokenContext? NyxRelayReplyToken)
+{
+    public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }
 
 /// <summary>
@@ -121,11 +138,17 @@ public sealed record ConversationTurnResult(
 public sealed class NullConversationTurnRunner : IConversationTurnRunner
 {
     /// <inheritdoc />
-    public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
+    public Task<ConversationTurnResult> RunInboundAsync(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
         Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
 
     /// <inheritdoc />
-    public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct) =>
+    public Task<ConversationTurnResult> RunLlmReplyAsync(
+        LlmReplyReadyEvent reply,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
         Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
 
     /// <inheritdoc />

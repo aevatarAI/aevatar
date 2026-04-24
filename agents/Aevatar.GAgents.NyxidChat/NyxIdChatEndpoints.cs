@@ -25,10 +25,9 @@ public static partial class NyxIdChatEndpoints
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
-        // this callback; auth is carried via X-NyxID-User-Token rather than the JWT bearer we
-        // validate in the fallback policy, so the route must stay anonymous. The health route
-        // stays open for liveness checks, but the diag route remains behind host auth because it
-        // can probe upstream Nyx connectivity with caller-supplied credentials.
+        // this callback and authenticates it with the dedicated X-NyxID-Callback-Token JWT, so
+        // the route must stay anonymous to the normal bearer policy. The diag + health routes
+        // under the same prefix are operator probes that also must stay open.
         app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync)
             .WithTags("NyxIdRelay")
             .AllowAnonymous();

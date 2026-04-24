@@ -41,16 +41,17 @@ public sealed class NyxIdRelayOutboundPort
         ConversationReference conversation,
         MessageContent content,
         OutboundDeliveryContext delivery,
+        string replyToken,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(conversation);
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(delivery);
 
-        if (string.IsNullOrWhiteSpace(delivery.ReplyAccessToken))
+        if (string.IsNullOrWhiteSpace(replyToken))
         {
             return EmitResult.Failed(
-                "missing_reply_access_token",
+                "reply_token_missing_or_expired",
                 "Relay reply is missing the access token required for channel-relay/reply.");
         }
 
@@ -67,7 +68,7 @@ public sealed class NyxIdRelayOutboundPort
         }
 
         var result = await _nyxClient.SendChannelRelayTextReplyAsync(
-            delivery.ReplyAccessToken,
+            replyToken,
             delivery.ReplyMessageId,
             replyText,
             ct);

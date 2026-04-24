@@ -37,7 +37,6 @@ public sealed class ChannelBotRegistrationProjectorTests
                     NyxChannelBotId = "nyx-bot-1",
                     NyxAgentApiKeyId = "api-key-1",
                     NyxConversationRouteId = "route-1",
-                    CredentialRef = "vault://channels/lark/registrations/bot-reg-1/relay-hmac",
                 },
             },
         };
@@ -54,7 +53,6 @@ public sealed class ChannelBotRegistrationProjectorTests
         doc.NyxChannelBotId.Should().Be("nyx-bot-1");
         doc.NyxAgentApiKeyId.Should().Be("api-key-1");
         doc.NyxConversationRouteId.Should().Be("route-1");
-        doc.CredentialRef.Should().Be("vault://channels/lark/registrations/bot-reg-1/relay-hmac");
         doc.StateVersion.Should().Be(2);
         doc.LastEventId.Should().Be("evt-bot-1");
         doc.ActorId.Should().Be("bot-reg-actor-1");

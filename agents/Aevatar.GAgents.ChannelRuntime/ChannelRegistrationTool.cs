@@ -80,10 +80,6 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Existing Nyx conversation route ID (optional for repair_lark_mirror, but strongly recommended)"
             },
-            "credential_ref": {
-              "type": "string",
-              "description": "Existing local relay credential reference to preserve during repair_lark_mirror (optional when registration_id still points at a stored relay secret)"
-            },
             "reason": {
               "type": "string",
               "description": "Optional operator reason for rebuild_projection"
@@ -301,8 +297,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
                 WebhookBaseUrl: GetStr(args, "webhook_base_url")?.Trim() ?? string.Empty,
                 NyxChannelBotId: nyxChannelBotId,
                 NyxAgentApiKeyId: nyxAgentApiKeyId,
-                NyxConversationRouteId: nyxConversationRouteId,
-                CredentialRef: GetStr(args, "credential_ref")?.Trim() ?? string.Empty),
+                NyxConversationRouteId: nyxConversationRouteId),
             ct);
 
         return SerializeLarkRegistrationPayload(
