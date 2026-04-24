@@ -16,6 +16,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
+        services.TryAddSingleton<INyxIdRelayReplayGuard>(provider =>
+        {
+            var options = provider.GetRequiredService<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>();
+            return new NyxIdRelayReplayGuard(
+                TimeSpan.FromSeconds(Math.Max(1, options.CallbackReplayWindowSeconds)),
+                TimeProvider.System);
+        });
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
 

@@ -11,7 +11,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxIdRelayOutboundPortTests
 {
     [Fact]
-    public async Task SendAsync_ShouldRejectMissingReplyAccessToken()
+    public async Task SendAsync_ShouldRejectMissingReplyToken()
     {
         var port = CreatePort(new RecordingJsonHandler());
 
@@ -23,10 +23,11 @@ public sealed class NyxIdRelayOutboundPortTests
             {
                 ReplyMessageId = "msg-1",
             },
+            string.Empty,
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
-        result.ErrorCode.Should().Be("missing_reply_access_token");
+        result.ErrorCode.Should().Be("reply_token_missing_or_expired");
     }
 
     [Fact]
@@ -41,9 +42,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello relay" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -53,6 +54,92 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests[0].Authorization.Should().Be("Bearer relay-token");
         handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-1\"");
         handler.Requests[0].Body.Should().Contain("\"text\":\"rendered:hello relay\"");
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldRejectMissingReplyMessageId()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.SendAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext
+            {
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("missing_reply_message_id");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldRejectMissingPlatform()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.SendAsync(
+            "",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("platform_required");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldRejectEmptyRenderedText()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("slack", text: ""));
+
+        var result = await port.SendAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("empty_reply");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldReturnFailure_WhenNyxRejectsRelayReply()
+    {
+        var handler = new RecordingJsonHandler(HttpStatusCode.BadRequest, "{\"error\":\"invalid_reply_token\"}");
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.SendAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_rejected");
     }
 
     [Fact]
@@ -67,9 +154,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello relay" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -89,9 +176,9 @@ public sealed class NyxIdRelayOutboundPortTests
             new MessageContent { Text = "hello relay" },
             new OutboundDeliveryContext
             {
-                ReplyAccessToken = "relay-token",
                 ReplyMessageId = "msg-1",
             },
+            "relay-token",
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -121,7 +208,9 @@ public sealed class NyxIdRelayOutboundPortTests
             "group",
             "conv-1");
 
-    private sealed class RecordingJsonHandler : HttpMessageHandler
+    private sealed class RecordingJsonHandler(
+        HttpStatusCode status = HttpStatusCode.OK,
+        string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""") : HttpMessageHandler
     {
         public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
 
@@ -132,20 +221,23 @@ public sealed class NyxIdRelayOutboundPortTests
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(status)
             {
-                Content = new StringContent("""{"message_id":"reply-1","platform_message_id":"platform-1"}""", Encoding.UTF8, "application/json"),
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             };
         }
     }
 
-    private sealed class StubComposer(string platform, ComposeCapability capability = ComposeCapability.Exact)
+    private sealed class StubComposer(
+        string platform,
+        ComposeCapability capability = ComposeCapability.Exact,
+        string? text = null)
         : IMessageComposer<StubNativePayload>
     {
         public ChannelId Channel { get; } = ChannelId.From(platform);
 
         public StubNativePayload Compose(MessageContent intent, ComposeContext context) =>
-            new($"rendered:{intent.Text}");
+            new(text ?? $"rendered:{intent.Text}");
 
         object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
 

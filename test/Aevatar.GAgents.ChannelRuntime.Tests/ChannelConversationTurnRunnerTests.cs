@@ -180,6 +180,212 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldFallbackToBoundedRegistrationScan_ForRelayTurnWhenIdentityQueryMisses()
+    {
+        var registration = BuildRegistrationEntry();
+        registration.NyxAgentApiKeyId = "nyx-key-1";
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([registration]));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-nyx-scan-1",
+                botId: "nyx-key-1",
+                outboundDelivery: new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-1",
+                    CorrelationId = "corr-relay-1",
+                },
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxMessageId = "nyx-msg-1",
+                    NyxPlatform = "lark",
+                    NyxConversationId = "nyx-conv-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-1");
+        await registrationByNyxIdentityPort.Received(1)
+            .GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
+        await registrationQueryPort.Received(1)
+            .QueryAllAsync(Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive()
+            .GetAsync("nyx-key-1", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_BoundedRegistrationScan_ReturnsFirstMatchWhenMultipleShareNyxKey()
+    {
+        var stale = BuildRegistrationEntry("reg-old");
+        stale.NyxAgentApiKeyId = "nyx-key-1";
+        var fresh = BuildRegistrationEntry("reg-new");
+        fresh.NyxAgentApiKeyId = "nyx-key-1";
+
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([stale, fresh]));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-nyx-dup-1",
+                botId: "nyx-key-1",
+                outboundDelivery: new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-1",
+                    CorrelationId = "corr-relay-1",
+                },
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        // Bounded scan has no ordering guarantee across duplicates sharing NyxAgentApiKeyId
+        // and returns the first hit from the projection. The stale entry can shadow the live one.
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-old");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_BoundedRegistrationScan_FallsThroughToBotIdLookup_WhenScanMisses()
+    {
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-other",
+                    NyxAgentApiKeyId = "different-key",
+                },
+            ]));
+        registrationQueryPort.GetAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-nyx-miss-scan-1",
+                botId: "nyx-key-1",
+                outboundDelivery: new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-1",
+                    CorrelationId = "corr-relay-1",
+                },
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("registration_not_found");
+        await registrationQueryPort.Received(1).QueryAllAsync(Arg.Any<CancellationToken>());
+        await registrationQueryPort.Received(1).GetAsync("nyx-key-1", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldSkipBoundedRegistrationScan_WhenOutboundDeliveryMissing()
+    {
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello without relay",
+                "msg-no-delivery-1",
+                botId: "nyx-key-1",
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("registration_not_found");
+        await registrationQueryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldSkipBoundedRegistrationScan_ForNonRelayIdentityMiss()
+    {
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync("missing-reg", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello from relay",
+                "msg-nyx-miss-1",
+                botId: "missing-reg",
+                transportExtras: new TransportExtras
+                {
+                    NyxAgentApiKeyId = "nyx-key-1",
+                    NyxMessageId = "nyx-msg-1",
+                    NyxPlatform = "lark",
+                    NyxConversationId = "nyx-conv-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("registration_not_found");
+        await registrationQueryPort.DidNotReceive()
+            .QueryAllAsync(Arg.Any<CancellationToken>());
+        await registrationQueryPort.Received(1)
+            .GetAsync("missing-reg", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldMapChannelScopeChatTypeExhaustively()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -362,7 +568,7 @@ public sealed class ChannelConversationTurnRunnerTests
             new OutboundDeliveryContext
             {
                 ReplyMessageId = "relay-msg-1",
-                ReplyAccessToken = "relay-token-1",
+                CorrelationId = "corr-relay-1",
             },
             new TransportExtras
             {
@@ -370,16 +576,19 @@ public sealed class ChannelConversationTurnRunnerTests
                 NyxUserAccessToken = "user-token-1",
             });
 
-        var result = await runner.RunLlmReplyAsync(new LlmReplyReadyEvent
-        {
-            CorrelationId = "corr-relay-1",
-            RegistrationId = "reg-1",
-            SourceActorId = "llm-worker-1",
-            Activity = activity,
-            Outbound = new MessageContent { Text = "relay reply" },
-            TerminalState = LlmReplyTerminalState.Completed,
-            ReadyAtUnixMs = 42,
-        }, CancellationToken.None);
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-1",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "relay reply" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-1"),
+            CancellationToken.None);
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("reply-1");
@@ -426,7 +635,7 @@ public sealed class ChannelConversationTurnRunnerTests
             new OutboundDeliveryContext
             {
                 ReplyMessageId = "relay-msg-1",
-                ReplyAccessToken = "relay-token-1",
+                CorrelationId = "corr-relay-card-1",
             },
             new TransportExtras
             {
@@ -445,16 +654,19 @@ public sealed class ChannelConversationTurnRunnerTests
             IsPrimary = true,
         });
 
-        var result = await runner.RunLlmReplyAsync(new LlmReplyReadyEvent
-        {
-            CorrelationId = "corr-relay-card-1",
-            RegistrationId = "reg-1",
-            SourceActorId = "llm-worker-1",
-            Activity = activity,
-            Outbound = outbound,
-            TerminalState = LlmReplyTerminalState.Completed,
-            ReadyAtUnixMs = 42,
-        }, CancellationToken.None);
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-card-1",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = outbound,
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-card-1"),
+            CancellationToken.None);
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("reply-card-1");
@@ -567,6 +779,16 @@ public sealed class ChannelConversationTurnRunnerTests
             interactiveReplyDispatcher,
             NullLogger<ChannelConversationTurnRunner>.Instance);
     }
+
+    private static ConversationTurnRuntimeContext RelayRuntimeContext(
+        string correlationId,
+        string replyToken = "relay-token-1",
+        string replyMessageId = "relay-msg-1") =>
+        new(new NyxRelayReplyTokenContext(
+            correlationId,
+            replyToken,
+            replyMessageId,
+            DateTimeOffset.UtcNow.AddMinutes(5)));
 
     private static ChatActivity BuildInboundActivity(
         string text,
