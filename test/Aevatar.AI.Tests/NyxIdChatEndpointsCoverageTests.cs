@@ -624,7 +624,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleRelayWebhookAsync_ShouldDispatchWorkflowResume_ForRelayCardAction()
     {
-        var relay = CreateRelayInvocationDependencies(scopeId: "scope-card", relayApiKeyId: "scope-card");
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-card");
         var payload = """
             {
               "message_id":"msg-card-1",
@@ -680,7 +680,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleRelayWebhookAsync_ShouldDispatchWorkflowResume_ForRelayCardActionContentTypeField()
     {
-        var relay = CreateRelayInvocationDependencies(scopeId: "scope-card", relayApiKeyId: "scope-card");
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-card");
         var payload = """
             {
               "message_id":"msg-card-2",
@@ -774,7 +774,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleRelayWebhookAsync_ShouldRejectInvalidSignature()
     {
-        var relay = CreateRelayInvocationDependencies(scopeId: "scope-a", relayApiKeyId: "scope-a");
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-a");
         var payload = """
             {
               "message_id":"msg-bad-sig",
@@ -808,7 +808,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleRelayWebhookAsync_ShouldAcceptAndDispatchChatActivity_WhenRelayIsValid()
     {
-        var relay = CreateRelayInvocationDependencies(scopeId: "scope-a", relayApiKeyId: "scope-a");
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-a");
         var payload = """
             {
               "message_id":"msg-1",
@@ -870,7 +870,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleRelayWebhookAsync_ShouldRejectMismatchedRelayApiKeyId()
     {
-        var relay = CreateRelayInvocationDependencies(scopeId: "scope-a", relayApiKeyId: "scope-a");
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-a");
         var payload = """
             {
               "message_id":"msg-mismatch",
@@ -908,7 +908,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleRelayWebhookAsync_ShouldUseConversationId_WhenPresent()
     {
-        var relay = CreateRelayInvocationDependencies(scopeId: "scope-b", relayApiKeyId: "scope-b");
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-b");
         var payload = """
             {
               "message_id":"msg-2",
@@ -1372,7 +1372,6 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     private static RelayInvocationDependencies CreateRelayInvocationDependencies(
-        string scopeId = "scope-test",
         string relayApiKeyId = "scope-test")
     {
         const string baseUrl = "https://nyx.example.com";
@@ -1410,7 +1409,6 @@ public class NyxIdChatEndpointsCoverageTests
             options,
             key,
             baseUrl,
-            scopeId,
             relayApiKeyId,
             userToken);
     }
@@ -1418,7 +1416,6 @@ public class NyxIdChatEndpointsCoverageTests
     private static string CreateRelayJwt(
         RsaSecurityKey key,
         string issuer,
-        string subject,
         string relayApiKeyId,
         string messageId,
         string platform,
@@ -1431,12 +1428,12 @@ public class NyxIdChatEndpointsCoverageTests
             Audience = "channel-relay/callback",
             Subject = new ClaimsIdentity(
             [
-                new Claim("sub", subject),
                 new Claim("api_key_id", relayApiKeyId),
                 new Claim("message_id", messageId),
                 new Claim("platform", platform),
                 new Claim("body_sha256", bodySha256),
                 new Claim(JwtRegisteredClaimNames.Jti, jti),
+                new Claim("token_type", "relay_callback"),
             ]),
             NotBefore = DateTime.UtcNow.AddMinutes(-1),
             Expires = DateTime.UtcNow.AddMinutes(5),
@@ -1459,7 +1456,6 @@ public class NyxIdChatEndpointsCoverageTests
         var callbackToken = CreateRelayJwt(
             relay.SigningKey,
             relay.Issuer,
-            relay.ScopeId,
             relay.RelayApiKeyId,
             messageId,
             platform,
@@ -1479,7 +1475,6 @@ public class NyxIdChatEndpointsCoverageTests
         RelayOptions Options,
         RsaSecurityKey SigningKey,
         string Issuer,
-        string ScopeId,
         string RelayApiKeyId,
         string UserToken);
 

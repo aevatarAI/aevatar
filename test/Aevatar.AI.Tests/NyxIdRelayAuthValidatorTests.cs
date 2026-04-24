@@ -43,7 +43,6 @@ public sealed class NyxIdRelayAuthValidatorTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.ScopeId.Should().Be("scope-123");
         result.RelayApiKeyId.Should().Be("api-key-123");
         result.UserAccessToken.Should().Be("user-token-1");
         result.Principal.Should().NotBeNull();

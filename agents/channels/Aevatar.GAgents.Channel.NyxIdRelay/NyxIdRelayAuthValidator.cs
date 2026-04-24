@@ -13,7 +13,6 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 public sealed record NyxIdRelayAuthenticationResult(
     bool Succeeded,
     ClaimsPrincipal? Principal = null,
-    string? ScopeId = null,
     string? RelayApiKeyId = null,
     string? UserAccessToken = null,
     string? ErrorCode = null,
@@ -33,7 +32,6 @@ public sealed class NyxIdRelayAuthValidator
     private sealed record CallbackJwtValidationResult(
         bool Succeeded,
         ClaimsPrincipal? Principal = null,
-        string? ScopeId = null,
         string? RelayApiKeyId = null,
         string? MessageId = null,
         string? Platform = null,
@@ -148,7 +146,6 @@ public sealed class NyxIdRelayAuthValidator
         return new NyxIdRelayAuthenticationResult(
             true,
             Principal: jwtValidation.Principal,
-            ScopeId: jwtValidation.ScopeId,
             RelayApiKeyId: jwtValidation.RelayApiKeyId,
             UserAccessToken: userToken);
     }
@@ -201,7 +198,6 @@ public sealed class NyxIdRelayAuthValidator
         try
         {
             var principal = handler.ValidateToken(token, parameters, out _);
-            var scopeId = principal.FindFirstValue("sub")?.Trim();
             var relayApiKeyId = principal.FindFirstValue("api_key_id")?.Trim();
             var messageId = principal.FindFirstValue("message_id")?.Trim();
             var platform = principal.FindFirstValue("platform")?.Trim();
@@ -261,7 +257,6 @@ public sealed class NyxIdRelayAuthValidator
             return new CallbackJwtValidationResult(
                 true,
                 Principal: principal,
-                ScopeId: scopeId,
                 RelayApiKeyId: relayApiKeyId,
                 MessageId: messageId,
                 Platform: platform,
