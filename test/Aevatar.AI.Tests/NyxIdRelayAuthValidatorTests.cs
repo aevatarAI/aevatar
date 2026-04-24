@@ -9,6 +9,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 
@@ -304,6 +305,70 @@ public sealed class NyxIdRelayAuthValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_ShouldLogSignatureDiagnostics_WhenRegistrationCredentialSignatureFails()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var logger = new CaptureLogger<NyxIdRelayAuthValidator>();
+        var validator = CreateValidator(handler, "https://nyx.example.com", logger: logger);
+        var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123", overrideSignature: "bad-signature");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("invalid_signature");
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning &&
+            entry.Message.Contains("Nyx relay signature verification failed", StringComparison.Ordinal) &&
+            entry.Message.Contains("relay_api_key_id=api-key-123", StringComparison.Ordinal) &&
+            entry.Message.Contains("payload_agent_api_key_id=api-key-123", StringComparison.Ordinal) &&
+            entry.Message.Contains("message_id=msg-1", StringComparison.Ordinal) &&
+            entry.Message.Contains("registration_id=reg-1", StringComparison.Ordinal) &&
+            entry.Message.Contains("credential_resolved=True", StringComparison.Ordinal) &&
+            entry.Message.Contains("signing_secret_source=registration_credential", StringComparison.Ordinal) &&
+            entry.Message.Contains("signature_header_present=True", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldLogSignatureDiagnostics_WhenFallingBackToGlobalHmacSecret()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson("https://nyx.example.com", "https://nyx.example.com/jwks"),
+            () => CreateJwksJson(key));
+        var logger = new CaptureLogger<NyxIdRelayAuthValidator>();
+        var validator = CreateValidator(
+            handler,
+            "https://nyx.example.com",
+            logger: logger,
+            registrationCredentialResolver: new NullRegistrationCredentialResolver(),
+            globalHmacSecret: "fallback-secret");
+        var token = CreateRelayJwt(key, "https://nyx.example.com", "https://nyx.example.com", "scope-123", "api-key-123");
+        var request = CreateRelayRequest(token, "api-key-123", overrideSignature: "bad-signature");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("invalid_signature");
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning &&
+            entry.Message.Contains("Nyx relay signature verification failed", StringComparison.Ordinal) &&
+            entry.Message.Contains("credential_resolved=False", StringComparison.Ordinal) &&
+            entry.Message.Contains("signing_secret_source=global_hmac_secret", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ValidateAsync_ShouldRejectMessageIdMismatch()
     {
         using var rsa = RSA.Create(2048);
@@ -427,7 +492,13 @@ public sealed class NyxIdRelayAuthValidatorTests
         document.RootElement.GetProperty("reply").GetProperty("text").GetString().Should().Be("hello");
     }
 
-    private static NyxIdRelayAuthValidator CreateValidator(HttpMessageHandler handler, string baseUrl, string hmacSecret = "relay-secret")
+    private static NyxIdRelayAuthValidator CreateValidator(
+        HttpMessageHandler handler,
+        string baseUrl,
+        string hmacSecret = "relay-secret",
+        ILogger<NyxIdRelayAuthValidator>? logger = null,
+        INyxIdRelayRegistrationCredentialResolver? registrationCredentialResolver = null,
+        string? globalHmacSecret = null)
     {
         var factory = new NyxRelayTestHttpClientFactory(new HttpClient(handler));
         return new NyxIdRelayAuthValidator(
@@ -439,9 +510,10 @@ public sealed class NyxIdRelayAuthValidatorTests
                 JwtClockSkewSeconds = 0,
                 RequireMessageIdHeader = true,
                 RequireTimestampHeader = true,
+                HmacSecret = globalHmacSecret,
             },
-            NullLogger<NyxIdRelayAuthValidator>.Instance,
-            new StaticRegistrationCredentialResolver(hmacSecret),
+            logger ?? NullLogger<NyxIdRelayAuthValidator>.Instance,
+            registrationCredentialResolver ?? new StaticRegistrationCredentialResolver(hmacSecret),
             new NyxIdRelayReplayGuard());
     }
 
@@ -573,6 +645,44 @@ public sealed class NyxIdRelayAuthValidatorTests
         public Task<NyxIdRelayRegistrationCredential?> ResolveAsync(string relayApiKeyId, CancellationToken ct = default) =>
             Task.FromResult<NyxIdRelayRegistrationCredential?>(
                 new NyxIdRelayRegistrationCredential("reg-1", relayApiKeyId, _apiKeyHash));
+    }
+
+    private sealed class NullRegistrationCredentialResolver : INyxIdRelayRegistrationCredentialResolver
+    {
+        public Task<NyxIdRelayRegistrationCredential?> ResolveAsync(string relayApiKeyId, CancellationToken ct = default) =>
+            Task.FromResult<NyxIdRelayRegistrationCredential?>(null);
+    }
+
+    private sealed class CaptureLogger<T> : ILogger<T>
+    {
+        public List<CapturedLogEntry> Entries { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull =>
+            NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new CapturedLogEntry(logLevel, formatter(state, exception)));
+        }
+
+        public sealed record CapturedLogEntry(LogLevel Level, string Message);
+
+        private sealed class NullScope : IDisposable
+        {
+            public static NullScope Instance { get; } = new();
+
+            public void Dispose()
+            {
+            }
+        }
     }
 
     private sealed class CaptureHandler : HttpMessageHandler
