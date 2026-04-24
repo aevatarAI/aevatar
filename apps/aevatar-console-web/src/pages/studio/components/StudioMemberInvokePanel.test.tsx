@@ -1,5 +1,7 @@
+import { AGUIEventType } from '@aevatar-react-sdk/types';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
+import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import StudioMemberInvokePanel from './StudioMemberInvokePanel';
 
@@ -8,6 +10,10 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
     invokeEndpoint: jest.fn(),
     streamChat: jest.fn(),
   },
+}));
+
+jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
+  parseBackendSSEStream: jest.fn(),
 }));
 
 jest.mock('@/shared/studio/api', () => ({
@@ -25,6 +31,7 @@ describe('StudioMemberInvokePanel', () => {
       requestId: 'run-1',
       targetActorId: 'actor-1',
     });
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {});
   });
 
   it('renders the invoke workbench skeleton with a compact contract and a persistent console', async () => {
@@ -157,6 +164,71 @@ describe('StudioMemberInvokePanel', () => {
     ).toBeTruthy();
     expect(screen.queryByText(/Runs（/)).toBeNull();
     expect(screen.queryByText('这次调用失败了。')).toBeNull();
+  });
+
+  it('prefers final run output over intermediate assistant text for chat invoke results', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
+      yield {
+        delta: '可以拆成这些重点词：',
+        type: AGUIEventType.TEXT_MESSAGE_CONTENT,
+      };
+      yield {
+        result: '핵심 단어로 나누면:\n- 빠른 요약',
+        type: AGUIEventType.RUN_FINISHED,
+      };
+    });
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'joker',
+            endpoints: [
+              {
+                description: 'Chat with joker.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-joker',
+            serviceId: 'joker',
+          },
+        ],
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: {
+        value: 'Give me a quick summary of what this member can do.',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '开始对话' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Give me a quick summary of what this member can do.',
+        },
+        expect.any(AbortSignal),
+        {
+          serviceId: 'joker',
+        },
+      );
+    });
+
+    expect(await screen.findByText(/핵심 단어로 나누면/)).toBeTruthy();
+    expect(screen.getByText(/빠른 요약/)).toBeTruthy();
+    expect(screen.queryByText('可以拆成这些重点词：')).toBeNull();
   });
 
   it('records runs into the merged Runs area and shows technical detail inline', async () => {

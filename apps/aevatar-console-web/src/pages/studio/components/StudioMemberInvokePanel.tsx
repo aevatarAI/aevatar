@@ -62,6 +62,7 @@ type InvokeResultState = {
   readonly error: string;
   readonly eventCount: number;
   readonly events: RuntimeEvent[];
+  readonly finalOutput: string;
   readonly mode: 'stream' | 'invoke';
   readonly responseJson: string;
   readonly runId: string;
@@ -181,6 +182,7 @@ function createIdleResult(): InvokeResultState {
     error: '',
     eventCount: 0,
     events: [],
+    finalOutput: '',
     mode: 'invoke',
     responseJson: '',
     runId: '',
@@ -267,6 +269,13 @@ function getContractStatusLabel(options: {
   }
 
   return '已就绪';
+}
+
+function getPreferredRunOutput(options: {
+  assistantText: string;
+  finalOutput: string;
+}): string {
+  return trimOptional(options.finalOutput) || trimOptional(options.assistantText);
 }
 
 const surfaceStyle: React.CSSProperties = {
@@ -598,6 +607,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     Boolean(invokeResult.commandId) ||
     Boolean(invokeResult.actorId) ||
     Boolean(invokeResult.error) ||
+    Boolean(invokeResult.finalOutput) ||
     Boolean(invokeResult.responseJson) ||
     Boolean(invokeResult.assistantText) ||
     chatMessages.length > 0 ||
@@ -623,6 +633,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         endpointId: invokeResult.endpointId || selectedEndpointId || undefined,
         error: invokeResult.error || undefined,
         eventCount: invokeResult.eventCount || invokeResult.events.length,
+        finalOutput: invokeResult.finalOutput || undefined,
         mode: invokeResult.mode || currentRunRequest?.mode,
         runId: invokeResult.runId || undefined,
         serviceId: invokeResult.serviceId || selectedServiceId || undefined,
@@ -642,6 +653,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     invokeResult.error,
     invokeResult.eventCount,
     invokeResult.events.length,
+    invokeResult.finalOutput,
     invokeResult.mode,
     invokeResult.responseJson,
     invokeResult.runId,
@@ -873,6 +885,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       const assistantMessageId = createClientId('assistant');
       const controller = new AbortController();
       const accumulator = createRuntimeEventAccumulator();
+      const getAssistantContent = () =>
+        getPreferredRunOutput({
+          assistantText: accumulator.assistantText,
+          finalOutput: accumulator.finalOutput,
+        });
       const buildChatRunMessages = (
         assistantStatus: StudioInvokeChatMessage['status'],
         assistantError?: string,
@@ -885,7 +902,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           timestamp: startedAt,
         },
         {
-          content: accumulator.assistantText,
+          content: getAssistantContent(),
           error: assistantError,
           id: assistantMessageId,
           role: 'assistant',
@@ -940,6 +957,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             error: accumulator.errorText,
             eventCount: accumulator.events.length,
             events: [...accumulator.events],
+            finalOutput: accumulator.finalOutput,
             mode: 'stream',
             responseJson: '',
             runId: accumulator.runId,
@@ -965,6 +983,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             error: accumulator.errorText,
             eventCount: accumulator.events.length,
             events: [...accumulator.events],
+            finalOutput: accumulator.finalOutput,
             mode: 'stream',
             responseJson: '',
             runId: accumulator.runId,
@@ -994,6 +1013,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             status: accumulator.errorText ? 'error' : 'success',
             summary:
               accumulator.errorText ||
+              trimOptional(accumulator.finalOutput) ||
               accumulator.assistantText ||
               '这轮对话没有返回额外文本。',
             snapshot: {
@@ -1016,6 +1036,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             error: message,
             eventCount: accumulator.events.length,
             events: [...accumulator.events],
+            finalOutput: accumulator.finalOutput,
             mode: 'stream',
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
@@ -1042,7 +1063,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             serviceId: selectedService.serviceId,
             startedAt,
             status: 'error',
-            summary: message,
+            summary:
+              message ||
+              trimOptional(accumulator.finalOutput) ||
+              accumulator.assistantText,
             snapshot: {
               chatMessages: cloneChatMessages(finalChatMessages),
               result: cloneInvokeResult(finalResult),
@@ -1115,6 +1139,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         endpointId: selectedEndpoint.endpointId,
         eventCount: events.length,
         events,
+        finalOutput: '',
         mode: 'invoke',
         responseJson: JSON.stringify(response, null, 2),
         runId,
@@ -1153,6 +1178,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ...createIdleResult(),
         endpointId: selectedEndpoint.endpointId,
         error: message,
+        finalOutput: '',
         mode: 'invoke',
         serviceId: selectedService.serviceId,
         status: 'error',
@@ -1406,6 +1432,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   <Typography.Text style={emptyConsoleTextStyle} type="secondary">
                     这次结构化调用已经返回结果。切到“原始”可以查看完整返回体。
                   </Typography.Text>
+                ) : invokeResult.finalOutput ? (
+                  <div style={plainResultStyle}>{invokeResult.finalOutput}</div>
                 ) : invokeResult.assistantText ? (
                   <div style={plainResultStyle}>{invokeResult.assistantText}</div>
                 ) : invokeResult.status === 'error' ? (
@@ -1477,6 +1505,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       invokeResult.assistantText,
       invokeResult.error,
       invokeResult.events,
+      invokeResult.finalOutput,
       invokeResult.responseJson,
       invokeResult.status,
       invokeResult.steps.length,
