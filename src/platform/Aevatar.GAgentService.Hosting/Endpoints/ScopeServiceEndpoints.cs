@@ -17,6 +17,7 @@ using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -91,7 +92,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
@@ -161,7 +162,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var result = await commandPort.UpsertAsync(
@@ -213,7 +214,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
@@ -259,7 +260,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
@@ -529,7 +530,7 @@ public static class ScopeServiceEndpoints
         // No service bound — run a built-in default chat workflow as draft-run.
         try
         {
-            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
             var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
@@ -875,7 +876,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
@@ -1240,7 +1241,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId, appId);
@@ -1394,7 +1395,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
         var receipt = await commandPort.CreateBindingAsync(new CreateServiceBindingCommand
@@ -1414,7 +1415,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
         var receipt = await commandPort.UpdateBindingAsync(new UpdateServiceBindingCommand
@@ -1433,7 +1434,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
         var receipt = await commandPort.RetireBindingAsync(new RetireServiceBindingCommand
@@ -1452,7 +1453,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
         var snapshot = await queryPort.GetBindingsAsync(
@@ -1518,7 +1519,7 @@ public static class ScopeServiceEndpoints
         CancellationToken ct,
         string? appId = null)
     {
-        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return new ScopeServiceResolution(null, null, null, denied);
 
         var identity = BuildScopeServiceIdentity(options, scopeId, serviceId, appId);

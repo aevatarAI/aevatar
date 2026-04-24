@@ -5,6 +5,8 @@ using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Controllers;
@@ -362,7 +364,7 @@ public sealed class WorkspaceController : ControllerBase
     private (AppScopeContext? Context, ActionResult? Failure) ResolveReadScopeContext(string? requestedScopeId) =>
         ResolveScopeContext(
             requestedScopeId,
-            allowUnauthenticatedQueryFallback: _hostingOptions.AllowUnauthenticatedScopeQueryFallback,
+            allowUnauthenticatedQueryFallback: IsUnauthenticatedScopeQueryFallbackEnabled(),
             unauthorizedMessage: "Studio authentication is required before accessing a scoped workflow workspace.");
 
     private (AppScopeContext? Context, ActionResult? Failure) ResolveMutationScopeContext(string? requestedScopeId) =>
@@ -408,6 +410,15 @@ public sealed class WorkspaceController : ControllerBase
         // This fallback is only for local debugging when auth is intentionally disabled.
         // It only applies to scoped reads; mutations still require authenticated Studio scope.
         return (new AppScopeContext(normalizedRequestedScopeId, "query:scopeId"), null);
+    }
+
+    private bool IsUnauthenticatedScopeQueryFallbackEnabled()
+    {
+        if (!_hostingOptions.AllowUnauthenticatedScopeQueryFallback)
+            return false;
+
+        var environment = HttpContext?.RequestServices.GetService<IHostEnvironment>();
+        return environment?.IsDevelopment() == true;
     }
 
     [HttpDelete("workflow-drafts/{workflowId}")]

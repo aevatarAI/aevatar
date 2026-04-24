@@ -1,5 +1,6 @@
 using System.Net;
 using System.Reflection;
+using System.Security.Claims;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -17,6 +18,7 @@ using Type = System.Type;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Hosting;
@@ -86,6 +88,29 @@ public sealed class ScopeGAgentEndpointsTests
         context.Response.ContentType.Should().Be("application/json");
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("UNKNOWN_GAGENT_TYPE");
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_ShouldRejectMismatchedAuthenticatedScope()
+    {
+        var interactionService = new FakeGAgentDraftRunInteractionService();
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort();
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext(claimedScopeId: "scope-other");
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
+                "hello"),
+            interactionService,
+            actorPreparationPort,
+            logger,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.Forbidden);
+        actorPreparationPort.PrepareCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -586,12 +611,14 @@ public sealed class ScopeGAgentEndpointsTests
             ]
         };
         var logger = LoggerFactory.Create(_ => { });
+        var context = CreateScopedHttpContext("scope-a");
 
-        var listResult = await InvokeHandleListActorsAsync("scope-a", store, logger, CancellationToken.None);
+        var listResult = await InvokeHandleListActorsAsync(context, "scope-a", store, logger, CancellationToken.None);
         ((IStatusCodeHttpResult)listResult).StatusCode.Should().Be((int)HttpStatusCode.OK);
         store.LastRequestedScopeId.Should().Be("scope-a");
 
         var addResult = await InvokeHandleAddActorAsync(
+            context,
             "scope-a",
             new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("gagent-a", "actor-3"),
             store,
@@ -604,6 +631,7 @@ public sealed class ScopeGAgentEndpointsTests
             x.ActorId == "actor-3");
 
         var removeResult = await InvokeHandleRemoveActorAsync(
+            context,
             "scope-a",
             "actor-1",
             "gagent-a",
@@ -617,6 +645,7 @@ public sealed class ScopeGAgentEndpointsTests
             x.ActorId == "actor-1");
 
         var invalidAdd = await InvokeHandleAddActorAsync(
+            context,
             "scope-a",
             new ScopeGAgentEndpoints.AddGAgentActorHttpRequest(" ", " "),
             store,
@@ -625,6 +654,7 @@ public sealed class ScopeGAgentEndpointsTests
         ((IStatusCodeHttpResult)invalidAdd).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
 
         var invalidRemove = await InvokeHandleRemoveActorAsync(
+            context,
             "scope-a",
             "actor-1",
             " ",
@@ -634,10 +664,11 @@ public sealed class ScopeGAgentEndpointsTests
         ((IStatusCodeHttpResult)invalidRemove).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
 
         var throwingStore = new RecordingGAgentActorStore { ThrowOnGet = new InvalidOperationException("get failed") };
-        var throwList = await InvokeHandleListActorsAsync("scope-a", throwingStore, logger, CancellationToken.None);
+        var throwList = await InvokeHandleListActorsAsync(context, "scope-a", throwingStore, logger, CancellationToken.None);
         ((IStatusCodeHttpResult)throwList).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
 
         var throwAdd = await InvokeHandleAddActorAsync(
+            context,
             "scope-a",
             new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("gagent-a", "actor-1"),
             new RecordingGAgentActorStore { ThrowOnAdd = new InvalidOperationException("add failed") },
@@ -646,6 +677,7 @@ public sealed class ScopeGAgentEndpointsTests
         ((IStatusCodeHttpResult)throwAdd).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
 
         var throwRemove = await InvokeHandleRemoveActorAsync(
+            context,
             "scope-a",
             "actor-1",
             "gagent-a",
@@ -653,6 +685,40 @@ public sealed class ScopeGAgentEndpointsTests
             logger,
             CancellationToken.None);
         ((IStatusCodeHttpResult)throwRemove).StatusCode.Should().Be((int)HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task HandleActorStoreEndpoints_ShouldRejectMismatchedAuthenticatedScope()
+    {
+        var store = new RecordingGAgentActorStore();
+        var logger = LoggerFactory.Create(_ => { });
+        var deniedContext = CreateScopedHttpContext("scope-other");
+
+        var listResult = await InvokeHandleListActorsAsync(deniedContext, "scope-a", store, logger, CancellationToken.None);
+        ((IStatusCodeHttpResult)listResult).StatusCode.Should().Be((int)HttpStatusCode.Forbidden);
+
+        var addResult = await InvokeHandleAddActorAsync(
+            deniedContext,
+            "scope-a",
+            new ScopeGAgentEndpoints.AddGAgentActorHttpRequest("gagent-a", "actor-1"),
+            store,
+            logger,
+            CancellationToken.None);
+        ((IStatusCodeHttpResult)addResult).StatusCode.Should().Be((int)HttpStatusCode.Forbidden);
+
+        var removeResult = await InvokeHandleRemoveActorAsync(
+            deniedContext,
+            "scope-a",
+            "actor-1",
+            "gagent-a",
+            store,
+            logger,
+            CancellationToken.None);
+        ((IStatusCodeHttpResult)removeResult).StatusCode.Should().Be((int)HttpStatusCode.Forbidden);
+
+        store.LastRequestedScopeId.Should().BeNull();
+        store.AddedActors.Should().BeEmpty();
+        store.RemovedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -723,6 +789,7 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     private static async Task<IResult> InvokeHandleListActorsAsync(
+        HttpContext context,
         string scopeId,
         IGAgentActorStore actorStore,
         ILoggerFactory loggerFactory,
@@ -733,6 +800,7 @@ public sealed class ScopeGAgentEndpointsTests
             BindingFlags.NonPublic | BindingFlags.Static);
         return await (Task<IResult>)method!.Invoke(null, new object[]
         {
+            context,
             scopeId,
             actorStore,
             loggerFactory,
@@ -749,6 +817,7 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     private static async Task<IResult> InvokeHandleAddActorAsync(
+        HttpContext context,
         string scopeId,
         ScopeGAgentEndpoints.AddGAgentActorHttpRequest request,
         IGAgentActorStore actorStore,
@@ -760,6 +829,7 @@ public sealed class ScopeGAgentEndpointsTests
             BindingFlags.NonPublic | BindingFlags.Static);
         return await (Task<IResult>)method!.Invoke(null, new object[]
         {
+            context,
             scopeId,
             request,
             actorStore,
@@ -769,6 +839,7 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     private static async Task<IResult> InvokeHandleRemoveActorAsync(
+        HttpContext context,
         string scopeId,
         string actorId,
         string? gagentType,
@@ -781,6 +852,7 @@ public sealed class ScopeGAgentEndpointsTests
             BindingFlags.NonPublic | BindingFlags.Static);
         return await (Task<IResult>)method!.Invoke(null, new object?[]
         {
+            context,
             scopeId,
             actorId,
             gagentType,
@@ -816,12 +888,9 @@ public sealed class ScopeGAgentEndpointsTests
             })!;
     }
 
-    private static HttpContext CreateDraftRunContext(string? authorization = null)
+    private static HttpContext CreateDraftRunContext(string? authorization = null, string claimedScopeId = "scope-a")
     {
-        var context = new DefaultHttpContext
-        {
-            RequestServices = new ServiceCollection().BuildServiceProvider()
-        };
+        var context = CreateScopedHttpContext(claimedScopeId);
         context.Response.Body = new MemoryStream();
         if (!string.IsNullOrWhiteSpace(authorization))
         {
@@ -829,6 +898,30 @@ public sealed class ScopeGAgentEndpointsTests
         }
 
         return context;
+    }
+
+    private static HttpContext CreateScopedHttpContext(string claimedScopeId)
+    {
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
+        return new DefaultHttpContext
+        {
+            RequestServices = services,
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("scope_id", claimedScopeId),
+            ], "test")),
+        };
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.GAgentService.Integration.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     private static EventEnvelope BuildEventEnvelope(IMessage message)

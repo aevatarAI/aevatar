@@ -3,6 +3,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Hosting;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -91,7 +92,7 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
-            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var result = await workflowCommandPort.UpsertAsync(new ScopeWorkflowUpsertRequest(
@@ -125,7 +126,7 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
-            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var workflows = await workflowQueryPort.ListAsync(scopeId, ct);
@@ -159,7 +160,7 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
-            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
@@ -195,7 +196,7 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
-            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
             var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
@@ -242,7 +243,7 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
-            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
             var workflow = await workflowQueryPort.GetByActorIdAsync(scopeId, request.ActorId, ct);

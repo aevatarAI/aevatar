@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Hosting;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -53,6 +54,9 @@ public static class StreamingProxyEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         var roomName = request?.RoomName?.Trim();
         if (string.IsNullOrWhiteSpace(roomName))
@@ -106,6 +110,9 @@ public static class StreamingProxyEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
@@ -132,6 +139,9 @@ public static class StreamingProxyEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
@@ -171,9 +181,14 @@ public static class StreamingProxyEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         var writer = new StreamingProxySseWriter(http.Response);
+        IActor? actor = null;
+        string? sessionId = null;
 
         try
         {
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             var prompt = request.Prompt?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(prompt))
             {
@@ -181,7 +196,7 @@ public static class StreamingProxyEndpoints
                 return;
             }
 
-            var actor = await actorRuntime.GetAsync(roomId);
+            actor = await actorRuntime.GetAsync(roomId);
             if (actor is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -192,7 +207,7 @@ public static class StreamingProxyEndpoints
             await writer.StartAsync(ct);
 
             var activityChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
-            var sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
+            sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
             var projectionLease = await roomSessionProjectionPort.EnsureAndAttachAsync(
                 token => roomSessionProjectionPort.EnsureChatProjectionAsync(actor.Id, sessionId, token),
@@ -344,7 +359,7 @@ public static class StreamingProxyEndpoints
         }
         catch (OperationCanceledException)
         {
-            // Client disconnected
+            await TryPublishCanceledTerminalStateAsync(actor, sessionId, durableCompletionResolver, logger);
         }
         catch (Exception ex)
         {
@@ -368,6 +383,9 @@ public static class StreamingProxyEndpoints
         [FromServices] IActorRuntime actorRuntime,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         if (string.IsNullOrWhiteSpace(request.AgentId) || string.IsNullOrWhiteSpace(request.Content))
             return Results.BadRequest(new { error = "agentId and content are required" });
 
@@ -411,6 +429,9 @@ public static class StreamingProxyEndpoints
 
         try
         {
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             var actor = await actorRuntime.GetAsync(roomId);
             if (actor is null)
             {
@@ -486,6 +507,9 @@ public static class StreamingProxyEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
@@ -512,6 +536,9 @@ public static class StreamingProxyEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         if (string.IsNullOrWhiteSpace(request.AgentId))
             return Results.BadRequest(new { error = "agentId is required" });
 
@@ -731,6 +758,38 @@ public static class StreamingProxyEndpoints
                     await Task.Delay(remaining < signalWaitWindow ? remaining : signalWaitWindow, ct);
                     break;
             }
+        }
+    }
+
+    private static async Task TryPublishCanceledTerminalStateAsync(
+        IActor? actor,
+        string? sessionId,
+        StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
+        ILogger logger)
+    {
+        if (actor is null || string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        try
+        {
+            var durableCompletion = await durableCompletionResolver.ResolveAsync(actor.Id, sessionId, CancellationToken.None);
+            if (durableCompletion is StreamingProxyProjectionCompletionStatus.Completed or StreamingProxyProjectionCompletionStatus.Failed)
+                return;
+
+            await PublishTerminalStateAsync(
+                actor,
+                sessionId,
+                StreamingProxyChatSessionTerminalStatus.Failed,
+                "StreamingProxy chat was cancelled before completion.",
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to publish terminal cancellation state for room {RoomId}, session {SessionId}",
+                actor.Id,
+                sessionId);
         }
     }
 

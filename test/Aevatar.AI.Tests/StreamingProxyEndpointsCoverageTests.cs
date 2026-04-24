@@ -1,11 +1,14 @@
 using System.Reflection;
+using System.Security.Claims;
 using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AppStreamingProxyParticipant = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
 
@@ -31,7 +34,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleCreateRoomAsync(
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
             new StreamingProxyEndpoints.CreateRoomRequest("  Daily Standup  "),
             actorStore,
@@ -68,7 +71,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleCreateRoomAsync(
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
             new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
             actorStore,
@@ -105,7 +108,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleListParticipantsAsync(
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
             "room-1",
             participantStore,
@@ -129,7 +132,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleListParticipantsAsync(
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
             "room-1",
             participantStore,
@@ -140,6 +143,52 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
         statusCode.Should().Be(StatusCodes.Status500InternalServerError);
         body.Should().Contain("Failed to list participants");
+    }
+
+    [Fact]
+    public async Task HandleCreateRoomAsync_ShouldRejectMismatchedAuthenticatedScope()
+    {
+        var operations = new List<string>();
+        var actorStore = new RecordingGAgentActorStore(operations);
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("created-room"));
+        var loggerFactory = LoggerFactory.Create(_ => { });
+
+        var result = await InvokeHandleCreateRoomAsync(
+            CreateScopedHttpContext("scope-b"),
+            "scope-a",
+            new StreamingProxyEndpoints.CreateRoomRequest("Denied Room"),
+            actorStore,
+            runtime,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status403Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        body.Should().Contain("Authenticated scope does not match requested scope.");
+        actorStore.AddedActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleListParticipantsAsync_ShouldRejectMismatchedAuthenticatedScope()
+    {
+        var participantStore = new RecordingParticipantStore();
+        var loggerFactory = LoggerFactory.Create(_ => { });
+
+        var result = await InvokeHandleListParticipantsAsync(
+            CreateScopedHttpContext("scope-b"),
+            "scope-a",
+            "room-1",
+            participantStore,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status403Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        body.Should().Contain("Authenticated scope does not match requested scope.");
     }
 
     private static async Task<IResult> InvokeHandleCreateRoomAsync(
@@ -182,6 +231,24 @@ public sealed class StreamingProxyEndpointsCoverageTests
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body, Encoding.UTF8, leaveOpen: true);
         return (context.Response.StatusCode, await reader.ReadToEndAsync());
+    }
+
+    private static DefaultHttpContext CreateScopedHttpContext(string claimedScopeId = "scope-a")
+    {
+        return new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+                .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+                .BuildServiceProvider(),
+            User = new ClaimsPrincipal(
+                new ClaimsIdentity(
+                [
+                    new Claim("scope_id", claimedScopeId),
+                ],
+                authenticationType: "TestAuth")),
+        };
     }
 
     private sealed class RecordingGAgentActorStore(List<string> operations) : IGAgentActorStore
@@ -378,5 +445,14 @@ public sealed class StreamingProxyEndpointsCoverageTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "StreamingProxyEndpointsCoverageTests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 }

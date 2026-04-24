@@ -122,9 +122,40 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
-        await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
         await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        try
+        {
+            await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
+        }
+        catch
+        {
+            await TryRestoreConversationRegistrationAsync(http, scopeId, actorId, actorStore);
+            throw;
+        }
+
         return Results.Ok();
+    }
+
+    private static async Task TryRestoreConversationRegistrationAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        IGAgentActorStore actorStore)
+    {
+        try
+        {
+            await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            http.RequestServices.GetService<ILoggerFactory>()
+                ?.CreateLogger("Aevatar.NyxId.Chat.DeleteConversation")
+                .LogError(
+                    ex,
+                    "Failed to restore NyxId chat conversation registration after history deletion failure: scope={ScopeId}, actor={ActorId}",
+                    scopeId,
+                    actorId);
+        }
     }
 
     private static async Task InjectUserConfigMetadataAsync(

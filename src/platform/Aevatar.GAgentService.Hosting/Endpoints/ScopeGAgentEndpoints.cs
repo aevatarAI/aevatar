@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
+using Aevatar.Hosting;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
@@ -276,6 +277,9 @@ public static class ScopeGAgentEndpoints
 
         try
         {
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             if (!TryValidateDraftRunRequest(http.Response, request))
                 return;
 
@@ -519,11 +523,15 @@ public static class ScopeGAgentEndpoints
     // ─── Actor CRUD (chrono-storage) ───
 
     private static async Task<IResult> HandleListActorsAsync(
+        HttpContext http,
         string scopeId,
         [FromServices] IGAgentActorStore actorStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         try
         {
             var groups = await actorStore.GetAsync(scopeId, ct);
@@ -542,12 +550,16 @@ public static class ScopeGAgentEndpoints
     }
 
     private static async Task<IResult> HandleAddActorAsync(
+        HttpContext http,
         string scopeId,
         AddGAgentActorHttpRequest request,
         [FromServices] IGAgentActorStore actorStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         try
         {
             if (string.IsNullOrWhiteSpace(request.GAgentType) || string.IsNullOrWhiteSpace(request.ActorId))
@@ -569,6 +581,7 @@ public static class ScopeGAgentEndpoints
     }
 
     private static async Task<IResult> HandleRemoveActorAsync(
+        HttpContext http,
         string scopeId,
         string actorId,
         [FromQuery] string? gagentType,
@@ -576,6 +589,9 @@ public static class ScopeGAgentEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         try
         {
             if (string.IsNullOrWhiteSpace(gagentType))

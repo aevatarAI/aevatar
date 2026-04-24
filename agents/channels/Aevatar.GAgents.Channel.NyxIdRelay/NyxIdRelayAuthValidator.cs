@@ -241,6 +241,8 @@ public sealed class NyxIdRelayAuthValidator
                     ErrorSummary: "Validated relay JWT is missing relay_api_key_id.");
             }
 
+            EnsureCanonicalScopeClaim(principal, scopeId);
+
             return new NyxIdRelayAuthenticationResult(
                 true,
                 Principal: principal,
@@ -262,6 +264,23 @@ public sealed class NyxIdRelayAuthValidator
             _logger.LogError(ex, "Nyx relay JWT validation failed unexpectedly");
             return new NyxIdRelayAuthenticationResult(false, ErrorCode: ex.GetType().Name, ErrorSummary: ex.Message);
         }
+    }
+
+    private static void EnsureCanonicalScopeClaim(ClaimsPrincipal principal, string scopeId)
+    {
+        ArgumentNullException.ThrowIfNull(principal);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+
+        if (principal.Claims.Any(claim =>
+                string.Equals(claim.Type, "scope_id", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(claim.Value?.Trim(), scopeId, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var identity = principal.Identities.FirstOrDefault(candidate => candidate.IsAuthenticated)
+            ?? principal.Identities.FirstOrDefault();
+        identity?.AddClaim(new Claim("scope_id", scopeId));
     }
 
     private async Task<CachedOidcConfiguration> GetConfigurationAsync(bool forceRefresh, CancellationToken ct)

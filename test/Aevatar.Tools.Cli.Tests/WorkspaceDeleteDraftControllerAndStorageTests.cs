@@ -11,6 +11,8 @@ using Aevatar.Studio.Infrastructure.Storage;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Tools.Cli.Tests;
@@ -50,6 +52,29 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         forbidden.Value.Should().BeEquivalentTo(new
         {
             message = "Requested scope does not match the authenticated Studio scope.",
+        });
+    }
+
+    [Fact]
+    public async Task GetSettings_WhenQueryFallbackIsEnabledOutsideDevelopment_ReturnsUnauthorized()
+    {
+        var controller = CreateController(
+            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            new StubScopeResolver(),
+            new StudioHostingOptions
+            {
+                AllowUnauthenticatedScopeQueryFallback = true,
+            },
+            Environments.Production);
+
+        var result = await controller.GetSettings("scope-1", CancellationToken.None);
+
+        var unauthorized = result.Result.Should().BeOfType<UnauthorizedObjectResult>().Subject;
+        unauthorized.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        unauthorized.Value.Should().BeEquivalentTo(new
+        {
+            message = "Studio authentication is required before accessing a scoped workflow workspace.",
         });
     }
 
@@ -671,8 +696,12 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         WorkspaceService workspaceService,
         AppScopedWorkflowService scopeWorkflowService,
         IAppScopeResolver scopeResolver,
-        StudioHostingOptions? hostingOptions = null)
+        StudioHostingOptions? hostingOptions = null,
+        string environmentName = "Development")
     {
+        var services = new ServiceCollection()
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment { EnvironmentName = environmentName })
+            .BuildServiceProvider();
         var controller = new WorkspaceController(
             workspaceService,
             scopeWorkflowService,
@@ -681,10 +710,21 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext(),
+                HttpContext = new DefaultHttpContext
+                {
+                    RequestServices = services,
+                },
             },
         };
         return controller;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ApplicationName { get; set; } = "Aevatar.Tools.Cli.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     private static AppScopedWorkflowService CreateScopeWorkflowService(IWorkflowDraftStore? workflowDraftStore) =>

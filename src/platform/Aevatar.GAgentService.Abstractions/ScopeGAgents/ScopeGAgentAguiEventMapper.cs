@@ -144,7 +144,7 @@ public static class ScopeGAgentAguiEventMapper
             };
         }
 
-        if (payload.TypeUrl.EndsWith("ToolApprovalRequestEvent", StringComparison.Ordinal))
+        if (payload.Is(ToolApprovalRequestEvent.Descriptor))
         {
             return new AGUIEvent
             {
@@ -169,49 +169,14 @@ public static class ScopeGAgentAguiEventMapper
         var structure = new Struct();
         try
         {
-            var input = new CodedInputStream(payload.Value.ToByteArray());
-            string requestId = string.Empty;
-            string toolName = string.Empty;
-            string toolCallId = string.Empty;
-            string argumentsJson = string.Empty;
-            var isDestructive = false;
-            var timeoutSeconds = 15;
-
-            while (!input.IsAtEnd)
-            {
-                var tag = input.ReadTag();
-                switch (WireFormat.GetTagFieldNumber(tag))
-                {
-                    case 1:
-                        requestId = input.ReadString();
-                        break;
-                    case 3:
-                        toolName = input.ReadString();
-                        break;
-                    case 4:
-                        toolCallId = input.ReadString();
-                        break;
-                    case 5:
-                        argumentsJson = input.ReadString();
-                        break;
-                    case 7:
-                        isDestructive = input.ReadBool();
-                        break;
-                    case 8:
-                        timeoutSeconds = input.ReadInt32();
-                        break;
-                    default:
-                        input.SkipLastField();
-                        break;
-                }
-            }
-
-            structure.Fields["requestId"] = Value.ForString(requestId);
-            structure.Fields["toolName"] = Value.ForString(toolName);
-            structure.Fields["toolCallId"] = Value.ForString(toolCallId);
-            structure.Fields["argumentsJson"] = Value.ForString(argumentsJson);
-            structure.Fields["isDestructive"] = Value.ForBool(isDestructive);
-            structure.Fields["timeoutSeconds"] = Value.ForNumber(timeoutSeconds);
+            var approval = payload.Unpack<ToolApprovalRequestEvent>();
+            structure.Fields["requestId"] = Value.ForString(approval.RequestId ?? string.Empty);
+            structure.Fields["sessionId"] = Value.ForString(approval.SessionId ?? string.Empty);
+            structure.Fields["toolName"] = Value.ForString(approval.ToolName ?? string.Empty);
+            structure.Fields["toolCallId"] = Value.ForString(approval.ToolCallId ?? string.Empty);
+            structure.Fields["argumentsJson"] = Value.ForString(approval.ArgumentsJson ?? string.Empty);
+            structure.Fields["isDestructive"] = Value.ForBool(approval.IsDestructive);
+            structure.Fields["timeoutSeconds"] = Value.ForNumber(approval.TimeoutSeconds);
         }
         catch
         {

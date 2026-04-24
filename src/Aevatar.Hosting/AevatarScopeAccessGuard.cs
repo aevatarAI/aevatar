@@ -1,15 +1,24 @@
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 
-namespace Aevatar.GAgentService.Hosting.Endpoints;
+namespace Aevatar.Hosting;
 
-internal static class ScopeEndpointAccess
+public static class AevatarScopeAccessGuard
 {
-    private static readonly string[] ScopeClaimTypes =
-    [
-        WorkflowRunCommandMetadataKeys.ScopeId,
-        "scope_id",
-    ];
+    private const string AuthenticationEnabledKey = "Aevatar:Authentication:Enabled";
+    private const string WorkflowScopeClaimType = "workflow.scope_id";
+    private const string CanonicalScopeClaimType = "scope_id";
+
+    public static bool IsAuthenticationEnabled(IServiceProvider services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        var configuration = services.GetService(typeof(IConfiguration)) as IConfiguration;
+        var environment = services.GetService(typeof(IHostEnvironment)) as IHostEnvironment;
+        var configuredValue = configuration?[AuthenticationEnabledKey];
+        return ResolveAuthenticationEnabled(configuredValue, environment);
+    }
 
     public static bool TryCreateScopeAccessDeniedResult(
         HttpContext http,
@@ -60,7 +69,7 @@ internal static class ScopeEndpointAccess
         ArgumentNullException.ThrowIfNull(http);
 
         message = string.Empty;
-        if (!ScopeEndpointRouteGroups.IsAuthenticationEnabled(http.RequestServices))
+        if (!IsAuthenticationEnabled(http.RequestServices))
             return false;
 
         if (http.User?.Identity?.IsAuthenticated != true)
@@ -71,7 +80,9 @@ internal static class ScopeEndpointAccess
 
         var normalizedRequestedScopeId = NormalizeRequired(requestedScopeId, nameof(requestedScopeId));
         var claimedScopeIds = http.User.Claims
-            .Where(static claim => ScopeClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase))
+            .Where(static claim =>
+                string.Equals(claim.Type, WorkflowScopeClaimType, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(claim.Type, CanonicalScopeClaimType, StringComparison.OrdinalIgnoreCase))
             .Select(static claim => claim.Value?.Trim())
             .Where(static value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.Ordinal)
@@ -93,6 +104,24 @@ internal static class ScopeEndpointAccess
 
         message = "Authenticated scope does not match requested scope.";
         return true;
+    }
+
+    private static bool ResolveAuthenticationEnabled(string? configuredValue, IHostEnvironment? environment)
+    {
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return true;
+
+        if (!bool.TryParse(configuredValue, out var enabled))
+            throw new InvalidOperationException(
+                $"Invalid boolean value '{configuredValue}' for {AuthenticationEnabledKey}.");
+
+        if (!enabled && environment is null)
+            return true;
+
+        if (!enabled && environment is { } hostEnvironment && !hostEnvironment.IsDevelopment())
+            return true;
+
+        return enabled;
     }
 
     private static string NormalizeRequired(string? value, string paramName)

@@ -248,13 +248,11 @@ public class NyxIdChatEndpointsCoverageTests
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("actor store unavailable");
-        historyStore.DeletedConversations.Should().ContainSingle(entry =>
-            entry.ScopeId == "scope-a" &&
-            entry.ConversationId == "actor-1");
+        historyStore.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleDeleteConversationAsync_ShouldNotRemoveActor_WhenHistoryDeleteFails()
+    public async Task HandleDeleteConversationAsync_ShouldRestoreActorRegistration_WhenHistoryDeleteFails()
     {
         var actorStore = new StubGAgentActorStore();
         var historyStore = new StubChatHistoryStore
@@ -273,7 +271,14 @@ public class NyxIdChatEndpointsCoverageTests
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("history unavailable");
-        actorStore.RemovedActors.Should().BeEmpty();
+        actorStore.RemovedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == "actor-1");
+        actorStore.AddedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == "actor-1");
     }
 
     [Fact]
@@ -826,11 +831,12 @@ public class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("accepted");
         response.Body.Should().Contain("msg-1");
+        var expectedActorId = BuildScopedRelayConversationActorId("scope-a", "slack:group:room-1");
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(ConversationGAgent) &&
-            call.Id == "channel-conversation:slack:group:room-1");
-        runtime.Actors.Should().ContainKey("channel-conversation:slack:group:room-1");
-        var actor = (StubActor)runtime.Actors["channel-conversation:slack:group:room-1"];
+            call.Id == expectedActorId);
+        runtime.Actors.Should().ContainKey(expectedActorId);
+        var actor = (StubActor)runtime.Actors[expectedActorId];
         actor.HandledEnvelopes.Should().ContainSingle(envelope =>
             envelope.Payload != null &&
             envelope.Payload.Is(ChatActivity.Descriptor));
@@ -922,10 +928,11 @@ public class NyxIdChatEndpointsCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var expectedActorId = BuildScopedRelayConversationActorId("scope-b", "discord:channel:conv-1");
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(ConversationGAgent) &&
-            call.Id == "channel-conversation:discord:channel:conv-1");
-        runtime.Actors.Should().ContainKey("channel-conversation:discord:channel:conv-1");
+            call.Id == expectedActorId);
+        runtime.Actors.Should().ContainKey(expectedActorId);
     }
 
     [Fact]
@@ -1293,6 +1300,13 @@ public class NyxIdChatEndpointsCoverageTests
             Task<T> task => await task,
             _ => throw new InvalidOperationException($"Unexpected return type: {result.GetType().FullName}"),
         };
+    }
+
+    private static string BuildScopedRelayConversationActorId(string scopeId, string canonicalKey)
+    {
+        var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
+            .ToLowerInvariant();
+        return $"channel-conversation:{canonicalKey}:scope:{scopeHash}";
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)

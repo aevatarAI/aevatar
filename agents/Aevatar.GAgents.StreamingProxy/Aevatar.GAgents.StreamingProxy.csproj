@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
   </ItemGroup>
   <ItemGroup>
