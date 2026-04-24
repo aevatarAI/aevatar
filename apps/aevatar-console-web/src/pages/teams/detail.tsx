@@ -75,7 +75,11 @@ import {
   deriveTeamIntegrationsSummary,
   deriveTeamWorkflowRoleBindings,
 } from "./runtime/teamIntegrations";
-import type { TeamPlaybackSummary } from "./runtime/teamRuntimeLens";
+import type {
+  TeamHealthStatus,
+  TeamHealthTone,
+  TeamPlaybackSummary,
+} from "./runtime/teamRuntimeLens";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 
 type ObservationStatus = "live" | "delayed" | "partial" | "unavailable";
@@ -491,6 +495,106 @@ function resolveTonePillStyle(
         background: token.colorFillQuaternary,
         color: token.colorTextSecondary,
       };
+  }
+}
+
+function formatTeamHealthStatusLabel(status: TeamHealthStatus): string {
+  switch (status) {
+    case "healthy":
+      return "可信运行";
+    case "attention":
+      return "需要核验";
+    case "degraded":
+      return "运行降级";
+    case "blocked":
+      return "等待人工";
+    case "human-overridden":
+      return "人工接管";
+    default:
+      return "状态未知";
+  }
+}
+
+function formatTeamHealthActionLabel(status: TeamHealthStatus): string {
+  switch (status) {
+    case "healthy":
+      return "可继续观察或小步调整";
+    case "attention":
+      return "变更前先核验信号";
+    case "degraded":
+      return "先修复运行异常";
+    case "blocked":
+      return "需要人工处理后继续";
+    case "human-overridden":
+      return "人工介入正在影响判断";
+    default:
+      return "等待更多运行事实";
+  }
+}
+
+function resolveTeamHealthToneStyle(
+  token: ReturnType<typeof theme.useToken>["token"],
+  tone: TeamHealthTone,
+): React.CSSProperties {
+  switch (tone) {
+    case "success":
+      return resolveTonePillStyle(token, "success");
+    case "warning":
+      return resolveTonePillStyle(token, "warning");
+    case "error":
+      return resolveTonePillStyle(token, "danger");
+    case "info":
+      return resolveTonePillStyle(token, "info");
+    default:
+      return resolveTonePillStyle(token, "neutral");
+  }
+}
+
+function formatTeamHealthDetail(detail: string): string {
+  const normalized = trimText(detail);
+  if (!normalized) {
+    return "--";
+  }
+
+  if (normalized === "A human-in-the-loop step is visible in the current run.") {
+    return "当前运行可见人工介入步骤。";
+  }
+
+  if (normalized.startsWith("Service deployment is ")) {
+    return `服务部署状态：${normalized.replace("Service deployment is ", "").replace(/\.$/, "")}。`;
+  }
+
+  if (normalized === "No recent team activity is available to verify the active deployment.") {
+    return "当前还没有近期团队运行来证明 active deployment 的健康状态。";
+  }
+
+  if (normalized.startsWith("Current run ")) {
+    return normalized
+      .replace(/^Current run /, "当前运行 ")
+      .replace(" is ", " 状态为 ");
+  }
+
+  if (normalized.startsWith("Latest error: ")) {
+    return normalized.replace("Latest error: ", "最近错误：");
+  }
+
+  if (normalized.startsWith("Current run status is ")) {
+    return normalized.replace("Current run status is ", "当前运行状态为 ");
+  }
+
+  return normalized;
+}
+
+function formatPartialSignal(signal: string): string {
+  switch (trimText(signal)) {
+    case "Actor graph unavailable":
+      return "事件拓扑暂不可用";
+    case "No successful baseline run":
+      return "暂无成功基线运行";
+    case "No recent runs":
+      return "暂无近期运行";
+    default:
+      return trimText(signal) || "--";
   }
 }
 
@@ -2674,6 +2778,75 @@ const TeamDetailPage: React.FC = () => {
         ? resolveTonePillStyle(token, "success")
         : resolveStatusPillStyle(token, row.badge),
   }));
+  const overviewGovernanceRows = [
+    {
+      badge: currentRevisionId !== "--" ? "serving" : "unknown",
+      badgeStyle:
+        currentRevisionId !== "--"
+          ? resolveTonePillStyle(token, "info")
+          : resolveTonePillStyle(token, "neutral"),
+      key: "servingRevision",
+      label: "Serving",
+      note:
+        lens.governance.servingRevision !== "Unknown"
+          ? `serving revision · ${compactId(lens.governance.servingRevision)}`
+          : "当前还没有可见 serving revision。",
+      value:
+        lens.governance.servingRevision !== "Unknown"
+          ? compactId(lens.governance.servingRevision)
+          : "Unknown",
+    },
+    {
+      badge: lens.currentRun ? "可追踪" : "暂无运行",
+      badgeStyle: lens.currentRun
+        ? resolveTonePillStyle(token, "success")
+        : resolveTonePillStyle(token, "neutral"),
+      key: "traceability",
+      label: "审计链路",
+      note: lens.governance.traceability,
+      value: lens.currentRun ? `run ${compactId(lens.currentRun.runId)}` : "暂无近期运行",
+    },
+    {
+      badge: lens.humanInterventionDetected ? "人工介入" : "未介入",
+      badgeStyle: lens.humanInterventionDetected
+        ? resolveTonePillStyle(token, "warning")
+        : resolveTonePillStyle(token, "success"),
+      key: "humanIntervention",
+      label: "人工介入",
+      note: lens.governance.humanIntervention,
+      value: lens.humanInterventionDetected ? "Manual gate active" : "No active override",
+    },
+    {
+      badge: lens.baselineRun ? "有基线" : "无基线",
+      badgeStyle: lens.baselineRun
+        ? resolveTonePillStyle(token, "success")
+        : resolveTonePillStyle(token, "warning"),
+      key: "fallback",
+      label: "回退基线",
+      note: lens.governance.fallback,
+      value: lens.baselineRun ? `run ${compactId(lens.baselineRun.runId)}` : "Fallback unavailable",
+    },
+    {
+      badge: currentDeploymentFriendly,
+      badgeStyle: resolveStatusPillStyle(token, currentDeploymentStatus),
+      key: "rollout",
+      label: "Rollout",
+      note: lens.governance.rollout,
+      value: currentDeploymentFriendly,
+    },
+  ];
+  const overviewCompareStatusLabel = lens.compare.available
+    ? "基线可用"
+    : lens.currentRun
+      ? "等待基线"
+      : "等待运行";
+  const overviewCompareStatusStyle = lens.compare.available
+    ? resolveTonePillStyle(token, "success")
+    : lens.currentRun
+      ? resolveTonePillStyle(token, "warning")
+      : resolveTonePillStyle(token, "info");
+  const overviewHealthDetails = lens.healthDetails.map(formatTeamHealthDetail);
+  const overviewPartialSignals = lens.partialSignals.map(formatPartialSignal);
   const displayedRunId = lens.currentRun?.runId || preferredRunId || "";
   const runSwitchOptions = React.useMemo(
     () =>
@@ -3089,6 +3262,12 @@ const TeamDetailPage: React.FC = () => {
   const renderOverviewTab = () => {
     return (
       <TeamOverviewTab
+        compareAvailable={lens.compare.available}
+        compareSections={lens.compare.sections}
+        compareStatusLabel={overviewCompareStatusLabel}
+        compareStatusStyle={overviewCompareStatusStyle}
+        compareSummary={lens.compare.summary}
+        compareTitle={lens.compare.title}
         compositionRows={overviewCompositionRows}
         currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
         currentDeploymentPillText={currentDeploymentPillText}
@@ -3108,8 +3287,15 @@ const TeamDetailPage: React.FC = () => {
           color: token.colorInfo,
         }}
         currentServicePillText={currentServicePillText}
+        governanceRows={overviewGovernanceRows}
+        healthActionLabel={formatTeamHealthActionLabel(lens.healthStatus)}
+        healthDetails={overviewHealthDetails}
+        healthStatusLabel={formatTeamHealthStatusLabel(lens.healthStatus)}
+        healthStatusStyle={resolveTeamHealthToneStyle(token, lens.healthTone)}
+        healthSummary={lens.healthSummary}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
+        partialSignals={overviewPartialSignals}
         runtimeSummaryRows={overviewRuntimeSummaryRows}
       />
     );
