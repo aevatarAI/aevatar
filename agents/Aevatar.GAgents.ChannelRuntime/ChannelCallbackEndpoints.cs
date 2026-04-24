@@ -398,6 +398,7 @@ public static class ChannelCallbackEndpoints
         if (http.Request.Body.CanSeek && http.Request.Body.Length == http.Request.Body.Position)
             return null;
 
+        // ReadFromJsonAsync throws InvalidOperationException for unsupported content types.
         return await http.Request.ReadFromJsonAsync<ChannelRegistrationRebuildRequest>(RegistrationJsonOptions, ct);
     }
 

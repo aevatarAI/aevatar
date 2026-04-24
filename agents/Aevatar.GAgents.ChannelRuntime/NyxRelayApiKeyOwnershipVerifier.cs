@@ -21,6 +21,8 @@ internal sealed class NyxRelayApiKeyOwnershipVerifier : INyxRelayApiKeyOwnership
     private readonly NyxIdApiClient _nyxClient;
     private readonly ILogger<NyxRelayApiKeyOwnershipVerifier> _logger;
 
+    private sealed record OwnerScopeResolution(string? ScopeId, string? FailureDetail);
+
     public NyxRelayApiKeyOwnershipVerifier(
         NyxIdApiClient nyxClient,
         ILogger<NyxRelayApiKeyOwnershipVerifier>? logger = null)
@@ -57,11 +59,13 @@ internal sealed class NyxRelayApiKeyOwnershipVerifier : INyxRelayApiKeyOwnership
             if (!string.Equals(returnedId, apiKeyId, StringComparison.Ordinal))
                 return Failure("api_key_id_mismatch");
 
-            var ownerScopeId = await ResolveOwnerScopeIdAsync(token, root, ct);
-            if (ownerScopeId is null)
+            var owner = await ResolveOwnerScopeIdAsync(token, root, ct);
+            if (owner.FailureDetail is not null)
+                return Failure(owner.FailureDetail);
+            if (owner.ScopeId is null)
                 return Failure("api_key_owner_scope_unresolved");
 
-            if (!string.Equals(ownerScopeId, scopeId, StringComparison.Ordinal))
+            if (!string.Equals(owner.ScopeId, scopeId, StringComparison.Ordinal))
                 return Failure("api_key_owner_scope_mismatch");
 
             return new NyxRelayApiKeyOwnershipVerification(true, "verified");
@@ -82,7 +86,10 @@ internal sealed class NyxRelayApiKeyOwnershipVerifier : INyxRelayApiKeyOwnership
         }
     }
 
-    private async Task<string?> ResolveOwnerScopeIdAsync(string accessToken, JsonElement apiKeyRoot, CancellationToken ct)
+    private async Task<OwnerScopeResolution> ResolveOwnerScopeIdAsync(
+        string accessToken,
+        JsonElement apiKeyRoot,
+        CancellationToken ct)
     {
         if (apiKeyRoot.TryGetProperty("credential_source", out var source) &&
             source.ValueKind == JsonValueKind.Object)
@@ -92,18 +99,48 @@ internal sealed class NyxRelayApiKeyOwnershipVerifier : INyxRelayApiKeyOwnership
             {
                 var role = ReadOptionalString(source, "role");
                 if (!string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase))
-                    return null;
+                    return Unresolved($"org_role={role ?? "missing"}");
 
-                return NormalizeOptional(ReadOptionalString(source, "org_id"));
+                var orgId = NormalizeOptional(ReadOptionalString(source, "org_id"));
+                return orgId is null
+                    ? Unresolved("org_id_missing")
+                    : Resolved(orgId);
             }
+
+            if (string.Equals(sourceType, "personal", StringComparison.OrdinalIgnoreCase))
+            {
+                return await ResolvePersonalOwnerScopeIdAsync(accessToken, apiKeyRoot, ct);
+            }
+
+            return Unresolved($"source_type={sourceType ?? "missing"}");
         }
 
+        return Unresolved("credential_source_missing");
+    }
+
+    private async Task<OwnerScopeResolution> ResolvePersonalOwnerScopeIdAsync(
+        string accessToken,
+        JsonElement apiKeyRoot,
+        CancellationToken ct)
+    {
+        // Personal key ownership relies on NyxID's read-owner gate; verify key.user_id too when the response exposes it.
         var currentUserResponse = await _nyxClient.GetCurrentUserAsync(accessToken, ct);
-        if (TryReadErrorEnvelope(currentUserResponse, out _))
-            return null;
+        if (TryReadErrorEnvelope(currentUserResponse, out var errorDetail))
+            return Unresolved($"current_user_lookup_failed {errorDetail}");
 
         using var currentUser = JsonDocument.Parse(currentUserResponse);
-        return NormalizeOptional(ReadOptionalString(currentUser.RootElement, "id"));
+        var currentUserId = NormalizeOptional(ReadOptionalString(currentUser.RootElement, "id"));
+        if (currentUserId is null)
+            return Unresolved("current_user_id_missing");
+
+        var keyUserId = NormalizeOptional(ReadOptionalString(apiKeyRoot, "user_id"));
+        if (keyUserId is not null &&
+            !string.Equals(keyUserId, currentUserId, StringComparison.Ordinal))
+        {
+            return new OwnerScopeResolution(null, "api_key_owner_scope_mismatch key_user_id_mismatch");
+        }
+
+        return Resolved(currentUserId);
     }
 
     private static bool TryReadErrorEnvelope(string response, out string detail)
@@ -153,6 +190,12 @@ internal sealed class NyxRelayApiKeyOwnershipVerifier : INyxRelayApiKeyOwnership
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
+
+    private static OwnerScopeResolution Resolved(string scopeId) =>
+        new(scopeId, null);
+
+    private static OwnerScopeResolution Unresolved(string detail) =>
+        new(null, $"api_key_owner_scope_unresolved {detail}");
 
     private static NyxRelayApiKeyOwnershipVerification Failure(string detail) =>
         new(false, detail);
