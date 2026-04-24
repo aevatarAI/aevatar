@@ -130,6 +130,49 @@ public sealed class NyxIdLLMProviderRoutingTests
         route.Request.Model.Should().Be("gpt-4-turbo");
     }
 
+    [Theory]
+    [InlineData("gpt-5")]
+    [InlineData("gpt-5.4")]
+    [InlineData("openai/gpt-5.4")]
+    public async Task ResolveRouteAsync_ShouldOmitTemperature_ForGpt5Models(string model)
+    {
+        var provider = CreateProvider();
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = model,
+            Temperature = 0,
+            Metadata = new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
+            },
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.Request.Temperature.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldKeepTemperature_ForNonGpt5Models()
+    {
+        var provider = CreateProvider();
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "gpt-4o",
+            Temperature = 0.2,
+            Metadata = new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
+            },
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.Request.Temperature.Should().Be(0.2);
+    }
+
     [Fact]
     public async Task ResolveRouteAsync_ShouldIgnoreAbsoluteUriInRoutePreference()
     {

@@ -96,7 +96,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
-        await PersistDomainEventAsync(new SkillRunnerInitializedEvent
+        var initialized = new SkillRunnerInitializedEvent
         {
             SkillName = command.SkillName?.Trim() ?? string.Empty,
             TemplateName = command.TemplateName?.Trim() ?? string.Empty,
@@ -109,11 +109,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
             ProviderName = NormalizeProviderName(command.ProviderName),
             Model = command.Model?.Trim() ?? string.Empty,
-            Temperature = command.Temperature,
-            MaxTokens = command.MaxTokens,
-            MaxToolRounds = command.MaxToolRounds,
-            MaxHistoryMessages = command.MaxHistoryMessages,
-        });
+        };
+
+        if (command.HasTemperature)
+            initialized.Temperature = command.Temperature;
+        if (command.HasMaxTokens)
+            initialized.MaxTokens = command.MaxTokens;
+        if (command.HasMaxToolRounds)
+            initialized.MaxToolRounds = command.MaxToolRounds;
+        if (command.HasMaxHistoryMessages)
+            initialized.MaxHistoryMessages = command.MaxHistoryMessages;
+
+        await PersistDomainEventAsync(initialized);
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpsertRegistryAsync(State.Enabled ? SkillRunnerDefaults.StatusRunning : SkillRunnerDefaults.StatusDisabled, CancellationToken.None);
@@ -374,8 +381,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.ProviderName = NormalizeProviderName(evt.ProviderName);
         next.Model = evt.Model ?? string.Empty;
-        next.Temperature = evt.Temperature;
-        next.MaxTokens = evt.MaxTokens;
+        if (evt.HasTemperature)
+            next.Temperature = evt.Temperature;
+        else
+            next.ClearTemperature();
+        if (evt.HasMaxTokens)
+            next.MaxTokens = evt.MaxTokens;
+        else
+            next.ClearMaxTokens();
         next.MaxToolRounds = evt.HasMaxToolRounds ? evt.MaxToolRounds : SkillRunnerDefaults.DefaultMaxToolRounds;
         next.MaxHistoryMessages = evt.HasMaxHistoryMessages ? evt.MaxHistoryMessages : SkillRunnerDefaults.DefaultMaxHistoryMessages;
         return next;

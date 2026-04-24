@@ -292,6 +292,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private LLMRequest NormalizeRequest(LLMRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var model = ResolveModel(request);
 
         return new LLMRequest
         {
@@ -299,11 +300,33 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             RequestId = request.RequestId,
             Metadata = request.Metadata,
             Tools = request.Tools,
-            Model = ResolveModel(request),
-            Temperature = request.Temperature,
+            Model = model,
+            Temperature = NormalizeTemperatureForModel(model, request.Temperature),
             MaxTokens = request.MaxTokens,
             ResponseFormat = request.ResponseFormat,
         };
+    }
+
+    internal static double? NormalizeTemperatureForModel(string? model, double? temperature)
+    {
+        if (!temperature.HasValue)
+            return null;
+
+        // NyxID's current OpenAI-compatible GPT-5 routes reject the temperature parameter.
+        return IsGpt5Model(model) ? null : temperature;
+    }
+
+    private static bool IsGpt5Model(string? model)
+    {
+        var normalized = model?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return false;
+
+        var slashIndex = normalized.LastIndexOf('/');
+        if (slashIndex >= 0 && slashIndex < normalized.Length - 1)
+            normalized = normalized[(slashIndex + 1)..];
+
+        return normalized.StartsWith("gpt-5", StringComparison.OrdinalIgnoreCase);
     }
 
     private string ResolveModel(LLMRequest request)
