@@ -201,12 +201,30 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
             </Typography.Link>
             {` / 团队详情 / ${activeTabLabel}`}
           </Typography.Text>
-          <Space align="center" wrap size={12}>
-            <Typography.Title level={1} style={{ margin: 0 }}>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              minWidth: 0,
+            }}
+          >
+            <Typography.Title
+              level={1}
+              style={{
+                lineHeight: 1.08,
+                margin: 0,
+                maxWidth: "100%",
+                minWidth: 0,
+                overflowWrap: "anywhere",
+                whiteSpace: "normal",
+              }}
+            >
               {teamTitle}
             </Typography.Title>
             {statusBadge}
-          </Space>
+          </div>
           {teamMeta ? (
             <div
               style={{
