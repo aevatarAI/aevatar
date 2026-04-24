@@ -71,4 +71,59 @@ public sealed class NyxIdRelayTransportTests
         parsed.Activity!.Conversation.CanonicalKey.Should().Be("discord:dm:user-42");
         parsed.Activity.TransportExtras.NyxConversationId.Should().Be("conv-dm-1");
     }
+
+    [Fact]
+    public void Parse_ShouldExposeLarkPlatformMessageId_FromRawPlatformData()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_123", "type": "group" },
+              "sender": { "platform_id": "ou_123", "display_name": "User One" },
+              "content": { "type": "text", "text": "hello" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_123"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_123");
+    }
+
+    [Fact]
+    public void Parse_ShouldPreferCurrentPlatformMessageId_WhenReplyTargetAlsoPresent()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_123", "type": "group" },
+              "sender": { "platform_id": "ou_123", "display_name": "User One" },
+              "content": { "type": "card_action", "text": "{\"approved\":true}" },
+              "reply_to_platform_message_id": "om_parent",
+              "raw_platform_data": {
+                "event": {
+                  "context": {
+                    "open_message_id": "om_raw"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_raw");
+    }
 }

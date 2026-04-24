@@ -22,6 +22,39 @@ public sealed class LarkCoverageTests
         sendTool.Description.Should().Contain("Proactively send a Lark message");
         sendTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
 
+        var replyTool = new LarkMessagesReplyTool(client);
+        replyTool.Name.Should().Be("lark_messages_reply");
+        replyTool.Description.Should().Contain("Reply to a specific Lark message");
+        replyTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+
+        var reactTool = new LarkMessagesReactTool(client);
+        reactTool.Name.Should().Be("lark_messages_react");
+        reactTool.Description.Should().Contain("Add an emoji reaction");
+        reactTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+
+        var reactionsListTool = new LarkMessagesReactionsListTool(client);
+        reactionsListTool.Name.Should().Be("lark_messages_reactions_list");
+        reactionsListTool.Description.Should().Contain("List emoji reaction records");
+        reactionsListTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        reactionsListTool.IsReadOnly.Should().BeTrue();
+
+        var reactionsDeleteTool = new LarkMessagesReactionsDeleteTool(client);
+        reactionsDeleteTool.Name.Should().Be("lark_messages_reactions_delete");
+        reactionsDeleteTool.Description.Should().Contain("Delete a specific Lark message reaction");
+        reactionsDeleteTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+
+        var searchTool = new LarkMessagesSearchTool(client);
+        searchTool.Name.Should().Be("lark_messages_search");
+        searchTool.Description.Should().Contain("Search Lark messages");
+        searchTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        searchTool.IsReadOnly.Should().BeTrue();
+
+        var batchGetTool = new LarkMessagesBatchGetTool(client);
+        batchGetTool.Name.Should().Be("lark_messages_batch_get");
+        batchGetTool.Description.Should().Contain("Batch fetch full Lark message details");
+        batchGetTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        batchGetTool.IsReadOnly.Should().BeTrue();
+
         var lookupTool = new LarkChatsLookupTool(client);
         lookupTool.Name.Should().Be("lark_chats_lookup");
         lookupTool.Description.Should().Contain("Search Lark chats");
@@ -235,6 +268,54 @@ public sealed class LarkCoverageTests
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> ReplyToMessageAsync(string token, LarkReplyMessageRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> CreateMessageReactionAsync(string token, LarkMessageReactionRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> ListMessageReactionsAsync(string token, LarkMessageReactionListRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"items":[]}}""");
+        }
+
+        public Task<string> DeleteMessageReactionAsync(string token, LarkMessageReactionDeleteRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"items":[],"count":0}}""");
+        }
+
+        public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"items":[]}}""");
         }
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)

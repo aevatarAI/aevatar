@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -51,6 +52,8 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var registration = await ResolveRegistrationAsync(activity, ct);
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
+
+        _ = TrySendImmediateLarkReactionAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
@@ -510,9 +513,11 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             authPrincipal: "bot");
     }
 
-    private static IReadOnlyDictionary<string, string> BuildReplyMetadata(ChannelInboundEvent inboundEvent)
+    private static IReadOnlyDictionary<string, string> BuildReplyMetadata(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity? activity = null)
     {
-        return new Dictionary<string, string>(StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
@@ -522,6 +527,12 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.MessageId] = inboundEvent.MessageId,
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
+
+        var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
+        if (!string.IsNullOrWhiteSpace(platformMessageId))
+            metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
+
+        return metadata;
     }
 
     private static IReadOnlyDictionary<string, string> BuildAgentBuilderMetadata(
@@ -529,7 +540,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelInboundEvent inboundEvent,
         string? userAccessToken)
     {
-        var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent), StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent, activity), StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
@@ -622,7 +633,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-        foreach (var pair in BuildReplyMetadata(inboundEvent))
+        foreach (var pair in BuildReplyMetadata(inboundEvent, activity))
             request.Metadata[pair.Key] = pair.Value;
 
         return request;
@@ -697,6 +708,142 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase)
             ? "lark"
             : platform;
+    }
+
+    private async Task TrySendImmediateLarkReactionAsync(
+        ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
+        CancellationToken ct)
+    {
+        if (!ShouldSendImmediateLarkReaction(activity, registration, out var accessToken, out var providerSlug, out var platformMessageId))
+            return;
+
+        try
+        {
+            var response = await _nyxClient.ProxyRequestAsync(
+                accessToken!,
+                providerSlug!,
+                $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions",
+                "POST",
+                """{"reaction_type":{"emoji_type":"OK"}}""",
+                null,
+                ct);
+
+            if (TryGetProxyError(response, out var detail))
+            {
+                _logger.LogWarning(
+                    "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, detail={Detail}",
+                    providerSlug,
+                    platformMessageId,
+                    detail);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Immediate Lark acknowledgment reaction threw: provider={ProviderSlug}, message={MessageId}",
+                providerSlug,
+                platformMessageId);
+        }
+    }
+
+    private static bool ShouldSendImmediateLarkReaction(
+        ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
+        out string? accessToken,
+        out string? providerSlug,
+        out string? platformMessageId)
+    {
+        accessToken = null;
+        providerSlug = null;
+        platformMessageId = null;
+
+        if (activity.Type != ActivityType.Message)
+            return false;
+
+        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform) ??
+                       NormalizeOptional(registration.Platform) ??
+                       NormalizeOptional(activity.ChannelId?.Value);
+        if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        accessToken = NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
+        providerSlug = NormalizeOptional(registration.NyxProviderSlug);
+        platformMessageId = NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId);
+
+        return !string.IsNullOrWhiteSpace(accessToken) &&
+               !string.IsNullOrWhiteSpace(providerSlug) &&
+               !string.IsNullOrWhiteSpace(platformMessageId) &&
+               platformMessageId.StartsWith("om_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetProxyError(string? response, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("error", out var errorProperty))
+            {
+                if (errorProperty.ValueKind == JsonValueKind.True)
+                {
+                    detail = TryReadJsonString(root, "message") ??
+                             TryReadJsonString(root, "body") ??
+                             "proxy_error";
+                    return true;
+                }
+
+                if (errorProperty.ValueKind == JsonValueKind.String)
+                {
+                    var error = errorProperty.GetString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        detail = error;
+                        return true;
+                    }
+                }
+            }
+
+            if (root.TryGetProperty("code", out var codeProperty) &&
+                codeProperty.ValueKind == JsonValueKind.Number &&
+                codeProperty.TryGetInt32(out var code) &&
+                code != 0)
+            {
+                detail = TryReadJsonString(root, "msg") ?? $"code={code}";
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore invalid bodies for best-effort acknowledgment.
+        }
+
+        return false;
+    }
+
+    private static string? TryReadJsonString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var value = property.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static ConversationTurnResult ToRelayFailure(EmitResult emit)
