@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Xunit;
 
@@ -52,7 +54,30 @@ public sealed class NyxRelayAgentBuilderFlowTests
         body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
         body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
         body.RootElement.GetProperty("github_username").GetString().Should().Be("eanzhao");
+        body.RootElement.GetProperty("save_github_username_preference").GetBoolean().Should().BeTrue();
+        body.RootElement.GetProperty("run_immediately").GetBoolean().Should().BeTrue();
         body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_8a70aeefbdb4340e1fa5f575b4c794eb");
+    }
+
+    [Fact]
+    public void TryResolve_ShouldNotRequestPreferenceSave_WhenDailyHasNoUsername()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            ConversationId = "oc_default_daily",
+            Text = "/daily",
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeTrue();
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
+        body.RootElement.GetProperty("save_github_username_preference").GetBoolean().Should().BeFalse();
     }
 
     [Theory]
@@ -145,9 +170,11 @@ public sealed class NyxRelayAgentBuilderFlowTests
             }
             """);
 
-        result.Should().Contain("Current agents:");
-        result.Should().Contain("agent-1: template=daily_report, status=running");
-        result.Should().Contain("/agent-status <agent_id>");
+        result.Actions.Should().BeEmpty();
+        result.Cards.Should().BeEmpty();
+        result.Text.Should().Contain("Current agents:");
+        result.Text.Should().Contain("agent-1: template=daily_report, status=running");
+        result.Text.Should().Contain("/agent-status <agent_id>");
     }
 
     [Fact]
@@ -236,5 +263,83 @@ public sealed class NyxRelayAgentBuilderFlowTests
 
         matched.Should().BeFalse();
         decision.Should().BeNull();
+    }
+
+    [Fact]
+    public void FormatToolResult_ShouldReturnCardForm_WhenCredentialsRequired()
+    {
+        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
+        var toolResultJson = JsonSerializer.Serialize(new
+        {
+            status = "credentials_required",
+            template = "daily_report",
+            provider_id = "p-github",
+            note = "Could not resolve github_username. Provide github_username explicitly, save a default preference, or reconnect GitHub in NyxID.",
+        });
+
+        var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResultJson);
+
+        result.Actions.Should().NotBeEmpty();
+        result.Actions.Any(action => action.Kind == ActionElementKind.TextInput && action.ActionId == "github_username")
+            .Should().BeTrue();
+        result.Actions.Any(action => action.Kind == ActionElementKind.FormSubmit && action.ActionId == "submit_daily_report")
+            .Should().BeTrue();
+        result.Cards.Should().HaveCount(1);
+        result.Cards[0].Title.Should().Be("Create Daily Report Agent");
+        result.Cards[0].Text.Should().Contain("GitHub credentials required");
+        result.Cards[0].Text.Should().Contain("p-github");
+        result.Text.Should().NotBeEmpty();
+        result.Text.Should().Contain("GitHub credentials required");
+    }
+
+    [Fact]
+    public void FormatToolResult_ShouldAckImmediateRun_WithSavedPreference()
+    {
+        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
+        var toolResultJson = JsonSerializer.Serialize(new
+        {
+            status = "created",
+            agent_id = "skill-runner-1ba2e9f3",
+            agent_type = "skill_runner",
+            template = "daily_report",
+            github_username = "eanzhao",
+            github_username_preference_saved = true,
+            run_immediately_triggered = true,
+            next_scheduled_run = "2026-04-25T09:00:00+00:00",
+            conversation_id = "oc_default_daily",
+        });
+
+        var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResultJson);
+
+        result.Actions.Should().BeEmpty();
+        result.Cards.Should().BeEmpty();
+        result.Text.Should().Contain("Daily report scheduled for `eanzhao`");
+        result.Text.Should().Contain("Running first report now");
+        result.Text.Should().Contain("I'll reply with the results shortly");
+        result.Text.Should().Contain("Saved `eanzhao` as your default GitHub username");
+        result.Text.Should().Contain("Next scheduled run: 2026-04-25T09:00:00+00:00");
+        result.Text.Should().Contain("skill-runner-1ba2e9f3");
+    }
+
+    [Fact]
+    public void FormatToolResult_ShouldNotMentionSavedPreference_WhenSaveNotRequested()
+    {
+        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
+        var toolResultJson = JsonSerializer.Serialize(new
+        {
+            status = "created",
+            agent_id = "skill-runner-1",
+            template = "daily_report",
+            github_username = "eanzhao",
+            github_username_preference_saved = false,
+            run_immediately_triggered = true,
+            next_scheduled_run = "2026-04-25T09:00:00+00:00",
+        });
+
+        var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResultJson);
+
+        result.Text.Should().Contain("Daily report scheduled for `eanzhao`");
+        result.Text.Should().Contain("Running first report now");
+        result.Text.Should().NotContain("as your default GitHub username");
     }
 }

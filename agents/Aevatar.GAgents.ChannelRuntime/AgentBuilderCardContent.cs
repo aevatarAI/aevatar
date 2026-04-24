@@ -1,0 +1,267 @@
+using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
+
+namespace Aevatar.GAgents.ChannelRuntime;
+
+/// <summary>
+/// Builds channel-neutral <see cref="MessageContent"/> payloads for the Day One agent builder flow.
+/// Actions and CardBlocks let the platform composer render native interactive cards instead of
+/// bouncing a pre-serialized JSON blob through a plain-text fallback.
+/// </summary>
+internal static class AgentBuilderCardContent
+{
+    private const string DailyReportAction = "create_daily_report";
+    private const string SocialMediaAction = "create_social_media";
+    private const string DefaultScheduleTime = "09:00";
+
+    public static MessageContent BuildDailyReportForm(string? preferredGithubUsername)
+    {
+        var savedNote = string.IsNullOrWhiteSpace(preferredGithubUsername)
+            ? string.Empty
+            : $"\n\nSaved GitHub username: `{preferredGithubUsername}`. Leave the field blank to reuse it.";
+
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = "daily_report_intro",
+            Title = "Create Daily Report Agent",
+            Text =
+                "**Day One template:** Daily GitHub report\n" +
+                "Fill in the fields below. The agent will run once now and then repeat every day at your chosen local time." +
+                savedNote,
+        });
+
+        content.Actions.Add(BuildTextInput(
+            "github_username",
+            "GitHub Username",
+            preferredGithubUsername ?? "alice"));
+        content.Actions.Add(BuildTextInput(
+            "repositories",
+            "Repositories (Optional)",
+            "owner/repo, owner/repo"));
+        content.Actions.Add(BuildTextInput(
+            "schedule_time",
+            "Daily Time (HH:mm)",
+            DefaultScheduleTime));
+        content.Actions.Add(BuildTextInput(
+            "schedule_timezone",
+            "Time Zone",
+            SkillRunnerDefaults.DefaultTimezone));
+
+        var submit = BuildFormSubmit(
+            "submit_daily_report",
+            "Create Agent",
+            isPrimary: true);
+        submit.Arguments["agent_builder_action"] = DailyReportAction;
+        submit.Arguments["run_immediately"] = "true";
+        content.Actions.Add(submit);
+
+        return content;
+    }
+
+    public static MessageContent BuildSocialMediaForm()
+    {
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = "social_media_intro",
+            Title = "Create Social Media Agent",
+            Text =
+                "**Workflow-backed template:** Social media draft + approval\n" +
+                "Fill in the fields below. Each scheduled run will generate one draft and send approval instructions into this Feishu private chat.",
+        });
+
+        content.Actions.Add(BuildTextInput(
+            "topic",
+            "Topic",
+            "Launch update for the new workflow feature"));
+        content.Actions.Add(BuildTextInput(
+            "audience",
+            "Audience (Optional)",
+            "Developers and technical founders"));
+        content.Actions.Add(BuildTextInput(
+            "style",
+            "Style (Optional)",
+            "Confident, concise, product-focused"));
+        content.Actions.Add(BuildTextInput(
+            "schedule_time",
+            "Daily Time (HH:mm)",
+            DefaultScheduleTime));
+        content.Actions.Add(BuildTextInput(
+            "schedule_timezone",
+            "Time Zone",
+            SkillRunnerDefaults.DefaultTimezone));
+
+        var submit = BuildFormSubmit(
+            "submit_social_media",
+            "Create Agent",
+            isPrimary: true);
+        submit.Arguments["agent_builder_action"] = SocialMediaAction;
+        submit.Arguments["run_immediately"] = "true";
+        content.Actions.Add(submit);
+
+        return content;
+    }
+
+    /// <summary>
+    /// Builds the post-tool acknowledgment for the Day One daily report creation flow.
+    /// The tool response returns GitHub username, preference-save status, and run_immediately trigger
+    /// status, which this method folds into a short text reply that leads with "running now" when
+    /// the schedule fired the first report, so the user knows a report is on the way.
+    /// </summary>
+    public static MessageContent FormatDailyReportToolReply(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return TextContent($"Create daily report agent failed: {error}");
+
+        var status = TryReadString(root, "status") ?? "accepted";
+        if (string.Equals(status, "credentials_required", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildDailyReportCredentialsCard(root, status);
+        }
+
+        var agentId = TryReadString(root, "agent_id") ?? "unknown-agent";
+        var githubUsername = TryReadString(root, "github_username");
+        var savedPreference = TryReadBool(root, "github_username_preference_saved");
+        var runImmediatelyTriggered = TryReadBool(root, "run_immediately_triggered");
+        var nextRun = TryReadString(root, "next_scheduled_run") ?? "pending";
+
+        var headline = runImmediatelyTriggered
+            ? (string.IsNullOrWhiteSpace(githubUsername)
+                ? "Daily report scheduled. Running first report now — I'll reply with the results shortly."
+                : $"Daily report scheduled for `{githubUsername}`. Running first report now — I'll reply with the results shortly.")
+            : (string.IsNullOrWhiteSpace(githubUsername)
+                ? "Daily report scheduled."
+                : $"Daily report scheduled for `{githubUsername}`.");
+
+        var lines = new List<string> { headline };
+        if (savedPreference && !string.IsNullOrWhiteSpace(githubUsername))
+            lines.Add($"Saved `{githubUsername}` as your default GitHub username.");
+
+        lines.Add($"Next scheduled run: {nextRun}");
+        lines.Add($"Agent ID: {agentId}");
+
+        var note = TryReadOptional(root, "note");
+        if (note is not null)
+            lines.Add(note);
+
+        lines.Add($"Next commands: /agents, /agent-status {agentId}, /run-agent {agentId}");
+
+        return TextContent(string.Join('\n', lines));
+    }
+
+    private static MessageContent BuildDailyReportCredentialsCard(JsonElement root, string status)
+    {
+        var providerId = TryReadString(root, "provider_id") ?? "unknown-provider";
+        var url = TryReadString(root, "authorization_url")
+                  ?? TryReadString(root, "auth_url")
+                  ?? TryReadString(root, "url")
+                  ?? TryReadString(root, "documentation_url");
+        var note = TryReadString(root, "note")
+                   ?? "Enter your GitHub username below — I'll save it as your default and run the report immediately.";
+        var heading = string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase)
+            ? "GitHub authorization required."
+            : "GitHub credentials required.";
+
+        var content = BuildDailyReportForm(preferredGithubUsername: null);
+        // Replace the intro card with a context-specific description so the user knows why the form
+        // popped up and where to authorize GitHub when the provider returned an auth URL.
+        content.Cards.Clear();
+
+        var descriptionLines = new List<string>
+        {
+            $"**{heading}**",
+            note,
+            $"Provider ID: `{providerId}`",
+        };
+        if (!string.IsNullOrWhiteSpace(url))
+            descriptionLines.Add($"Open: {url}");
+        descriptionLines.Add("Or just reply with `/daily <github_username>` — I'll save it and run the report now.");
+
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = "daily_report_credentials",
+            Title = "Create Daily Report Agent",
+            Text = string.Join('\n', descriptionLines),
+        });
+
+        // Plain-text fallback for channels that cannot render the card.
+        var fallbackLines = new List<string>
+        {
+            heading,
+            note,
+            $"Provider ID: {providerId}",
+        };
+        if (!string.IsNullOrWhiteSpace(url))
+            fallbackLines.Add($"Open: {url}");
+        fallbackLines.Add("Reply with `/daily <github_username>` — I'll save it and run the report immediately.");
+
+        content.Text = string.Join('\n', fallbackLines);
+        return content;
+    }
+
+    private static ActionElement BuildTextInput(string actionId, string label, string placeholder) =>
+        new()
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = actionId,
+            Label = label,
+            Placeholder = placeholder,
+        };
+
+    private static ActionElement BuildFormSubmit(string actionId, string label, bool isPrimary) =>
+        new()
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = actionId,
+            Label = label,
+            IsPrimary = isPrimary,
+        };
+
+    private static MessageContent TextContent(string text) => new() { Text = text };
+
+    private static bool TryReadError(JsonElement root, out string error)
+    {
+        error = TryReadString(root, "error") ?? string.Empty;
+        return error.Length > 0;
+    }
+
+    private static string? TryReadString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+            return null;
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.String => property.GetString(),
+            JsonValueKind.Number => property.GetRawText(),
+            JsonValueKind.True => bool.TrueString,
+            JsonValueKind.False => bool.FalseString,
+            _ => null,
+        };
+    }
+
+    private static bool TryReadBool(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+            return false;
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => bool.TryParse(property.GetString(), out var parsed) && parsed,
+            _ => false,
+        };
+    }
+
+    private static string? TryReadOptional(JsonElement element, string propertyName)
+    {
+        var raw = TryReadString(element, propertyName);
+        return string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
+    }
+}

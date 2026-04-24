@@ -261,7 +261,8 @@ public sealed class AgentBuilderTool : IAgentTool
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
 
-        if (args.Bool("run_immediately") == true)
+        var runImmediatelyRequested = args.Bool("run_immediately") == true;
+        if (runImmediatelyRequested)
             await actor.HandleEventAsync(
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
@@ -274,12 +275,13 @@ public sealed class AgentBuilderTool : IAgentTool
             entry => string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
                      string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
             ct,
-            maxAttempts: args.Bool("run_immediately") == true ? 20 : 10);
+            maxAttempts: runImmediatelyRequested ? 20 : 10);
 
-        await SaveGithubUsernamePreferenceIfRequestedAsync(
+        var savePreferenceRequested = args.Bool("save_github_username_preference") == true;
+        var preferenceSaved = await SaveGithubUsernamePreferenceIfRequestedAsync(
             configScopeId,
             githubUsernameResolution.GithubUsername ?? string.Empty,
-            args.Bool("save_github_username_preference") == true,
+            savePreferenceRequested,
             ct);
 
         return JsonSerializer.Serialize(new
@@ -288,6 +290,9 @@ public sealed class AgentBuilderTool : IAgentTool
             agent_id = agentId,
             agent_type = SkillRunnerDefaults.AgentType,
             template = templateSpec.TemplateName,
+            github_username = githubUsernameResolution.GithubUsername,
+            github_username_preference_saved = preferenceSaved,
+            run_immediately_triggered = runImmediatelyRequested,
             next_scheduled_run = nextRunAtUtc,
             conversation_id = conversationId,
             api_key_id = apiKeyId,
@@ -1251,22 +1256,23 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
-    private async Task SaveGithubUsernamePreferenceIfRequestedAsync(
+    private async Task<bool> SaveGithubUsernamePreferenceIfRequestedAsync(
         string scopeId,
         string githubUsername,
         bool shouldSave,
         CancellationToken ct)
     {
         if (!shouldSave || string.IsNullOrWhiteSpace(githubUsername))
-            return;
+            return false;
 
         var commandService = _serviceProvider.GetService<IUserConfigCommandService>();
         if (commandService is null)
-            return;
+            return false;
 
         try
         {
             await commandService.SaveGithubUsernameAsync(scopeId, githubUsername, ct);
+            return true;
         }
         catch (OperationCanceledException)
         {
@@ -1274,6 +1280,7 @@ public sealed class AgentBuilderTool : IAgentTool
         }
         catch
         {
+            return false;
         }
     }
 

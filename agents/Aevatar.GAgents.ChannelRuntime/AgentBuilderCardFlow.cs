@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
@@ -241,7 +242,7 @@ internal static class AgentBuilderCardFlow
         }
     }
 
-    public static string FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
+    public static MessageContent FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
@@ -250,23 +251,28 @@ internal static class AgentBuilderCardFlow
             using var doc = JsonDocument.Parse(toolResultJson);
             return decision.ToolAction switch
             {
-                DailyReportAction => FormatCreateDailyReportResult(doc.RootElement),
-                SocialMediaAction => FormatCreateSocialMediaResult(doc.RootElement),
-                ListTemplatesAction => FormatListTemplatesResult(doc.RootElement),
-                ListAgentsAction => FormatListAgentsResult(doc.RootElement),
-                AgentStatusAction => FormatAgentStatusResult(doc.RootElement),
-                RunAgentAction => FormatRunAgentResult(doc.RootElement),
-                DisableAgentAction => FormatDisableAgentResult(doc.RootElement),
-                EnableAgentAction => FormatEnableAgentResult(doc.RootElement),
-                DeleteAgentAction => FormatDeleteAgentResult(doc.RootElement),
-                _ => toolResultJson,
+                // Daily report creation uses the shared formatter so Nyx-relay slash commands and
+                // Feishu card-action submits render the same "running now, I'll reply when done"
+                // acknowledgment instead of one path dumping the legacy JSON card as text.
+                DailyReportAction => AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement),
+                SocialMediaAction => ToTextContent(FormatCreateSocialMediaResult(doc.RootElement)),
+                ListTemplatesAction => ToTextContent(FormatListTemplatesResult(doc.RootElement)),
+                ListAgentsAction => ToTextContent(FormatListAgentsResult(doc.RootElement)),
+                AgentStatusAction => ToTextContent(FormatAgentStatusResult(doc.RootElement)),
+                RunAgentAction => ToTextContent(FormatRunAgentResult(doc.RootElement)),
+                DisableAgentAction => ToTextContent(FormatDisableAgentResult(doc.RootElement)),
+                EnableAgentAction => ToTextContent(FormatEnableAgentResult(doc.RootElement)),
+                DeleteAgentAction => ToTextContent(FormatDeleteAgentResult(doc.RootElement)),
+                _ => ToTextContent(toolResultJson),
             };
         }
         catch (JsonException)
         {
-            return toolResultJson;
+            return ToTextContent(toolResultJson);
         }
     }
+
+    private static MessageContent ToTextContent(string text) => new() { Text = text };
 
     public static string ResolveToolChatType(ChannelInboundEvent evt)
     {
@@ -1506,10 +1512,22 @@ internal sealed record AgentBuilderFlowDecision(
     bool RequiresToolExecution,
     string ReplyPayload,
     string? ToolArgumentsJson,
-    string? ToolAction)
+    string? ToolAction,
+    MessageContent? ReplyContent = null)
 {
     public static AgentBuilderFlowDecision DirectReply(string replyPayload) =>
         new(false, replyPayload, null, null);
+
+    public static AgentBuilderFlowDecision DirectReply(MessageContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return new AgentBuilderFlowDecision(
+            RequiresToolExecution: false,
+            ReplyPayload: string.IsNullOrWhiteSpace(content.Text) ? string.Empty : content.Text,
+            ToolArgumentsJson: null,
+            ToolAction: null,
+            ReplyContent: content);
+    }
 
     public static AgentBuilderFlowDecision ToolCall(string toolAction, string argumentsJson) =>
         new(true, string.Empty, argumentsJson, toolAction);
