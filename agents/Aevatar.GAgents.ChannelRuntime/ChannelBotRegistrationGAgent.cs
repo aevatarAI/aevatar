@@ -52,7 +52,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
-            CredentialRef = cmd.CredentialRef ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 

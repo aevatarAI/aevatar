@@ -55,6 +55,9 @@ public sealed class NyxIdRelayTransport
         var timestamp = ParseTimestamp(payload.Timestamp);
         var botId = payload.Agent?.ApiKeyId?.Trim();
         var platformMessageId = ResolvePlatformMessageId(payload, platform);
+        var correlationId = string.IsNullOrWhiteSpace(payload.CorrelationId)
+            ? payload.MessageId.Trim()
+            : payload.CorrelationId.Trim();
 
         var activity = new ChatActivity
         {
@@ -85,7 +88,7 @@ public sealed class NyxIdRelayTransport
             OutboundDelivery = new OutboundDeliveryContext
             {
                 ReplyMessageId = payload.MessageId.Trim(),
-                ReplyAccessToken = payload.ReplyToken?.Trim() ?? string.Empty,
+                CorrelationId = correlationId,
             },
             TransportExtras = new TransportExtras
             {

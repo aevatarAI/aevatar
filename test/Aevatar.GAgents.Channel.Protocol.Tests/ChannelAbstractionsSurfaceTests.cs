@@ -99,13 +99,12 @@ public sealed class ChannelAbstractionsSurfaceTests
                 ChannelId.From("slack"),
                 BotInstanceId.From("ops-bot"),
                 "scope-1"),
-            "vault://bots/ops-bot",
             "verify-me");
         var authContext = AuthContext.OnBehalfOfUser("vault://users/u1", "U1");
 
-        (await provider.ResolveBotCredentialAsync(binding)).ShouldBe("secret:vault://bots/ops-bot");
         (await provider.ResolveUserCredentialAsync(authContext)).ShouldBe("secret:vault://users/u1");
-        provider.ResolvedRefs.ShouldBe(["vault://bots/ops-bot", "vault://users/u1"]);
+        binding.VerificationToken.ShouldBe("verify-me");
+        provider.ResolvedRefs.ShouldBe(["vault://users/u1"]);
     }
 
     [Fact]

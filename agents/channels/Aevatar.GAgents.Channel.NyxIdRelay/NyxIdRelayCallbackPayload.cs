@@ -17,6 +17,9 @@ public sealed class NyxIdRelayCallbackPayload
     [JsonPropertyName("reply_token")]
     public string? ReplyToken { get; set; }
 
+    [JsonPropertyName("correlation_id")]
+    public string? CorrelationId { get; set; }
+
     [JsonPropertyName("reply_to_platform_message_id")]
     public string? ReplyToPlatformMessageId { get; set; }
 
