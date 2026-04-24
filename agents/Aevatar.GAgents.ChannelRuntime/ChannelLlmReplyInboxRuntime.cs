@@ -4,6 +4,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.NyxidChat;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -21,7 +23,9 @@ internal sealed class ChannelLlmReplyInboxRuntime :
     private readonly IActorRuntime _actorRuntime;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
-    private readonly NyxIdRelayOptions? _relayOptions;
+    private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
+    private readonly INyxIdRelayScopeResolver? _scopeResolver;
+    private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly ILogger<ChannelLlmReplyInboxRuntime> _logger;
     private IAsyncDisposable? _subscription;
 
@@ -30,14 +34,18 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         IActorRuntime actorRuntime,
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
-        NyxIdRelayOptions? relayOptions,
-        ILogger<ChannelLlmReplyInboxRuntime> logger)
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
+        ILogger<ChannelLlmReplyInboxRuntime> logger,
+        INyxIdRelayScopeResolver? scopeResolver = null,
+        IUserConfigQueryPort? userConfigQueryPort = null)
     {
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
+        _scopeResolver = scopeResolver;
+        _userConfigQueryPort = userConfigQueryPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -131,7 +139,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
 
         try
         {
-            var effectiveMetadata = BuildEffectiveMetadata(request);
+            var effectiveMetadata = await BuildEffectiveMetadataAsync(request, CancellationToken.None);
             IDisposable? interactiveReplyScope = null;
             try
             {
@@ -202,16 +210,99 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         await actor.HandleEventAsync(envelope, CancellationToken.None);
     }
 
-    private IReadOnlyDictionary<string, string> BuildEffectiveMetadata(NeedsLlmReplyEvent request)
+    private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
+        NeedsLlmReplyEvent request,
+        CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
-        var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
-        if (string.IsNullOrWhiteSpace(userAccessToken))
-            return metadata;
 
-        metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
-        metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
+        // Apply the bot owner's pre-configured LLM route + model. The relay callback
+        // identifies the bot by api_key_id (in activity.Bot.Value); we resolve that to
+        // the owner's Aevatar scope id and load the same UserConfig the owner uses
+        // when chatting through nyxid-chat themselves, then pin ModelOverride /
+        // NyxIdRoutePreference / MaxToolRoundsOverride from that configuration.
+        await ApplyBotOwnerLlmConfigAsync(request, metadata, ct);
+
+        // The inbound callback's X-NyxID-User-Token is the bot owner's NyxID session
+        // JWT (freshly issued by NyxID for each callback). It is the bot owner's own
+        // credential for LLM calls — the same thing that would authorize them in
+        // nyxid-chat. The short TTL (~15 min) is mitigated by the direct-enqueue
+        // dispatch (#380), the inbox-echoed token flow (#383), and the stale pending
+        // request GC, so the token is still valid when the LLM call actually fires
+        // for any non-stale request. If the downstream provider rejects it, the
+        // classifier surfaces a real user-facing error via NyxIdRelayErrorClassifier.
+        var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
+        if (!string.IsNullOrWhiteSpace(userAccessToken))
+        {
+            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
+            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
+        }
+
         return metadata;
+    }
+
+    private async Task ApplyBotOwnerLlmConfigAsync(
+        NeedsLlmReplyEvent request,
+        IDictionary<string, string> metadata,
+        CancellationToken ct)
+    {
+        if (_scopeResolver is null || _userConfigQueryPort is null)
+            return;
+
+        var apiKeyId = request.Activity?.Bot?.Value?.Trim();
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+            return;
+
+        string? scopeId;
+        try
+        {
+            scopeId = await _scopeResolver.ResolveScopeIdByApiKeyAsync(apiKeyId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve bot owner scope id for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                request.CorrelationId,
+                apiKeyId);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(scopeId))
+        {
+            _logger.LogDebug(
+                "No bot owner scope id resolved for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                request.CorrelationId,
+                apiKeyId);
+            return;
+        }
+
+        try
+        {
+            var config = await _userConfigQueryPort.GetAsync(scopeId, ct);
+            if (!string.IsNullOrWhiteSpace(config.DefaultModel))
+                metadata[LLMRequestMetadataKeys.ModelOverride] = config.DefaultModel.Trim();
+            if (!string.IsNullOrWhiteSpace(config.PreferredLlmRoute))
+                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = config.PreferredLlmRoute.Trim();
+            if (config.MaxToolRounds > 0)
+                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] =
+                    config.MaxToolRounds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            _logger.LogInformation(
+                "Applied bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId} model={Model} route={Route}",
+                request.CorrelationId,
+                scopeId,
+                string.IsNullOrWhiteSpace(config.DefaultModel) ? "<server-default>" : config.DefaultModel,
+                string.IsNullOrWhiteSpace(config.PreferredLlmRoute) ? "<server-default>" : config.PreferredLlmRoute);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to load bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId}",
+                request.CorrelationId,
+                scopeId);
+        }
     }
 
     private static bool IsRelayRequest(NeedsLlmReplyEvent request) =>
