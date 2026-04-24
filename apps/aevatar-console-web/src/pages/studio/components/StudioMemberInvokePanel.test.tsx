@@ -103,6 +103,8 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Member')).toBeTruthy();
     expect(screen.getByText('Binding Context')).toBeTruthy();
     expect(screen.getByText('Revision')).toBeTruthy();
+    expect(screen.getByText('已就绪')).toBeTruthy();
+    expect(screen.queryByText('缺少提示词')).toBeNull();
     expect(screen.getByText('结果')).toBeTruthy();
     expect(screen.getByText('追踪')).toBeTruthy();
     expect(screen.getByText('原始')).toBeTruthy();
@@ -147,6 +149,8 @@ describe('StudioMemberInvokePanel', () => {
 
     expect(await screen.findByText('请输入提示词后再开始对话。')).toBeTruthy();
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(screen.getByText('已就绪')).toBeTruthy();
+    expect(screen.queryByText('缺少提示词')).toBeNull();
     expect(screen.getByText('当前结果')).toBeTruthy();
     expect(
       screen.getByText('还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。'),

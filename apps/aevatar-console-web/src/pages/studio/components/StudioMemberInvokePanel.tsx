@@ -257,19 +257,16 @@ function getCurrentResultStatusStyle(
 function getContractStatusLabel(options: {
   hasEndpoint: boolean;
   hasMember: boolean;
-  hasPrompt: boolean;
-  hasTypedPayload: boolean;
-  isChatEndpoint: boolean;
 }): string {
-  if (!options.hasMember || !options.hasEndpoint) {
+  if (!options.hasMember) {
     return '未选中成员';
   }
 
-  if (options.isChatEndpoint) {
-    return options.hasPrompt ? '就绪' : '缺少提示词';
+  if (!options.hasEndpoint) {
+    return '缺少端点';
   }
 
-  return options.hasPrompt || options.hasTypedPayload ? '就绪' : '待输入';
+  return '已就绪';
 }
 
 const surfaceStyle: React.CSSProperties = {
@@ -609,9 +606,6 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentContractStatusLabel = getContractStatusLabel({
     hasEndpoint: Boolean(selectedEndpoint),
     hasMember: Boolean(selectedService),
-    hasPrompt: Boolean(prompt.trim()),
-    hasTypedPayload: Boolean(payloadBase64.trim()),
-    isChatEndpoint,
   });
   const currentRawOutput = useMemo(() => {
     if (invokeResult.responseJson) {
@@ -1520,7 +1514,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             layoutMode="document"
             padding={10}
             title="调用契约"
-            titleHelp="这里只保留当前调用对象和选择状态，不展示运行结果。"
+            titleHelp="这里只保留当前调用对象和契约准备状态，不展示运行结果，也不读取输入校验。"
           >
             <div style={contractGridStyle}>
               <div style={contractFieldStyle}>
@@ -1529,7 +1523,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   style={{
                     ...contractStatusPillBaseStyle,
                     ...getCurrentResultStatusStyle(
-                      currentContractStatusLabel === '就绪' ? 'success' : 'idle',
+                      currentContractStatusLabel === '已就绪' ? 'success' : 'idle',
                     ),
                   }}
                 >
