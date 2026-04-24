@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -137,7 +138,7 @@ public sealed class ConversationGAgentDedupTests
                 new OutboundDeliveryContext
                 {
                     ReplyMessageId = "relay-msg-1",
-                    ReplyAccessToken = "relay-token-1",
+                    CorrelationId = "corr-relay-1",
                 }),
         };
         var (agent, store) = CreateAgent(runner, "conv-relay");
@@ -255,6 +256,94 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_NeverPersistsReplyTokenIntoEventStore()
+    {
+        // Issue #366 §4 invariant: relay reply_token must stay actor-owned runtime state.
+        // The transient inbox envelope NyxRelayInboundActivity carries the token across the
+        // dispatch boundary, but the actor must not write it into any persisted event payload.
+        const string sentinelReplyToken = "sentinel-reply-token-9f3c5b2e-must-not-persist";
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+            LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+                "sent:" + reply.CorrelationId,
+                new MessageContent { Text = "ack" },
+                "bot",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = reply.Activity?.OutboundDelivery?.ReplyMessageId ?? string.Empty,
+                    CorrelationId = reply.CorrelationId,
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-relay-token-leak");
+
+        var inboundActivity = CreateActivity("act-relay-leak", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-leak",
+            CorrelationId = "corr-relay-leak",
+        };
+        var relayInbound = new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            CorrelationId = "corr-relay-leak",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(relayInbound);
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-relay-leak",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = inboundActivity.Clone(),
+            Outbound = new MessageContent { Text = "reply-from-llm" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        });
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldNotBeEmpty();
+        var sentinelBytes = Encoding.UTF8.GetBytes(sentinelReplyToken);
+        foreach (var record in events)
+        {
+            var payloadBytes = record.EventData?.Value?.ToByteArray() ?? Array.Empty<byte>();
+            ContainsSubsequence(payloadBytes, sentinelBytes)
+                .ShouldBeFalse($"persisted event {record.EventType} must not contain reply_token bytes");
+        }
+    }
+
+    private static bool ContainsSubsequence(byte[] haystack, byte[] needle)
+    {
+        if (needle.Length == 0 || haystack.Length < needle.Length)
+            return false;
+        for (var i = 0; i <= haystack.Length - needle.Length; i++)
+        {
+            var match = true;
+            for (var j = 0; j < needle.Length; j++)
+            {
+                if (haystack[i + j] != needle[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match)
+                return true;
+        }
+        return false;
+    }
+
+    [Fact]
     public async Task HandleContinueCommandAsync_PermanentFailure_MarksCommandProcessed()
     {
         // Terminal (non-retryable) continue failures consume the command id so a buggy caller's
@@ -367,7 +456,10 @@ public sealed class ConversationGAgentDedupTests
         public Func<LlmReplyReadyEvent, ConversationTurnResult>? LlmReplyResultFactory { get; set; }
         public Func<ConversationContinueRequestedEvent, ConversationTurnResult>? ContinueResultFactory { get; set; }
 
-        public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct)
+        public Task<ConversationTurnResult> RunInboundAsync(
+            ChatActivity activity,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
         {
             Interlocked.Increment(ref InboundCount);
             var result = InboundResultFactory is null
@@ -376,7 +468,10 @@ public sealed class ConversationGAgentDedupTests
             return Task.FromResult(result);
         }
 
-        public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct)
+        public Task<ConversationTurnResult> RunLlmReplyAsync(
+            LlmReplyReadyEvent reply,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
         {
             Interlocked.Increment(ref LlmReplyCount);
             var result = LlmReplyResultFactory is null

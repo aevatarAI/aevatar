@@ -204,7 +204,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 outboundDelivery: new OutboundDeliveryContext
                 {
                     ReplyMessageId = "relay-msg-1",
-                    ReplyAccessToken = "relay-token-1",
+                    CorrelationId = "corr-relay-1",
                 },
                 transportExtras: new TransportExtras
                 {
@@ -231,10 +231,8 @@ public sealed class ChannelConversationTurnRunnerTests
     {
         var stale = BuildRegistrationEntry("reg-old");
         stale.NyxAgentApiKeyId = "nyx-key-1";
-        stale.CredentialRef = "vault://old";
         var fresh = BuildRegistrationEntry("reg-new");
         fresh.NyxAgentApiKeyId = "nyx-key-1";
-        fresh.CredentialRef = "vault://new";
 
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         registrationQueryPort.QueryAllAsync(Arg.Any<CancellationToken>())
@@ -256,7 +254,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 outboundDelivery: new OutboundDeliveryContext
                 {
                     ReplyMessageId = "relay-msg-1",
-                    ReplyAccessToken = "relay-token-1",
+                    CorrelationId = "corr-relay-1",
                 },
                 transportExtras: new TransportExtras
                 {
@@ -303,7 +301,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 outboundDelivery: new OutboundDeliveryContext
                 {
                     ReplyMessageId = "relay-msg-1",
-                    ReplyAccessToken = "relay-token-1",
+                    CorrelationId = "corr-relay-1",
                 },
                 transportExtras: new TransportExtras
                 {
@@ -570,7 +568,7 @@ public sealed class ChannelConversationTurnRunnerTests
             new OutboundDeliveryContext
             {
                 ReplyMessageId = "relay-msg-1",
-                ReplyAccessToken = "relay-token-1",
+                CorrelationId = "corr-relay-1",
             },
             new TransportExtras
             {
@@ -578,16 +576,19 @@ public sealed class ChannelConversationTurnRunnerTests
                 NyxUserAccessToken = "user-token-1",
             });
 
-        var result = await runner.RunLlmReplyAsync(new LlmReplyReadyEvent
-        {
-            CorrelationId = "corr-relay-1",
-            RegistrationId = "reg-1",
-            SourceActorId = "llm-worker-1",
-            Activity = activity,
-            Outbound = new MessageContent { Text = "relay reply" },
-            TerminalState = LlmReplyTerminalState.Completed,
-            ReadyAtUnixMs = 42,
-        }, CancellationToken.None);
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-1",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "relay reply" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-1"),
+            CancellationToken.None);
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("reply-1");
@@ -634,7 +635,7 @@ public sealed class ChannelConversationTurnRunnerTests
             new OutboundDeliveryContext
             {
                 ReplyMessageId = "relay-msg-1",
-                ReplyAccessToken = "relay-token-1",
+                CorrelationId = "corr-relay-card-1",
             },
             new TransportExtras
             {
@@ -653,16 +654,19 @@ public sealed class ChannelConversationTurnRunnerTests
             IsPrimary = true,
         });
 
-        var result = await runner.RunLlmReplyAsync(new LlmReplyReadyEvent
-        {
-            CorrelationId = "corr-relay-card-1",
-            RegistrationId = "reg-1",
-            SourceActorId = "llm-worker-1",
-            Activity = activity,
-            Outbound = outbound,
-            TerminalState = LlmReplyTerminalState.Completed,
-            ReadyAtUnixMs = 42,
-        }, CancellationToken.None);
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-card-1",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = outbound,
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-card-1"),
+            CancellationToken.None);
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("reply-card-1");
@@ -775,6 +779,16 @@ public sealed class ChannelConversationTurnRunnerTests
             interactiveReplyDispatcher,
             NullLogger<ChannelConversationTurnRunner>.Instance);
     }
+
+    private static ConversationTurnRuntimeContext RelayRuntimeContext(
+        string correlationId,
+        string replyToken = "relay-token-1",
+        string replyMessageId = "relay-msg-1") =>
+        new(new NyxRelayReplyTokenContext(
+            correlationId,
+            replyToken,
+            replyMessageId,
+            DateTimeOffset.UtcNow.AddMinutes(5)));
 
     private static ChatActivity BuildInboundActivity(
         string text,
