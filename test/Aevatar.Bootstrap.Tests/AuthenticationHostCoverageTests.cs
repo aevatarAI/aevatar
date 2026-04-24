@@ -204,14 +204,59 @@ public class AuthenticationHostCoverageTests
             .And.Contain(c => c.Value == "existing-scope");
     }
 
+    [Fact]
+    public void ResolveAuthenticationEnabled_ShouldHonorDevelopmentAndProductionRules()
+    {
+        InvokeResolveAuthenticationEnabled(null, new HostEnvironmentStub(Environments.Development))
+            .Should().BeTrue();
+        InvokeResolveAuthenticationEnabled("false", new HostEnvironmentStub(Environments.Development))
+            .Should().BeFalse();
+        InvokeResolveAuthenticationEnabled("false", new HostEnvironmentStub(Environments.Production))
+            .Should().BeTrue();
+        InvokeResolveAuthenticationEnabled("true", new HostEnvironmentStub(Environments.Production))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResolveAuthenticationEnabled_ShouldThrowForInvalidConfigurationOrMissingEnvironment()
+    {
+        var invalidAct = () => InvokeResolveAuthenticationEnabled("nope", new HostEnvironmentStub(Environments.Development));
+        invalidAct.Should().Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .WithMessage("Invalid boolean value 'nope' for Aevatar:Authentication:Enabled.");
+
+        var nullEnvironmentAct = () => InvokeResolveAuthenticationEnabled("true", null);
+        nullEnvironmentAct.Should().Throw<TargetInvocationException>()
+            .WithInnerException<ArgumentNullException>();
+    }
+
     private static IReadOnlyList<Claim> Transform(NyxIdClaimsTransformer transformer, IEnumerable<Claim> claims)
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims));
         return transformer.TransformClaims(principal).ToList();
     }
 
+    private static bool InvokeResolveAuthenticationEnabled(string? configuredValue, IHostEnvironment? environment)
+    {
+        var method = typeof(AevatarAuthenticationHostExtensions).GetMethod(
+            "ResolveAuthenticationEnabled",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("ResolveAuthenticationEnabled not found.");
+
+        return (bool)method.Invoke(null, [configuredValue, environment!])!;
+    }
+
     private static string DisabledAuthenticationScheme =>
         (string)typeof(AevatarAuthenticationHostExtensions)
             .GetField("DisabledAuthenticationScheme", BindingFlags.NonPublic | BindingFlags.Static)!
             .GetValue(null)!;
+
+    private sealed class HostEnvironmentStub(string environmentName) : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = environmentName;
+        public string ApplicationName { get; set; } = "Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
+    }
 }
