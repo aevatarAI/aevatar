@@ -237,9 +237,16 @@ public sealed class AgentBuilderTool : IAgentTool
         // proxy/s/api-github and the user sees no useful daily report. Preflight a safe
         // GitHub endpoint with the freshly minted key and fail the create with an actionable
         // error rather than persisting an agent that will never produce a usable report.
+        //
+        // Reviewer (PR #412 r3141699756): on the fail-fast path the freshly created NyxID API
+        // key would be left behind — repeated `/daily` attempts that hit GitHub preflight
+        // accumulate orphan proxy keys. Best-effort revoke before returning.
         var preflight = await PreflightGitHubProxyAsync(nyxClient, apiKeyValue!, providerSlug, ct);
         if (preflight is not null)
+        {
+            await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "github_preflight_failed", ct);
             return preflight;
+        }
 
         var actor = await actorRuntime.GetAsync(agentId)
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
@@ -1464,9 +1471,13 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(probe))
             return null;
 
-        // The Nyx envelope wraps proxy errors as {"error":..., "code": <http>, "body": ...}.
-        // Lark proxy uses {"code":<non-zero>,"msg":...} but GitHub proxy returns the raw
-        // GitHub envelope inside `body` when the upstream HTTP failed. Treat 401/403 as the
+        // `NyxIdApiClient.SendAsync` (NyxIdApiClient.cs:680) wraps HTTP non-2xx as
+        // `{"error": true, "status": <http>, "body": "<raw downstream body>"}` — `status`,
+        // not `code`. Reviewer (PR #412 r3141699476): the previous parser only read `code`,
+        // so for the actual #411 production failures (HTTP 403 from /api/v1/proxy/s/api-github
+        // /rate_limit) it set status=0, returned null, and persisted a daily_report agent
+        // that would fail at runtime. Read both `status` (the SendAsync envelope) AND `code`
+        // (any future inverted-naming envelope or top-level Lark code). Treat 401/403 as the
         // signal to fail-fast; let other shapes flow through (rate limits, 5xx etc are
         // operational and not "agent fundamentally broken").
         try
@@ -1481,9 +1492,9 @@ public sealed class AgentBuilderTool : IAgentTool
             if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
                 return null;
 
-            var status = root.TryGetProperty("code", out var codeProp) && codeProp.ValueKind == JsonValueKind.Number
-                ? codeProp.GetInt32()
-                : 0;
+            var status = TryReadInt32Property(root, "status")
+                         ?? TryReadInt32Property(root, "code")
+                         ?? 0;
             if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
                 return null;
 
@@ -1509,6 +1520,56 @@ public sealed class AgentBuilderTool : IAgentTool
             // Non-JSON probe response: don't pretend we know what's going on; let creation
             // proceed so the agent can at least be created (operator can debug from logs).
             return null;
+        }
+    }
+
+    private static int? TryReadInt32Property(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Number ||
+            !property.TryGetInt32(out var value))
+        {
+            return null;
+        }
+        return value;
+    }
+
+    /// <summary>
+    /// Best-effort revoke of an API key minted earlier in the create flow. Used when a
+    /// preflight (e.g. GitHub proxy access) detects that the agent will be DOA at runtime, so
+    /// we don't leave orphan proxy-scoped keys behind on every retry. Failures here are
+    /// logged at Warning but do NOT propagate — the structured create-time error is the
+    /// user-facing signal; an orphan key is an ops cleanup concern, not a hard failure.
+    /// </summary>
+    private async Task BestEffortRevokeApiKeyAsync(
+        NyxIdApiClient nyxClient,
+        string sessionToken,
+        string apiKeyId,
+        string reason,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+            return;
+
+        try
+        {
+            var response = await nyxClient.DeleteApiKeyAsync(sessionToken, apiKeyId, ct);
+            if (LarkProxyResponse.TryGetError(response, out _, out var detail))
+            {
+                _logger?.LogWarning(
+                    "Failed to revoke orphan agent API key {ApiKeyId} after {Reason}: {Detail}",
+                    apiKeyId,
+                    reason,
+                    detail);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Exception revoking orphan agent API key {ApiKeyId} after {Reason}",
+                apiKeyId,
+                reason);
         }
     }
 

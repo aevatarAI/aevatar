@@ -240,6 +240,77 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SendOutputAsync_ShouldRetryWithFallback_When_PrimaryRejectedAsBotNotInChat_ViaHttp400Envelope()
+    {
+        // Reviewer (PR #412 r3141700469): production failures arrive through
+        // `NyxIdApiClient.SendAsync` as an HTTP-400 Nyx envelope:
+        // `{"error": true, "status": 400, "body": "{\"code\":230002,...}"}`. The previous
+        // `LarkProxyResponse.TryGetError` returned true for that shape but left
+        // `larkCode=null` because it didn't parse the nested `body`, so the BotNotInChat
+        // retry branch never fired in the actual production path. Pin the wrapped envelope
+        // shape end-to-end.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "oc_dm_chat_1",
+            LarkReceiveIdType = "chat_id",
+            LarkReceiveIdFallback = "on_user_1",
+            LarkReceiveIdTypeFallback = "union_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        // First (primary) attempt: NyxIdApiClient.SendAsync HTTP-400 envelope wrapping Lark
+        // 230002. Second (fallback) attempt: clean success.
+        var handler = new SequencedHandler(
+            """{"error": true, "status": 400, "body": "{\"code\":230002,\"msg\":\"Bot is not in the chat\"}"}""",
+            """{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeSendOutputAsync(_agent, "report");
+
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].RequestUri!.Query.Should().Contain("receive_id_type=chat_id");
+        handler.Requests[1].RequestUri!.Query.Should().Contain("receive_id_type=union_id");
+        handler.Bodies[1].Should().Contain("\"receive_id\":\"on_user_1\"");
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldThrowCrossTenantHint_When_LarkCodeNestedInHttp400Body()
+    {
+        // Same envelope shape as the production /daily failure log: NyxID wraps the Lark
+        // 99992364 as a string body inside an HTTP-400 Nyx envelope. The cross-tenant
+        // recreate-the-agent hint (PR #412) only fires when the parser surfaces the nested
+        // Lark code; previously it never did. Pin both the recovery hint and the nested-body
+        // unwrap together.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "on_relay_tenant_user_1",
+            LarkReceiveIdType = "union_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler(
+            """{"error": true, "status": 400, "body": "{\"code\":99992364,\"msg\":\"user id cross tenant\"}"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.WithMessage("*99992364*");
+        assertion.WithMessage("*different tenant*");
+        assertion.WithMessage("*/agents*");
+        assertion.WithMessage("*Delete*");
+        assertion.WithMessage("*/daily*");
+    }
+
+    [Fact]
     public async Task SendOutputAsync_ShouldRetryWithFallback_When_PrimaryRejectedAsBotNotInChat()
     {
         // Reviewer concern (codex-bot, P1, PR #412): chat_id-first regresses cross-app

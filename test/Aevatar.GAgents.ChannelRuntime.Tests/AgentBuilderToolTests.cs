@@ -386,10 +386,17 @@ public sealed class AgentBuilderToolTests
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-403","full_key":"full-key-403"}""");
-        // The preflight: NyxID returns its envelope with code=403 when the new key has no
-        // bound GitHub credential. Mirrors the production failure mode from issue #411.
+        // The preflight: `NyxIdApiClient.SendAsync` wraps any HTTP non-2xx as
+        // `{"error": true, "status": <http>, "body": "<raw downstream body>"}` (NyxIdApiClient.cs:680).
+        // Reviewer (PR #412 r3141699476) caught that the previous handler shape used `"code"`
+        // but real production uses `"status"` — mirror the actual envelope so the parser is
+        // exercised against what runtime delivers, not a synthetic shape.
         handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
-            """{"error":"upstream","code":403,"message":"GitHub denied access","body":"{\"message\":\"Bad credentials\"}"}""");
+            """{"error": true, "status": 403, "body": "{\"message\":\"Bad credentials\",\"documentation_url\":\"https://docs.github.com/rest\"}"}""");
+        // Reviewer (PR #412 r3141699756): on the fail-fast path we must also revoke the
+        // freshly-created agent API key, otherwise repeated `/daily` attempts accumulate
+        // orphan proxy-scoped keys. Wire a DELETE handler so the test can verify it ran.
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-403", """{"deleted":true}""");
 
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -432,6 +439,14 @@ public sealed class AgentBuilderToolTests
             await skillRunnerActor.DidNotReceive().HandleEventAsync(
                 Arg.Any<EventEnvelope>(),
                 Arg.Any<CancellationToken>());
+
+            // Best-effort revoke of the freshly-minted API key so repeated `/daily` attempts
+            // that hit GitHub preflight don't accumulate orphan proxy-scoped keys (reviewer
+            // r3141699756). The DELETE call is the only proof from this layer that the orphan
+            // is being cleaned up.
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-403");
         }
         finally
         {
