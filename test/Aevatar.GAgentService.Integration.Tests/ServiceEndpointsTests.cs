@@ -8,6 +8,8 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -605,6 +607,179 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task InvokeAsync_WithPayloadJson_ShouldPackTypedAnyAndForwardRevisionId()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.CatalogReader.Service = new ServiceCatalogSnapshot(
+            ServiceKey: "tenant:app:ns:orders",
+            TenantId: "tenant",
+            AppId: "app",
+            Namespace: "ns",
+            ServiceId: "orders",
+            DisplayName: "Orders",
+            DefaultServingRevisionId: "rev-active",
+            ActiveServingRevisionId: "rev-active",
+            DeploymentId: "dep-1",
+            PrimaryActorId: "actor-1",
+            DeploymentStatus: "Active",
+            Endpoints: [],
+            PolicyIds: [],
+            UpdatedAt: DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            "tenant:app:ns:orders",
+            "rev-active",
+            new PreparedServiceRevisionArtifact
+            {
+                ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/chat", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            null,
+            null,
+            "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            null,
+            PayloadJson: """{"tenantId":"hello-tenant","serviceId":"orders"}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.gagentservice.ServiceIdentity");
+        host.InvocationPort.LastRequest.RevisionId.Should().Be("rev-active");
+        var decoded = ServiceIdentity.Parser.ParseFrom(host.InvocationPort.LastRequest.Payload.Value);
+        decoded.TenantId.Should().Be("hello-tenant");
+        decoded.ServiceId.Should().Be("orders");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithPayloadJsonAndExplicitRevision_ShouldUseRequestedRevision()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        await host.ArtifactStore.SaveAsync(
+            "tenant:app:ns:orders",
+            "rev-explicit",
+            new PreparedServiceRevisionArtifact
+            {
+                ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/chat", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            null,
+            null,
+            "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            null,
+            PayloadJson: """{"tenantId":"named-tenant"}""",
+            RevisionId: "rev-explicit"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest!.RevisionId.Should().Be("rev-explicit");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithBothPayloadJsonAndBase64_ShouldReturnBadRequest()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/chat", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            null,
+            null,
+            "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            "AAAA",
+            PayloadJson: """{"tenantId":"hi"}"""));
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("mutually exclusive");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithPayloadJson_ShouldReturnBadRequest_WhenTypeUrlNotInRevision()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        await host.ArtifactStore.SaveAsync(
+            "tenant:app:ns:orders",
+            "rev-active",
+            new PreparedServiceRevisionArtifact
+            {
+                ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/chat", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            null,
+            null,
+            "type.googleapis.com/demo.Unknown",
+            null,
+            PayloadJson: """{"foo":"bar"}""",
+            RevisionId: "rev-active"));
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("not found in revision");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithPayloadJson_ShouldReturnBadRequest_WhenJsonIsMalformed()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        await host.ArtifactStore.SaveAsync(
+            "tenant:app:ns:orders",
+            "rev-active",
+            new PreparedServiceRevisionArtifact
+            {
+                ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/chat", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            null,
+            null,
+            "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            null,
+            PayloadJson: "{this is not json",
+            RevisionId: "rev-active"));
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("payloadJson");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithPayloadJson_ShouldReturnBadRequest_WhenNoActiveRevision()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/chat", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            null,
+            null,
+            "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            null,
+            PayloadJson: """{"tenantId":"hi"}"""));
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("revisionId");
+    }
+
+    [Fact]
     public async Task CreateRevisionAsync_WithUnsupportedImplementationKind_ShouldFail()
     {
         await using var host = await EndpointTestHost.StartAsync();
@@ -782,8 +957,11 @@ public sealed class ServiceEndpointsTests
             "corr-1",
             null,
             null));
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("payloadTypeUrl");
     }
 
     [Fact]
@@ -1001,13 +1179,17 @@ public sealed class ServiceEndpointsTests
             HttpClient client,
             RecordingServiceCommandPort commandPort,
             RecordingServiceQueryPort queryPort,
-            RecordingServiceInvocationPort invocationPort)
+            RecordingServiceInvocationPort invocationPort,
+            FakeServiceCatalogQueryReader catalogReader,
+            FakeServiceRevisionArtifactStore artifactStore)
         {
             _app = app;
             Client = client;
             CommandPort = commandPort;
             QueryPort = queryPort;
             InvocationPort = invocationPort;
+            CatalogReader = catalogReader;
+            ArtifactStore = artifactStore;
         }
 
         public HttpClient Client { get; }
@@ -1017,6 +1199,10 @@ public sealed class ServiceEndpointsTests
         public RecordingServiceQueryPort QueryPort { get; }
 
         public RecordingServiceInvocationPort InvocationPort { get; }
+
+        public FakeServiceCatalogQueryReader CatalogReader { get; }
+
+        public FakeServiceRevisionArtifactStore ArtifactStore { get; }
 
         public static async Task<EndpointTestHost> StartAsync()
         {
@@ -1029,11 +1215,15 @@ public sealed class ServiceEndpointsTests
             var commandPort = new RecordingServiceCommandPort();
             var queryPort = new RecordingServiceQueryPort();
             var invocationPort = new RecordingServiceInvocationPort();
+            var catalogReader = new FakeServiceCatalogQueryReader();
+            var artifactStore = new FakeServiceRevisionArtifactStore();
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceServingQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
+            builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
+            builder.Services.AddSingleton<IServiceRevisionArtifactStore>(artifactStore);
             builder.Services.AddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
 
             var app = builder.Build();
@@ -1066,7 +1256,7 @@ public sealed class ServiceEndpointsTests
                 BaseAddress = new Uri(address),
             };
 
-            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort);
+            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort, catalogReader, artifactStore);
         }
 
         public async ValueTask DisposeAsync()
@@ -1314,6 +1504,58 @@ public sealed class ServiceEndpointsTests
                 CorrelationId = request.CorrelationId,
             });
         }
+    }
+
+    private sealed class FakeServiceCatalogQueryReader : IServiceCatalogQueryReader
+    {
+        public ServiceCatalogSnapshot? Service { get; set; }
+
+        public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(Service);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(int take = 1000, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Service == null ? [] : [Service]);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Service == null ? [] : [Service]);
+    }
+
+    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    {
+        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
+
+        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
+        {
+            _artifacts[$"{serviceKey}:{revisionId}"] = artifact;
+            return Task.CompletedTask;
+        }
+
+        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default)
+        {
+            _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
+            return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
+        }
+    }
+
+    internal static ByteString BuildProtocolDescriptorSetFor(MessageDescriptor descriptor)
+    {
+        var fds = new FileDescriptorSet();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        CollectFileProto(descriptor.File, fds, seen);
+        return fds.ToByteString();
+    }
+
+    private static void CollectFileProto(FileDescriptor file, FileDescriptorSet fds, HashSet<string> seen)
+    {
+        if (!seen.Add(file.Name))
+            return;
+        foreach (var dep in file.Dependencies)
+        {
+            CollectFileProto(dep, fds, seen);
+        }
+
+        var fileProto = FileDescriptorProto.Parser.ParseFrom(file.SerializedData);
+        fds.File.Add(fileProto);
     }
 
     private sealed class TestStaticAgent : Aevatar.Foundation.Abstractions.IAgent

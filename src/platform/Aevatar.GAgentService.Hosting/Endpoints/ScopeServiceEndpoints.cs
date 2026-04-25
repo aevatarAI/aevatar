@@ -12,6 +12,7 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
@@ -590,6 +591,8 @@ public static class ScopeServiceEndpoints
         string endpointId,
         InvokeScopeServiceHttpRequest request,
         [FromServices] IServiceInvocationPort invocationPort,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionArtifactStore artifactStore,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         HandleInvokeAsync(
@@ -600,6 +603,8 @@ public static class ScopeServiceEndpoints
             request,
             appId: null,
             invocationPort,
+            catalogReader,
+            artifactStore,
             options,
             ct);
 
@@ -1236,6 +1241,8 @@ public static class ScopeServiceEndpoints
         InvokeScopeServiceHttpRequest request,
         string? appId,
         [FromServices] IServiceInvocationPort invocationPort,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionArtifactStore artifactStore,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -1245,16 +1252,25 @@ public static class ScopeServiceEndpoints
                 return denied;
 
             var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId, appId);
+            var typeUrl = request.PayloadTypeUrl?.Trim() ?? string.Empty;
+            var revisionId = request.RevisionId?.Trim() ?? string.Empty;
+            var (payload, resolvedRevisionId) = await ResolveInvocationPayloadAsync(
+                request,
+                typeUrl,
+                revisionId,
+                identity,
+                catalogReader,
+                artifactStore,
+                ct);
+
             var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
             {
                 Identity = identity,
                 EndpointId = endpointId?.Trim() ?? string.Empty,
                 CommandId = request.CommandId?.Trim() ?? string.Empty,
                 CorrelationId = request.CorrelationId?.Trim() ?? string.Empty,
-                RevisionId = request.RevisionId?.Trim() ?? string.Empty,
-                Payload = ServiceJsonPayloads.PackBase64(
-                    request.PayloadTypeUrl?.Trim() ?? string.Empty,
-                    request.PayloadBase64),
+                RevisionId = resolvedRevisionId,
+                Payload = payload,
                 Caller = new ServiceInvocationCaller
                 {
                     ServiceKey = string.Empty,
@@ -1268,6 +1284,46 @@ public static class ScopeServiceEndpoints
         {
             return CreateScopeInvokeFailureResult(ex);
         }
+    }
+
+    private static async Task<(Any Payload, string RevisionId)> ResolveInvocationPayloadAsync(
+        InvokeScopeServiceHttpRequest request,
+        string typeUrl,
+        string requestedRevisionId,
+        ServiceIdentity identity,
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionArtifactStore artifactStore,
+        CancellationToken ct)
+    {
+        var hasJson = !string.IsNullOrWhiteSpace(request.PayloadJson);
+        var hasBase64 = !string.IsNullOrWhiteSpace(request.PayloadBase64);
+        if (hasJson && hasBase64)
+            throw new InvalidOperationException(
+                "payloadJson and payloadBase64 are mutually exclusive; specify only one.");
+
+        if (hasJson)
+        {
+            if (string.IsNullOrWhiteSpace(typeUrl))
+                throw new InvalidOperationException("payloadTypeUrl is required when payloadJson is provided.");
+
+            var revisionId = requestedRevisionId;
+            if (string.IsNullOrWhiteSpace(revisionId))
+            {
+                var catalog = await catalogReader.GetAsync(identity, ct);
+                revisionId = catalog?.ActiveServingRevisionId ?? string.Empty;
+            }
+
+            var packed = await ServiceJsonPayloads.PackJsonAsync(
+                artifactStore,
+                ServiceKeys.Build(identity),
+                revisionId,
+                typeUrl,
+                request.PayloadJson!,
+                ct);
+            return (packed, revisionId);
+        }
+
+        return (ServiceJsonPayloads.PackBase64(typeUrl, request.PayloadBase64), requestedRevisionId);
     }
 
     private static async Task<IResult> HandleResumeRunAsync(
@@ -2424,7 +2480,8 @@ const response = await fetch("{{invokePath}}", {
         string? CorrelationId,
         string? PayloadTypeUrl,
         string? PayloadBase64,
-        string? RevisionId = null);
+        string? RevisionId = null,
+        string? PayloadJson = null);
 
     public sealed record ScopeDraftRunHttpRequest(
         string Prompt,
