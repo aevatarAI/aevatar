@@ -1833,7 +1833,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 detail = string.IsNullOrWhiteSpace(detail) ? "GitHub proxy returned 401/403 for the new agent API key." : detail,
                 http_status = status,
                 proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
-                hint = "GitHub returned 401/403 to NyxID's stored OAuth token. The token was likely revoked at GitHub or had its scopes downgraded after the provider was connected. Re-authorize the GitHub provider at NyxID, then run /daily again.",
+                hint = "GitHub returned 401/403 through the NyxID proxy. Common causes: (a) the OAuth grant for GitHub was revoked at github.com/settings/applications or its scopes were downgraded — re-authorize the GitHub provider at NyxID; (b) the request reached GitHub without a User-Agent header (NyxIdApiClient now sends a default; if you see this, check that the deployed binary includes that fix). The agent will not produce a useful daily report until proxy access succeeds.",
                 nyx_provider_slug = nyxProviderSlug,
             });
         }

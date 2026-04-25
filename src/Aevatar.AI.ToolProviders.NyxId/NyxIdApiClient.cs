@@ -23,6 +23,19 @@ public sealed record NyxIdChannelRelayReplyResult(
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient
 {
+    /// <summary>
+    /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
+    /// when the caller does not specify one in <c>extraHeaders</c>. GitHub's REST API rejects
+    /// requests without a <c>User-Agent</c> with HTTP 403 ("Request forbidden by administrative
+    /// rules") — see https://docs.github.com/en/rest/overview/resources-in-the-rest-api#user-agent-required.
+    /// .NET's <c>HttpClient</c> does not set one by default; NyxID proxies the client's headers
+    /// through to GitHub, so the absence at the .NET layer manifests as a GitHub 403 in
+    /// production. CLI tools written against <c>reqwest</c> (e.g. <c>nyxid proxy request</c>)
+    /// happen to send <c>reqwest/x.y</c> as their default and so never hit this.
+    /// </summary>
+    public const string DefaultProxyUserAgent = "aevatar-agent-builder";
+    private const string UserAgentHeaderName = "User-Agent";
+
     private readonly HttpClient _http;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
@@ -131,11 +144,25 @@ public sealed class NyxIdApiClient
         using var request = new HttpRequestMessage(httpMethod, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+        var callerSpecifiedUserAgent = false;
         if (extraHeaders != null)
         {
             foreach (var (key, value) in extraHeaders)
+            {
                 request.Headers.TryAddWithoutValidation(key, value);
+                if (string.Equals(key, UserAgentHeaderName, StringComparison.OrdinalIgnoreCase))
+                    callerSpecifiedUserAgent = true;
+            }
         }
+
+        // GitHub-required User-Agent (#417 follow-up). NyxID proxies whatever the .NET client
+        // sends, and HttpClient sends none by default, so without this every GitHub call lands
+        // as 403 "Request forbidden by administrative rules". Inject a default for *all* proxy
+        // targets — non-GitHub services don't care about UA either way, and pinning it at the
+        // proxy boundary means SkillRunner / agent-builder / preflight all benefit without
+        // every call site remembering to pass it.
+        if (!callerSpecifiedUserAgent)
+            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
 
         if (!string.IsNullOrEmpty(body) && httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head)
         {
