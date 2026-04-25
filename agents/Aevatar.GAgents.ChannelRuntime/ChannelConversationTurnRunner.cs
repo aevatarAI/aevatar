@@ -930,7 +930,13 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
             if (TryGetProxyError(response, out var detail))
             {
-                _logger.LogWarning(
+                // Best-effort acknowledgment. The most common cause is the bot
+                // missing reaction permission on Lark (code 231002), which is a
+                // tenant-level config issue that recurs on every inbound message
+                // until ops fixes the app scope. Log at Debug so it stays
+                // discoverable when the channel is opted into verbose logging
+                // without spamming Warnings on every turn.
+                _logger.LogDebug(
                     "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, detail={Detail}",
                     providerSlug,
                     platformMessageId,

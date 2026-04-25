@@ -261,6 +261,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
+        var receiveIdType = LarkConversationTargets.ResolveReceiveIdType(State.OutboundConfig.ConversationId);
         var body = JsonSerializer.Serialize(new
         {
             receive_id = State.OutboundConfig.ConversationId,
@@ -271,7 +272,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await client.ProxyRequestAsync(
             State.OutboundConfig.NyxApiKey,
             State.OutboundConfig.NyxProviderSlug,
-            "open-apis/im/v1/messages?receive_id_type=chat_id",
+            $"open-apis/im/v1/messages?receive_id_type={receiveIdType}",
             "POST", body, null, ct);
     }
 

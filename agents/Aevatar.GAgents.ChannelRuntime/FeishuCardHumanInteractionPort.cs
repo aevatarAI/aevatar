@@ -323,6 +323,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         string failurePrefix,
         CancellationToken cancellationToken)
     {
+        var receiveIdType = LarkConversationTargets.ResolveReceiveIdType(target.ConversationId);
         var body = JsonSerializer.Serialize(new
         {
             receive_id = target.ConversationId,
@@ -333,7 +334,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         var result = await _nyxIdApiClient.ProxyRequestAsync(
             target.NyxApiKey,
             target.NyxProviderSlug,
-            "open-apis/im/v1/messages?receive_id_type=chat_id",
+            $"open-apis/im/v1/messages?receive_id_type={receiveIdType}",
             "POST",
             body,
             extraHeaders: null,
