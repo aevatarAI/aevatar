@@ -59,6 +59,58 @@ public sealed class FeishuCardHumanInteractionPortTests
     }
 
     [Fact]
+    public async Task DeliverSuspensionAsync_ShouldRetryWithFallback_When_PrimaryRejectedAsBotNotInChat_ViaHttp400Envelope()
+    {
+        // Reviewer (PR #412 second-pass review): the 230002→fallback retry was added to
+        // `FeishuCardHumanInteractionPort.SendMessageAsync` but coverage for the catalog-backed
+        // path lives only in `SkillRunnerGAgentTests`. If `UserAgentCatalogProjector.Materialize`
+        // / `UserAgentCatalogQueryPort.ToEntry` ever drop the new
+        // `LarkReceiveIdFallback` / `LarkReceiveIdTypeFallback` mirror, the existing port tests
+        // (which only assert primary success) would still pass while production cards stop
+        // delivering on cross-app same-tenant DMs. Pin: catalog entry exposes a chat_id primary
+        // + union_id fallback; primary is rejected with the real wrapped envelope shape that
+        // `NyxIdApiClient.SendAsync` produces for HTTP-non-2xx responses; the port retries once
+        // with the fallback typed pair and the second POST carries `receive_id_type=union_id`
+        // and `receive_id=on_*`.
+        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+        registry.GetAsync("agent-fb", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "agent-fb",
+                Platform = "lark",
+                ConversationId = "oc_dm_chat_1",
+                NyxProviderSlug = "api-lark-bot",
+                NyxApiKey = "nyx-api-key-fb",
+                TemplateName = "social_media",
+                LarkReceiveId = "oc_dm_chat_1",
+                LarkReceiveIdType = "chat_id",
+                LarkReceiveIdFallback = "on_user_1",
+                LarkReceiveIdTypeFallback = "union_id",
+            }));
+
+        var handler = new SequencedRecordingHandler(
+            """{"error": true, "status": 400, "body": "{\"code\":230002,\"msg\":\"Bot is not in the chat\"}"}""",
+            """{"data":{"message_id":"om_fb"}}""");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler));
+        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, new LarkMessageComposer(), NullLogger<FeishuCardHumanInteractionPort>.Instance);
+
+        await port.DeliverSuspensionAsync(BuildApprovalRequest(), "agent-fb", CancellationToken.None);
+
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].RequestUri!.Query.Should().Contain("receive_id_type=chat_id");
+        handler.Requests[1].RequestUri!.Query.Should().Contain("receive_id_type=union_id");
+
+        using var primaryBody = JsonDocument.Parse(handler.Bodies[0]!);
+        primaryBody.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_dm_chat_1");
+
+        using var fallbackBody = JsonDocument.Parse(handler.Bodies[1]!);
+        fallbackBody.RootElement.GetProperty("receive_id").GetString().Should().Be("on_user_1");
+        fallbackBody.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+    }
+
+    [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrow_WhenTargetMissing()
     {
         var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
@@ -308,6 +360,34 @@ public sealed class FeishuCardHumanInteractionPortTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    /// <summary>
+    /// Returns a different response per request in the order given so the primary→fallback
+    /// retry can be exercised. Records every request + body so tests can assert the order
+    /// of <c>receive_id_type</c> and the fallback <c>receive_id</c> on the second POST.
+    /// </summary>
+    private sealed class SequencedRecordingHandler : HttpMessageHandler
+    {
+        private readonly Queue<string> _responses;
+        public List<HttpRequestMessage> Requests { get; } = [];
+        public List<string?> Bodies { get; } = [];
+
+        public SequencedRecordingHandler(params string[] responses)
+        {
+            _responses = new Queue<string>(responses);
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            Bodies.Add(request.Content == null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
+            var body = _responses.Count > 0 ? _responses.Dequeue() : """{"data":{}}""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
     }
