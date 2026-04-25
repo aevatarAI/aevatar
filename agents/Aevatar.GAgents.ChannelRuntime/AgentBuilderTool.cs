@@ -775,22 +775,23 @@ public sealed class AgentBuilderTool : IAgentTool
         string expectedStatus,
         CancellationToken ct)
     {
-        // Capture the readmodel version before waiting so we can distinguish "the
-        // expected status hasn't materialized yet" from "the read model is stale".
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-
         // Mirrors create_agent: ensure the projection scope is alive so the
         // actor's committed status event has a subscribed materializer.
         await EnsureUserAgentCatalogProjectionAsync(ct);
 
+        // Status-driven polling (no version anchor): caller dispatches the
+        // lifecycle command and we wait for the read model to reflect the
+        // expected status. A version-gated optimization here was wrong because
+        // `versionBefore` would be captured *after* dispatch, so a fast
+        // projection that already advanced the version made `versionAfter ==
+        // versionBefore` and burned the entire budget. The Status field itself
+        // is the authoritative signal — `expectedStatus` is enum-like and only
+        // moves when the lifecycle event materializes, so reading it on every
+        // attempt is both correct and cheap.
         for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
                 await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
-
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
 
             var entry = await queryPort.GetAsync(agentId, ct);
             if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))

@@ -1666,6 +1666,89 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_DisableAgent_ReturnsStatusFast_WhenProjectionUpdatedBeforeBaselineRead()
+    {
+        // Regression guard for PR #413 codex review (P2): an earlier iteration
+        // gated `GetAsync` on `GetStateVersionAsync` strictly advancing past
+        // a captured baseline. Because `WaitForAgentStatusAsync` runs *after*
+        // dispatch, a fast Local actor + projection could land the new
+        // status before the baseline read, so `versionAfter == versionBefore`
+        // and the loop burned the entire 15 s budget despite the read model
+        // already being correct. This pins the version-anchor-free behavior:
+        // if the read model surfaces the expected status on the first poll,
+        // we return immediately regardless of whether the version moved.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetAsync("skill-runner-fast", Arg.Any<CancellationToken>())
+            .Returns(
+                // RequireManagedAgentAsync's existence check sees the pre-disable status.
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+                {
+                    AgentId = "skill-runner-fast",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    Status = SkillRunnerDefaults.StatusRunning,
+                }),
+                // Wait helper's first poll already sees the disabled status because the
+                // projection raced ahead of the baseline read. With the version gate this
+                // test would burn the full 15 s; the gate-free wait must finish in <100 ms.
+                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+                {
+                    AgentId = "skill-runner-fast",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    Status = SkillRunnerDefaults.StatusDisabled,
+                }));
+        // Pin the codex scenario: state version stays flat across polls. If we
+        // ever re-introduce a version gate the test would deadlock and fail
+        // the suite timeout.
+        queryPort.GetStateVersionAsync("skill-runner-fast", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(42L));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-fast");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-fast").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler())
+            {
+                BaseAddress = new Uri("https://nyx.example.com"),
+            }));
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "disable_agent",
+                  "agent_id": "skill-runner-fast"
+                }
+                """);
+            stopwatch.Stop();
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
+            // 1 s ceiling: a regression that re-introduces the version gate
+            // would make the wait loop burn the full ProjectionWaitAttempts ×
+            // ProjectionWaitDelayMilliseconds budget (15 s by default).
+            stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DisableAgent_DispatchesDisableAndReturnsStatus()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -1689,14 +1772,6 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
-        // The status wait now skips polls until the read-model state version
-        // advances past versionBefore. Returning a fresh version on the second
-        // call keeps the test exercising the success path without burning the
-        // full 15 s polling budget.
-        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(7L),
-                Task.FromResult<long?>(8L));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
@@ -1769,12 +1844,6 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
-        // See DisableAgent test — advance the version on the second poll so
-        // the wait helper escapes the loop quickly instead of timing out.
-        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(7L),
-                Task.FromResult<long?>(8L));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
@@ -1847,13 +1916,6 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
-        // Advance the version on the second poll so the wait helper exits
-        // immediately on the disabled status — keeps the test under the
-        // production polling budget.
-        queryPort.GetStateVersionAsync("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<long?>(7L),
-                Task.FromResult<long?>(8L));
 
         var workflowAgentActor = Substitute.For<IActor>();
         workflowAgentActor.Id.Returns("workflow-agent-1");
