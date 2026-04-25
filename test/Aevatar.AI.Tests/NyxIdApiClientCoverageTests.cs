@@ -176,6 +176,66 @@ public sealed class NyxIdApiClientCoverageTests
     }
 
     [Fact]
+    public async Task ProxyRequestAsync_ShouldInjectDefaultUserAgent_WhenCallerOmitsIt()
+    {
+        // #417 follow-up: GitHub's REST API rejects requests without a `User-Agent` header
+        // with a 403 "Request forbidden by administrative rules". .NET's `HttpClient` doesn't
+        // send one by default, and NyxID proxies whatever the .NET client sends — so without
+        // this default, every agent-builder GitHub call lands as a spurious 403 (root cause of
+        // production /daily failures captured under PR #420 diagnostic logs).
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        await client.ProxyRequestAsync(
+            "token",
+            "api-github",
+            "/rate_limit",
+            "GET",
+            body: null,
+            extraHeaders: null,
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        var ua = handler.LastRequest!.Headers.UserAgent.ToString();
+        ua.Should().Be(NyxIdApiClient.DefaultProxyUserAgent);
+    }
+
+    [Fact]
+    public async Task ProxyRequestAsync_ShouldHonorCallerSuppliedUserAgent()
+    {
+        // The default is only injected when the caller doesn't specify one — agent code that
+        // wants to identify as a different UA (e.g. SkillRunner with a per-template label)
+        // should win over the boundary default.
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        await client.ProxyRequestAsync(
+            "token",
+            "api-github",
+            "/rate_limit",
+            "GET",
+            body: null,
+            extraHeaders: new Dictionary<string, string> { ["User-Agent"] = "custom-skill-runner/1.2.3" },
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        var ua = handler.LastRequest!.Headers.UserAgent.ToString();
+        ua.Should().Be("custom-skill-runner/1.2.3");
+    }
+
+    [Fact]
     public void TryParseErrorEnvelope_ShouldHandleEmptyInvalidAndStructuredResponses()
     {
         InvokeTryParseErrorEnvelope(string.Empty).Should().Be((true, "empty_response"));
