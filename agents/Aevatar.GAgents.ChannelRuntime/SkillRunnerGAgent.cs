@@ -324,6 +324,21 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 "delete and recreate it (`/agents` → Delete → `/daily`) to pick up the cross-app safe target.";
         }
 
+        if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
+        {
+            // Even union_id is rejected — the relay-side ingress and outbound apps are in
+            // different Lark tenants. No user-id-based identifier survives that boundary;
+            // recreating the agent makes the new chat_id-preferred path take effect (chat_id
+            // bypasses user-id translation entirely as long as the same app is on both ends).
+            return
+                $"Lark message delivery rejected (code={larkCode}): {detail}. " +
+                "The outbound Lark app is in a different tenant than the inbound app, so " +
+                "user-id translation is impossible. Delete and recreate the agent " +
+                "(`/agents` → Delete → `/daily`) so the new chat_id-preferred outbound path " +
+                "takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot that " +
+                "received the inbound event.";
+        }
+
         return larkCode is { } code
             ? $"Lark message delivery rejected (code={code}): {detail}"
             : $"Lark message delivery rejected: {detail}";

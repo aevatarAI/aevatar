@@ -496,18 +496,28 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 relayDelivery);
         }
 
+        // The dispatcher has already consumed the relay reply token via NyxID's
+        // `channel-relay/reply` endpoint — even when the upstream returns 5xx, NyxID's
+        // single-use semantics mark the token as used before the failure surfaces. A second
+        // call with the same token (the previous "degrade to text" retry) lands as
+        // `401 Reply token already used`, which then escapes as a hard relay failure and
+        // queues an inbound turn retry that re-consumes the (already gone) token forever
+        // — observed in production after PR #409 introduced interactive cards: NyxID
+        // returned 502 for the card payload, the legacy fallback re-sent as text and got
+        // 401, and the bot looked silent on every subsequent DM.
+        //
+        // Surface the failure to the caller's grain-level retry path instead. The token is
+        // single-use, so we get exactly one attempt per inbound; if that fails, the right
+        // recovery is to NOT replay the same token within this turn.
         _logger.LogWarning(
-            "Interactive relay reply rejected; degrading to text. messageId={MessageId}, detail={Detail}",
+            "Interactive relay reply rejected; not retrying as text (single-use token already consumed). messageId={MessageId}, detail={Detail}",
             relayDelivery.ReplyMessageId,
             dispatch.Detail);
-        return await SendRelayTextFallbackAsync(
-            fallbackText,
-            sentActivitySeed,
-            conversation,
-            inbound,
-            relayDelivery,
-            relayToken,
-            ct);
+        return ToRelayFailure(EmitResult.Failed(
+            "relay_reply_rejected",
+            string.IsNullOrWhiteSpace(dispatch.Detail)
+                ? "Interactive relay reply rejected; reply token consumed."
+                : dispatch.Detail));
     }
 
     private async Task<ConversationTurnResult> SendRelayTextFallbackAsync(

@@ -23,4 +23,15 @@ internal static class LarkBotErrorCodes
     /// cross-app safe pair.
     /// </summary>
     public const int OpenIdCrossApp = 99992361;
+
+    /// <summary>
+    /// "user id cross tenant" — Lark <c>union_id</c> is tenant-scoped. When the relay-side
+    /// ingress Lark app and the outbound proxy Lark app live in different Lark tenants (e.g.
+    /// NyxID-administered <c>api-lark-bot</c> proxy bound to a different tenant than the user's
+    /// own bot that subscribed to events), <c>receive_id_type=union_id</c> is rejected.
+    /// Resolution is configuration-side: align the NyxID proxy's downstream Lark app with the
+    /// channel-bot that received the inbound event, OR rebuild the agent so the new
+    /// <c>chat_id</c>-preferred path takes effect (chat_id traverses no user-id translation).
+    /// </summary>
+    public const int UserIdCrossTenant = 99992364;
 }

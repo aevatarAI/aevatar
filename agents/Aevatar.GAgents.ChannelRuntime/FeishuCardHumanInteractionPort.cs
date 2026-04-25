@@ -378,6 +378,21 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 "delete and recreate it (`/agents` → Delete → `/social-media`) to pick up the cross-app safe target.";
         }
 
+        if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
+        {
+            // Cross-tenant variant of the open_id case — even union_id fails. Same recovery
+            // shape: recreate the agent so the chat_id-preferred outbound takes effect, or
+            // align the NyxID `s/api-lark-bot` proxy with the channel-bot that received the
+            // inbound event so the apps share a tenant.
+            return
+                $"{failurePrefix} (code={larkCode}): {detail}. " +
+                "The outbound Lark app is in a different tenant than the inbound app, so " +
+                "user-id translation is impossible. Delete and recreate the workflow agent " +
+                "(`/agents` → Delete → `/social-media`) so the new chat_id-preferred outbound " +
+                "path takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot " +
+                "that received the inbound event.";
+        }
+
         return larkCode is { } code
             ? $"{failurePrefix} (code={code}): {detail}"
             : $"{failurePrefix}: {detail}";

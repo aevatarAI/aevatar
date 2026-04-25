@@ -239,6 +239,41 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         assertion.WithMessage("*/daily*");
     }
 
+    [Fact]
+    public async Task SendOutputAsync_ShouldIncludeRecreateHint_When_LarkRejectsAsCrossTenantUserId()
+    {
+        // Production failure mode after PR #409 switched p2p to union_id: NyxID's relay-side
+        // ingress and `s/api-lark-bot` proxy turned out to be in different Lark tenants, so even
+        // union_id is rejected. This PR pivots to chat_id-first; the cross_tenant error code is
+        // surfaced with the same recreate guidance so legacy agents (still pinned to union_id)
+        // give users a way to recover without reading source.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "on_relay_tenant_user_1",
+            LarkReceiveIdType = "union_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler(
+            """{"code":99992364,"msg":"user id cross tenant","error":{"log_id":"L1"}}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.WithMessage("*code=99992364*");
+        assertion.WithMessage("*user id cross tenant*");
+        assertion.WithMessage("*different tenant*");
+        assertion.WithMessage("*chat_id-preferred*");
+        assertion.WithMessage("*/agents*");
+        assertion.WithMessage("*Delete*");
+        assertion.WithMessage("*/daily*");
+    }
+
     private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(

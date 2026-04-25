@@ -724,6 +724,102 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunLlmReplyAsync_ShouldNotRetryAsText_WhenInteractiveDispatcherFails()
+    {
+        // Production regression: NyxID's `channel-relay/reply` is single-use — even when the
+        // interactive payload returns a transport-level failure (e.g. NyxID 502), the relay
+        // token is already consumed. The legacy "degrade to text" path in
+        // TrySendInteractiveRelayReplyAsync re-sent the same token as plain text, which always
+        // came back as `401 Reply token already used`, escalated as `relay_reply_rejected`, and
+        // queued an inbound turn retry that re-consumed the (already gone) token forever — bot
+        // looked silent on every subsequent DM after PR #409 introduced interactive cards.
+        //
+        // The single-use semantics demand exactly one attempt per inbound. When the dispatcher
+        // reports failure, the runner must surface a failure result without making a second
+        // call to the relay HTTP API.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();
+        interactiveDispatcher.DispatchAsync(
+                Arg.Any<ChannelId>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MessageContent>(),
+                Arg.Any<ComposeContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new InteractiveReplyDispatchResult(
+                Succeeded: false,
+                MessageId: null,
+                PlatformMessageId: null,
+                Capability: ComposeCapability.Exact,
+                FellBackToText: false,
+                Detail: "nyx_status=502 body=error code: 502")));
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-1"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            interactiveReplyDispatcher: interactiveDispatcher);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-card-fail-1",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-1",
+                CorrelationId = "corr-relay-card-fail-1",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+            });
+        var outbound = new MessageContent
+        {
+            Text = "Choose one",
+        };
+        outbound.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "confirm",
+            Label = "Confirm",
+            IsPrimary = true,
+        });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-card-fail-1",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = outbound,
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-card-fail-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_rejected");
+        result.ErrorSummary.Should().Contain("502");
+
+        // Critical assertion: the runner MUST NOT make a second HTTP call to NyxID's
+        // channel-relay endpoint. The previous (broken) "degrade to text" path issued one
+        // additional POST that always failed with 401 and trashed the inbound turn's retry
+        // budget. Verify the relay handler stays clean.
+        relayHandler.Requests.Should().BeEmpty();
+        await interactiveDispatcher.Received(1).DispatchAsync(
+            Arg.Any<ChannelId>(),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<MessageContent>(),
+            Arg.Any<ComposeContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunContinueAsync_DirectMessageWithoutPartition_ReturnsPermanentFailure()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

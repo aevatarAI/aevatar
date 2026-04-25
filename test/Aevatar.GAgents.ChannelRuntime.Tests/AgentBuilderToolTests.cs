@@ -231,14 +231,14 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_PinsLarkUnionId_When_RelayPropagatesIt()
+    public async Task ExecuteAsync_CreateAgent_DailyReport_PinsLarkChatId_When_RelayPropagatesIt()
     {
-        // Cross-app outbound delivery (`code:99992361 open_id cross app`) requires the
-        // tenant-stable `union_id`. When the relay surfaces it via
-        // ChannelMetadataKeys.LarkUnionId the typed delivery target on
-        // InitializeSkillRunnerCommand must pin (union_id, "union_id") instead of falling back
-        // to the relay-app-scoped open_id. Integration counterpart of
-        // LarkConversationTargetsTests.BuildFromInbound_ShouldPreferLarkUnionId_*.
+        // The new outbound priority pins (chat_id, "chat_id") whenever the relay surfaces
+        // ChannelMetadataKeys.LarkChatId — chat_id is the literal DM thread, no user-id
+        // translation is needed. This is the integration counterpart of
+        // LarkConversationTargetsTests.BuildFromInbound_ShouldPreferLarkChatId_ForP2pDirectMessages
+        // and is what survives both `99992361 open_id cross app` (PR #403/409) and
+        // `99992364 user id cross tenant` (PR after #409) failure modes in production.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionAsync("skill-runner-union-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
@@ -330,8 +330,8 @@ public sealed class AgentBuilderToolTests
                 Arg.Is<EventEnvelope>(e =>
                     e.Payload != null &&
                     e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "on_user_1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "union_id"),
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "oc_dm_chat_1" &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "chat_id"),
                 Arg.Any<CancellationToken>());
         }
         finally

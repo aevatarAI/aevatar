@@ -90,33 +90,51 @@ public sealed class LarkConversationTargetsTests
     }
 
     [Fact]
-    public void BuildFromInbound_ShouldPreferLarkUnionId_ForP2pDirectMessages()
+    public void BuildFromInbound_ShouldPreferLarkChatId_ForP2pDirectMessages()
     {
-        // union_id is tenant-stable and cross-app safe, so a relay-side ingress app and an
-        // outbound-side customer app see the SAME `on_*` for the user. This eliminates the
-        // `code:99992361 open_id cross app` rejection that was breaking SkillRunner DMs when
-        // only the open_id was available.
+        // chat_id (oc_*) is the literal DM thread between the user and the bot that received
+        // the inbound event. When the outbound proxy authenticates as the SAME Lark app, sending
+        // back via `receive_id_type=chat_id` targets the same chat WITHOUT traversing any user-id
+        // resolution. This is the only path that survives both cross-app (`99992361`) and
+        // cross-tenant (`99992364`) deployments where the relay-side ingress and outbound apps
+        // share at least the inbound chat membership.
         var target = LarkConversationTargets.BuildFromInbound(
             chatType: "p2p",
             conversationId: "oc_dm_underlying_chat",
             senderId: "ou_user_1",
             larkUnionId: "on_user_1",
-            larkChatId: "oc_dm_underlying_chat");
+            larkChatId: "oc_dm_chat_1");
 
-        target.ReceiveId.Should().Be("on_user_1");
-        target.ReceiveIdType.Should().Be("union_id");
+        target.ReceiveId.Should().Be("oc_dm_chat_1");
+        target.ReceiveIdType.Should().Be("chat_id");
         target.FellBackToPrefixInference.Should().BeFalse();
     }
 
     [Fact]
-    public void BuildFromInbound_ShouldFallBackToSenderOpenId_ForP2pWithoutUnionId()
+    public void BuildFromInbound_ShouldFallBackToUnionId_ForP2pWithoutChatId()
     {
-        // When the relay does not surface a union_id (older relay revisions, misconfigured
-        // Lark app, non-Lark traffic mistyped as p2p), the only DM identifier we have is the
-        // sender open_id. Lark accepts it inside the originating app and rejects it
-        // (`code:99992361 open_id cross app`) when sent from a different app — flip
-        // FellBackToPrefixInference=true so call sites LogDebug and operators can correlate
-        // a missing-union_id ingress with downstream Lark rejections.
+        // When the relay does not surface a Lark chat_id (older relay revisions, malformed
+        // raw_platform_data), union_id is the next-best tenant-stable identifier. Lark rejects
+        // it as `code:99992364 user id cross tenant` when the relay-side ingress and outbound
+        // apps live in different tenants — flip FellBackToPrefixInference=true so call sites
+        // LogDebug and operators can correlate the rejection with a missing-chat_id ingress.
+        var target = LarkConversationTargets.BuildFromInbound(
+            chatType: "p2p",
+            conversationId: "oc_dm_underlying_chat",
+            senderId: "ou_user_1",
+            larkUnionId: "on_user_1");
+
+        target.ReceiveId.Should().Be("on_user_1");
+        target.ReceiveIdType.Should().Be("union_id");
+        target.FellBackToPrefixInference.Should().BeTrue();
+    }
+
+    [Fact]
+    public void BuildFromInbound_ShouldFallBackToSenderOpenId_ForP2pWithoutChatIdOrUnionId()
+    {
+        // Last-resort identifier. Surfaces `code:99992361 open_id cross app` when the
+        // relay-side ingress and outbound apps differ — flip FellBack so call sites LogDebug
+        // and operators see exactly which identifier they ended up with.
         var target = LarkConversationTargets.BuildFromInbound(
             chatType: "p2p",
             conversationId: "oc_dm_underlying_chat",
