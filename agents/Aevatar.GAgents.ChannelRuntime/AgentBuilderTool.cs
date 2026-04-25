@@ -728,6 +728,33 @@ public sealed class AgentBuilderTool : IAgentTool
         };
     }
 
+    /// <summary>
+    /// Builds the JSON body for <c>POST /api/v1/api-keys</c> when the agent-builder mints a
+    /// scoped child key for a new agent. Pins <c>allow_all_services = false</c> alongside the
+    /// resolved <c>allowed_service_ids</c> so the agent's proxy reach is bounded to exactly the
+    /// catalog slugs the template requires.
+    /// </summary>
+    /// <remarks>
+    /// PR #418 review (4175529548): NyxID's <c>CreateApiKeyRequest.allow_all_services</c>
+    /// (<c>backend/src/handlers/api_keys.rs:105</c>) is <c>#[serde(default = "default_true")]</c>,
+    /// and proxy enforcement (<c>backend/src/handlers/proxy.rs:1030</c>) only checks
+    /// <c>allowed_service_ids</c> when <c>!auth_user.allow_all_services</c>. Omitting the field
+    /// means NyxID stores <c>true</c>, the resolved <c>UserService.id</c> list is persisted but
+    /// never consulted, and the key has broad proxy reach across every service the parent token
+    /// can see. Setting <c>false</c> explicitly:
+    /// <list type="bullet">
+    ///   <item>activates the enforcement path #417 was written to satisfy,</item>
+    ///   <item>makes the narrow-scope intent first-class instead of relying on the parent
+    ///   delegation token's setting (which is what surfaced the bug in production), and</item>
+    ///   <item>triggers <c>validate_service_ids</c> at create-time
+    ///   (<c>backend/src/services/key_service.rs:183</c>), so a malformed
+    ///   <c>UserService.id</c> fails fast at <c>POST /api-keys</c> instead of silently passing
+    ///   through and 403'ing on every later proxy call.</item>
+    /// </list>
+    /// <c>allow_all_nodes</c> stays at the NyxID default — this flow does not restrict node
+    /// routing, and pinning it would surface a separate boundary that has nothing to do with
+    /// the agent's service reach.
+    /// </remarks>
     private static string BuildCreateApiKeyPayload(string agentId, IReadOnlyList<string> requiredServiceIds)
     {
         if (requiredServiceIds.Count == 0)
@@ -739,6 +766,7 @@ public sealed class AgentBuilderTool : IAgentTool
             ["scopes"] = "proxy",
             ["platform"] = "generic",
             ["allowed_service_ids"] = requiredServiceIds,
+            ["allow_all_services"] = false,
         };
 
         return JsonSerializer.Serialize(payload);
@@ -1013,11 +1041,14 @@ public sealed class AgentBuilderTool : IAgentTool
     /// catalog id. The mismatch silently passed at <c>POST /api-keys</c> creation time, then
     /// surfaced as <c>403 ApiKeyScopeForbidden</c> on every proxy call.</para>
     /// <para>Why the old code looked correct in development: <c>allow_all_services=true</c>
-    /// short-circuits the enforcement check. Session-token-minted API keys default to
-    /// <c>allow_all_services=true</c>, so a developer reproducing the create-key + proxy-call
+    /// short-circuits the enforcement check (NyxID <c>proxy.rs:1030</c>). Session-token-minted
+    /// API keys default to <c>true</c>, so a developer reproducing the create-key + proxy-call
     /// dance from a CLI never tripped the bug. The agent path mints child keys via the
     /// channel-relay delegation token; NyxID forces those children to inherit
-    /// <c>allow_all_services=false</c> from the parent, which is when enforcement kicks in.</para>
+    /// <c>allow_all_services=false</c> from the parent, which is when enforcement kicks in.
+    /// The <c>BuildCreateApiKeyPayload</c> change in PR #418 (review 4175529548) makes the
+    /// narrow-scope intent first-class by setting <c>allow_all_services=false</c> explicitly,
+    /// so this resolver's output is consulted regardless of the parent's setting.</para>
     /// <para>The fix: use <c>GET /api/v1/user-services</c>, which lists this user's
     /// <c>UserService</c> instances. For each instance the response carries the per-user
     /// <c>id</c> (what enforcement actually checks) plus <c>slug</c>, <c>is_active</c>, and a

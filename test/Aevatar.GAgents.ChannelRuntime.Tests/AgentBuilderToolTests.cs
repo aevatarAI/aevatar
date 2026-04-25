@@ -217,7 +217,11 @@ public sealed class AgentBuilderToolTests
                 .Select(static item => item.GetString())
                 .Should()
                 .BeEquivalentTo(["svc-github", "svc-lark"]);
-            apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
+            // PR #418 review (4175529548): NyxID's `allow_all_services` defaults to `true`
+            // (api_keys.rs:105) and proxy enforcement only fires when `!allow_all_services`
+            // (proxy.rs:1030). Pin that the field is *present* and `false` so the resolved
+            // `allowed_service_ids` actually constrains the key's reach.
+            apiKeyDoc.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
         }
         finally
         {
@@ -1747,7 +1751,11 @@ public sealed class AgentBuilderToolTests
                 .Select(static item => item.GetString())
                 .Should()
                 .BeEquivalentTo(["svc-lark"]);
-            apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
+            // PR #418 review (4175529548): NyxID's `allow_all_services` defaults to `true`
+            // (api_keys.rs:105) and proxy enforcement only fires when `!allow_all_services`
+            // (proxy.rs:1030). Pin that the field is *present* and `false` so the resolved
+            // `allowed_service_ids` actually constrains the key's reach.
+            apiKeyDoc.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
         }
         finally
         {
