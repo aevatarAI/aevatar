@@ -109,7 +109,12 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var cardMarkdown = bodyElements[1].GetProperty("content").GetString();
         cardMarkdown.ShouldNotBeNull();
         cardMarkdown.ShouldContain("skill-runner");
-        bodyElements[2].GetProperty("tag").GetString().ShouldBe("action");
+        var button = bodyElements[2];
+        button.GetProperty("tag").GetString().ShouldBe("button");
+        button.TryGetProperty("value", out _).ShouldBeFalse();
+        var behavior = button.GetProperty("behaviors")[0];
+        behavior.GetProperty("type").GetString().ShouldBe("callback");
+        behavior.GetProperty("value").GetProperty("action_id").GetString().ShouldBe("status");
     }
 
     [Fact]
@@ -156,6 +161,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
             .GetProperty("elements")
             .EnumerateArray()
             .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "input");
+        inputElement.TryGetProperty("label", out _).ShouldBeFalse();
         inputElement.GetProperty("default_value").GetString().ShouldBe("eanzhao");
     }
 
@@ -202,5 +208,60 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
             .EnumerateArray()
             .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "input");
         inputElement.TryGetProperty("default_value", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Compose_WhenRenderingFormSubmit_UsesLarkV2CallbackBehavior()
+    {
+        var intent = new MessageContent();
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = "github_username",
+            Label = "GitHub Username",
+            Placeholder = "octocat",
+        });
+        var submit = new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "submit_daily_report",
+            Label = "Create",
+            IsPrimary = true,
+        };
+        submit.Arguments["agent_builder_action"] = "create_daily_report";
+        intent.Actions.Add(submit);
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var formElement = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "form");
+        var submitButton = formElement
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "button");
+
+        submitButton.GetProperty("name").GetString().ShouldBe("submit_daily_report");
+        submitButton.GetProperty("form_action_type").GetString().ShouldBe("submit");
+        submitButton.TryGetProperty("value", out _).ShouldBeFalse();
+        var behavior = submitButton.GetProperty("behaviors")[0];
+        behavior.GetProperty("type").GetString().ShouldBe("callback");
+        var value = behavior.GetProperty("value");
+        value.GetProperty("action_id").GetString().ShouldBe("submit_daily_report");
+        value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily_report");
     }
 }

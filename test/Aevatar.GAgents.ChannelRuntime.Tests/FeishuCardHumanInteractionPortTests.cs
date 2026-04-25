@@ -53,9 +53,18 @@ public sealed class FeishuCardHumanInteractionPortTests
         bodyElements.GetArrayLength().Should().BeGreaterThan(1);
         bodyElements[1].GetProperty("tag").GetString().Should().Be("form");
         var formElements = bodyElements[1].GetProperty("elements");
-        formElements[2].GetProperty("text").GetProperty("content").GetString().Should().Be("Approve");
-        formElements[3].GetProperty("text").GetProperty("content").GetString().Should().Be("Reject");
-        formElements[2].GetProperty("value").GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
+        var approveButton = formElements
+            .EnumerateArray()
+            .First(e => e.GetProperty("tag").GetString() == "button" &&
+                        e.GetProperty("text").GetProperty("content").GetString() == "Approve");
+        var rejectButton = formElements
+            .EnumerateArray()
+            .First(e => e.GetProperty("tag").GetString() == "button" &&
+                        e.GetProperty("text").GetProperty("content").GetString() == "Reject");
+        approveButton.GetProperty("text").GetProperty("content").GetString().Should().Be("Approve");
+        rejectButton.GetProperty("text").GetProperty("content").GetString().Should().Be("Reject");
+        approveButton.GetProperty("behaviors")[0].GetProperty("value").GetProperty("actor_id").GetString()
+            .Should().Be("workflow-actor-1");
     }
 
     [Fact]
@@ -298,9 +307,17 @@ public sealed class FeishuCardHumanInteractionPortTests
         var formElements = form.GetProperty("elements");
         document.RootElement.GetProperty("body").GetProperty("elements")[0].GetProperty("content").GetString()
             .Should().Contain("/submit actor_id=workflow-actor-2 run_id=run-2 step_id=input-1");
-        formElements[0].GetProperty("name").GetString().Should().Be("user_input");
-        formElements[1].GetProperty("text").GetProperty("content").GetString().Should().Be("Submit");
-        formElements[1].GetProperty("value").GetProperty("run_id").GetString().Should().Be("run-2");
+        var input = formElements
+            .EnumerateArray()
+            .Single(e => e.GetProperty("tag").GetString() == "input");
+        input.GetProperty("name").GetString().Should().Be("user_input");
+        input.TryGetProperty("label", out _).Should().BeFalse();
+        var submitButton = formElements
+            .EnumerateArray()
+            .Single(e => e.GetProperty("tag").GetString() == "button");
+        submitButton.GetProperty("text").GetProperty("content").GetString().Should().Be("Submit");
+        submitButton.GetProperty("behaviors")[0].GetProperty("value").GetProperty("run_id").GetString()
+            .Should().Be("run-2");
     }
 
     [Fact]
