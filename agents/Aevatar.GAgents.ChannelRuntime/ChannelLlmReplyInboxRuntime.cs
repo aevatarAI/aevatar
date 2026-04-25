@@ -142,7 +142,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         var terminalState = LlmReplyTerminalState.Completed;
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
-        TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, actor);
+        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, actor);
 
         try
         {
