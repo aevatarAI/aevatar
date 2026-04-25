@@ -301,11 +301,32 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             // Surface downstream rejection so HandleTriggerAsync sees a real failure instead of
             // persisting SkillRunnerExecutionCompletedEvent on a silently-dropped Lark response.
-            throw new InvalidOperationException(
-                larkCode is { } code
-                    ? $"Lark message delivery rejected (code={code}): {detail}"
-                    : $"Lark message delivery rejected: {detail}");
+            // The Error field on SkillRunnerExecutionFailedEvent ends up in `/agent-status`'s
+            // `last_error`, so for known recurring stale-state codes we expand the bare Lark
+            // message into actionable recovery guidance — otherwise the user sees a cryptic
+            // `99992361 open_id cross app` and has no way to know they need to rebuild the
+            // agent.
+            throw new InvalidOperationException(BuildLarkRejectionMessage(larkCode, detail));
         }
+    }
+
+    private static string BuildLarkRejectionMessage(int? larkCode, string detail)
+    {
+        if (larkCode == LarkBotErrorCodes.OpenIdCrossApp)
+        {
+            // The agent's persisted OutboundConfig was captured before union_id ingress existed
+            // (PR #409 added that), so `LarkReceiveIdType=open_id` is permanently scoped to a
+            // different Lark app than the customer outbound. Self-heal is not possible without
+            // a fresh ingress event carrying union_id; the user must rebuild the agent.
+            return
+                $"Lark message delivery rejected (code={larkCode}): {detail}. " +
+                "This agent was created before cross-app union_id ingress existed; " +
+                "delete and recreate it (`/agents` → Delete → `/daily`) to pick up the cross-app safe target.";
+        }
+
+        return larkCode is { } code
+            ? $"Lark message delivery rejected (code={code}): {detail}"
+            : $"Lark message delivery rejected: {detail}";
     }
 
     private async Task TrySendFailureAsync(string error, CancellationToken ct)

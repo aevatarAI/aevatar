@@ -39,6 +39,30 @@ public sealed class AgentBuilderCardFlowTests
     }
 
     [Fact]
+    public async Task TryResolveAsync_TemplatesCardButton_DispatchesListTemplatesTool()
+    {
+        // The /agents card surfaces a `Templates` button; PR #409 added it. Without an explicit
+        // case in the card_action switch the button click would no-op and confuse users who
+        // navigate by tapping rather than typing /templates. Pin the contract so a refactor can
+        // not silently drop the routing.
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "card_action",
+            RegistrationScopeId = "scope-1",
+        };
+        inbound.Extra["agent_builder_action"] = "list_templates";
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("list_templates");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be("list_templates");
+    }
+
+    [Fact]
     public async Task TryResolveAsync_DailyReportSubmit_AllowsMissingGithubUsername_ForUserConfigFallback()
     {
         var inbound = new ChannelInboundEvent

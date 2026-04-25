@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Xunit;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
@@ -198,9 +199,10 @@ public sealed class AgentBuilderToolTests
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.NyxApiKey == "full-key-1" &&
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.ApiKeyId == "key-1" &&
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.OwnerNyxUserId == "user-1" &&
-                    // For p2p the typed delivery target pins the user open_id from SenderId so
-                    // outbound DMs go through Lark's open_id receive type even when the relay's
-                    // ConversationId is the underlying oc_* chat or a route id.
+                    // p2p inbound without LarkUnionId in the request context falls back to the
+                    // sender open_id. Lark accepts this only when the relay-side and outbound
+                    // apps match; cross-app deployments must populate LarkUnionId at ingress
+                    // (see test below) to avoid `code:99992361 open_id cross app` rejections.
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "ou_user_1" &&
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "open_id"),
                 Arg.Any<CancellationToken>());
@@ -221,6 +223,326 @@ public sealed class AgentBuilderToolTests
                 .Should()
                 .BeEquivalentTo(["svc-github", "svc-lark"]);
             apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_PinsLarkUnionId_When_RelayPropagatesIt()
+    {
+        // Cross-app outbound delivery (`code:99992361 open_id cross app`) requires the
+        // tenant-stable `union_id`. When the relay surfaces it via
+        // ChannelMetadataKeys.LarkUnionId the typed delivery target on
+        // InitializeSkillRunnerCommand must pin (union_id, "union_id") instead of falling back
+        // to the relay-app-scoped open_id. Integration counterpart of
+        // LarkConversationTargetsTests.BuildFromInbound_ShouldPreferLarkUnionId_*.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-union-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-union-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-union-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-union-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-union-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-union-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github"}
+              ],
+              "custom_services": [
+                {"id":"svc-lark","slug":"api-lark-bot"}
+              ],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-union-1","full_key":"full-key-union-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_dm_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            [ChannelMetadataKeys.LarkUnionId] = "on_user_1",
+            [ChannelMetadataKeys.LarkChatId] = "oc_dm_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-union-1",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            await skillRunnerActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "on_user_1" &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "union_id"),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_LogsFallbackBreadcrumb_When_LarkUnionIdMissing()
+    {
+        // Reviewer (PR #409 r3141562097): when the relay does not surface LarkUnionId at agent
+        // creation, BuildFromInbound returns (ou_*, open_id, FellBack=true). The flag itself is
+        // not persisted on OutboundConfig (typed receive id/type only), so a downstream
+        // LarkConversationTargets.Resolve() at SkillRunner send time sees populated typed fields
+        // and reports FellBack=false — meaning the cross-app risk is invisible to operators
+        // unless the agent-create site logs it once. Pin the LogDebug breadcrumb so the
+        // observability promised in the PR description actually fires in production.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-fallback-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-fallback-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-fallback-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-fallback-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-fallback-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-fallback-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [{"id":"svc-github","slug":"api-github"}],
+              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-fallback-1","full_key":"full-key-fallback-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+
+        var logger = new ListLogger<AgentBuilderTool>();
+        var tool = new AgentBuilderTool(services.BuildServiceProvider(), logger);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            // Deliberately NO LarkUnionId / LarkChatId — this is the cross-app risky path.
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-fallback-1",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            // The breadcrumb must capture enough context to correlate with downstream Lark
+            // `99992361` rejections: agent_id, the missing typed fields, and the chosen receive
+            // type. Otherwise operators get no signal and the silent-default bug class re-opens.
+            var fallback = logger.Entries.Should().ContainSingle(entry =>
+                entry.Level == LogLevel.Debug &&
+                entry.Message.Contains("Agent builder fell back to legacy delivery target inference") &&
+                entry.Message.Contains("skill-runner-fallback-1") &&
+                entry.Message.Contains("hasUnionId=False") &&
+                entry.Message.Contains("hasLarkChatId=False") &&
+                entry.Message.Contains("hasSenderId=True") &&
+                entry.Message.Contains("resolvedReceiveIdType=open_id")).Subject;
+            fallback.Message.Should().Contain("99992361");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_DoesNotLogFallback_When_LarkUnionIdPresent()
+    {
+        // Counterpart to the breadcrumb test: when the relay surfaces union_id, the typed
+        // delivery target is cross-app safe and we must NOT spam Debug logs on every successful
+        // ingress (otherwise the breadcrumb signal becomes useless noise once /agents traffic
+        // ramps up).
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-no-fallback-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-no-fallback-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-no-fallback-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-no-fallback-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-no-fallback-1").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-no-fallback-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [{"id":"svc-github","slug":"api-github"}],
+              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-no-fallback-1","full_key":"full-key-no-fallback-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+
+        var logger = new ListLogger<AgentBuilderTool>();
+        var tool = new AgentBuilderTool(services.BuildServiceProvider(), logger);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            [ChannelMetadataKeys.LarkUnionId] = "on_user_1",
+            [ChannelMetadataKeys.LarkChatId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-no-fallback-1",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            logger.Entries.Should().NotContain(entry =>
+                entry.Message.Contains("fell back to legacy delivery target inference"));
         }
         finally
         {
@@ -1545,6 +1867,40 @@ public sealed class AgentBuilderToolTests
             SavedScopeId = scopeId;
             SavedGithubUsername = githubUsername;
             return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Minimal in-memory <see cref="ILogger{T}"/> that records each log call so tests can assert
+    /// on level + formatted message. Avoids a full Microsoft.Extensions.Logging.Testing dependency
+    /// for a single observability assertion.
+    /// </summary>
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<LogEntry> Entries { get; } = new();
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            ArgumentNullException.ThrowIfNull(formatter);
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception)));
+        }
+
+        public sealed record LogEntry(LogLevel Level, string Message);
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+
+            public void Dispose() { }
         }
     }
 }

@@ -181,6 +181,13 @@ internal static class AgentBuilderCardFlow
                 decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
                 return true;
 
+            case ListTemplatesAction:
+                // The /agents card surfaces a `Templates` button (also reachable via the
+                // text-flow `/templates` slash command). Without this branch, clicking the
+                // button leaves the user with an unhandled card action and no feedback.
+                decision = AgentBuilderFlowDecision.ToolCall(ListTemplatesAction, """{"action":"list_templates"}""");
+                return true;
+
             case AgentStatusAction:
                 if (!TryBuildAgentActionArguments(evt, "agent_status", out argumentsJson, out validationError))
                 {

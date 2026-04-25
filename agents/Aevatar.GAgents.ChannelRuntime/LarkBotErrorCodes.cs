@@ -12,4 +12,15 @@ internal static class LarkBotErrorCodes
     /// config gap when the bot's app scope is missing the reaction permission.
     /// </summary>
     public const int NoPermissionToReact = 231002;
+
+    /// <summary>
+    /// "open_id cross app" — Lark <c>open_id</c> is app-scoped (each Lark app issues its own
+    /// <c>ou_*</c> for the same user). When relay-side ingress (e.g. NyxID's Lark app) and
+    /// outbound (e.g. customer's <c>api-lark-bot</c>) are different apps, sending to a
+    /// <c>receive_id_type=open_id</c> with the relay-app-scoped <c>ou_*</c> is rejected. Surfaces
+    /// on legacy SkillRunner / human-interaction state captured before <c>union_id</c> ingress
+    /// existed; rebuild the agent (e.g. <c>/agents</c> → Delete → <c>/daily</c>) to pin the new
+    /// cross-app safe pair.
+    /// </summary>
+    public const int OpenIdCrossApp = 99992361;
 }

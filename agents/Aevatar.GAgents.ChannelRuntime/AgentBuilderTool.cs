@@ -236,10 +236,7 @@ public sealed class AgentBuilderTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-        var deliveryTarget = LarkConversationTargets.BuildFromInbound(
-            AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType),
-            conversationId,
-            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId));
+        var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeSkillRunnerCommand
         {
             SkillName = templateSpec.SkillName,
@@ -383,10 +380,7 @@ public sealed class AgentBuilderTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-        var deliveryTarget = LarkConversationTargets.BuildFromInbound(
-            AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType),
-            conversationId,
-            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId));
+        var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeWorkflowAgentCommand
         {
             WorkflowId = workflowUpsert.Workflow.WorkflowId,
@@ -1415,6 +1409,46 @@ public sealed class AgentBuilderTool : IAgentTool
     {
         var normalized = (value ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    /// <summary>
+    /// Builds the typed Lark delivery target from the current AgentToolRequestContext and emits
+    /// a LogDebug breadcrumb when <see cref="LarkConversationTargets.BuildFromInbound"/> falls
+    /// back from the cross-app safe pair (union_id / chat_id) to the legacy open_id /
+    /// conversation_id path. The fallback flag is intentionally NOT persisted on
+    /// <c>SkillRunnerOutboundConfig</c> / <c>InitializeWorkflowAgentCommand</c> because the
+    /// downstream <see cref="LarkConversationTargets.Resolve"/> path treats any populated typed
+    /// pair as authoritative — so this is the only place the cross-app risk surfaces. Operators
+    /// correlating Lark <c>code:99992361 open_id cross app</c> rejections need this log line to
+    /// confirm whether the relay surfaced <c>union_id</c> at agent-create time.
+    /// </summary>
+    private LarkReceiveTarget ResolveDeliveryTarget(string conversationId, string agentId)
+    {
+        var chatType = AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType);
+        var senderId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId);
+        var unionId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkUnionId);
+        var chatId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkChatId);
+
+        var target = LarkConversationTargets.BuildFromInbound(
+            chatType,
+            conversationId,
+            senderId,
+            unionId,
+            chatId);
+
+        if (target.FellBackToPrefixInference)
+        {
+            _logger?.LogDebug(
+                "Agent builder fell back to legacy delivery target inference for {AgentId}: chatType={ChatType}, hasUnionId={HasUnionId}, hasLarkChatId={HasLarkChatId}, hasSenderId={HasSenderId}, resolvedReceiveIdType={ReceiveIdType}. Cross-app outbound (e.g. customer api-lark-bot) may surface Lark `99992361 open_id cross app` until the relay propagates union_id.",
+                agentId,
+                chatType ?? string.Empty,
+                !string.IsNullOrWhiteSpace(unionId),
+                !string.IsNullOrWhiteSpace(chatId),
+                !string.IsNullOrWhiteSpace(senderId),
+                target.ReceiveIdType);
+        }
+
+        return target;
     }
 
     private sealed class BuilderArgs

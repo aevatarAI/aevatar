@@ -203,6 +203,42 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .WithMessage("*upstream timeout*");
     }
 
+    [Fact]
+    public async Task SendOutputAsync_ShouldIncludeRecreateHint_When_LarkRejectsAsCrossAppOpenId()
+    {
+        // PR #409 review (pulls/409#review-4175198266): after this fix new agents capture
+        // union_id, but agents created before the fix still have `LarkReceiveIdType=open_id`
+        // pinned to a relay-app-scoped `ou_*`. Their next scheduled run hits Lark
+        // `99992361 open_id cross app` and the user sees the bare error in `/agent-status`'s
+        // `last_error` with no clue what to do. Surface explicit "delete and recreate" guidance
+        // so the failure becomes self-documenting.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_relay_app_user_1",
+            LarkReceiveIdType = "open_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler(
+            """{"code":99992361,"msg":"open_id cross app","error":{"message":"Refer to the documentation"}}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.WithMessage("*code=99992361*");
+        assertion.WithMessage("*open_id cross app*");
+        // The hint must be actionable enough that the user can recover without reading source.
+        assertion.WithMessage("*before cross-app union_id ingress existed*");
+        assertion.WithMessage("*/agents*");
+        assertion.WithMessage("*Delete*");
+        assertion.WithMessage("*/daily*");
+    }
+
     private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(

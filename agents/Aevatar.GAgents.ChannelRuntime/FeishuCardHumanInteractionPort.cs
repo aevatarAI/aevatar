@@ -359,11 +359,28 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         if (LarkProxyResponse.TryGetError(result, out var larkCode, out var detail))
         {
-            throw new InvalidOperationException(
-                larkCode is { } code
-                    ? $"{failurePrefix} (code={code}): {detail}"
-                    : $"{failurePrefix}: {detail}");
+            throw new InvalidOperationException(BuildLarkRejectionMessage(failurePrefix, larkCode, detail));
         }
+    }
+
+    private static string BuildLarkRejectionMessage(string failurePrefix, int? larkCode, string detail)
+    {
+        if (larkCode == LarkBotErrorCodes.OpenIdCrossApp)
+        {
+            // Mirrors the SkillRunnerGAgent recovery hint: the workflow agent's catalog target
+            // was captured before union_id ingress existed and the persisted typed pair is
+            // permanently relay-app-scoped. Surface the recreate-the-agent instruction inside
+            // the exception message so it ends up in `/agent-status`'s `last_error` field
+            // instead of the cryptic Lark `99992361 open_id cross app`.
+            return
+                $"{failurePrefix} (code={larkCode}): {detail}. " +
+                "This workflow agent was created before cross-app union_id ingress existed; " +
+                "delete and recreate it (`/agents` → Delete → `/social-media`) to pick up the cross-app safe target.";
+        }
+
+        return larkCode is { } code
+            ? $"{failurePrefix} (code={code}): {detail}"
+            : $"{failurePrefix}: {detail}";
     }
 
     private static bool SupportsApproveReject(HumanInteractionRequest request) =>

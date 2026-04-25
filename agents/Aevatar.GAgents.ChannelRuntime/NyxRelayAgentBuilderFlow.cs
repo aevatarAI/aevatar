@@ -64,8 +64,8 @@ internal static class NyxRelayAgentBuilderFlow
                 "create_daily_report" => FormatCreateDailyReportResult(doc.RootElement),
                 "create_social_media" => TextContent(FormatCreateSocialMediaResult(doc.RootElement)),
                 "list_templates" => TextContent(FormatListTemplatesResult(doc.RootElement)),
-                "list_agents" => TextContent(FormatListAgentsResult(doc.RootElement)),
-                "agent_status" => TextContent(FormatAgentStatusResult(doc.RootElement)),
+                "list_agents" => FormatListAgentsCard(doc.RootElement),
+                "agent_status" => FormatAgentStatusCard(doc.RootElement),
                 "run_agent" => TextContent(FormatRunAgentResult(doc.RootElement)),
                 "disable_agent" => TextContent(FormatLifecycleStatusResult("Agent disabled.", doc.RootElement)),
                 "enable_agent" => TextContent(FormatLifecycleStatusResult("Agent enabled.", doc.RootElement)),
@@ -366,6 +366,80 @@ internal static class NyxRelayAgentBuilderFlow
         return string.Join('\n', lines);
     }
 
+    /// <summary>
+    /// Renders <c>/agents</c> as an interactive Lark card. Each agent gets a section block with
+    /// status fields and a "Status" button that triggers <c>agent_builder_action=agent_status</c>
+    /// (handled by <see cref="AgentBuilderCardFlow"/>); a footer button cluster offers shortcuts
+    /// to create another agent or browse templates. Empty result keeps the existing helper-text
+    /// reply since there are no per-agent buttons to render.
+    /// </summary>
+    private static MessageContent FormatListAgentsCard(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return TextContent($"List agents failed: {error}");
+
+        var content = new MessageContent();
+
+        if (!root.TryGetProperty("agents", out var agentsElement) ||
+            agentsElement.ValueKind != JsonValueKind.Array ||
+            agentsElement.GetArrayLength() == 0)
+        {
+            content.Cards.Add(new CardBlock
+            {
+                Kind = CardBlockKind.Section,
+                BlockId = "agents_empty",
+                Title = "No agents yet",
+                Text = "Create one with `/daily` for a daily GitHub report or `/social-media` for a social-media drafter.",
+            });
+            content.Actions.Add(BuildButton("Create Daily Report", "open_daily_report_form", isPrimary: true));
+            content.Actions.Add(BuildButton("Create Social Media", "open_social_media_form", isPrimary: false));
+            return content;
+        }
+
+        var summary = new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = "agents_summary",
+            Title = "Your agents",
+            Text = "Tap **Status** under any agent to drill in. Action buttons there run, disable/enable, or delete the agent.",
+        };
+        content.Cards.Add(summary);
+
+        foreach (var item in agentsElement.EnumerateArray())
+        {
+            var agentId = ReadString(item, "agent_id") ?? "unknown-agent";
+            var template = ReadString(item, "template") ?? "unknown-template";
+            var status = ReadString(item, "status") ?? "unknown";
+            var nextRun = ReadString(item, "next_scheduled_run") ?? "pending";
+            var lastRun = NormalizeOptional(ReadString(item, "last_run_at"));
+
+            var card = new CardBlock
+            {
+                Kind = CardBlockKind.Section,
+                BlockId = $"agent_row:{agentId}",
+                Title = $"`{agentId}`",
+                Text = $"Template: `{template}` · Status: `{status}`\nNext run: `{nextRun}`{(lastRun is null ? string.Empty : $" · Last run: `{lastRun}`")}",
+            };
+            content.Cards.Add(card);
+
+            // Per-agent "Status" button: triggers `agent_status` action which AgentBuilderCardFlow
+            // already handles and re-renders as a status card with the run / lifecycle actions.
+            content.Actions.Add(BuildAgentScopedButton(
+                label: $"Status: {ShortenAgentId(agentId)}",
+                agentBuilderAction: "agent_status",
+                agentId: agentId,
+                isPrimary: false));
+        }
+
+        // Footer shortcut row mirrors what AgentBuilderCardFlow renders on the dedicated card
+        // path so users have one consistent UX whether they typed `/agents` or arrived via card.
+        content.Actions.Add(BuildButton("Create Daily Report", "open_daily_report_form", isPrimary: false));
+        content.Actions.Add(BuildButton("Create Social Media", "open_social_media_form", isPrimary: false));
+        content.Actions.Add(BuildButton("Templates", "list_templates", isPrimary: false));
+
+        return content;
+    }
+
     private static string FormatAgentStatusResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
@@ -383,6 +457,102 @@ internal static class NyxRelayAgentBuilderFlow
             NormalizeOptional(ReadString(root, "last_error")) is { } lastError ? $"Last error: {lastError}" : null,
             NormalizeOptional(ReadString(root, "note")),
             $"Next commands: /run-agent {agentId}, /disable-agent {agentId}, /enable-agent {agentId}, /delete-agent {agentId} confirm");
+    }
+
+    /// <summary>
+    /// Renders <c>/agent-status &lt;agent_id&gt;</c> as an interactive card with action buttons
+    /// (Run, Disable, Enable, Delete). Each button submits the corresponding
+    /// <c>agent_builder_action</c> with the agent_id as an argument so
+    /// <see cref="AgentBuilderCardFlow"/> can route the click to the existing tool action without
+    /// the user having to retype the id. Mirrors the card produced by the card-flow path so the
+    /// text-command and card-flow surfaces stay visually consistent.
+    /// </summary>
+    private static MessageContent FormatAgentStatusCard(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return TextContent($"Agent status failed: {error}");
+
+        var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
+        var template = ReadString(root, "template") ?? "unknown-template";
+        var status = ReadString(root, "status") ?? "unknown";
+        var schedule = $"{ReadString(root, "schedule_cron") ?? "n/a"} ({ReadString(root, "schedule_timezone") ?? "n/a"})";
+        var lastRun = ReadString(root, "last_run_at") ?? "n/a";
+        var nextRun = ReadString(root, "next_scheduled_run") ?? "n/a";
+        var lastError = NormalizeOptional(ReadString(root, "last_error"));
+        var note = NormalizeOptional(ReadString(root, "note"));
+
+        var bodyLines = new List<string>
+        {
+            $"Agent ID: `{agentId}`",
+            $"Template: `{template}`",
+            $"Status: `{status}`",
+            $"Schedule: `{schedule}`",
+            $"Last run: `{lastRun}`",
+            $"Next run: `{nextRun}`",
+        };
+        if (lastError is not null)
+            bodyLines.Add($"Last error: {lastError}");
+        if (note is not null)
+            bodyLines.Add(note);
+
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = $"agent_status:{agentId}",
+            Title = "Agent Status",
+            Text = string.Join("\n", bodyLines),
+        });
+
+        // Lifecycle buttons mirror the legacy text "Next commands: ..." line. Disable and Enable
+        // are both shown so the user can flip status either direction without typing; the click
+        // handler enforces the invariants. Delete is marked danger so Lark renders it red and the
+        // user has a final visual confirm before submitting.
+        var isRunning = string.Equals(status, SkillRunnerDefaults.StatusRunning, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(status, SkillRunnerDefaults.StatusError, StringComparison.OrdinalIgnoreCase);
+        content.Actions.Add(BuildAgentScopedButton("Run Now", "run_agent", agentId, isPrimary: isRunning));
+        content.Actions.Add(BuildAgentScopedButton("Disable", "disable_agent", agentId, isPrimary: false));
+        content.Actions.Add(BuildAgentScopedButton("Enable", "enable_agent", agentId, isPrimary: false));
+        var deleteButton = BuildAgentScopedButton("Delete", "delete_agent", agentId, isPrimary: false);
+        deleteButton.IsDanger = true;
+        deleteButton.Arguments["confirm"] = "true";
+        content.Actions.Add(deleteButton);
+        content.Actions.Add(BuildButton("Back to Agents", "list_agents", isPrimary: false));
+
+        return content;
+    }
+
+    private static ActionElement BuildButton(string label, string agentBuilderAction, bool isPrimary)
+    {
+        var button = new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = agentBuilderAction,
+            Label = label,
+            IsPrimary = isPrimary,
+        };
+        button.Arguments["agent_builder_action"] = agentBuilderAction;
+        return button;
+    }
+
+    private static ActionElement BuildAgentScopedButton(string label, string agentBuilderAction, string agentId, bool isPrimary)
+    {
+        var button = BuildButton(label, agentBuilderAction, isPrimary);
+        button.Arguments["agent_id"] = agentId;
+        return button;
+    }
+
+    /// <summary>
+    /// Compresses long agent ids (e.g. <c>skill-runner-94d754dfdfbb416aa5a676cecd0d7a71</c>) into
+    /// a 10-char suffix so per-agent button labels stay readable in narrow Lark cards. The full
+    /// id is still carried in the button's <c>arguments</c> so the click handler routes correctly.
+    /// </summary>
+    private static string ShortenAgentId(string agentId)
+    {
+        if (string.IsNullOrEmpty(agentId) || agentId.Length <= 14)
+            return agentId;
+
+        return $"…{agentId[^10..]}";
     }
 
     private static string FormatRunAgentResult(JsonElement root)
