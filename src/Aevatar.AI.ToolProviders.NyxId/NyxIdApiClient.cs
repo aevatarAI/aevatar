@@ -209,6 +209,9 @@ public sealed class NyxIdApiClient
 
     // ─── User Services (for route command) ───
 
+    public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/user-services", ct);
+
     public Task<string> UpdateUserServiceAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
 
