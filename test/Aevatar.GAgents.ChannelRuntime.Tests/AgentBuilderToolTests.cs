@@ -132,17 +132,12 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
               "services": [
-                {"id":"svc-github","slug":"api-github"}
-              ],
-              "custom_services": [
-                {"id":"svc-lark","slug":"api-lark-bot"}
-              ],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
@@ -222,7 +217,11 @@ public sealed class AgentBuilderToolTests
                 .Select(static item => item.GetString())
                 .Should()
                 .BeEquivalentTo(["svc-github", "svc-lark"]);
-            apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
+            // PR #418 review (4175529548): NyxID's `allow_all_services` defaults to `true`
+            // (api_keys.rs:105) and proxy enforcement only fires when `!allow_all_services`
+            // (proxy.rs:1030). Pin that the field is *present* and `false` so the resolved
+            // `allowed_service_ids` actually constrains the key's reach.
+            apiKeyDoc.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
         }
         finally
         {
@@ -275,17 +274,12 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
               "services": [
-                {"id":"svc-github","slug":"api-github"}
-              ],
-              "custom_services": [
-                {"id":"svc-lark","slug":"api-lark-bot"}
-              ],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-union-1","full_key":"full-key-union-1"}""");
@@ -343,12 +337,18 @@ public sealed class AgentBuilderToolTests
     [Fact]
     public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubProxyDeniedForNewKey()
     {
-        // Issue aevatarAI/aevatar#411: a daily_report agent is created with the new agent API
-        // key flagged `allowed_service_ids=api-github`, but if NyxID's binding for the user's
-        // GitHub OAuth credential is missing/expired, every scheduled run hits 401/403 from
-        // the proxy and the user only sees an empty / degraded report. Preflight
-        // `proxy/s/api-github/rate_limit` with the freshly minted key and fail-fast with an
-        // actionable error so the agent is not persisted in a "always-fails-at-runtime" state.
+        // Issue aevatarAI/aevatar#411 + #417: the create flow preflights GitHub proxy access
+        // with the freshly minted agent API key. Originally (#411) the failure mode this caught
+        // was misdiagnosed as a missing api-key→GitHub binding; #417 fixed that root cause by
+        // populating `allowed_service_ids` with per-user `UserService.id`s instead of catalog
+        // ids. The probe is retained because GitHub OAuth grants can still be revoked outside
+        // our control (user clicks "Revoke access" at GitHub, scopes downgraded, account
+        // temp-banned). Surfacing the 401/403 at create-time avoids persisting an agent that
+        // would produce empty output on every scheduled run.
+        //
+        // Pinned in this test: the structured `github_proxy_access_denied` error is returned
+        // (no actor invocation), AND the freshly minted api-key IS revoked so retries don't
+        // accumulate orphan proxy-scoped keys (codex review PR #418 r3141846175).
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
@@ -376,13 +376,12 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
-              "services": [{"id":"svc-github","slug":"api-github"}],
-              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-403","full_key":"full-key-403"}""");
@@ -393,9 +392,10 @@ public sealed class AgentBuilderToolTests
         // exercised against what runtime delivers, not a synthetic shape.
         handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
             """{"error": true, "status": 403, "body": "{\"message\":\"Bad credentials\",\"documentation_url\":\"https://docs.github.com/rest\"}"}""");
-        // Reviewer (PR #412 r3141699756): on the fail-fast path we must also revoke the
-        // freshly-created agent API key, otherwise repeated `/daily` attempts accumulate
-        // orphan proxy-scoped keys. Wire a DELETE handler so the test can verify it ran.
+        // Codex review (PR #418 r3141846175): retries of `/daily` mint a new api-key on every
+        // run. Without best-effort revoke on preflight failure, the user's NyxID account would
+        // accumulate one orphan proxy-scoped key per failed retry. Stub the DELETE so the test
+        // can verify the revoke fires.
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-403", """{"deleted":true}""");
 
         var nyxClient = new NyxIdApiClient(
@@ -432,7 +432,9 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("error").GetString().Should().Be("github_proxy_access_denied");
             doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
-            doc.RootElement.GetProperty("hint").GetString().Should().Contain("api-keys");
+            // The hint should point users at re-authorizing the GitHub provider at NyxID, not
+            // at api-key bindings (which used to be the misdiagnosis under #411 — see #417).
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("Re-authorize");
 
             // The actor must NOT receive InitializeSkillRunnerCommand — preflight aborts
             // BEFORE the actor is invoked so we don't leave a broken agent in the catalog.
@@ -440,10 +442,11 @@ public sealed class AgentBuilderToolTests
                 Arg.Any<EventEnvelope>(),
                 Arg.Any<CancellationToken>());
 
-            // Best-effort revoke of the freshly-minted API key so repeated `/daily` attempts
-            // that hit GitHub preflight don't accumulate orphan proxy-scoped keys (reviewer
-            // r3141699756). The DELETE call is the only proof from this layer that the orphan
-            // is being cleaned up.
+            // Codex review (PR #418 r3141846175): even though the api-key carries the right
+            // `allowed_service_ids` under #417, the create flow mints a *new* key per run.
+            // Without best-effort revoke on preflight failure, every failed `/daily` retry
+            // would orphan one proxy-scoped key in the user's NyxID account. Pin that the
+            // DELETE fires so we don't regress on this cleanup.
             handler.Requests.Should().Contain(r =>
                 r.Method == HttpMethod.Delete &&
                 r.Path == "/api/v1/api-keys/key-403");
@@ -500,13 +503,12 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
-              "services": [{"id":"svc-github","slug":"api-github"}],
-              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-fallback-1","full_key":"full-key-fallback-1"}""");
@@ -609,13 +611,12 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
-              "services": [{"id":"svc-github","slug":"api-github"}],
-              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-no-fallback-1","full_key":"full-key-no-fallback-1"}""");
@@ -706,13 +707,12 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
-              "services": [{"id":"svc-github","slug":"api-github"}],
-              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-pref-1","full_key":"full-key-pref-1"}""");
@@ -809,13 +809,12 @@ public sealed class AgentBuilderToolTests
             }
             """);
         handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/user", """{"login":"derived-user"}""");
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
-              "services": [{"id":"svc-github","slug":"api-github"}],
-              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-derived-1","full_key":"full-key-derived-1"}""");
@@ -984,13 +983,12 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
-              "services": [{"id":"svc-github","slug":"api-github"}],
-              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
-              "total": 2,
-              "page": 1,
-              "per_page": 100
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-save-1","full_key":"full-key-save-1"}""");
@@ -1064,15 +1062,11 @@ public sealed class AgentBuilderToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
               "services": [
-                {"id":"svc-lark","slug":"api-lark-bot"}
-              ],
-              "custom_services": [],
-              "total": 1,
-              "page": 1,
-              "per_page": 100
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
 
@@ -1105,9 +1099,354 @@ public sealed class AgentBuilderToolTests
                 }
                 """);
 
-            result.Should().Contain("Missing required Nyx proxy services");
+            // #417: when a required slug has no UserService row, surface a structured
+            // `service_not_connected` error naming the slug (was: free-text "Missing required
+            // Nyx proxy services" wrapped in `{error: "..."}`). The actor must NOT be created
+            // and no api-key request should fire.
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("service_not_connected");
+            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-github");
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("api-github");
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
             await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredSlug_IsInactive()
+    {
+        // #417: when the user has a UserService row for the required slug but it's marked
+        // `is_active: false`, surface `service_inactive` rather than persisting an api-key
+        // that NyxID's enforcement will reject at proxy time.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":false,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("service_inactive");
+            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-github");
+            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_OrgSharedSlug_IsViewerOnly()
+    {
+        // #417: when the only matching UserService row is org-shared with `allowed: false`
+        // (org viewer role), don't bind it as a proxy target — NyxID would reject the proxy
+        // call later as `org_role_insufficient`. Surface `service_org_viewer_only` so the
+        // user knows to ask an admin or connect a personal credential.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"org","org_id":"org-1","role":"viewer","allowed":false}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("service_org_viewer_only");
+            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-github");
+            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_AllowedServiceIds_AreUserServiceIds_NotCatalogIds()
+    {
+        // #417 regression pin. The bug: backend used `GET /proxy/services` (catalog list) and
+        // populated the new api-key's `allowed_service_ids` with `DownstreamService.id` (catalog
+        // UUIDs). NyxID's proxy enforcement (proxy.rs:1030) compares against `UserService.id`
+        // (per-user instance UUIDs). The mismatch was silently accepted on api-key create and
+        // 403'd on every proxy call. The fix routes through `/user-services`, returning per-user
+        // ids. Stub a response where the per-user `id` is *distinct from* `catalog_service_id`
+        // and pin that the api-key payload carries the per-user `id` value.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-id-pin", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-id-pin", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-id-pin",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-id-pin");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-id-pin").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-id-pin", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"user-svc-github-instance","slug":"api-github","catalog_service_id":"catalog-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"user-svc-lark-instance","slug":"api-lark-bot","catalog_service_id":"catalog-lark","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-id-pin","full_key":"full-key-id-pin"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-id-pin",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            var apiKeyRequest = handler.Requests.Should()
+                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
+                .Subject;
+            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
+            var allowed = apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+                .Select(static item => item.GetString())
+                .ToArray();
+            allowed.Should().BeEquivalentTo(["user-svc-github-instance", "user-svc-lark-instance"]);
+            allowed.Should().NotContain("catalog-github").And.NotContain("catalog-lark");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_PicksEligibleRow_When_DuplicateSlugRowsExist()
+    {
+        // Codex review (PR #418 r3141846173): a user with mixed bindings can have multiple
+        // UserService rows for the same slug — e.g. an org-shared `allowed:false` row and a
+        // personal active row. NyxID does not guarantee any ordering, so the resolver must
+        // pick the *eligible* row regardless of position. Pin the case where the ineligible
+        // row arrives first; the resolver must still produce the personal id and succeed.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync("skill-runner-dup", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync("skill-runner-dup", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-dup",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-dup");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-dup").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-dup", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        // Two rows for `api-github` (ineligible org-viewer first, eligible personal second) and
+        // two rows for `api-lark-bot` (inactive first, active second). The resolver must pick
+        // the eligible rows in both cases, not the first-seen ones.
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github-org","slug":"api-github","is_active":true,"credential_source":{"type":"org","org_id":"org-1","role":"viewer","allowed":false}},
+                {"id":"svc-github-personal","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark-stale","slug":"api-lark-bot","is_active":false,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark-active","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-dup","full_key":"full-key-dup"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-dup",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            var apiKeyRequest = handler.Requests.Should()
+                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
+                .Subject;
+            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
+            var allowed = apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+                .Select(static item => item.GetString())
+                .ToArray();
+            allowed.Should().BeEquivalentTo(["svc-github-personal", "svc-lark-active"]);
+            allowed.Should().NotContain("svc-github-org").And.NotContain("svc-lark-stale");
         }
         finally
         {
@@ -1315,15 +1654,11 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
               "services": [
-                {"id":"svc-lark","slug":"api-lark-bot"}
-              ],
-              "custom_services": [],
-              "total": 1,
-              "page": 1,
-              "per_page": 100
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
@@ -1416,7 +1751,11 @@ public sealed class AgentBuilderToolTests
                 .Select(static item => item.GetString())
                 .Should()
                 .BeEquivalentTo(["svc-lark"]);
-            apiKeyDoc.RootElement.TryGetProperty("allow_all_services", out _).Should().BeFalse();
+            // PR #418 review (4175529548): NyxID's `allow_all_services` defaults to `true`
+            // (api_keys.rs:105) and proxy enforcement only fires when `!allow_all_services`
+            // (proxy.rs:1030). Pin that the field is *present* and `false` so the resolved
+            // `allowed_service_ids` actually constrains the key's reach.
+            apiKeyDoc.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
         }
         finally
         {

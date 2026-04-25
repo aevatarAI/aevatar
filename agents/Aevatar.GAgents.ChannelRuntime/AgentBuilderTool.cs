@@ -226,8 +226,8 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
         var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
-        if (requiredServiceIds.error != null)
-            return JsonSerializer.Serialize(new { error = requiredServiceIds.error });
+        if (requiredServiceIds.errorJson != null)
+            return requiredServiceIds.errorJson;
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? SkillRunnerDefaults.GenerateActorId()
@@ -244,15 +244,17 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
             return JsonSerializer.Serialize(new { error = apiKeyError });
 
-        // Issue #411: the new agent API key is allowed_service_ids=api-github but might lack a
-        // bound GitHub credential, in which case every scheduled run hits 401/403 from
-        // proxy/s/api-github and the user sees no useful daily report. Preflight a safe
-        // GitHub endpoint with the freshly minted key and fail the create with an actionable
-        // error rather than persisting an agent that will never produce a usable report.
+        // Issue aevatarAI/aevatar#411 / #417 follow-up: catch in-flight GitHub OAuth revocation.
+        // The earlier `BuildGitHubAuthorizationResponseAsync` check covers the "no provider token
+        // at all" case; this preflight only earns its keep when the OAuth grant was revoked or
+        // had its scopes downgraded between connect-time and create-time.
         //
-        // Reviewer (PR #412 r3141699756): on the fail-fast path the freshly created NyxID API
-        // key would be left behind — repeated `/daily` attempts that hit GitHub preflight
-        // accumulate orphan proxy keys. Best-effort revoke before returning.
+        // Codex review (PR #418 r3141846175): even though the api-key itself is correctly
+        // configured under #417, we still revoke it on preflight failure. Reason: each retry of
+        // `/daily` mints a *new* api-key before the preflight runs, so without revoke the user's
+        // NyxID account accumulates one orphan proxy-scoped key per failed retry until they
+        // re-authorize GitHub. The revoke is a best-effort cleanup, not a safety claim about the
+        // key's correctness.
         var preflight = await PreflightGitHubProxyAsync(nyxClient, apiKeyValue!, providerSlug, ct);
         if (preflight is not null)
         {
@@ -373,8 +375,8 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
         var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, [providerSlug], ct);
-        if (requiredServiceIds.error != null)
-            return JsonSerializer.Serialize(new { error = requiredServiceIds.error });
+        if (requiredServiceIds.errorJson != null)
+            return requiredServiceIds.errorJson;
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? WorkflowAgentDefaults.GenerateActorId()
@@ -726,6 +728,33 @@ public sealed class AgentBuilderTool : IAgentTool
         };
     }
 
+    /// <summary>
+    /// Builds the JSON body for <c>POST /api/v1/api-keys</c> when the agent-builder mints a
+    /// scoped child key for a new agent. Pins <c>allow_all_services = false</c> alongside the
+    /// resolved <c>allowed_service_ids</c> so the agent's proxy reach is bounded to exactly the
+    /// catalog slugs the template requires.
+    /// </summary>
+    /// <remarks>
+    /// PR #418 review (4175529548): NyxID's <c>CreateApiKeyRequest.allow_all_services</c>
+    /// (<c>backend/src/handlers/api_keys.rs:105</c>) is <c>#[serde(default = "default_true")]</c>,
+    /// and proxy enforcement (<c>backend/src/handlers/proxy.rs:1030</c>) only checks
+    /// <c>allowed_service_ids</c> when <c>!auth_user.allow_all_services</c>. Omitting the field
+    /// means NyxID stores <c>true</c>, the resolved <c>UserService.id</c> list is persisted but
+    /// never consulted, and the key has broad proxy reach across every service the parent token
+    /// can see. Setting <c>false</c> explicitly:
+    /// <list type="bullet">
+    ///   <item>activates the enforcement path #417 was written to satisfy,</item>
+    ///   <item>makes the narrow-scope intent first-class instead of relying on the parent
+    ///   delegation token's setting (which is what surfaced the bug in production), and</item>
+    ///   <item>triggers <c>validate_service_ids</c> at create-time
+    ///   (<c>backend/src/services/key_service.rs:183</c>), so a malformed
+    ///   <c>UserService.id</c> fails fast at <c>POST /api-keys</c> instead of silently passing
+    ///   through and 403'ing on every later proxy call.</item>
+    /// </list>
+    /// <c>allow_all_nodes</c> stays at the NyxID default — this flow does not restrict node
+    /// routing, and pinning it would surface a separate boundary that has nothing to do with
+    /// the agent's service reach.
+    /// </remarks>
     private static string BuildCreateApiKeyPayload(string agentId, IReadOnlyList<string> requiredServiceIds)
     {
         if (requiredServiceIds.Count == 0)
@@ -737,6 +766,7 @@ public sealed class AgentBuilderTool : IAgentTool
             ["scopes"] = "proxy",
             ["platform"] = "generic",
             ["allowed_service_ids"] = requiredServiceIds,
+            ["allow_all_services"] = false,
         };
 
         return JsonSerializer.Serialize(payload);
@@ -998,54 +1028,174 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
-    private async Task<(IReadOnlyList<string>? value, string? error)> ResolveProxyServiceIdsAsync(
+    /// <summary>
+    /// Resolves the per-user <c>UserService.id</c> values that the new agent's API key needs in
+    /// <c>allowed_service_ids</c> to reach each required catalog slug through the NyxID proxy.
+    /// </summary>
+    /// <remarks>
+    /// <para>Issue aevatarAI/aevatar#417. The previous implementation called
+    /// <c>GET /api/v1/proxy/services</c> (the <em>catalog</em> list) and pulled out each row's
+    /// <c>id</c>, which is a <c>DownstreamService.id</c> — a global catalog UUID shared across
+    /// all users. NyxID's proxy enforcement (<c>backend/src/handlers/proxy.rs:1030</c>) checks the
+    /// API key's <c>allowed_service_ids</c> against the per-user <c>UserService.id</c>, not the
+    /// catalog id. The mismatch silently passed at <c>POST /api-keys</c> creation time, then
+    /// surfaced as <c>403 ApiKeyScopeForbidden</c> on every proxy call.</para>
+    /// <para>Why the old code looked correct in development: <c>allow_all_services=true</c>
+    /// short-circuits the enforcement check (NyxID <c>proxy.rs:1030</c>). Session-token-minted
+    /// API keys default to <c>true</c>, so a developer reproducing the create-key + proxy-call
+    /// dance from a CLI never tripped the bug. The agent path mints child keys via the
+    /// channel-relay delegation token; NyxID forces those children to inherit
+    /// <c>allow_all_services=false</c> from the parent, which is when enforcement kicks in.
+    /// The <c>BuildCreateApiKeyPayload</c> change in PR #418 (review 4175529548) makes the
+    /// narrow-scope intent first-class by setting <c>allow_all_services=false</c> explicitly,
+    /// so this resolver's output is consulted regardless of the parent's setting.</para>
+    /// <para>The fix: use <c>GET /api/v1/user-services</c>, which lists this user's
+    /// <c>UserService</c> instances. For each instance the response carries the per-user
+    /// <c>id</c> (what enforcement actually checks) plus <c>slug</c>, <c>is_active</c>, and a
+    /// <c>credential_source</c> envelope. We filter to active rows whose slug matches a required
+    /// slug, and skip org-shared rows the caller cannot use as a proxy target — those would later
+    /// surface as a less-actionable <c>org_role_insufficient</c> error.</para>
+    /// </remarks>
+    private async Task<(IReadOnlyList<string>? value, string? errorJson)> ResolveProxyServiceIdsAsync(
         NyxIdApiClient client,
         string token,
         IReadOnlyList<string> requiredSlugs,
         CancellationToken ct)
     {
         if (requiredSlugs.Count == 0)
-            return (null, "At least one required Nyx proxy service slug must be provided.");
+        {
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "no_required_slugs",
+                hint = "At least one required Nyx proxy service slug must be provided.",
+            }));
+        }
 
-        var response = await client.DiscoverProxyServicesAsync(token, ct);
+        var response = await client.ListUserServicesAsync(token, ct);
         if (IsErrorPayload(response))
-            return (null, "Could not discover required Nyx proxy services.");
+        {
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "user_services_unavailable",
+                hint = "Could not list connected Nyx user-services. Try again or check NyxID availability.",
+            }));
+        }
 
         try
         {
             using var doc = JsonDocument.Parse(response);
-            var serviceIdsBySlug = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // List response shape: { "services": [ {id, slug, is_active, credential_source: {...}}, ... ] }
+            // The catalog response also nests under "services" (and additionally "custom_services"),
+            // so reusing EnumerateProxyServiceItems is safe — but we accept *only* rows that look
+            // like UserService instances by checking presence of `slug`.
+            //
+            // Codex review (PR #418 r3141846173): users with mixed bindings can have multiple
+            // rows for the same slug (e.g. an org-shared `allowed:false` row alongside a personal
+            // active row). NyxID does not guarantee any ordering, so the resolver must keep the
+            // *most eligible* row per slug rather than the first one seen. We track the first
+            // ineligible row anyway so that when no eligible row exists we can still emit a
+            // specific error (`service_inactive` / `service_org_viewer_only`) instead of a
+            // generic miss.
+            var bestBySlug = new Dictionary<string, ServiceResolution>(StringComparer.OrdinalIgnoreCase);
             foreach (var svc in EnumerateProxyServiceItems(doc.RootElement))
             {
                 var slug = ReadString(svc, "slug");
                 if (string.IsNullOrWhiteSpace(slug))
                     continue;
 
-                var id = ReadString(svc, "id", "service_id");
-                if (!string.IsNullOrWhiteSpace(id))
-                    serviceIdsBySlug[slug] = id;
+                var id = ReadString(svc, "id");
+                if (string.IsNullOrWhiteSpace(id))
+                    continue;
+
+                var isActive = TryReadBool(svc, "is_active") ?? true;
+                var credentialSource = svc.TryGetProperty("credential_source", out var cs) ? cs : default;
+                var sourceType = credentialSource.ValueKind == JsonValueKind.Object
+                    ? ReadString(credentialSource, "type")
+                    : null;
+                var orgAllowed = credentialSource.ValueKind == JsonValueKind.Object
+                    ? TryReadBool(credentialSource, "allowed")
+                    : null;
+
+                var candidate = new ServiceResolution(
+                    Id: id!,
+                    IsActive: isActive,
+                    CredentialSourceType: sourceType,
+                    OrgAllowed: orgAllowed);
+
+                if (bestBySlug.TryGetValue(slug, out var existing))
+                {
+                    // Already have an eligible row → never downgrade.
+                    if (existing.IsEligible)
+                        continue;
+                    // Existing is ineligible; only replace with another ineligible row if we
+                    // would otherwise lose information. Replace iff candidate is eligible.
+                    if (!candidate.IsEligible)
+                        continue;
+                }
+
+                bestBySlug[slug] = candidate;
             }
 
-            var missingSlugs = requiredSlugs
-                .Where(slug => !serviceIdsBySlug.ContainsKey(slug))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (missingSlugs.Length > 0)
+            var ids = new List<string>(requiredSlugs.Count);
+            foreach (var slug in requiredSlugs.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                return (null,
-                    $"Missing required Nyx proxy services: {string.Join(", ", missingSlugs)}. API key creation was rejected to avoid broad proxy access.");
+                if (!bestBySlug.TryGetValue(slug, out var resolution))
+                {
+                    return (null, JsonSerializer.Serialize(new
+                    {
+                        error = "service_not_connected",
+                        slug,
+                        hint = $"NyxID has no connected user-service for slug `{slug}`. Connect the provider at NyxID before creating this agent.",
+                    }));
+                }
+
+                if (resolution.IsEligible)
+                {
+                    ids.Add(resolution.Id);
+                    continue;
+                }
+
+                if (string.Equals(resolution.CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) &&
+                    resolution.OrgAllowed != true)
+                {
+                    return (null, JsonSerializer.Serialize(new
+                    {
+                        error = "service_org_viewer_only",
+                        slug,
+                        hint = $"NyxID user-service for slug `{slug}` is shared by your org but your role does not permit using it as a proxy target. Ask an admin to widen the org role scope, or connect a personal credential.",
+                    }));
+                }
+
+                // Remaining ineligible reason: !is_active.
+                return (null, JsonSerializer.Serialize(new
+                {
+                    error = "service_inactive",
+                    slug,
+                    hint = $"NyxID user-service for slug `{slug}` is inactive. Re-activate it at NyxID before creating this agent.",
+                }));
             }
 
-            var ids = requiredSlugs
-                .Select(slug => serviceIdsBySlug[slug])
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            return (ids, null);
+            return (ids.Distinct(StringComparer.Ordinal).ToArray(), null);
         }
         catch (JsonException)
         {
-            return (null, "Could not parse Nyx proxy service discovery response.");
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "user_services_parse_failed",
+                hint = "NyxID user-services response was not valid JSON.",
+            }));
         }
+    }
+
+    private readonly record struct ServiceResolution(
+        string Id,
+        bool IsActive,
+        string? CredentialSourceType,
+        bool? OrgAllowed)
+    {
+        public bool IsEligible =>
+            IsActive &&
+            !(string.Equals(CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) && OrgAllowed != true);
     }
 
     private async Task<string?> BuildGitHubAuthorizationResponseAsync(
@@ -1574,13 +1724,23 @@ public sealed class AgentBuilderTool : IAgentTool
     /// relay surfaced <c>union_id</c> at agent-create time.
     /// </summary>
     /// <summary>
-    /// Preflights GitHub proxy access using the newly created agent API key against
-    /// <c>/rate_limit</c> — an unauthenticated-friendly read endpoint that returns 401/403 when
-    /// the key lacks a bound GitHub credential. Returns a structured error JSON suitable for
-    /// returning verbatim from the tool when access is denied; returns <c>null</c> when access
-    /// works (or when the daily-report's required service list does not include GitHub, in
-    /// which case there's nothing to preflight). Issue aevatarAI/aevatar#411.
+    /// Preflights GitHub proxy access using the newly created agent API key against GitHub's
+    /// <c>/rate_limit</c> — a cheap read-only endpoint that returns 401/403 when NyxID's stored
+    /// OAuth token was revoked or had its scopes downgraded at GitHub between connect-time and
+    /// agent-create-time. Returns a structured error JSON suitable for returning verbatim from
+    /// the tool when access is denied; returns <c>null</c> on success or on probe shapes we
+    /// don't classify as "fundamentally broken" (rate limits, 5xx).
     /// </summary>
+    /// <remarks>
+    /// Issue aevatarAI/aevatar#411 added this preflight to fail fast on a misdiagnosed root
+    /// cause (we thought the api-key was missing a GitHub binding). Issue #417 fixed that real
+    /// cause — the api-key now carries the right per-user <c>UserService.id</c>s. The probe is
+    /// retained because the OAuth grant can still be revoked outside our control (user clicks
+    /// "Revoke access" in GitHub Settings → Applications, GitHub temp-bans the account, etc.),
+    /// and surfacing that at create-time avoids persisting a daily-report agent that would
+    /// produce empty output on every run. The freshly minted api-key is best-effort revoked at
+    /// the call site so retries don't accumulate orphan proxy-scoped keys.
+    /// </remarks>
     private async Task<string?> PreflightGitHubProxyAsync(
         NyxIdApiClient nyxClient,
         string apiKey,
@@ -1641,7 +1801,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 detail = string.IsNullOrWhiteSpace(detail) ? "GitHub proxy returned 401/403 for the new agent API key." : detail,
                 http_status = status,
                 proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
-                hint = "The new agent API key was created with `allowed_service_ids=api-github` but cannot reach GitHub via NyxID. Verify the GitHub OAuth provider is connected at NyxID and that the key picks up the binding (NyxID `api-keys/{id}/bindings`). Until this is resolved the daily report will return empty/degraded output every run.",
+                hint = "GitHub returned 401/403 to NyxID's stored OAuth token. The token was likely revoked at GitHub or had its scopes downgraded after the provider was connected. Re-authorize the GitHub provider at NyxID, then run /daily again.",
                 nyx_provider_slug = nyxProviderSlug,
             });
         }
@@ -1664,12 +1824,28 @@ public sealed class AgentBuilderTool : IAgentTool
         return value;
     }
 
+    private static bool? TryReadBool(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object ||
+            !element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
+
     /// <summary>
-    /// Best-effort revoke of an API key minted earlier in the create flow. Used when a
-    /// preflight (e.g. GitHub proxy access) detects that the agent will be DOA at runtime, so
-    /// we don't leave orphan proxy-scoped keys behind on every retry. Failures here are
-    /// logged at Warning but do NOT propagate — the structured create-time error is the
-    /// user-facing signal; an orphan key is an ops cleanup concern, not a hard failure.
+    /// Best-effort revoke of an API key minted earlier in the create flow. Used when GitHub
+    /// preflight fails so retries of <c>/daily</c> don't accumulate orphan proxy-scoped keys
+    /// in the user's NyxID account (codex review #418 r3141846175). Failures here are logged
+    /// at Warning but do NOT propagate — the structured create-time error is the user-facing
+    /// signal; an orphan key is an ops cleanup concern, not a hard failure.
     /// </summary>
     private async Task BestEffortRevokeApiKeyAsync(
         NyxIdApiClient nyxClient,
