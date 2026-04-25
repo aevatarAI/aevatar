@@ -14,7 +14,9 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using System.Security.Claims;
 
@@ -652,10 +654,7 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         var http = new DefaultHttpContext
         {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddOptions()
-                .BuildServiceProvider(),
+            RequestServices = BuildRequestServices(),
         };
         http.Response.Body = new MemoryStream();
         http.User = new ClaimsPrincipal(
@@ -671,13 +670,26 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         var http = new DefaultHttpContext
         {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddOptions()
-                .BuildServiceProvider(),
+            RequestServices = BuildRequestServices(),
         };
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private static ServiceProvider BuildRequestServices() =>
+        new ServiceCollection()
+            .AddLogging()
+            .AddOptions()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.GAgentService.Integration.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     private static async Task<string> ReadBodyAsync(HttpResponse response)

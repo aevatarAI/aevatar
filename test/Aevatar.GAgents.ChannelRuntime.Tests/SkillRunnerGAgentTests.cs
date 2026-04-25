@@ -73,6 +73,24 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.EffectiveConfig.Temperature.Should().Be(0);
     }
 
+    [Fact]
+    public async Task HandleInitializeAsync_WhenMaxTokensIsExplicitZero_ShouldPreserveStateAndSuppressEffectiveConfig()
+    {
+        var command = CreateInitializeCommand();
+        command.MaxTokens = 0;
+
+        await _agent.HandleInitializeAsync(command);
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
+        initialized.HasMaxTokens.Should().BeTrue();
+        initialized.MaxTokens.Should().Be(0);
+
+        _agent.State.HasMaxTokens.Should().BeTrue();
+        _agent.State.MaxTokens.Should().Be(0);
+        _agent.EffectiveConfig.MaxTokens.Should().BeNull();
+    }
+
     private SkillRunnerGAgent CreateAgent(string actorId)
     {
         var agent = new SkillRunnerGAgent

@@ -381,6 +381,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.ProviderName = NormalizeProviderName(evt.ProviderName);
         next.Model = evt.Model ?? string.Empty;
+
+        // Missing sampling fields intentionally use upstream model defaults;
+        // missing runner limits fall back to SkillRunner defaults.
         if (evt.HasTemperature)
             next.Temperature = evt.Temperature;
         else
@@ -389,6 +392,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.MaxTokens = evt.MaxTokens;
         else
             next.ClearMaxTokens();
+
         next.MaxToolRounds = evt.HasMaxToolRounds ? evt.MaxToolRounds : SkillRunnerDefaults.DefaultMaxToolRounds;
         next.MaxHistoryMessages = evt.HasMaxHistoryMessages ? evt.MaxHistoryMessages : SkillRunnerDefaults.DefaultMaxHistoryMessages;
         return next;
