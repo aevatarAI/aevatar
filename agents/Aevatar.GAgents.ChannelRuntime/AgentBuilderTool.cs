@@ -233,20 +233,10 @@ public sealed class AgentBuilderTool : IAgentTool
             ? SkillRunnerDefaults.GenerateActorId()
             : args.Str("agent_id")!.Trim();
 
-        // Diagnostic (#417 follow-up, PR for production 403 root-cause hunt): log the resolved
-        // service-id list and the exact payload we're about to send to NyxID `POST /api-keys`.
-        // The api-key request body is otherwise opaque in production; without this we can't tell
-        // whether the deployed binary actually carries the `allow_all_services=false` field, or
-        // whether `requiredServiceIds` resolved to per-user `UserService.id`s vs catalog ids.
-        var apiKeyPayload = BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!);
-        _logger?.LogInformation(
-            "Diagnostic[#417]: minting agent api-key. agentId={AgentId} requiredSlugs={Slugs} resolvedServiceIds={Ids} payload={Payload}",
-            agentId,
-            string.Join(",", templateSpec!.RequiredServiceSlugs),
-            string.Join(",", requiredServiceIds.value!),
-            apiKeyPayload);
-
-        var createKeyResponse = await nyxClient.CreateApiKeyAsync(token, apiKeyPayload, ct);
+        var createKeyResponse = await nyxClient.CreateApiKeyAsync(
+            token,
+            BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!),
+            ct);
 
         if (IsErrorPayload(createKeyResponse))
             return createKeyResponse;
@@ -254,30 +244,19 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
             return JsonSerializer.Serialize(new { error = apiKeyError });
 
-        _logger?.LogInformation(
-            "Diagnostic[#417]: agent api-key created. agentId={AgentId} apiKeyId={ApiKeyId}",
-            agentId,
-            apiKeyId);
-
-        // Issue aevatarAI/aevatar#411 / #417 follow-up: catch in-flight GitHub OAuth revocation.
-        // The earlier `BuildGitHubAuthorizationResponseAsync` check covers the "no provider token
-        // at all" case; this preflight only earns its keep when the OAuth grant was revoked or
-        // had its scopes downgraded between connect-time and create-time.
+        // Issue aevatarAI/aevatar#411 / #417 follow-up: catch in-flight GitHub-side issues.
+        // The earlier `BuildGitHubAuthorizationResponseAsync` check covers the "no provider
+        // token at all" case; this preflight catches misconfigurations that only surface at
+        // request time (the original case under #421 was a missing `User-Agent` header that
+        // GitHub rejects with 403; OAuth grant revocation is the other one).
         //
-        // Codex review (PR #418 r3141846175): even though the api-key itself is correctly
-        // configured under #417, we still revoke it on preflight failure. Reason: each retry of
-        // `/daily` mints a *new* api-key before the preflight runs, so without revoke the user's
-        // NyxID account accumulates one orphan proxy-scoped key per failed retry until they
-        // re-authorize GitHub. The revoke is a best-effort cleanup, not a safety claim about the
-        // key's correctness.
+        // PR #418 review r3141846175: revoke the freshly-minted key on preflight failure so
+        // each `/daily` retry doesn't leave another orphan proxy-scoped key behind in the
+        // user's NyxID account. The revoke is best-effort cleanup, not a safety claim about
+        // the key's correctness.
         var preflight = await PreflightGitHubProxyAsync(nyxClient, apiKeyValue!, providerSlug, ct);
         if (preflight is not null)
         {
-            _logger?.LogWarning(
-                "Diagnostic[#417]: preflight failed; revoking new api-key. agentId={AgentId} apiKeyId={ApiKeyId} preflightResponse={Response}",
-                agentId,
-                apiKeyId,
-                preflight);
             await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "github_preflight_failed", ct);
             return preflight;
         }
@@ -1777,18 +1756,6 @@ public sealed class AgentBuilderTool : IAgentTool
             body: null,
             extraHeaders: null,
             ct);
-
-        // Diagnostic (#417 follow-up): log the *raw* probe response. The parsed JSON envelope
-        // we return as `proxy_body` only carries the inner Lark/GitHub `body` string when
-        // SendAsync wraps non-2xx; the unparsed `probe` is the only place we see what NyxID
-        // actually returned. Distinguishes:
-        //   - `{"error":true,"status":403,"error_code":9000,"message":"API key does not have access..."}` → NyxID `ApiKeyScopeForbidden` (our payload still wrong)
-        //   - `{"error":true,"status":403,"body":"{\"message\":\"Bad credentials\",...}"}` → GitHub upstream 403 (OAuth grant revoked)
-        //   - other shapes → unclassified
-        _logger?.LogInformation(
-            "Diagnostic[#417]: GitHub preflight probe response. providerSlug={ProviderSlug} probe={Probe}",
-            nyxProviderSlug,
-            string.IsNullOrWhiteSpace(probe) ? "<empty>" : probe);
 
         if (string.IsNullOrWhiteSpace(probe))
             return null;
