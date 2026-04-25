@@ -434,7 +434,10 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
             // The hint should point users at re-authorizing the GitHub provider at NyxID, not
             // at api-key bindings (which used to be the misdiagnosis under #411 — see #417).
-            doc.RootElement.GetProperty("hint").GetString().Should().Contain("Re-authorize");
+            // Match case-insensitively so future hint copy edits (capitalization, punctuation)
+            // don't require flipping this assertion in lockstep — the *intent* of the assertion
+            // is "hint mentions re-authorization", not "hint matches one specific prefix".
+            doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("re-authorize");
 
             // The actor must NOT receive InitializeSkillRunnerCommand — preflight aborts
             // BEFORE the actor is invoked so we don't leave a broken agent in the catalog.
