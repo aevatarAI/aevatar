@@ -36,6 +36,18 @@ internal static class LarkProxyResponse
     /// responses, OR nested in the <c>body</c> string for HTTP-non-2xx wrapped envelopes.
     /// <paramref name="detail"/> is a short human-readable summary suitable for log lines or
     /// exception messages.
+    ///
+    /// <para><b>Branch order (invariant):</b> top-level <c>code</c> is checked BEFORE the
+    /// <c>error</c> envelope. The two production shapes are mutually exclusive today
+    /// (HTTP-200 → top-level <c>code</c> only; HTTP-non-2xx → <c>{error:true,status,body}</c>
+    /// only — <c>SendAsync</c> never emits both at the same level), so for every observed
+    /// response either order yields the same result. The order is fixed deliberately for
+    /// forward-compat: if NyxID ever wraps a successful Lark business rejection as a hybrid
+    /// <c>{"error":true,"status":200,"code":230002,...}</c>, this prioritizes the explicit
+    /// Lark business code over the generic "nyx says error" envelope. The branch ordering
+    /// reversed in PR #412 (was: <c>error</c> first, then top-level <c>code</c>); reviewer
+    /// (PR #412 long-form review §4) flagged the implicit reversal — capturing the rationale
+    /// here so future readers do not "fix" it back.</para>
     /// </summary>
     public static bool TryGetError(string? response, out int? larkCode, out string detail)
     {
