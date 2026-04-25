@@ -137,7 +137,7 @@ public class NyxIdChatEndpointsCoverageTests
         var actorStore = new StubGAgentActorStore();
         var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
             actorStore,
             CancellationToken.None);
@@ -149,10 +149,28 @@ public class NyxIdChatEndpointsCoverageTests
         doc.RootElement.TryGetProperty("createdAt", out _).Should().BeFalse();
         var createdActorId = actorId.GetString();
         createdActorId.Should().NotBeNullOrWhiteSpace();
+        NyxIdChatServiceDefaults.IsActorIdForScope(createdActorId, "scope-a").Should().BeTrue();
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
             entry.ActorId == createdActorId);
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldRejectMismatchedAuthenticatedScope()
+    {
+        var actorStore = new StubGAgentActorStore();
+        var result = await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            CreateScopedHttpContext("scope-b"),
+            "scope-a",
+            actorStore,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        response.Body.Should().Contain("SCOPE_ACCESS_DENIED");
+        actorStore.AddedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -165,7 +183,7 @@ public class NyxIdChatEndpointsCoverageTests
 
         var act = async () => await InvokeResultAsync(
             "HandleCreateConversationAsync",
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
             actorStore,
             CancellationToken.None);
@@ -187,7 +205,7 @@ public class NyxIdChatEndpointsCoverageTests
         };
         var result = await InvokeResultAsync(
             "HandleListConversationsAsync",
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
             actorStore,
             CancellationToken.None);
@@ -204,13 +222,14 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleDeleteConversationAsync_ShouldReturnOk_AndRemoveActor()
     {
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "delete");
         var actorStore = new StubGAgentActorStore();
         var historyStore = new StubChatHistoryStore();
         var result = await InvokeResultAsync(
             "HandleDeleteConversationAsync",
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
-            "actor-1",
+            actorId,
             actorStore,
             historyStore,
             CancellationToken.None);
@@ -220,15 +239,37 @@ public class NyxIdChatEndpointsCoverageTests
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
-            entry.ActorId == "actor-1");
+            entry.ActorId == actorId);
         historyStore.DeletedConversations.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.ConversationId == "actor-1");
+            entry.ConversationId == actorId);
+    }
+
+    [Fact]
+    public async Task HandleDeleteConversationAsync_ShouldReturnNotFound_WhenConversationIsNotRegisteredInScope()
+    {
+        var actorStore = new StubGAgentActorStore();
+        var historyStore = new StubChatHistoryStore();
+        var result = await InvokeResultAsync(
+            "HandleDeleteConversationAsync",
+            CreateScopedHttpContext(),
+            "scope-a",
+            "actor-1",
+            actorStore,
+            historyStore,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.Body.Should().Contain("NYXID_CHAT_CONVERSATION_NOT_FOUND");
+        actorStore.RemovedActors.Should().BeEmpty();
+        historyStore.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
     public async Task HandleDeleteConversationAsync_ShouldBubbleFailure_WhenActorRemovalFails()
     {
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "remove-failure");
         var actorStore = new StubGAgentActorStore
         {
             RemoveActorException = new InvalidOperationException("actor store unavailable"),
@@ -237,9 +278,9 @@ public class NyxIdChatEndpointsCoverageTests
 
         var act = async () => await InvokeResultAsync(
             "HandleDeleteConversationAsync",
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
-            "actor-1",
+            actorId,
             actorStore,
             historyStore,
             CancellationToken.None);
@@ -252,6 +293,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleDeleteConversationAsync_ShouldRestoreActorRegistration_WhenHistoryDeleteFails()
     {
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "restore");
         var actorStore = new StubGAgentActorStore();
         var historyStore = new StubChatHistoryStore
         {
@@ -260,9 +302,9 @@ public class NyxIdChatEndpointsCoverageTests
 
         var act = async () => await InvokeResultAsync(
             "HandleDeleteConversationAsync",
-            new DefaultHttpContext(),
+            CreateScopedHttpContext(),
             "scope-a",
-            "actor-1",
+            actorId,
             actorStore,
             historyStore,
             CancellationToken.None);
@@ -272,17 +314,17 @@ public class NyxIdChatEndpointsCoverageTests
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
-            entry.ActorId == "actor-1");
+            entry.ActorId == actorId);
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
-            entry.ActorId == "actor-1");
+            entry.ActorId == actorId);
     }
 
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldRejectWithoutAuthorization()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer";
         var runtime = new StubActorRuntime();
         var subscriptions = new StubSubscriptionProvider();
@@ -301,9 +343,109 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_ShouldRejectMismatchedAuthenticatedScope()
+    {
+        var context = CreateScopedHttpContext("scope-b");
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        var runtime = new StubActorRuntime();
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "auth-scope");
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            actorId,
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            runtime,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldReturnNotFound_WhenConversationIsNotRegisteredInScope()
+    {
+        var context = CreateScopedHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        var runtime = new StubActorRuntime();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            runtime,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldAcceptScopeBoundConversation_WhenRegistryProjectionHasNotCaughtUp()
+    {
+        var context = CreateScopedHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "first-message");
+        var runtime = new StubActorRuntime();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            actorId,
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            runtime,
+            new StubSubscriptionProvider
+            {
+                Messages =
+                {
+                    new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+                },
+            },
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Id == actorId);
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldRejectConversationBoundToDifferentScope()
+    {
+        var context = CreateScopedHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        var runtime = new StubActorRuntime();
+        var actorId = BuildScopedNyxIdChatActorId("scope-b", "cross-scope");
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            actorId,
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            runtime,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ShouldRejectWhenNoPromptAndNoInputParts()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
         var runtime = new StubActorRuntime();
 
@@ -323,7 +465,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleApproveAsync_ShouldRejectWithoutAuthorization()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer";
         var runtime = new StubActorRuntime();
 
@@ -341,9 +483,33 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleApproveAsync_ShouldReturnNotFound_WhenConversationIsNotRegisteredInScope()
+    {
+        var context = CreateScopedHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        var runtime = new StubActorRuntime();
+        var actorId = BuildScopedNyxIdChatActorId("scope-b", "approval-scope");
+        runtime.Actors[actorId] = new StubActor(actorId);
+
+        await InvokeTaskAsync(
+            "HandleApproveAsync",
+            context,
+            "scope-a",
+            actorId,
+            new NyxIdChatEndpoints.NyxIdApprovalRequest("req"),
+            runtime,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        runtime.Actors[actorId].Should().BeOfType<StubActor>().Subject.HandledEnvelopes.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleApproveAsync_ShouldRejectWhenRequestIdMissing()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
         var runtime = new StubActorRuntime();
 
@@ -363,17 +529,15 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldDispatchChatRequest_AndWriteRunFinished()
     {
-        var context = new DefaultHttpContext
-        {
-            RequestServices = new ServiceCollection()
+        var context = CreateScopedHttpContext(
+            services => services
                 .AddLogging()
                 .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
-                .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
-                .BuildServiceProvider(),
-        };
+                .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this")));
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
         context.Response.Body = new MemoryStream();
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "dispatch");
 
         var runtime = new StubActorRuntime();
         var subscriptions = new StubSubscriptionProvider
@@ -390,7 +554,7 @@ public class NyxIdChatEndpointsCoverageTests
             "HandleStreamMessageAsync",
             context,
             "scope-a",
-            "actor-1",
+            actorId,
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello there"),
             runtime,
             subscriptions,
@@ -399,7 +563,7 @@ public class NyxIdChatEndpointsCoverageTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         runtime.CreateCalls.Should().ContainSingle();
-        var actor = runtime.Actors["actor-1"].Should().BeOfType<StubActor>().Subject;
+        var actor = runtime.Actors[actorId].Should().BeOfType<StubActor>().Subject;
         var chatRequest = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Prompt.Should().Be("hello there");
         chatRequest.ScopeId.Should().Be("scope-a");
@@ -423,14 +587,15 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldReturn500_WhenFailureOccursBeforeWriterStarts()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "runtime-failure");
 
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
             context,
             "scope-a",
-            "actor-1",
+            actorId,
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
             new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
             new StubSubscriptionProvider(),
@@ -443,18 +608,19 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldWriteRunError_WhenFailureOccursAfterWriterStarts()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
 
         var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "stream-error");
+        runtime.Actors[actorId] = new StubActor(actorId);
 
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
             context,
             "scope-a",
-            "actor-1",
+            actorId,
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
             runtime,
             new ThrowingSubscriptionProvider(new InvalidOperationException("subscription failed")),
@@ -472,12 +638,13 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleApproveAsync_ShouldDispatchDecision_AndWriteRunFinished()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
 
         var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "approve");
+        runtime.Actors[actorId] = new StubActor(actorId);
         var subscriptions = new StubSubscriptionProvider
         {
             Messages =
@@ -491,7 +658,7 @@ public class NyxIdChatEndpointsCoverageTests
             "HandleApproveAsync",
             context,
             "scope-a",
-            "actor-1",
+            actorId,
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1", Approved: false, Reason: "deny", SessionId: "session-1"),
             runtime,
             subscriptions,
@@ -499,7 +666,7 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        var actor = runtime.Actors["actor-1"].Should().BeOfType<StubActor>().Subject;
+        var actor = runtime.Actors[actorId].Should().BeOfType<StubActor>().Subject;
         var decision = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ToolApprovalDecisionEvent>();
         decision.RequestId.Should().Be("req-1");
         decision.Approved.Should().BeFalse();
@@ -515,14 +682,15 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleApproveAsync_ShouldReturn500_WhenFailureOccursBeforeWriterStarts()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "approval-runtime-failure");
 
         await InvokeTaskAsync(
             "HandleApproveAsync",
             context,
             "scope-a",
-            "actor-1",
+            actorId,
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
             new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
             new StubSubscriptionProvider(),
@@ -535,18 +703,19 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleApproveAsync_ShouldWriteRunError_WhenFailureOccursAfterWriterStarts()
     {
-        var context = new DefaultHttpContext();
+        var context = CreateScopedHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
 
         var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
+        var actorId = BuildScopedNyxIdChatActorId("scope-a", "approval-stream-error");
+        runtime.Actors[actorId] = new StubActor(actorId);
 
         await InvokeTaskAsync(
             "HandleApproveAsync",
             context,
             "scope-a",
-            "actor-1",
+            actorId,
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
             runtime,
             new ThrowingSubscriptionProvider(new InvalidOperationException("approval subscription failed")),
@@ -1383,6 +1552,13 @@ public class NyxIdChatEndpointsCoverageTests
         return $"channel-conversation:{canonicalKey}:scope:{scopeHash}";
     }
 
+    private static string BuildScopedNyxIdChatActorId(string scopeId, string suffix)
+    {
+        var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
+            .ToLowerInvariant();
+        return $"{NyxIdChatServiceDefaults.ActorIdPrefix}-{suffix}:scope:{scopeHash}";
+    }
+
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
     {
         var context = new DefaultHttpContext
@@ -1424,6 +1600,40 @@ public class NyxIdChatEndpointsCoverageTests
         await endpoint.RequestDelegate!(context);
         context.Response.Body.Position = 0;
         return (context.Response.StatusCode, await new StreamReader(context.Response.Body).ReadToEndAsync());
+    }
+
+    private static DefaultHttpContext CreateScopedHttpContext(
+        string claimedScopeId = "scope-a",
+        Action<IServiceCollection>? configureServices = null)
+    {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        configureServices?.Invoke(services);
+
+        return new DefaultHttpContext
+        {
+            RequestServices = services.BuildServiceProvider(),
+            User = new ClaimsPrincipal(
+                new ClaimsIdentity(
+                [
+                    new Claim("scope_id", claimedScopeId),
+                ],
+                authenticationType: "TestAuth")),
+        };
+    }
+
+    private static DefaultHttpContext CreateScopedHttpContext(Action<IServiceCollection> configureServices) =>
+        CreateScopedHttpContext("scope-a", configureServices);
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "NyxIdChatEndpointsCoverageTests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 
     private static int GetFreeTcpPort()
