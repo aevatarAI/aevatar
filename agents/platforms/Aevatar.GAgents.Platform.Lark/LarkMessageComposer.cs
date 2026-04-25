@@ -53,11 +53,13 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             if (leading is not null)
                 formElements.Add(leading);
 
+            var actionElements = intent.Actions.SelectMany(BuildFormChildElements).ToArray();
             formElements.Add(new
             {
                 tag = "form",
                 name = DefaultFormName,
-                elements = intent.Actions.Select(BuildFormChildAction).ToArray(),
+                direction = "vertical",
+                elements = actionElements,
             });
 
             var formCardJson = JsonSerializer.Serialize(new
@@ -78,6 +80,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                 },
                 body = new
                 {
+                    direction = "vertical",
                     elements = formElements,
                 },
             });
@@ -110,11 +113,9 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 
         if (intent.Actions.Count > 0)
         {
-            elements.Add(new
-            {
-                tag = "action",
-                actions = intent.Actions.Select(BuildAction).ToArray(),
-            });
+            elements.AddRange(intent.Actions
+                .Where(action => action.Kind != ActionElementKind.TextInput)
+                .Select(BuildAction));
         }
 
         var cardJson = JsonSerializer.Serialize(new
@@ -135,6 +136,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             },
             body = new
             {
+                direction = "vertical",
                 elements,
             },
         });
@@ -212,10 +214,26 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         };
     }
 
-    private static object BuildFormChildAction(ActionElement action) =>
-        action.Kind == ActionElementKind.TextInput
-            ? BuildFormInput(action)
-            : BuildFormButton(action);
+    private static IEnumerable<object> BuildFormChildElements(ActionElement action)
+    {
+        if (action.Kind != ActionElementKind.TextInput)
+        {
+            yield return BuildFormButton(action);
+            yield break;
+        }
+
+        var label = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label;
+        if (!string.IsNullOrWhiteSpace(label))
+        {
+            yield return new
+            {
+                tag = "markdown",
+                content = $"**{label}**",
+            };
+        }
+
+        yield return BuildFormInput(action);
+    }
 
     private static object BuildFormInput(ActionElement action)
     {
@@ -226,11 +244,8 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         {
             ["tag"] = "input",
             ["name"] = action.ActionId,
-            ["label"] = new
-            {
-                tag = "plain_text",
-                content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
-            },
+            ["input_type"] = "text",
+            ["width"] = "fill",
             ["placeholder"] = new
             {
                 tag = "plain_text",
@@ -245,7 +260,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
     private static object BuildFormButton(ActionElement action) => new
     {
         tag = "button",
-        type = action.IsPrimary ? "primary" : "default",
+        type = ResolveButtonType(action),
         name = action.ActionId,
         form_action_type = "submit",
         text = new
@@ -253,7 +268,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             tag = "plain_text",
             content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
         },
-        value = BuildActionValueObject(action),
+        behaviors = BuildButtonBehaviors(action),
     };
 
     private static object BuildAction(ActionElement action) => new
@@ -264,9 +279,40 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             tag = "plain_text",
             content = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label,
         },
-        type = action.IsPrimary ? "primary" : "default",
-        value = BuildActionValueObject(action),
+        type = ResolveButtonType(action),
+        behaviors = BuildButtonBehaviors(action),
     };
+
+    private static string ResolveButtonType(ActionElement action)
+    {
+        if (action.IsDanger)
+            return "danger";
+        return action.IsPrimary ? "primary" : "default";
+    }
+
+    private static object[] BuildButtonBehaviors(ActionElement action)
+    {
+        if (action.Kind == ActionElementKind.Link && !string.IsNullOrWhiteSpace(action.Value))
+        {
+            return new object[]
+            {
+                new
+                {
+                    type = "open_url",
+                    default_url = action.Value,
+                },
+            };
+        }
+
+        return new object[]
+        {
+            new
+            {
+                type = "callback",
+                value = BuildActionValueObject(action),
+            },
+        };
+    }
 
     private static IDictionary<string, object?> BuildActionValueObject(ActionElement action)
     {
