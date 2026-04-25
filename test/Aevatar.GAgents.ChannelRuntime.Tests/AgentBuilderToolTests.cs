@@ -1946,14 +1946,30 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            // The crucial assertion is that the helper exhausted the
-            // injected 3-attempt budget instead of returning on the first
-            // status match: 1 caller baseline + 3 helper iterations =
-            // 4 calls. With status-only polling the helper would have
-            // returned on iteration 0 without ever calling
-            // GetStateVersionAsync, so total would be 1. Tightly coupled to
-            // the injected budget by design — that is what pins the contract.
+
+            // Path-level assertion: the helper exhausted the injected
+            // 3-attempt budget instead of returning on the first status
+            // match: 1 caller baseline + 3 helper iterations = 4 calls.
+            // With status-only polling the helper would have returned on
+            // iteration 0 without ever calling GetStateVersionAsync, so
+            // total would be 1. Tightly coupled to the injected budget by
+            // design — that is what pins the contract.
             await queryPort.Received(4).GetStateVersionAsync("skill-runner-stale", Arg.Any<CancellationToken>());
+
+            // Outcome-level assertion: when the dual gate never passes, the
+            // user-facing payload must NOT claim success. The wait helper
+            // returns Confirmed=false (no un-gated GetAsync fallback), and
+            // DisableAgentAsync surfaces the pre-dispatch entry plus an
+            // honest "submitted / propagating" note. A regression that
+            // re-introduces the un-gated final read OR drops the
+            // confirmed/unconfirmed branching makes this test fail by
+            // surfacing "Scheduling paused" + status=Disabled despite the
+            // dual gate having been violated.
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            var note = doc.RootElement.GetProperty("note").GetString();
+            note.Should().Contain("Disable submitted")
+                .And.Contain("/agent-status")
+                .And.NotContain("Scheduling paused");
         }
         finally
         {

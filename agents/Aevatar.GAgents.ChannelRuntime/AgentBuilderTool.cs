@@ -666,8 +666,15 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusDisabled, ct) ?? entry.value;
-        return SerializeAgentStatus(after, "Agent disabled. Scheduling paused.");
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusDisabled, ct);
+        if (observation.Confirmed)
+            return SerializeAgentStatus(observation.Entry!, "Agent disabled. Scheduling paused.");
+
+        // Dual gate never passed — the disable was dispatched but the read
+        // model has not confirmed the lifecycle change within the wait
+        // budget. Surface the pre-dispatch entry with an honest propagating
+        // note so the caller (LLM/user) does not assume the agent is paused.
+        return SerializeAgentStatus(entry.value, "Disable submitted. Run /agent-status in a few seconds to confirm the agent is paused.");
     }
 
     private async Task<string> EnableAgentAsync(
@@ -697,8 +704,12 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusRunning, ct) ?? entry.value;
-        return SerializeAgentStatus(after, "Agent enabled. Scheduling resumed.");
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusRunning, ct);
+        if (observation.Confirmed)
+            return SerializeAgentStatus(observation.Entry!, "Agent enabled. Scheduling resumed.");
+
+        // See DisableAgentAsync for the rationale on the un-confirmed branch.
+        return SerializeAgentStatus(entry.value, "Enable submitted. Run /agent-status in a few seconds to confirm the agent is running.");
     }
 
     private static EventEnvelope BuildDirectEnvelope(string targetActorId, IMessage payload)
@@ -830,7 +841,7 @@ public sealed class AgentBuilderTool : IAgentTool
         await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
     }
 
-    private async Task<UserAgentCatalogEntry?> WaitForAgentStatusAsync(
+    private async Task<(bool Confirmed, UserAgentCatalogEntry? Entry)> WaitForAgentStatusAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
         long versionBefore,
@@ -864,10 +875,15 @@ public sealed class AgentBuilderTool : IAgentTool
 
             var entry = await queryPort.GetAsync(agentId, ct);
             if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
-                return entry;
+                return (Confirmed: true, Entry: entry);
         }
 
-        return await queryPort.GetAsync(agentId, ct);
+        // Budget exhausted: the dual gate never passed. Do NOT fall back to an
+        // un-gated GetAsync read — that would surface a stale-but-expected-
+        // looking entry and let callers report success despite the contract
+        // not being satisfied. Callers must surface honest "submitted /
+        // propagating" copy when Confirmed is false.
+        return (Confirmed: false, Entry: null);
     }
 
     /// <summary>
