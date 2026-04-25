@@ -247,13 +247,20 @@ public sealed class AgentBuilderTool : IAgentTool
         // Issue aevatarAI/aevatar#411 / #417 follow-up: catch in-flight GitHub OAuth revocation.
         // The earlier `BuildGitHubAuthorizationResponseAsync` check covers the "no provider token
         // at all" case; this preflight only earns its keep when the OAuth grant was revoked or
-        // had its scopes downgraded between connect-time and create-time. The api-key itself is
-        // healthy at this point (`#417` fixed `allowed_service_ids` to carry per-user
-        // `UserService.id`s), so we do NOT revoke it on preflight failure — the failure mode is
-        // upstream GitHub denying the stored credential, not a malformed proxy scope.
+        // had its scopes downgraded between connect-time and create-time.
+        //
+        // Codex review (PR #418 r3141846175): even though the api-key itself is correctly
+        // configured under #417, we still revoke it on preflight failure. Reason: each retry of
+        // `/daily` mints a *new* api-key before the preflight runs, so without revoke the user's
+        // NyxID account accumulates one orphan proxy-scoped key per failed retry until they
+        // re-authorize GitHub. The revoke is a best-effort cleanup, not a safety claim about the
+        // key's correctness.
         var preflight = await PreflightGitHubProxyAsync(nyxClient, apiKeyValue!, providerSlug, ct);
         if (preflight is not null)
+        {
+            await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "github_preflight_failed", ct);
             return preflight;
+        }
 
         var actor = await actorRuntime.GetAsync(agentId)
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
@@ -1050,7 +1057,15 @@ public sealed class AgentBuilderTool : IAgentTool
             // The catalog response also nests under "services" (and additionally "custom_services"),
             // so reusing EnumerateProxyServiceItems is safe — but we accept *only* rows that look
             // like UserService instances by checking presence of `slug`.
-            var resolutionsBySlug = new Dictionary<string, ServiceResolution>(StringComparer.OrdinalIgnoreCase);
+            //
+            // Codex review (PR #418 r3141846173): users with mixed bindings can have multiple
+            // rows for the same slug (e.g. an org-shared `allowed:false` row alongside a personal
+            // active row). NyxID does not guarantee any ordering, so the resolver must keep the
+            // *most eligible* row per slug rather than the first one seen. We track the first
+            // ineligible row anyway so that when no eligible row exists we can still emit a
+            // specific error (`service_inactive` / `service_org_viewer_only`) instead of a
+            // generic miss.
+            var bestBySlug = new Dictionary<string, ServiceResolution>(StringComparer.OrdinalIgnoreCase);
             foreach (var svc in EnumerateProxyServiceItems(doc.RootElement))
             {
                 var slug = ReadString(svc, "slug");
@@ -1070,24 +1085,30 @@ public sealed class AgentBuilderTool : IAgentTool
                     ? TryReadBool(credentialSource, "allowed")
                     : null;
 
-                // Surface the *first* match per slug. If the user happens to have multiple
-                // UserService rows for the same slug (legacy migration leftovers), order is
-                // server-determined; we don't try to pick "the best" one because the caller
-                // doesn't have a preference signal here.
-                if (resolutionsBySlug.ContainsKey(slug))
-                    continue;
-
-                resolutionsBySlug[slug] = new ServiceResolution(
+                var candidate = new ServiceResolution(
                     Id: id!,
                     IsActive: isActive,
                     CredentialSourceType: sourceType,
                     OrgAllowed: orgAllowed);
+
+                if (bestBySlug.TryGetValue(slug, out var existing))
+                {
+                    // Already have an eligible row → never downgrade.
+                    if (existing.IsEligible)
+                        continue;
+                    // Existing is ineligible; only replace with another ineligible row if we
+                    // would otherwise lose information. Replace iff candidate is eligible.
+                    if (!candidate.IsEligible)
+                        continue;
+                }
+
+                bestBySlug[slug] = candidate;
             }
 
             var ids = new List<string>(requiredSlugs.Count);
             foreach (var slug in requiredSlugs.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (!resolutionsBySlug.TryGetValue(slug, out var resolution))
+                if (!bestBySlug.TryGetValue(slug, out var resolution))
                 {
                     return (null, JsonSerializer.Serialize(new
                     {
@@ -1097,14 +1118,10 @@ public sealed class AgentBuilderTool : IAgentTool
                     }));
                 }
 
-                if (!resolution.IsActive)
+                if (resolution.IsEligible)
                 {
-                    return (null, JsonSerializer.Serialize(new
-                    {
-                        error = "service_inactive",
-                        slug,
-                        hint = $"NyxID user-service for slug `{slug}` is inactive. Re-activate it at NyxID before creating this agent.",
-                    }));
+                    ids.Add(resolution.Id);
+                    continue;
                 }
 
                 if (string.Equals(resolution.CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) &&
@@ -1118,7 +1135,13 @@ public sealed class AgentBuilderTool : IAgentTool
                     }));
                 }
 
-                ids.Add(resolution.Id);
+                // Remaining ineligible reason: !is_active.
+                return (null, JsonSerializer.Serialize(new
+                {
+                    error = "service_inactive",
+                    slug,
+                    hint = $"NyxID user-service for slug `{slug}` is inactive. Re-activate it at NyxID before creating this agent.",
+                }));
             }
 
             return (ids.Distinct(StringComparer.Ordinal).ToArray(), null);
@@ -1137,7 +1160,12 @@ public sealed class AgentBuilderTool : IAgentTool
         string Id,
         bool IsActive,
         string? CredentialSourceType,
-        bool? OrgAllowed);
+        bool? OrgAllowed)
+    {
+        public bool IsEligible =>
+            IsActive &&
+            !(string.Equals(CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) && OrgAllowed != true);
+    }
 
     private async Task<string?> BuildGitHubAuthorizationResponseAsync(
         NyxIdApiClient client,
@@ -1679,8 +1707,8 @@ public sealed class AgentBuilderTool : IAgentTool
     /// retained because the OAuth grant can still be revoked outside our control (user clicks
     /// "Revoke access" in GitHub Settings → Applications, GitHub temp-bans the account, etc.),
     /// and surfacing that at create-time avoids persisting a daily-report agent that would
-    /// produce empty output on every run. The api-key is NOT revoked on preflight failure: it
-    /// is healthy, only its downstream credential is.
+    /// produce empty output on every run. The freshly minted api-key is best-effort revoked at
+    /// the call site so retries don't accumulate orphan proxy-scoped keys.
     /// </remarks>
     private async Task<string?> PreflightGitHubProxyAsync(
         NyxIdApiClient nyxClient,
@@ -1779,6 +1807,45 @@ public sealed class AgentBuilderTool : IAgentTool
             JsonValueKind.False => false,
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Best-effort revoke of an API key minted earlier in the create flow. Used when GitHub
+    /// preflight fails so retries of <c>/daily</c> don't accumulate orphan proxy-scoped keys
+    /// in the user's NyxID account (codex review #418 r3141846175). Failures here are logged
+    /// at Warning but do NOT propagate — the structured create-time error is the user-facing
+    /// signal; an orphan key is an ops cleanup concern, not a hard failure.
+    /// </summary>
+    private async Task BestEffortRevokeApiKeyAsync(
+        NyxIdApiClient nyxClient,
+        string sessionToken,
+        string apiKeyId,
+        string reason,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+            return;
+
+        try
+        {
+            var response = await nyxClient.DeleteApiKeyAsync(sessionToken, apiKeyId, ct);
+            if (LarkProxyResponse.TryGetError(response, out _, out var detail))
+            {
+                _logger?.LogWarning(
+                    "Failed to revoke orphan agent API key {ApiKeyId} after {Reason}: {Detail}",
+                    apiKeyId,
+                    reason,
+                    detail);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Exception revoking orphan agent API key {ApiKeyId} after {Reason}",
+                apiKeyId,
+                reason);
+        }
     }
 
     private LarkReceiveTargetWithFallback ResolveDeliveryTarget(string conversationId, string agentId)
