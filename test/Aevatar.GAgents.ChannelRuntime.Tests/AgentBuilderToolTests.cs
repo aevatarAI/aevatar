@@ -1395,6 +1395,103 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_DeleteAgent_ReturnsAcceptedWithPropagatingHint_WhenTombstoneDoesNotReflectWithinBudget()
+    {
+        // Production bug class: with the old 5 s polling budget, /delete-agent
+        // routinely returned "accepted" + "tombstone is not yet reflected" while
+        // the document was still visible to /agents minutes later. This guard
+        // proves that when the read model legitimately stays behind, the user-
+        // facing payload now nudges the user to retry rather than implying the
+        // delete might not have landed at all.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-stuck",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                ApiKeyId = "key-stuck",
+                OwnerNyxUserId = "user-1",
+            }));
+        // Read-model lags forever in this test: GetStateVersionAsync keeps
+        // returning the same version (the projector never advances past it),
+        // and GetAsync keeps surfacing the entry.
+        queryPort.GetStateVersionAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(7L));
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
+                [new UserAgentCatalogEntry { AgentId = "skill-runner-stuck", OwnerNyxUserId = "user-1" }]));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-stuck");
+        var registryActor = Substitute.For<IActor>();
+        registryActor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-stuck").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-stuck", """{"ok":true}""");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        // Shrink the polling budget so the not-reflected branch fires in <100 ms
+        // instead of the production 15 s. Reset in finally so other tests in the
+        // class still see the production constants.
+        var originalAttempts = AgentBuilderTool.ProjectionWaitAttempts;
+        var originalDelay = AgentBuilderTool.ProjectionWaitDelayMilliseconds;
+        AgentBuilderTool.ProjectionWaitAttempts = 3;
+        AgentBuilderTool.ProjectionWaitDelayMilliseconds = 1;
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "delete_agent",
+                  "agent_id": "skill-runner-stuck",
+                  "confirm": true
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-stuck");
+            doc.RootElement.GetProperty("delete_notice").GetString()
+                .Should().Contain("Delete submitted for");
+            // The new copy must point users at /agents to verify rather than
+            // implying the tombstone did not land.
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("propagating")
+                .And.Contain("/agents");
+
+            await registryActor.Received(1).HandleEventAsync(
+                Arg.Is<EventEnvelope>(e =>
+                    e.Payload != null &&
+                    e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
+                    e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "skill-runner-stuck"),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentBuilderTool.ProjectionWaitAttempts = originalAttempts;
+            AgentBuilderTool.ProjectionWaitDelayMilliseconds = originalDelay;
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RunAgent_DispatchesManualTrigger()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -1592,6 +1689,14 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
+        // The status wait now skips polls until the read-model state version
+        // advances past versionBefore. Returning a fresh version on the second
+        // call keeps the test exercising the success path without burning the
+        // full 15 s polling budget.
+        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<long?>(7L),
+                Task.FromResult<long?>(8L));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
@@ -1664,6 +1769,12 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
+        // See DisableAgent test — advance the version on the second poll so
+        // the wait helper escapes the loop quickly instead of timing out.
+        queryPort.GetStateVersionAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<long?>(7L),
+                Task.FromResult<long?>(8L));
 
         var skillRunnerActor = Substitute.For<IActor>();
         skillRunnerActor.Id.Returns("skill-runner-1");
@@ -1736,6 +1847,13 @@ public sealed class AgentBuilderToolTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
+        // Advance the version on the second poll so the wait helper exits
+        // immediately on the disabled status — keeps the test under the
+        // production polling budget.
+        queryPort.GetStateVersionAsync("workflow-agent-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<long?>(7L),
+                Task.FromResult<long?>(8L));
 
         var workflowAgentActor = Substitute.For<IActor>();
         workflowAgentActor.Id.Returns("workflow-agent-1");

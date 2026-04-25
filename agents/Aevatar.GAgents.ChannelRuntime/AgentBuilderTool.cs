@@ -17,6 +17,16 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class AgentBuilderTool : IAgentTool
 {
+    // Read-model wait budget for actor -> projector -> document store propagation.
+    // 30 attempts × 500 ms = 15 s. The previous 5 s budget routinely lost the race
+    // to projection lag in production, so /delete-agent and /disable-agent
+    // returned "accepted" while the document was still visible.
+    //
+    // Internal (not const) so tests can shrink the budget when they need to exercise
+    // the "did not reflect within budget" branch without burning the full 15 s.
+    internal static int ProjectionWaitAttempts = 30;
+    internal static int ProjectionWaitDelayMilliseconds = 500;
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AgentBuilderTool>? _logger;
 
@@ -494,6 +504,10 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
+        // Capture the read-model version before issuing tombstone so the wait can
+        // distinguish "projection caught up" from "projector did not run yet".
+        var versionBefore = await queryPort.GetStateVersionAsync(entry.AgentId, ct) ?? -1;
+
         var disableResult = await DispatchAgentLifecycleAsync(entry, actorRuntime, "delete_agent", LifecycleAction.Disable, null, ct);
         if (disableResult.error != null)
             return disableResult.error;
@@ -507,42 +521,41 @@ public sealed class AgentBuilderTool : IAgentTool
             BuildDirectEnvelope(registryActor.Id, new UserAgentCatalogTombstoneCommand { AgentId = entry.AgentId }),
             ct);
 
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(500, ct);
+        // Mirrors create_agent: ensure the projection scope is active so the actor's
+        // committed tombstone event has a subscribed materializer to translate into a
+        // document delete. Without this priming, an Orleans grain that idle-deactivated
+        // may queue the tombstone with no consumer.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
 
-            if (await queryPort.GetAsync(entry.AgentId, ct) == null)
-            {
-                var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
-                    ? entry.OwnerNyxUserId
-                    : await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-                var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
-                return JsonSerializer.Serialize(new
-                {
-                    status = "deleted",
-                    agent_id = entry.AgentId,
-                    revoked_api_key_id = entry.ApiKeyId,
-                    delete_notice = $"Deleted agent `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
-                    agents,
-                    total = agents.Length,
-                });
-            }
-        }
+        var deleted = await WaitForTombstoneReflectedAsync(queryPort, entry.AgentId, versionBefore, ct);
 
-        var acceptedOwnerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
+        var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
             ? entry.OwnerNyxUserId
             : await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-        var acceptedAgents = await QueryAgentsForOwnerAsync(queryPort, acceptedOwnerFilter, ct);
+        var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
+
+        if (deleted)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                status = "deleted",
+                agent_id = entry.AgentId,
+                revoked_api_key_id = entry.ApiKeyId,
+                delete_notice = $"Deleted agent `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
+                agents,
+                total = agents.Length,
+            });
+        }
+
         return JsonSerializer.Serialize(new
         {
             status = "accepted",
             agent_id = entry.AgentId,
             revoked_api_key_id = entry.ApiKeyId,
             delete_notice = $"Delete submitted for `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
-            agents = acceptedAgents,
-            total = acceptedAgents.Length,
-            note = "Delete was submitted but registry tombstone is not yet reflected.",
+            agents,
+            total = agents.Length,
+            note = "Tombstone is propagating. Run /agents in a few seconds to confirm the agent is gone.",
         });
     }
 
@@ -762,10 +775,22 @@ public sealed class AgentBuilderTool : IAgentTool
         string expectedStatus,
         CancellationToken ct)
     {
-        for (var attempt = 0; attempt < 10; attempt++)
+        // Capture the readmodel version before waiting so we can distinguish "the
+        // expected status hasn't materialized yet" from "the read model is stale".
+        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+
+        // Mirrors create_agent: ensure the projection scope is alive so the
+        // actor's committed status event has a subscribed materializer.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
+        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(500, ct);
+                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
+
+            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+            if (versionAfter <= versionBefore)
+                continue;
 
             var entry = await queryPort.GetAsync(agentId, ct);
             if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
@@ -773,6 +798,43 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         return await queryPort.GetAsync(agentId, ct);
+    }
+
+    /// <summary>
+    /// Polls the read model until the agent's tombstoned state is reflected as a
+    /// document deletion. The read-model contract guarantees that a tombstoned
+    /// entry causes <see cref="UserAgentCatalogProjector"/> to dispatch
+    /// <c>DeleteAsync</c>; document absence is therefore the authoritative signal.
+    /// </summary>
+    private static async Task<bool> WaitForTombstoneReflectedAsync(
+        IUserAgentCatalogQueryPort queryPort,
+        string agentId,
+        long versionBefore,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
+
+            // GetStateVersionAsync reads the same document; if it is null the
+            // document has been deleted by the projector.
+            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
+            if (versionAfter == null)
+                return true;
+
+            if (versionAfter.Value <= versionBefore)
+                continue;
+
+            // Version advanced (a fresh state event reached the projector) but the
+            // document still exists; if it is the tombstoned entry the projector
+            // would have deleted it on the same advance, so a non-null entry means
+            // either an interleaving upsert or a stale read replica - keep waiting.
+            if (await queryPort.GetAsync(agentId, ct) == null)
+                return true;
+        }
+
+        return false;
     }
 
     private async Task<(bool success, string? error)> DispatchAgentLifecycleAsync(

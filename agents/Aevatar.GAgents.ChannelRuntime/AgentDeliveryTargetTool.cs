@@ -13,6 +13,13 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 public sealed class AgentDeliveryTargetTool : IAgentTool
 {
+    // Read-model wait budget for actor -> projector -> document store propagation.
+    // 30 attempts × 500 ms = 15 s. The previous 5 s budget routinely lost the race
+    // to projection lag in production, so deletes returned "accepted" while the
+    // tombstoned document was still visible.
+    private const int ProjectionWaitAttempts = 30;
+    private const int ProjectionWaitDelayMilliseconds = 500;
+
     private readonly IServiceProvider _serviceProvider;
 
     public AgentDeliveryTargetTool(IServiceProvider serviceProvider)
@@ -216,10 +223,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         await actor.HandleEventAsync(envelope);
 
         var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
+        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(500, ct);
+                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
 
             var versionAfter = await queryPort.GetStateVersionAsync(agentId.value!, ct) ?? -1;
             if (versionAfter <= versionBefore)
@@ -289,6 +296,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
+        // Capture version + ensure projection scope is alive (matches the Upsert path
+        // above). Without priming, an idle-deactivated projection grain leaves the
+        // tombstone enqueued with no consumer and the document persists indefinitely.
+        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+
+        var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
+        if (projectionPort != null)
+            await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
+
         var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
 
@@ -310,12 +326,24 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         // Tombstone triggers IProjectionWriteDispatcher.DeleteAsync (Channel RFC §7.1.1),
         // which also removes the document's projected StateVersion. Gate confirmation
-        // purely on document absence — versionAfter would be null after the delete lands.
+        // on either document absence or a state-version advance that materializes the
+        // delete — the prior absence-only check returned false negatives whenever the
+        // 5 s budget lost the race to projection lag.
         var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
+        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(500, ct);
+                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
+
+            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
+            if (versionAfter == null)
+            {
+                confirmed = true;
+                break;
+            }
+
+            if (versionAfter.Value <= versionBefore)
+                continue;
 
             if (await queryPort.GetAsync(agentId, ct) == null)
             {
@@ -329,7 +357,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             status = confirmed ? "deleted" : "accepted",
             agent_id = agentId,
             delivery_target_id = agentId,
-            note = confirmed ? "" : "Delete submitted but projection not yet confirmed. Try 'list' after a few seconds.",
+            note = confirmed ? "" : "Tombstone is propagating. Try 'list' in a few seconds to confirm the delivery target is gone.",
         });
     }
 
