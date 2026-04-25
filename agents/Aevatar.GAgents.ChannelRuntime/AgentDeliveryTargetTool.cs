@@ -13,18 +13,21 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 public sealed class AgentDeliveryTargetTool : IAgentTool
 {
-    // Read-model wait budget for actor -> projector -> document store propagation.
-    // 30 attempts × 500 ms = 15 s. The previous 5 s budget routinely lost the race
-    // to projection lag in production, so deletes returned "accepted" while the
-    // tombstoned document was still visible.
-    private const int ProjectionWaitAttempts = 30;
-    private const int ProjectionWaitDelayMilliseconds = 500;
-
     private readonly IServiceProvider _serviceProvider;
+    // Per-instance polling budget (see ProjectionWaitDefaults). Tests inject
+    // shrunk values via the constructor to exercise the budget-exhausted
+    // branch without burning the production 15 s.
+    private readonly int _projectionWaitAttempts;
+    private readonly int _projectionWaitDelayMilliseconds;
 
-    public AgentDeliveryTargetTool(IServiceProvider serviceProvider)
+    public AgentDeliveryTargetTool(
+        IServiceProvider serviceProvider,
+        int projectionWaitAttempts = ProjectionWaitDefaults.Attempts,
+        int projectionWaitDelayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
     {
         _serviceProvider = serviceProvider;
+        _projectionWaitAttempts = projectionWaitAttempts;
+        _projectionWaitDelayMilliseconds = projectionWaitDelayMilliseconds;
     }
 
     public string Name => "agent_delivery_targets";
@@ -223,10 +226,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         await actor.HandleEventAsync(envelope);
 
         var confirmed = false;
-        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
+        for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
+                await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
             var versionAfter = await queryPort.GetStateVersionAsync(agentId.value!, ct) ?? -1;
             if (versionAfter <= versionBefore)
@@ -330,10 +333,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         // delete — the prior absence-only check returned false negatives whenever the
         // 5 s budget lost the race to projection lag.
         var confirmed = false;
-        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
+        for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
+                await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
             var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
             if (versionAfter == null)

@@ -17,23 +17,25 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class AgentBuilderTool : IAgentTool
 {
-    // Read-model wait budget for actor -> projector -> document store propagation.
-    // 30 attempts × 500 ms = 15 s. The previous 5 s budget routinely lost the race
-    // to projection lag in production, so /delete-agent and /disable-agent
-    // returned "accepted" while the document was still visible.
-    //
-    // Internal (not const) so tests can shrink the budget when they need to exercise
-    // the "did not reflect within budget" branch without burning the full 15 s.
-    internal static int ProjectionWaitAttempts = 30;
-    internal static int ProjectionWaitDelayMilliseconds = 500;
-
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AgentBuilderTool>? _logger;
+    // Per-instance polling budget for actor -> projector -> document store
+    // propagation. Defaults to ProjectionWaitDefaults (15 s); tests inject
+    // shrunk values via the constructor instead of mutating a process-global,
+    // which would race other tests if the test surface ever parallelizes.
+    private readonly int _projectionWaitAttempts;
+    private readonly int _projectionWaitDelayMilliseconds;
 
-    public AgentBuilderTool(IServiceProvider serviceProvider, ILogger<AgentBuilderTool>? logger = null)
+    public AgentBuilderTool(
+        IServiceProvider serviceProvider,
+        ILogger<AgentBuilderTool>? logger = null,
+        int projectionWaitAttempts = ProjectionWaitDefaults.Attempts,
+        int projectionWaitDelayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _projectionWaitAttempts = projectionWaitAttempts;
+        _projectionWaitDelayMilliseconds = projectionWaitDelayMilliseconds;
     }
 
     public string Name => "agent_builder";
@@ -508,6 +510,14 @@ public sealed class AgentBuilderTool : IAgentTool
         // distinguish "projection caught up" from "projector did not run yet".
         var versionBefore = await queryPort.GetStateVersionAsync(entry.AgentId, ct) ?? -1;
 
+        // Prime the projection scope BEFORE any dispatch. If we primed after
+        // HandleEventAsync, an idle-deactivated projection grain would have
+        // already missed the published event and a late activation could not
+        // recover it (the activation contract is "be alive when the event
+        // arrives", not "replay missed events"). Activating up front costs at
+        // most one extra warm-grain round trip.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
         var disableResult = await DispatchAgentLifecycleAsync(entry, actorRuntime, "delete_agent", LifecycleAction.Disable, null, ct);
         if (disableResult.error != null)
             return disableResult.error;
@@ -521,13 +531,13 @@ public sealed class AgentBuilderTool : IAgentTool
             BuildDirectEnvelope(registryActor.Id, new UserAgentCatalogTombstoneCommand { AgentId = entry.AgentId }),
             ct);
 
-        // Mirrors create_agent: ensure the projection scope is active so the actor's
-        // committed tombstone event has a subscribed materializer to translate into a
-        // document delete. Without this priming, an Orleans grain that idle-deactivated
-        // may queue the tombstone with no consumer.
-        await EnsureUserAgentCatalogProjectionAsync(ct);
-
-        var deleted = await WaitForTombstoneReflectedAsync(queryPort, entry.AgentId, versionBefore, ct);
+        var deleted = await WaitForTombstoneReflectedAsync(
+            queryPort,
+            entry.AgentId,
+            versionBefore,
+            ct,
+            _projectionWaitAttempts,
+            _projectionWaitDelayMilliseconds);
 
         var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
             ? entry.OwnerNyxUserId
@@ -610,6 +620,11 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
         var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "disable_agent", LifecycleAction.Disable, null, ct);
         if (dispatch.error != null)
             return dispatch.error;
@@ -631,6 +646,11 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal) ||
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
+
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
 
         var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "enable_agent", LifecycleAction.Enable, null, ct);
         if (dispatch.error != null)
@@ -775,10 +795,6 @@ public sealed class AgentBuilderTool : IAgentTool
         string expectedStatus,
         CancellationToken ct)
     {
-        // Mirrors create_agent: ensure the projection scope is alive so the
-        // actor's committed status event has a subscribed materializer.
-        await EnsureUserAgentCatalogProjectionAsync(ct);
-
         // Status-driven polling (no version anchor): caller dispatches the
         // lifecycle command and we wait for the read model to reflect the
         // expected status. A version-gated optimization here was wrong because
@@ -787,11 +803,14 @@ public sealed class AgentBuilderTool : IAgentTool
         // versionBefore` and burned the entire budget. The Status field itself
         // is the authoritative signal — `expectedStatus` is enum-like and only
         // moves when the lifecycle event materializes, so reading it on every
-        // attempt is both correct and cheap.
-        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
+        // attempt is both correct and cheap. Projection scope priming happens
+        // in the caller before the dispatch (see DisableAgentAsync /
+        // EnableAgentAsync) — a late prime here cannot recover an event the
+        // projector already missed.
+        for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
+                await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
             var entry = await queryPort.GetAsync(agentId, ct);
             if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
@@ -811,12 +830,14 @@ public sealed class AgentBuilderTool : IAgentTool
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
         long versionBefore,
-        CancellationToken ct)
+        CancellationToken ct,
+        int maxAttempts = ProjectionWaitDefaults.Attempts,
+        int delayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
     {
-        for (var attempt = 0; attempt < ProjectionWaitAttempts; attempt++)
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(ProjectionWaitDelayMilliseconds, ct);
+                await Task.Delay(delayMilliseconds, ct);
 
             // GetStateVersionAsync reads the same document; if it is null the
             // document has been deleted by the projector.

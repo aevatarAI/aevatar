@@ -1441,15 +1441,16 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(actorRuntime);
         services.AddSingleton(nyxClient);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
-
-        // Shrink the polling budget so the not-reflected branch fires in <100 ms
-        // instead of the production 15 s. Reset in finally so other tests in the
-        // class still see the production constants.
-        var originalAttempts = AgentBuilderTool.ProjectionWaitAttempts;
-        var originalDelay = AgentBuilderTool.ProjectionWaitDelayMilliseconds;
-        AgentBuilderTool.ProjectionWaitAttempts = 3;
-        AgentBuilderTool.ProjectionWaitDelayMilliseconds = 1;
+        // Inject a shrunk wait budget per-instance (3 attempts × 1 ms) so the
+        // not-reflected branch fires in <100 ms instead of the production
+        // 15 s. Per-instance state replaces the earlier mutable-static
+        // approach (codex review r3141706856) so concurrent test classes
+        // that exercise other AgentBuilderTool paths cannot be poisoned by
+        // shrunk values leaking through process-global state.
+        var tool = new AgentBuilderTool(
+            services.BuildServiceProvider(),
+            projectionWaitAttempts: 3,
+            projectionWaitDelayMilliseconds: 1);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -1485,8 +1486,6 @@ public sealed class AgentBuilderToolTests
         }
         finally
         {
-            AgentBuilderTool.ProjectionWaitAttempts = originalAttempts;
-            AgentBuilderTool.ProjectionWaitDelayMilliseconds = originalDelay;
             AgentToolRequestContext.CurrentMetadata = null;
         }
     }
