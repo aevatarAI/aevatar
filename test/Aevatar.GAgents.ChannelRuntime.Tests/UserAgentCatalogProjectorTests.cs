@@ -54,8 +54,10 @@ public sealed class UserAgentCatalogProjectorTests
                     ErrorCount = 1,
                     LastError = "last-error",
                     CreatedAt = createdAt,
-                    LarkReceiveId = "ou_user_1",
-                    LarkReceiveIdType = "open_id",
+                    LarkReceiveId = "oc_dm_chat_1",
+                    LarkReceiveIdType = "chat_id",
+                    LarkReceiveIdFallback = "on_user_1",
+                    LarkReceiveIdTypeFallback = "union_id",
                 },
             },
         };
@@ -87,9 +89,15 @@ public sealed class UserAgentCatalogProjectorTests
         document.UpdatedAt.Should().Be(_clock.UtcNow);
         // Typed Lark target round-trips through the projection so catalog-backed senders
         // (FeishuCardHumanInteractionPort) read it via UserAgentCatalogQueryPort.ToEntry
-        // instead of falling back to conversation_id prefix inference.
-        document.LarkReceiveId.Should().Be("ou_user_1");
-        document.LarkReceiveIdType.Should().Be("open_id");
+        // instead of falling back to conversation_id prefix inference. The fallback pair
+        // (PR #412) MUST mirror through the projection too — without it the runtime
+        // `230002 bot not in chat` retry on FeishuCardHumanInteractionPort /
+        // SkillRunnerGAgent would never have a fallback typed pair to retry against, even
+        // though the actor-side state captured one at create time.
+        document.LarkReceiveId.Should().Be("oc_dm_chat_1");
+        document.LarkReceiveIdType.Should().Be("chat_id");
+        document.LarkReceiveIdFallback.Should().Be("on_user_1");
+        document.LarkReceiveIdTypeFallback.Should().Be("union_id");
     }
 
     [Fact]
@@ -97,20 +105,27 @@ public sealed class UserAgentCatalogProjectorTests
     {
         // FeishuCardHumanInteractionPort consumes UserAgentCatalogEntry via this conversion;
         // dropping the typed fields would silently regress workflow / social_media DM delivery
-        // back to the prefix-inference path even after the projection captured them.
+        // back to the prefix-inference path even after the projection captured them. The
+        // fallback pair (PR #412) is part of the same contract — the catalog-backed
+        // `230002 bot not in chat` retry depends on `LarkReceiveIdFallback` /
+        // `LarkReceiveIdTypeFallback` surviving the document → entry mapping.
         var document = new UserAgentCatalogDocument
         {
             Id = "agent-1",
             Platform = "lark",
-            ConversationId = "oc_chat_1",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
+            ConversationId = "oc_dm_chat_1",
+            LarkReceiveId = "oc_dm_chat_1",
+            LarkReceiveIdType = "chat_id",
+            LarkReceiveIdFallback = "on_user_1",
+            LarkReceiveIdTypeFallback = "union_id",
         };
 
         var entry = UserAgentCatalogQueryPort.ToEntry(document, nyxApiKey: "");
 
-        entry.LarkReceiveId.Should().Be("ou_user_1");
-        entry.LarkReceiveIdType.Should().Be("open_id");
+        entry.LarkReceiveId.Should().Be("oc_dm_chat_1");
+        entry.LarkReceiveIdType.Should().Be("chat_id");
+        entry.LarkReceiveIdFallback.Should().Be("on_user_1");
+        entry.LarkReceiveIdTypeFallback.Should().Be("union_id");
     }
 
     [Fact]
