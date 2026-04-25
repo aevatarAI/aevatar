@@ -287,6 +287,16 @@ message TransportExtras {
   string nyx_user_access_token = 5;
   // The platform-native message id of the originating user message when Nyx relay can recover it.
   string nyx_platform_message_id = 6;
+  // The Lark `union_id` (`on_*`) of the inbound sender. Tenant-stable and cross-app safe, so
+  // outbound delivery can target the user via `receive_id_type=union_id` even when the inbound
+  // event was relayed through a different Lark app than the outbound sender. Empty when the
+  // platform is not Lark or the relay payload could not surface a `union_id`.
+  string nyx_lark_union_id = 7;
+  // The Lark `chat_id` (`oc_*`) of the inbound conversation as observed by the relay-side Lark
+  // app. Cross-app safe within the tenant for groups/threads/channels (any app added to the
+  // chat can address it via `receive_id_type=chat_id`). For p2p DMs the chat_id is bot-specific
+  // and not cross-app safe; downstream senders prefer `nyx_lark_union_id` for p2p targets.
+  string nyx_lark_chat_id = 8;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

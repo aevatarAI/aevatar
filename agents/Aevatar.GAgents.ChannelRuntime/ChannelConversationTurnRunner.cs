@@ -681,6 +681,18 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(platformMessageId))
             metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
 
+        // Lark cross-app outbound delivery: agent-builder consumers prefer the tenant-stable
+        // union_id / chat_id captured at ingress over the relay-app-scoped open_id, so a
+        // mismatch between the relay-side Lark app and the customer's outbound Lark app does
+        // not surface as `code:99992361 open_id cross app` rejections at send time.
+        var larkUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkUnionId);
+        if (!string.IsNullOrWhiteSpace(larkUnionId))
+            metadata[ChannelMetadataKeys.LarkUnionId] = larkUnionId;
+
+        var larkChatId = NormalizeOptional(activity?.TransportExtras?.NyxLarkChatId);
+        if (!string.IsNullOrWhiteSpace(larkChatId))
+            metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
+
         return metadata;
     }
 

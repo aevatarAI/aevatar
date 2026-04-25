@@ -239,7 +239,9 @@ public sealed class AgentBuilderTool : IAgentTool
         var deliveryTarget = LarkConversationTargets.BuildFromInbound(
             AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType),
             conversationId,
-            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId));
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId),
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkUnionId),
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkChatId));
         var initialize = new InitializeSkillRunnerCommand
         {
             SkillName = templateSpec.SkillName,
@@ -386,7 +388,9 @@ public sealed class AgentBuilderTool : IAgentTool
         var deliveryTarget = LarkConversationTargets.BuildFromInbound(
             AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType),
             conversationId,
-            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId));
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId),
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkUnionId),
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkChatId));
         var initialize = new InitializeWorkflowAgentCommand
         {
             WorkflowId = workflowUpsert.Workflow.WorkflowId,

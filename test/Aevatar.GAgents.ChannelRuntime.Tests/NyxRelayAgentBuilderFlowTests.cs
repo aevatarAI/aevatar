@@ -152,8 +152,12 @@ public sealed class NyxRelayAgentBuilderFlowTests
     }
 
     [Fact]
-    public void FormatToolResult_ShouldRenderPlainTextListAgentsResponse()
+    public void FormatToolResult_ShouldRenderListAgentsAsInteractiveCard()
     {
+        // /agents now returns an interactive card so users can drill into per-agent status
+        // without retyping the long agent_id. Per-row "Status" buttons carry the full agent_id
+        // in their arguments so AgentBuilderCardFlow's existing card_action handler routes them
+        // back to the agent_status tool path.
         var decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
         var result = NyxRelayAgentBuilderFlow.FormatToolResult(
             decision,
@@ -161,20 +165,93 @@ public sealed class NyxRelayAgentBuilderFlowTests
             {
               "agents": [
                 {
-                  "agent_id": "agent-1",
+                  "agent_id": "skill-runner-94d754dfdfbb416aa5a676cecd0d7a71",
                   "template": "daily_report",
                   "status": "running",
-                  "next_scheduled_run": "2026-04-23T09:00:00Z"
+                  "next_scheduled_run": "2026-04-23T09:00:00Z",
+                  "last_run_at": "2026-04-22T09:00:00Z"
                 }
               ]
             }
             """);
 
-        result.Actions.Should().BeEmpty();
+        result.Cards.Should().NotBeEmpty();
+        // First card is the summary; subsequent cards are per-agent rows.
+        result.Cards[0].Title.Should().Be("Your agents");
+        result.Cards.Skip(1).Should().ContainSingle(card =>
+            card.BlockId == "agent_row:skill-runner-94d754dfdfbb416aa5a676cecd0d7a71");
+
+        var statusButton = result.Actions.Should().Contain(a => a.ActionId == "agent_status").Subject;
+        statusButton.Arguments.Should().Contain(new KeyValuePair<string, string>(
+            "agent_builder_action", "agent_status"));
+        statusButton.Arguments.Should().Contain(new KeyValuePair<string, string>(
+            "agent_id", "skill-runner-94d754dfdfbb416aa5a676cecd0d7a71"));
+
+        result.Actions.Should().Contain(a => a.ActionId == "open_daily_report_form");
+        result.Actions.Should().Contain(a => a.ActionId == "open_social_media_form");
+    }
+
+    [Fact]
+    public void FormatToolResult_ShouldRenderEmptyListAgentsAsCallToActionCard()
+    {
+        var decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
+        var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, """{"agents":[]}""");
+
+        result.Cards.Should().ContainSingle(card => card.BlockId == "agents_empty");
+        result.Actions.Should().Contain(a => a.ActionId == "open_daily_report_form");
+        result.Actions.Should().Contain(a => a.ActionId == "open_social_media_form");
+    }
+
+    [Fact]
+    public void FormatToolResult_ShouldRenderAgentStatusAsInteractiveCard_WithLifecycleButtons()
+    {
+        // /agent-status now ships as an interactive card with one button per lifecycle action
+        // (Run, Disable, Enable, Delete) so the user does not have to retype the agent_id for
+        // each follow-up command. Each button carries the agent_id in its arguments and the
+        // delete button additionally carries `confirm=true` so AgentBuilderCardFlow's existing
+        // confirm-required handler skips the second-step prompt.
+        var decision = AgentBuilderFlowDecision.ToolCall("agent_status", """{"action":"agent_status"}""");
+        var result = NyxRelayAgentBuilderFlow.FormatToolResult(
+            decision,
+            """
+            {
+              "agent_id": "skill-runner-1",
+              "template": "daily_report",
+              "status": "error",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "UTC",
+              "last_run_at": "2026-04-25T05:30:00Z",
+              "next_scheduled_run": "2026-04-26T09:00:00Z",
+              "last_error": "Lark message delivery rejected"
+            }
+            """);
+
+        result.Cards.Should().ContainSingle(card => card.BlockId == "agent_status:skill-runner-1");
+        result.Cards[0].Text.Should().Contain("Status: `error`");
+        result.Cards[0].Text.Should().Contain("Last error:");
+
+        result.Actions.Should().Contain(a => a.ActionId == "run_agent");
+        result.Actions.Should().Contain(a => a.ActionId == "disable_agent");
+        result.Actions.Should().Contain(a => a.ActionId == "enable_agent");
+        result.Actions.Should().Contain(a => a.ActionId == "list_agents");
+
+        var deleteButton = result.Actions.Should().Contain(a => a.ActionId == "delete_agent").Subject;
+        deleteButton.IsDanger.Should().BeTrue();
+        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("confirm", "true"));
+        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("agent_id", "skill-runner-1"));
+    }
+
+    [Fact]
+    public void FormatToolResult_ShouldRenderAgentStatusError_WhenToolReturnsError()
+    {
+        var decision = AgentBuilderFlowDecision.ToolCall("agent_status", """{"action":"agent_status"}""");
+        var result = NyxRelayAgentBuilderFlow.FormatToolResult(
+            decision,
+            """{"error":"Agent not found"}""");
+
         result.Cards.Should().BeEmpty();
-        result.Text.Should().Contain("Current agents:");
-        result.Text.Should().Contain("agent-1: template=daily_report, status=running");
-        result.Text.Should().Contain("/agent-status <agent_id>");
+        result.Actions.Should().BeEmpty();
+        result.Text.Should().Contain("Agent status failed: Agent not found");
     }
 
     [Fact]
