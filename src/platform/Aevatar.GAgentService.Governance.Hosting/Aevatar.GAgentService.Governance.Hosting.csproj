@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.GAgentService.Governance.Hosting</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\Aevatar.Authentication.Abstractions\Aevatar.Authentication.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Application\Aevatar.GAgentService.Governance.Application.csproj" />
