@@ -29,7 +29,11 @@ internal static class JsonToProto
             if (element.ValueKind == JsonValueKind.Null)
                 continue;
 
-            if (field.IsRepeated)
+            if (field.IsMap)
+            {
+                WriteMap(field, element, output);
+            }
+            else if (field.IsRepeated)
             {
                 WriteRepeated(field, element, output);
             }
@@ -37,6 +41,42 @@ internal static class JsonToProto
             {
                 WriteSingle(field, element, output);
             }
+        }
+    }
+
+    private static void WriteMap(FieldDescriptor field, JsonElement obj, CodedOutputStream output)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException(
+                $"map field '{field.FullName}' expects a JSON object but received '{obj.ValueKind}'.");
+
+        if (field.MessageType == null)
+            throw new InvalidOperationException(
+                $"map field '{field.FullName}' has unresolved entry message type.");
+
+        var keyField = field.MessageType.FindFieldByNumber(1)
+            ?? throw new InvalidOperationException(
+                $"map field '{field.FullName}' has no key descriptor.");
+        var valueField = field.MessageType.FindFieldByNumber(2)
+            ?? throw new InvalidOperationException(
+                $"map field '{field.FullName}' has no value descriptor.");
+
+        foreach (var entry in obj.EnumerateObject())
+        {
+            if (entry.Value.ValueKind == JsonValueKind.Null)
+                continue;
+
+            using var entryStream = new MemoryStream();
+            var entryOutput = new CodedOutputStream(entryStream);
+
+            using var keyDoc = JsonDocument.Parse(JsonSerializer.Serialize(entry.Name));
+            WriteSingle(keyField, keyDoc.RootElement, entryOutput);
+            WriteSingle(valueField, entry.Value, entryOutput);
+            entryOutput.Flush();
+
+            var entryBytes = entryStream.ToArray();
+            output.WriteTag(field.FieldNumber, WireFormat.WireType.LengthDelimited);
+            output.WriteBytes(ByteString.CopyFrom(entryBytes));
         }
     }
 
@@ -126,13 +166,13 @@ internal static class JsonToProto
                 output.WriteUInt64(ReadUInt64(field, value));
                 break;
             case FieldType.Int32:
-                output.WriteInt32((int)ReadInt64(field, value));
+                output.WriteInt32(ReadInt32(field, value));
                 break;
             case FieldType.Fixed64:
                 output.WriteFixed64(ReadUInt64(field, value));
                 break;
             case FieldType.Fixed32:
-                output.WriteFixed32((uint)ReadUInt64(field, value));
+                output.WriteFixed32(ReadUInt32(field, value));
                 break;
             case FieldType.Bool:
                 output.WriteBool(ReadBool(field, value));
@@ -144,19 +184,19 @@ internal static class JsonToProto
                 output.WriteBytes(ReadBytes(field, value));
                 break;
             case FieldType.UInt32:
-                output.WriteUInt32((uint)ReadUInt64(field, value));
+                output.WriteUInt32(ReadUInt32(field, value));
                 break;
             case FieldType.Enum:
                 output.WriteInt32(ReadEnum(field, value));
                 break;
             case FieldType.SFixed32:
-                output.WriteSFixed32((int)ReadInt64(field, value));
+                output.WriteSFixed32(ReadInt32(field, value));
                 break;
             case FieldType.SFixed64:
                 output.WriteSFixed64(ReadInt64(field, value));
                 break;
             case FieldType.SInt32:
-                output.WriteSInt32((int)ReadInt64(field, value));
+                output.WriteSInt32(ReadInt32(field, value));
                 break;
             case FieldType.SInt64:
                 output.WriteSInt64(ReadInt64(field, value));
@@ -180,6 +220,28 @@ internal static class JsonToProto
         FieldType.String or FieldType.Bytes or FieldType.Message or FieldType.Group => false,
         _ => true,
     };
+
+    private static int ReadInt32(FieldDescriptor field, JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n))
+            return n;
+        if (value.ValueKind == JsonValueKind.String &&
+            int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var s))
+            return s;
+        throw new InvalidOperationException(
+            $"field '{field.FullName}' expects a 32-bit signed integer but received '{value.ValueKind}' or value out of range.");
+    }
+
+    private static uint ReadUInt32(FieldDescriptor field, JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetUInt32(out var n))
+            return n;
+        if (value.ValueKind == JsonValueKind.String &&
+            uint.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var s))
+            return s;
+        throw new InvalidOperationException(
+            $"field '{field.FullName}' expects a 32-bit unsigned integer but received '{value.ValueKind}' or value out of range.");
+    }
 
     private static long ReadInt64(FieldDescriptor field, JsonElement value)
     {
