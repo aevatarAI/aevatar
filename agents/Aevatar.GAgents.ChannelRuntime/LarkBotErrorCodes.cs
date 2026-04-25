@@ -34,4 +34,15 @@ internal static class LarkBotErrorCodes
     /// <c>chat_id</c>-preferred path takes effect (chat_id traverses no user-id translation).
     /// </summary>
     public const int UserIdCrossTenant = 99992364;
+
+    /// <summary>
+    /// "Bot is not in the chat" — the outbound app is not a member of the chat referenced by
+    /// <c>receive_id_type=chat_id</c>. For DMs, each Lark app has its own DM thread with the
+    /// user, so a chat_id captured by the relay-side ingress app is rejected by a different
+    /// outbound app even within the same tenant. Triggers the runtime fallback to the
+    /// secondary delivery target (typically union_id) in
+    /// <c>SkillRunnerGAgent.SendOutputAsync</c> and
+    /// <c>FeishuCardHumanInteractionPort.SendMessageAsync</c>.
+    /// </summary>
+    public const int BotNotInChat = 230002;
 }

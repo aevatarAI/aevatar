@@ -63,5 +63,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             Tombstoned = document.Tombstoned,
             LarkReceiveId = document.LarkReceiveId ?? string.Empty,
             LarkReceiveIdType = document.LarkReceiveIdType ?? string.Empty,
+            LarkReceiveIdFallback = document.LarkReceiveIdFallback ?? string.Empty,
+            LarkReceiveIdTypeFallback = document.LarkReceiveIdTypeFallback ?? string.Empty,
         };
 }

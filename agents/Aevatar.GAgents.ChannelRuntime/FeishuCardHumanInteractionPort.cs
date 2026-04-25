@@ -338,29 +338,90 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 deliveryTarget.ReceiveIdType);
         }
 
+        var outcome = await TrySendWithFallbackAsync(
+            target,
+            messageType,
+            contentJson,
+            deliveryTarget,
+            emptyResponseMessage,
+            cancellationToken);
+
+        if (!outcome.Succeeded)
+        {
+            throw new InvalidOperationException(BuildLarkRejectionMessage(failurePrefix, outcome.LarkCode, outcome.Detail));
+        }
+    }
+
+    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
+    {
+        public static SendOutcome Success() => new(true, null, string.Empty);
+        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
+    }
+
+    /// <summary>
+    /// Mirrors <c>SkillRunnerGAgent.TrySendWithFallbackAsync</c>: tries the typed primary
+    /// delivery target, then on a Lark <c>230002 bot not in chat</c> rejection retries once
+    /// with the fallback target persisted on <see cref="UserAgentCatalogEntry.LarkReceiveIdFallback"/>.
+    /// Returns success vs. failure (with Lark code+detail) so the caller can throw cleanly.
+    /// </summary>
+    private async Task<SendOutcome> TrySendWithFallbackAsync(
+        UserAgentCatalogEntry target,
+        string messageType,
+        string contentJson,
+        LarkReceiveTarget primary,
+        string emptyResponseMessage,
+        CancellationToken cancellationToken)
+    {
+        var primaryResult = await SendOutboundAsync(target, messageType, contentJson, primary, cancellationToken);
+        if (string.IsNullOrWhiteSpace(primaryResult))
+            throw new InvalidOperationException(emptyResponseMessage);
+        if (!LarkProxyResponse.TryGetError(primaryResult, out var larkCode, out var detail))
+            return SendOutcome.Success();
+
+        if (larkCode != LarkBotErrorCodes.BotNotInChat)
+            return SendOutcome.Failed(larkCode, detail);
+
+        var fallbackId = target.LarkReceiveIdFallback?.Trim();
+        var fallbackType = target.LarkReceiveIdTypeFallback?.Trim();
+        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
+            return SendOutcome.Failed(larkCode, detail);
+
+        _logger.LogInformation(
+            "Feishu human interaction port primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair: agent={AgentId}, fallbackType={FallbackType}",
+            target.AgentId,
+            fallbackType);
+
+        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
+        var fallbackResult = await SendOutboundAsync(target, messageType, contentJson, fallbackTarget, cancellationToken);
+        if (string.IsNullOrWhiteSpace(fallbackResult))
+            throw new InvalidOperationException(emptyResponseMessage);
+        if (!LarkProxyResponse.TryGetError(fallbackResult, out var fallbackCode, out var fallbackDetail))
+            return SendOutcome.Success();
+        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+    }
+
+    private async Task<string> SendOutboundAsync(
+        UserAgentCatalogEntry target,
+        string messageType,
+        string contentJson,
+        LarkReceiveTarget receiveTarget,
+        CancellationToken cancellationToken)
+    {
         var body = JsonSerializer.Serialize(new
         {
-            receive_id = deliveryTarget.ReceiveId,
+            receive_id = receiveTarget.ReceiveId,
             msg_type = messageType,
             content = contentJson,
         });
 
-        var result = await _nyxIdApiClient.ProxyRequestAsync(
+        return await _nyxIdApiClient.ProxyRequestAsync(
             target.NyxApiKey,
             target.NyxProviderSlug,
-            $"open-apis/im/v1/messages?receive_id_type={deliveryTarget.ReceiveIdType}",
+            $"open-apis/im/v1/messages?receive_id_type={receiveTarget.ReceiveIdType}",
             "POST",
             body,
             extraHeaders: null,
             cancellationToken);
-
-        if (string.IsNullOrWhiteSpace(result))
-            throw new InvalidOperationException(emptyResponseMessage);
-
-        if (LarkProxyResponse.TryGetError(result, out var larkCode, out var detail))
-        {
-            throw new InvalidOperationException(BuildLarkRejectionMessage(failurePrefix, larkCode, detail));
-        }
     }
 
     private static string BuildLarkRejectionMessage(string failurePrefix, int? larkCode, string detail)

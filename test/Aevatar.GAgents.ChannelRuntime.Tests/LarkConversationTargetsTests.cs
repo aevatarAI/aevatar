@@ -209,6 +209,59 @@ public sealed class LarkConversationTargetsTests
     }
 
     [Fact]
+    public void BuildFromInboundWithFallback_ShouldPairChatIdPrimary_WithUnionIdFallback_ForP2p()
+    {
+        // PR #412 reviewer concern (codex-bot, P1): chat_id-first regresses cross-app same-tenant
+        // deployments where the outbound app is not a member of the inbound DM. The fallback
+        // pairs the primary chat_id with a secondary union_id captured at ingress so the
+        // runtime can retry once on `230002 bot not in chat` without needing a fresh ingress.
+        var target = LarkConversationTargets.BuildFromInboundWithFallback(
+            chatType: "p2p",
+            conversationId: "oc_dm_chat_1",
+            senderId: "ou_user_1",
+            larkUnionId: "on_user_1",
+            larkChatId: "oc_dm_chat_1");
+
+        target.Primary.ReceiveId.Should().Be("oc_dm_chat_1");
+        target.Primary.ReceiveIdType.Should().Be("chat_id");
+        target.Fallback.Should().NotBeNull();
+        target.Fallback!.Value.ReceiveId.Should().Be("on_user_1");
+        target.Fallback.Value.ReceiveIdType.Should().Be("union_id");
+    }
+
+    [Fact]
+    public void BuildFromInboundWithFallback_ShouldNotPairFallback_ForGroupChats()
+    {
+        // For groups chat_id is tenant-scoped; either the outbound app is in the chat (chat_id
+        // works) or it isn't (no user-id-based identifier helps). No fallback to attempt.
+        var target = LarkConversationTargets.BuildFromInboundWithFallback(
+            chatType: "group",
+            conversationId: "oc_group_chat_1",
+            senderId: "ou_user_1",
+            larkUnionId: "on_user_1",
+            larkChatId: "oc_group_chat_1");
+
+        target.Primary.ReceiveIdType.Should().Be("chat_id");
+        target.Fallback.Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildFromInboundWithFallback_ShouldOmitFallback_WhenPrimaryIsNotChatId()
+    {
+        // When the primary already degrades to union_id or open_id (chat_id missing at
+        // ingress), there is no further fallback to capture — the primary IS the safest
+        // identifier we have.
+        var target = LarkConversationTargets.BuildFromInboundWithFallback(
+            chatType: "p2p",
+            conversationId: "ou_legacy",
+            senderId: "ou_user_1",
+            larkUnionId: "on_user_1");
+
+        target.Primary.ReceiveIdType.Should().Be("union_id");
+        target.Fallback.Should().BeNull();
+    }
+
+    [Fact]
     public void Resolve_ShouldRecoverOpenIdForP2pConfusedInbound_ViaPrefixInference()
     {
         // Pairs with BuildFromInbound's defensive p2p+empty-sender path: the empty typed pair

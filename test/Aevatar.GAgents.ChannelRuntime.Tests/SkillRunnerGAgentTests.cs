@@ -240,6 +240,72 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SendOutputAsync_ShouldRetryWithFallback_When_PrimaryRejectedAsBotNotInChat()
+    {
+        // Reviewer concern (codex-bot, P1, PR #412): chat_id-first regresses cross-app
+        // same-tenant deployments where the outbound app is not a member of the inbound DM
+        // chat — Lark returns `230002 bot not in chat` for chat_id-typed sends. Captured the
+        // union_id at create time as a fallback; assert the runtime retries once with the
+        // fallback typed pair when the primary attempt fails with 230002, and that the retry
+        // body uses the fallback `receive_id` / `receive_id_type`.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "oc_dm_chat_1",
+            LarkReceiveIdType = "chat_id",
+            LarkReceiveIdFallback = "on_user_1",
+            LarkReceiveIdTypeFallback = "union_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new SequencedHandler(
+            """{"code":230002,"msg":"Bot is not in the chat"}""",
+            """{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeSendOutputAsync(_agent, "report");
+
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].RequestUri!.Query.Should().Contain("receive_id_type=chat_id");
+        handler.Bodies[0].Should().Contain("\"receive_id\":\"oc_dm_chat_1\"");
+        handler.Requests[1].RequestUri!.Query.Should().Contain("receive_id_type=union_id");
+        handler.Bodies[1].Should().Contain("\"receive_id\":\"on_user_1\"");
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldNotRetry_When_PrimaryRejectedWithDifferentLarkCode()
+    {
+        // Only `230002 bot not in chat` triggers the fallback retry. Other Lark codes (e.g.
+        // 99992364 cross_tenant) propagate immediately so the user sees the actionable
+        // recovery hint for the actual failure mode rather than a misleading retry.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "oc_dm_chat_1",
+            LarkReceiveIdType = "chat_id",
+            LarkReceiveIdFallback = "on_user_1",
+            LarkReceiveIdTypeFallback = "union_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new SequencedHandler(
+            """{"code":99992364,"msg":"user id cross tenant"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*99992364*");
+        handler.Requests.Should().ContainSingle("only 230002 should trigger the fallback retry");
+    }
+
+    [Fact]
     public async Task SendOutputAsync_ShouldIncludeRecreateHint_When_LarkRejectsAsCrossTenantUserId()
     {
         // Production failure mode after PR #409 switched p2p to union_id: NyxID's relay-side
@@ -309,6 +375,34 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    /// <summary>
+    /// Returns a different response per request in the order given. Used to simulate the
+    /// `bot not in chat` rejection on the primary attempt followed by a successful fallback
+    /// retry.
+    /// </summary>
+    private sealed class SequencedHandler : HttpMessageHandler
+    {
+        private readonly Queue<string> _responses;
+        public List<HttpRequestMessage> Requests { get; } = new();
+        public List<string?> Bodies { get; } = new();
+
+        public SequencedHandler(params string[] responses)
+        {
+            _responses = new Queue<string>(responses);
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            Bodies.Add(request.Content == null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
+            var body = _responses.Count > 0 ? _responses.Dequeue() : """{"code":0,"msg":"success"}""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
     }

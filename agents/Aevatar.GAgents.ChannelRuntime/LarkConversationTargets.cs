@@ -133,9 +133,61 @@ internal static class LarkConversationTargets
     // narrow until a second emitter (e.g. a Telegram bridge) actually lands.
     private static bool IsDirectMessage(string? chatType) =>
         string.Equals(chatType?.Trim(), "p2p", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Builds the primary outbound delivery target plus a secondary fallback. The primary
+    /// follows <see cref="BuildFromInbound"/>'s priority (chat_id &gt; union_id &gt; open_id).
+    /// The fallback is the next-best identifier we have at ingress time so the runtime can
+    /// retry once on a Lark <c>230002 bot not in chat</c> rejection without needing a fresh
+    /// ingress event:
+    /// <list type="bullet">
+    /// <item><description>For p2p: when the primary is chat_id (`oc_*`), the fallback is union_id (`on_*`) when the relay surfaced one. This recovers cross-app same-tenant deployments where the outbound app is not in the DM chat.</description></item>
+    /// <item><description>For groups: no fallback — chat_id is tenant-scoped and either works (any app in the chat) or fails for reasons that union_id wouldn't fix.</description></item>
+    /// </list>
+    /// </summary>
+    public static LarkReceiveTargetWithFallback BuildFromInboundWithFallback(
+        string? chatType,
+        string? conversationId,
+        string? senderId,
+        string? larkUnionId = null,
+        string? larkChatId = null)
+    {
+        var primary = BuildFromInbound(chatType, conversationId, senderId, larkUnionId, larkChatId);
+
+        // Only useful when the primary is chat_id AND we still have a tenant-stable user
+        // identifier to try in cross-app same-tenant scenarios. Skip when the primary is
+        // already union_id or open_id — those don't need a fallback because they are NOT
+        // app-specific in the way DM chat_id is.
+        if (!IsDirectMessage(chatType))
+            return new LarkReceiveTargetWithFallback(primary, Fallback: null);
+
+        if (!string.Equals(primary.ReceiveIdType, DefaultReceiveIdType, StringComparison.Ordinal))
+            return new LarkReceiveTargetWithFallback(primary, Fallback: null);
+
+        var trimmedUnion = (larkUnionId ?? string.Empty).Trim();
+        if (!string.IsNullOrEmpty(trimmedUnion))
+            return new LarkReceiveTargetWithFallback(
+                primary,
+                new LarkReceiveTarget(trimmedUnion, UnionIdReceiveIdType, FellBackToPrefixInference: false));
+
+        return new LarkReceiveTargetWithFallback(primary, Fallback: null);
+    }
 }
 
 internal readonly record struct LarkReceiveTarget(
     string ReceiveId,
     string ReceiveIdType,
     bool FellBackToPrefixInference);
+
+/// <summary>
+/// Primary outbound delivery target plus a secondary fallback. Captured at agent-create time
+/// when the inbound surfaces both a chat_id (primary) and a union_id (fallback). The runtime
+/// tries the primary first; on a Lark <c>230002 bot not in chat</c> rejection — the failure
+/// mode for cross-app same-tenant deployments where the outbound app is not a member of the
+/// inbound DM chat — it retries once with the fallback. Without the fallback, switching to
+/// chat_id-first would regress those deployments because chat_id is bot-specific for DMs and
+/// only valid when the same Lark app received the inbound.
+/// </summary>
+internal readonly record struct LarkReceiveTargetWithFallback(
+    LarkReceiveTarget Primary,
+    LarkReceiveTarget? Fallback);

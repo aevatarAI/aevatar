@@ -802,7 +802,13 @@ public sealed class ChannelConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
-        result.ErrorCode.Should().Be("relay_reply_rejected");
+        // Distinct error code routed to PermanentFailure (vs transient `relay_reply_rejected`)
+        // so `ConversationGAgent.HandleInboundTurnTransientFailureAsync` does NOT queue an
+        // `InboundTurnRetryScheduledEvent` that would re-run the inbound turn with the same
+        // already-consumed reply token. Without this routing, the in-turn retry fix would just
+        // shift the 401 cascade from in-turn replay to grain-level replay.
+        result.ErrorCode.Should().Be("relay_reply_token_consumed");
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
         result.ErrorSummary.Should().Contain("502");
 
         // Critical assertion: the runner MUST NOT make a second HTTP call to NyxID's

@@ -506,15 +506,19 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // returned 502 for the card payload, the legacy fallback re-sent as text and got
         // 401, and the bot looked silent on every subsequent DM.
         //
-        // Surface the failure to the caller's grain-level retry path instead. The token is
-        // single-use, so we get exactly one attempt per inbound; if that fails, the right
-        // recovery is to NOT replay the same token within this turn.
+        // Use the distinct `relay_reply_token_consumed` error code so `ToRelayFailure` maps
+        // it to `PermanentFailure` (vs. transient). Without this, `ConversationGAgent
+        // .HandleInboundTurnTransientFailureAsync` would queue an `InboundTurnRetryScheduled
+        // Event` and re-run the same inbound turn with the same already-consumed token —
+        // shifting the 401 cascade from in-turn replay (fixed) to grain-level replay (still
+        // broken). The token is single-use, so we get exactly one attempt per inbound; if
+        // that fails, the only correct recovery is to NOT replay it.
         _logger.LogWarning(
-            "Interactive relay reply rejected; not retrying as text (single-use token already consumed). messageId={MessageId}, detail={Detail}",
+            "Interactive relay reply rejected; reply token consumed, not retrying. messageId={MessageId}, detail={Detail}",
             relayDelivery.ReplyMessageId,
             dispatch.Detail);
         return ToRelayFailure(EmitResult.Failed(
-            "relay_reply_rejected",
+            "relay_reply_token_consumed",
             string.IsNullOrWhiteSpace(dispatch.Detail)
                 ? "Interactive relay reply rejected; reply token consumed."
                 : dispatch.Detail));
@@ -1035,6 +1039,12 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         return errorCode switch
         {
+            // The reply token has already been consumed (single-use). Re-running the inbound
+            // turn at grain level (`ConversationGAgent.HandleInboundTurnTransientFailureAsync`)
+            // would replay the same token and get `401 Reply token already used` forever, so
+            // route to PermanentFailure to short-circuit the retry queue. The user-facing
+            // recovery is to send a fresh inbound message which carries a fresh token.
+            "relay_reply_token_consumed" or
             "reply_token_missing_or_expired" or "missing_reply_message_id" or "empty_reply" =>
                 ConversationTurnResult.PermanentFailure(errorCode, errorMessage),
             _ when emit.RetryAfterTimeSpan is { } retryAfter =>

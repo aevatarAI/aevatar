@@ -341,6 +341,105 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubProxyDeniedForNewKey()
+    {
+        // Issue aevatarAI/aevatar#411: a daily_report agent is created with the new agent API
+        // key flagged `allowed_service_ids=api-github`, but if NyxID's binding for the user's
+        // GitHub OAuth credential is missing/expired, every scheduled run hits 401/403 from
+        // the proxy and the user only sees an empty / degraded report. Preflight
+        // `proxy/s/api-github/rate_limit` with the freshly minted key and fail-fast with an
+        // actionable error so the agent is not persisted in a "always-fails-at-runtime" state.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-github-403");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-github-403").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-github-403", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [{"id":"svc-github","slug":"api-github"}],
+              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-403","full_key":"full-key-403"}""");
+        // The preflight: NyxID returns its envelope with code=403 when the new key has no
+        // bound GitHub credential. Mirrors the production failure mode from issue #411.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"error":"upstream","code":403,"message":"GitHub denied access","body":"{\"message\":\"Bad credentials\"}"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-github-403",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_proxy_access_denied");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("api-keys");
+
+            // The actor must NOT receive InitializeSkillRunnerCommand — preflight aborts
+            // BEFORE the actor is invoked so we don't leave a broken agent in the catalog.
+            await skillRunnerActor.DidNotReceive().HandleEventAsync(
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CreateAgent_DailyReport_LogsFallbackBreadcrumb_When_LarkUnionIdMissing()
     {
         // Reviewer (PR #409 r3141562097): when the relay does not surface LarkUnionId at agent
