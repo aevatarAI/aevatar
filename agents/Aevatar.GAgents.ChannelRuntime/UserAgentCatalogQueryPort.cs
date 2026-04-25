@@ -61,5 +61,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             CreatedAt = document.CreatedAtUtc,
             UpdatedAt = document.UpdatedAtUtc,
             Tombstoned = document.Tombstoned,
+            LarkReceiveId = document.LarkReceiveId ?? string.Empty,
+            LarkReceiveIdType = document.LarkReceiveIdType ?? string.Empty,
         };
 }
