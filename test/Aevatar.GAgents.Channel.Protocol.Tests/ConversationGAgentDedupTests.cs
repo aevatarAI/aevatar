@@ -225,6 +225,63 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task ApplyLlmReplyRequested_AfterTransientFailureRetryPending_ReapsPendingInboundTurn()
+    {
+        // Codex review on #399 retry: a transient-failed activity that later succeeds via
+        // redelivery on the LLM reply path must reap the pending retry entry. Without this,
+        // the deferred retry would find the stale pending entry, hit the dedup guard, and
+        // silently no-op — but the entry would survive to be re-registered on every
+        // activation, growing PendingInboundTurns unboundedly.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationTurnResult.TransientFailure("rate_limited", "retry later");
+                return ConversationTurnResult.LlmReplyRequested(
+                    new NeedsLlmReplyEvent
+                    {
+                        CorrelationId = activity.Id,
+                        TargetActorId = "conversation:actor",
+                        RegistrationId = "reg-1",
+                        Activity = activity.Clone(),
+                        RequestedAtUnixMs = 7,
+                    });
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-llm-supersedes-retry");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-llm-supersedes", "conv:slack:C1"));
+        agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-llm-supersedes");
+
+        // Redelivery hits the LLM reply branch; ApplyLlmReplyRequested must reap the pending
+        // entry alongside adding the activity id to ProcessedMessageIds.
+        await agent.HandleInboundActivityAsync(CreateActivity("act-llm-supersedes", "conv:slack:C1"));
+
+        runner.InboundCount.ShouldBe(2);
+        agent.State.ProcessedMessageIds.ShouldContain("act-llm-supersedes");
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-llm-supersedes");
+
+        var eventsAfterRedelivery = await store.GetEventsAsync(agent.Id);
+
+        // The deferred retry that was scheduled on the first delivery now fires. With the
+        // pending entry already reaped, the handler is a true no-op: no runner invocation,
+        // no further events persisted, and PendingInboundTurns stays empty.
+        await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+        {
+            ActivityId = "act-llm-supersedes",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(2);
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-llm-supersedes");
+        var eventsAfterRetryFire = await store.GetEventsAsync(agent.Id);
+        eventsAfterRetryFire.Count.ShouldBe(eventsAfterRedelivery.Count);
+    }
+
+    [Fact]
     public async Task HandleInboundActivityAsync_WhenRunnerReportsPermanentFailure_EmitsTerminalWithoutScheduling()
     {
         // Issue #399 non-regression: permanent-adapter failures must skip the retry pipeline and

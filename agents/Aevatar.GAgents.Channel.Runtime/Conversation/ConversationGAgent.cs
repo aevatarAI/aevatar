@@ -355,17 +355,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var pending = FindPendingInboundTurn(evt.ActivityId);
         if (pending is null || pending.Activity is null)
         {
+            // Pending entry already reaped — either by ApplyTurnCompleted (success), the
+            // terminal NotRetryable ApplyContinueFailed (exhaustion), or ApplyLlmReplyRequested
+            // (redelivery accepted into the LLM reply pipeline before this retry could fire).
             Logger.LogDebug(
                 "Ignoring deferred inbound turn retry without pending entry: activity={ActivityId}",
                 evt.ActivityId);
             return;
         }
 
-        // If the turn already completed via another path between scheduling and firing, the
-        // dedup guard in HandleInboundActivityCoreAsync will drop the redelivery without
-        // running the turn runner. That's still desired behaviour — we just log and let the
-        // core handler's existing check handle the cleanup.
-        //
         // The in-memory _nyxRelayReplyTokens dict is the authoritative source for the relay
         // reply credential. If the activation is still alive, BuildNyxRelayRuntimeContext
         // will re-hydrate it from activity.outbound_delivery.correlation_id; if the pod was
@@ -1167,6 +1165,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (!string.IsNullOrWhiteSpace(activityId))
         {
             AppendBounded(next.ProcessedMessageIds, activityId, ProcessedIdsCap);
+            // Acceptance into the LLM reply pipeline supersedes any pending inbound retry
+            // entry for the same activity. Without this reap, a redelivery that takes the
+            // LLM path would leave the stale pending entry in state, where it would be
+            // re-scheduled on every activation and silently no-op against the dedup guard.
+            RemovePendingInboundTurn(next.PendingInboundTurns, activityId);
         }
 
         if (evt.Activity?.Conversation != null && next.Conversation == null)
