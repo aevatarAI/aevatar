@@ -248,6 +248,12 @@ public sealed class AgentBuilderTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
         var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeSkillRunnerCommand
         {
@@ -282,7 +288,6 @@ public sealed class AgentBuilderTool : IAgentTool
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
 
-        await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
@@ -392,6 +397,12 @@ public sealed class AgentBuilderTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
         var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeWorkflowAgentCommand
         {
@@ -414,7 +425,6 @@ public sealed class AgentBuilderTool : IAgentTool
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
 
-        await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
@@ -620,6 +630,13 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
+        // Capture baseline version BEFORE dispatch so the wait can distinguish
+        // "projection has materialized this disable" from "stale read replica
+        // happens to surface a historical disabled status". Capture must
+        // precede dispatch — capturing inside the wait helper would race
+        // against a fast projection that already advanced the version.
+        var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
+
         // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
         // the rationale. A late prime can't recover an event the projector
         // already missed.
@@ -629,7 +646,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusDisabled, ct) ?? entry.value;
+        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusDisabled, ct) ?? entry.value;
         return SerializeAgentStatus(after, "Agent disabled. Scheduling paused.");
     }
 
@@ -647,6 +664,10 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
 
+        // See DisableAgentAsync for why versionBefore is captured here (before
+        // any dispatch) and not inside WaitForAgentStatusAsync.
+        var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
+
         // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
         // the rationale. A late prime can't recover an event the projector
         // already missed.
@@ -656,7 +677,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusRunning, ct) ?? entry.value;
+        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusRunning, ct) ?? entry.value;
         return SerializeAgentStatus(after, "Agent enabled. Scheduling resumed.");
     }
 
@@ -792,25 +813,34 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<UserAgentCatalogEntry?> WaitForAgentStatusAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
+        long versionBefore,
         string expectedStatus,
         CancellationToken ct)
     {
-        // Status-driven polling (no version anchor): caller dispatches the
-        // lifecycle command and we wait for the read model to reflect the
-        // expected status. A version-gated optimization here was wrong because
-        // `versionBefore` would be captured *after* dispatch, so a fast
-        // projection that already advanced the version made `versionAfter ==
-        // versionBefore` and burned the entire budget. The Status field itself
-        // is the authoritative signal — `expectedStatus` is enum-like and only
-        // moves when the lifecycle event materializes, so reading it on every
-        // attempt is both correct and cheap. Projection scope priming happens
-        // in the caller before the dispatch (see DisableAgentAsync /
+        // Status + version dual-condition (mirrors WaitForCreatedAgentAsync):
+        // wait until the read model both advances past the caller-captured
+        // baseline AND surfaces the expected status. Status alone is not
+        // enough — a stale replica can hold an expected-looking historical
+        // status (e.g., a previous disable→enable→disable cycle) and pass a
+        // status-only check while the actor has not yet processed *this*
+        // dispatch. Conversely, version alone is not enough either — an
+        // unrelated state event could advance the version without changing
+        // status. Both conditions together pin "this specific lifecycle
+        // event has materialized in the read model". Caller must capture
+        // versionBefore *before* dispatch, otherwise a fast projection that
+        // already advanced the version would make versionAfter == versionBefore
+        // and burn the entire budget. Projection scope priming also happens
+        // in the caller before dispatch (see DisableAgentAsync /
         // EnableAgentAsync) — a late prime here cannot recover an event the
         // projector already missed.
         for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
                 await Task.Delay(_projectionWaitDelayMilliseconds, ct);
+
+            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+            if (versionAfter <= versionBefore)
+                continue;
 
             var entry = await queryPort.GetAsync(agentId, ct);
             if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
