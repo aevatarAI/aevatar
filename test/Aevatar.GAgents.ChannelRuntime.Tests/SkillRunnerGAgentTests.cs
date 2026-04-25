@@ -1,4 +1,8 @@
+using System.Net;
 using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
@@ -89,6 +93,153 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.HasMaxTokens.Should().BeTrue();
         _agent.State.MaxTokens.Should().Be(0);
         _agent.EffectiveConfig.MaxTokens.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldUseTypedReceiveTarget_WhenLarkReceiveIdIsPopulated()
+    {
+        // Initialize with typed fields set (the shape AgentBuilderTool now writes for p2p flows).
+        // Even though the legacy ConversationId is an `oc_*` chat id (which Lark would also accept
+        // with chat_id), the typed open_id target should be sent verbatim — this is what fixes the
+        // production 400 where the relay's ConversationId fell through to ou_*.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_chat_legacy",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_1"}}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeSendOutputAsync(_agent, "scheduled report body");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=open_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_user_1");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldFallBackToConversationIdPrefixInference_ForLegacyState()
+    {
+        // Backward compatibility: state persisted before the typed lark_receive_id fields existed
+        // still resolves through the prefix heuristic on ConversationId. The send still succeeds
+        // (no exception); the sender emits a Debug breadcrumb that is not visible to xUnit.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "ou_legacy_user",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeSendOutputAsync(_agent, "legacy report body");
+
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=open_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_legacy_user");
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldThrow_WhenLarkBusinessCodeIsNonZero()
+    {
+        // Lark reports business errors as HTTP 200 with `code != 0`. Ignoring the response would
+        // let HandleTriggerAsync persist SkillRunnerExecutionCompletedEvent on a silent failure.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":230002,"msg":"invalid receive_id"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.WithMessage("*code=230002*");
+        assertion.WithMessage("*invalid receive_id*");
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldThrow_WhenNyxProxyEnvelopeReportsError()
+    {
+        // HTTP non-2xx from NyxID gets packaged into a Nyx envelope that ProxyRequestAsync returns
+        // verbatim. Ignoring it would mask transport / auth failures.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"error":true,"message":"upstream timeout"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*upstream timeout*");
+    }
+
+    private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
+    {
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var field = typeof(SkillRunnerGAgent).GetField(
+            "_nyxIdApiClient",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        field.Should().NotBeNull();
+        field!.SetValue(agent, client);
+    }
+
+    private static Task InvokeSendOutputAsync(SkillRunnerGAgent agent, string output)
+    {
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "SendOutputAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        return (Task)method!.Invoke(agent, [output, CancellationToken.None])!;
+    }
+
+    private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
+    {
+        public HttpRequestMessage? LastRequest { get; private set; }
+        public string? LastBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastRequest = request;
+            LastBody = request.Content == null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+            };
+        }
     }
 
     private SkillRunnerGAgent CreateAgent(string actorId)

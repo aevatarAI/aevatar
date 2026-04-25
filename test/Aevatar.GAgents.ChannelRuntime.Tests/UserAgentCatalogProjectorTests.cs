@@ -54,6 +54,8 @@ public sealed class UserAgentCatalogProjectorTests
                     ErrorCount = 1,
                     LastError = "last-error",
                     CreatedAt = createdAt,
+                    LarkReceiveId = "ou_user_1",
+                    LarkReceiveIdType = "open_id",
                 },
             },
         };
@@ -83,6 +85,32 @@ public sealed class UserAgentCatalogProjectorTests
         document.ActorId.Should().Be("agent-registry-store");
         document.CreatedAt.Should().Be(createdAt.ToDateTimeOffset());
         document.UpdatedAt.Should().Be(_clock.UtcNow);
+        // Typed Lark target round-trips through the projection so catalog-backed senders
+        // (FeishuCardHumanInteractionPort) read it via UserAgentCatalogQueryPort.ToEntry
+        // instead of falling back to conversation_id prefix inference.
+        document.LarkReceiveId.Should().Be("ou_user_1");
+        document.LarkReceiveIdType.Should().Be("open_id");
+    }
+
+    [Fact]
+    public void ToEntry_ShouldRoundTripTypedLarkReceiveTarget_FromDocumentToEntry()
+    {
+        // FeishuCardHumanInteractionPort consumes UserAgentCatalogEntry via this conversion;
+        // dropping the typed fields would silently regress workflow / social_media DM delivery
+        // back to the prefix-inference path even after the projection captured them.
+        var document = new UserAgentCatalogDocument
+        {
+            Id = "agent-1",
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+        };
+
+        var entry = UserAgentCatalogQueryPort.ToEntry(document, nyxApiKey: "");
+
+        entry.LarkReceiveId.Should().Be("ou_user_1");
+        entry.LarkReceiveIdType.Should().Be("open_id");
     }
 
     [Fact]

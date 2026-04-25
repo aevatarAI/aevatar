@@ -268,18 +268,44 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
+        var deliveryTarget = LarkConversationTargets.Resolve(
+            State.OutboundConfig.LarkReceiveId,
+            State.OutboundConfig.LarkReceiveIdType,
+            State.OutboundConfig.ConversationId);
+        if (deliveryTarget.FellBackToPrefixInference)
+        {
+            // No typed receive_id captured at create time; only legacy state predating the
+            // typed fields hits this path. Keep the breadcrumb so format drift is observable
+            // when the prefix heuristic stops matching.
+            Logger.LogDebug(
+                "Skill runner {ActorId} resolved Lark receive target by prefix inference (legacy state): conversationId={ConversationId}, receiveIdType={ReceiveIdType}",
+                Id,
+                State.OutboundConfig.ConversationId,
+                deliveryTarget.ReceiveIdType);
+        }
+
         var body = JsonSerializer.Serialize(new
         {
-            receive_id = State.OutboundConfig.ConversationId,
+            receive_id = deliveryTarget.ReceiveId,
             msg_type = "text",
             content = JsonSerializer.Serialize(new { text = output }),
         });
 
-        await client.ProxyRequestAsync(
+        var response = await client.ProxyRequestAsync(
             State.OutboundConfig.NyxApiKey,
             State.OutboundConfig.NyxProviderSlug,
-            "open-apis/im/v1/messages?receive_id_type=chat_id",
+            $"open-apis/im/v1/messages?receive_id_type={deliveryTarget.ReceiveIdType}",
             "POST", body, null, ct);
+
+        if (LarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
+        {
+            // Surface downstream rejection so HandleTriggerAsync sees a real failure instead of
+            // persisting SkillRunnerExecutionCompletedEvent on a silently-dropped Lark response.
+            throw new InvalidOperationException(
+                larkCode is { } code
+                    ? $"Lark message delivery rejected (code={code}): {detail}"
+                    : $"Lark message delivery rejected: {detail}");
+        }
     }
 
     private async Task TrySendFailureAsync(string error, CancellationToken ct)
@@ -334,6 +360,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ScheduleCron = State.ScheduleCron ?? string.Empty,
             ScheduleTimezone = State.ScheduleTimezone ?? string.Empty,
             Status = status,
+            LarkReceiveId = State.OutboundConfig?.LarkReceiveId ?? string.Empty,
+            LarkReceiveIdType = State.OutboundConfig?.LarkReceiveIdType ?? string.Empty,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);

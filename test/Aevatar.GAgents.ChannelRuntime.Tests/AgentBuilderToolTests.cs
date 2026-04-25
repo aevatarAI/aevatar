@@ -161,6 +161,7 @@ public sealed class AgentBuilderToolTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             [ChannelMetadataKeys.ChatType] = "p2p",
             [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
             ["scope_id"] = "scope-1",
         };
         try
@@ -196,7 +197,12 @@ public sealed class AgentBuilderToolTests
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.NyxApiKey == "full-key-1" &&
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.ApiKeyId == "key-1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.OwnerNyxUserId == "user-1"),
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.OwnerNyxUserId == "user-1" &&
+                    // For p2p the typed delivery target pins the user open_id from SenderId so
+                    // outbound DMs go through Lark's open_id receive type even when the relay's
+                    // ConversationId is the underlying oc_* chat or a route id.
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "ou_user_1" &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "open_id"),
                 Arg.Any<CancellationToken>());
 
             await skillRunnerActor.Received(1).HandleEventAsync(
@@ -903,6 +909,7 @@ public sealed class AgentBuilderToolTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             [ChannelMetadataKeys.ChatType] = "p2p",
             [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
             ["scope_id"] = "scope-1",
         };
         try
@@ -944,7 +951,12 @@ public sealed class AgentBuilderToolTests
                     e.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowActorId == "workflow-actor-1" &&
                     e.Payload.Unpack<InitializeWorkflowAgentCommand>().ConversationId == "oc_chat_1" &&
                     e.Payload.Unpack<InitializeWorkflowAgentCommand>().NyxApiKey == "full-key-2" &&
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ApiKeyId == "key-2"),
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ApiKeyId == "key-2" &&
+                    // Mirror of the daily_report p2p assertion: BuildFromInbound must pin the
+                    // sender open_id at delivery-target creation time so FeishuCardHumanInteraction
+                    // Port reads it through the catalog projection without re-deriving the type.
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().LarkReceiveId == "ou_user_1" &&
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().LarkReceiveIdType == "open_id"),
                 Arg.Any<CancellationToken>());
 
             await workflowAgentActor.Received(1).HandleEventAsync(
