@@ -1,9 +1,11 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Hosting.Serialization;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -358,6 +360,8 @@ public static partial class ServiceEndpoints
         InvokeServiceHttpRequest request,
         [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceInvocationPort invocationPort,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionArtifactStore artifactStore,
         CancellationToken ct)
     {
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
@@ -372,18 +376,77 @@ public static partial class ServiceEndpoints
             return denied;
         }
 
+        Any payload;
+        string revisionId;
+        try
+        {
+            (payload, revisionId) = await ResolveInvocationPayloadAsync(
+                request,
+                identity,
+                catalogReader,
+                artifactStore,
+                ct);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SERVICE_INVOKE_REQUEST",
+                message = ex.Message,
+            });
+        }
+
         var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
         {
             Identity = identity,
             EndpointId = endpointId,
             CommandId = request.CommandId ?? string.Empty,
             CorrelationId = request.CorrelationId ?? string.Empty,
-            Payload = ServiceJsonPayloads.PackBase64(
-                request.PayloadTypeUrl ?? string.Empty,
-                request.PayloadBase64),
+            RevisionId = revisionId,
+            Payload = payload,
             Caller = ResolveInvocationCaller(identityResolver, request),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}", receipt);
+    }
+
+    private static async Task<(Any Payload, string RevisionId)> ResolveInvocationPayloadAsync(
+        InvokeServiceHttpRequest request,
+        ServiceIdentity identity,
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionArtifactStore artifactStore,
+        CancellationToken ct)
+    {
+        var typeUrl = request.PayloadTypeUrl ?? string.Empty;
+        var requestedRevisionId = request.RevisionId?.Trim() ?? string.Empty;
+        var hasJson = !string.IsNullOrWhiteSpace(request.PayloadJson);
+        var hasBase64 = !string.IsNullOrWhiteSpace(request.PayloadBase64);
+        if (hasJson && hasBase64)
+            throw new InvalidOperationException(
+                "payloadJson and payloadBase64 are mutually exclusive; specify only one.");
+
+        if (hasJson)
+        {
+            if (string.IsNullOrWhiteSpace(typeUrl))
+                throw new InvalidOperationException("payloadTypeUrl is required when payloadJson is provided.");
+
+            var revisionId = requestedRevisionId;
+            if (string.IsNullOrWhiteSpace(revisionId))
+            {
+                var catalog = await catalogReader.GetAsync(identity, ct);
+                revisionId = catalog?.ActiveServingRevisionId ?? string.Empty;
+            }
+
+            var packed = await ServiceJsonPayloads.PackJsonAsync(
+                artifactStore,
+                ServiceKeys.Build(identity),
+                revisionId,
+                typeUrl,
+                request.PayloadJson!,
+                ct);
+            return (packed, revisionId);
+        }
+
+        return (ServiceJsonPayloads.PackBase64(typeUrl, request.PayloadBase64), requestedRevisionId);
     }
 
     private static ServiceInvocationCaller ResolveInvocationCaller(
@@ -546,5 +609,7 @@ public static partial class ServiceEndpoints
         string? PayloadBase64,
         string? CallerServiceKey = null,
         string? CallerTenantId = null,
-        string? CallerAppId = null);
+        string? CallerAppId = null,
+        string? PayloadJson = null,
+        string? RevisionId = null);
 }
