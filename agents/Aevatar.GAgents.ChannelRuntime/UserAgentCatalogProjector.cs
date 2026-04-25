@@ -56,5 +56,7 @@ public sealed class UserAgentCatalogProjector
             ActorId = context.RootActorId,
             UpdatedAt = updatedAt,
             CreatedAt = entry.CreatedAt != null ? entry.CreatedAt.ToDateTimeOffset() : updatedAt,
+            LarkReceiveId = entry.LarkReceiveId ?? string.Empty,
+            LarkReceiveIdType = entry.LarkReceiveIdType ?? string.Empty,
         };
 }

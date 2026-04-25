@@ -89,13 +89,8 @@ public sealed class LarkConversationTargetsTests
         resolved.FellBackToPrefixInference.Should().BeTrue();
     }
 
-    [Theory]
-    [InlineData("p2p")]
-    [InlineData("P2P")]
-    [InlineData("direct_message")]
-    [InlineData("DirectMessage")]
-    [InlineData("dm")]
-    public void BuildFromInbound_ShouldUseSenderOpenId_ForDirectMessages(string chatType)
+    [Fact]
+    public void BuildFromInbound_ShouldUseSenderOpenId_ForP2pDirectMessages()
     {
         // The relay puts the Lark sender open_id (`ou_*`) into ChannelInboundEvent.SenderId,
         // while ConversationId may be the route id or the DM's underlying `oc_*` chat_id —
@@ -103,7 +98,7 @@ public sealed class LarkConversationTargetsTests
         // the bot is only authorised to DM the user, not the synthetic DM thread. Pin sender
         // open_id at delivery-target creation time.
         var target = LarkConversationTargets.BuildFromInbound(
-            chatType,
+            chatType: "p2p",
             conversationId: "oc_dm_underlying_chat",
             senderId: "ou_user_1");
 
@@ -119,8 +114,16 @@ public sealed class LarkConversationTargetsTests
     [InlineData("conversation")]
     [InlineData(null)]
     [InlineData("")]
-    public void BuildFromInbound_ShouldUseConversationChatId_ForNonDirectMessages(string? chatType)
+    [InlineData("P2P")]
+    [InlineData("direct_message")]
+    [InlineData("dm")]
+    public void BuildFromInbound_ShouldUseConversationChatId_ForNonP2pChatTypes(string? chatType)
     {
+        // ChannelConversationTurnRunner.ResolveConversationChatType is the only emitter of
+        // ChannelMetadataKeys.ChatType in this repo and produces exactly "p2p" for direct
+        // messages. Anything else — group/channel/thread/blank, or even other casings of "p2p" —
+        // is treated as a non-DM target and routed through `oc_*/chat_id`. Keep this guard
+        // narrow until a second emitter actually lands.
         var target = LarkConversationTargets.BuildFromInbound(
             chatType,
             conversationId: "oc_group_chat_1",
@@ -132,18 +135,40 @@ public sealed class LarkConversationTargetsTests
     }
 
     [Fact]
-    public void BuildFromInbound_ShouldFallBackToConversationChatId_WhenSenderIsMissingForDm()
+    public void BuildFromInbound_ShouldReturnEmptyTypedPairWithFellBack_WhenP2pAndSenderIsMissing()
     {
-        // Defensive: if the relay payload omits the sender open_id for a DM, we cannot
-        // reliably target the user. Returning the conversation_id (typed as chat_id) lets the
-        // outbound proxy fail loudly with the actual Lark error rather than silently sending
-        // to a wrong target.
+        // Defensive: a confused inbound (chat_type=p2p but no sender open_id) cannot be pinned
+        // to a typed receive target without re-creating the original /daily outage shape (open_id
+        // typed as chat_id). Return an empty typed pair with FellBack=true so the outbound
+        // resolver runs the legacy prefix path and call sites emit the Debug breadcrumb.
         var target = LarkConversationTargets.BuildFromInbound(
             chatType: "p2p",
-            conversationId: "oc_chat_1",
+            conversationId: "ou_user_1",
             senderId: "");
 
-        target.ReceiveId.Should().Be("oc_chat_1");
-        target.ReceiveIdType.Should().Be("chat_id");
+        target.ReceiveId.Should().BeEmpty();
+        target.ReceiveIdType.Should().BeEmpty();
+        target.FellBackToPrefixInference.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Resolve_ShouldRecoverOpenIdForP2pConfusedInbound_ViaPrefixInference()
+    {
+        // Pairs with BuildFromInbound's defensive p2p+empty-sender path: the empty typed pair
+        // makes Resolve fall back to the prefix heuristic on the legacy ConversationId, which
+        // recovers `open_id` for an `ou_*` value. Net effect: confused inbound is observable
+        // (FellBack=true) and still produces the right receive_id_type.
+        var typed = LarkConversationTargets.BuildFromInbound(
+            chatType: "p2p",
+            conversationId: "ou_user_1",
+            senderId: "");
+        var resolved = LarkConversationTargets.Resolve(
+            typed.ReceiveId,
+            typed.ReceiveIdType,
+            legacyConversationId: "ou_user_1");
+
+        resolved.ReceiveId.Should().Be("ou_user_1");
+        resolved.ReceiveIdType.Should().Be("open_id");
+        resolved.FellBackToPrefixInference.Should().BeTrue();
     }
 }

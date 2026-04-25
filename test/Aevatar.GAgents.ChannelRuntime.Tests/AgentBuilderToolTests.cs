@@ -909,6 +909,7 @@ public sealed class AgentBuilderToolTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             [ChannelMetadataKeys.ChatType] = "p2p",
             [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
             ["scope_id"] = "scope-1",
         };
         try
@@ -950,7 +951,12 @@ public sealed class AgentBuilderToolTests
                     e.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowActorId == "workflow-actor-1" &&
                     e.Payload.Unpack<InitializeWorkflowAgentCommand>().ConversationId == "oc_chat_1" &&
                     e.Payload.Unpack<InitializeWorkflowAgentCommand>().NyxApiKey == "full-key-2" &&
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ApiKeyId == "key-2"),
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ApiKeyId == "key-2" &&
+                    // Mirror of the daily_report p2p assertion: BuildFromInbound must pin the
+                    // sender open_id at delivery-target creation time so FeishuCardHumanInteraction
+                    // Port reads it through the catalog projection without re-deriving the type.
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().LarkReceiveId == "ou_user_1" &&
+                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().LarkReceiveIdType == "open_id"),
                 Arg.Any<CancellationToken>());
 
             await workflowAgentActor.Received(1).HandleEventAsync(

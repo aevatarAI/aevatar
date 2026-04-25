@@ -62,30 +62,33 @@ internal static class LarkConversationTargets
     /// also propagating an underlying chat_id; for everything else we send to the originating
     /// chat via its <c>oc_*</c> chat_id, which Lark accepts uniformly for groups, threads, and
     /// channels.
+    ///
+    /// If the inbound is p2p but the relay omitted <c>SenderId</c>, returning a typed pair would
+    /// silently re-create the original /daily 400 (typing the user open_id as <c>chat_id</c>).
+    /// Instead, return an empty typed pair with <c>FellBackToPrefixInference=true</c> so
+    /// <see cref="Resolve"/> falls back to the legacy prefix path and call sites emit a Debug
+    /// breadcrumb. The relay always emits <c>Sender.PlatformId</c> in production, so this path
+    /// is defensive.
     /// </summary>
     public static LarkReceiveTarget BuildFromInbound(string? chatType, string? conversationId, string? senderId)
     {
         var trimmedSender = (senderId ?? string.Empty).Trim();
-        if (IsDirectMessage(chatType) && !string.IsNullOrEmpty(trimmedSender))
+        if (IsDirectMessage(chatType))
         {
-            return new LarkReceiveTarget(trimmedSender, OpenIdReceiveIdType, FellBackToPrefixInference: false);
+            return string.IsNullOrEmpty(trimmedSender)
+                ? new LarkReceiveTarget(string.Empty, string.Empty, FellBackToPrefixInference: true)
+                : new LarkReceiveTarget(trimmedSender, OpenIdReceiveIdType, FellBackToPrefixInference: false);
         }
 
         var trimmedConversation = (conversationId ?? string.Empty).Trim();
         return new LarkReceiveTarget(trimmedConversation, DefaultReceiveIdType, FellBackToPrefixInference: false);
     }
 
-    private static bool IsDirectMessage(string? chatType)
-    {
-        if (string.IsNullOrWhiteSpace(chatType))
-            return false;
-
-        var normalized = chatType.Trim();
-        return string.Equals(normalized, "p2p", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(normalized, "direct_message", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(normalized, "directmessage", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(normalized, "dm", StringComparison.OrdinalIgnoreCase);
-    }
+    // Only "p2p" is emitted by ChannelConversationTurnRunner.ResolveConversationChatType today,
+    // which is the single source for ChannelMetadataKeys.ChatType in this repo. Keep the check
+    // narrow until a second emitter (e.g. a Telegram bridge) actually lands.
+    private static bool IsDirectMessage(string? chatType) =>
+        string.Equals(chatType?.Trim(), "p2p", StringComparison.Ordinal);
 }
 
 internal readonly record struct LarkReceiveTarget(

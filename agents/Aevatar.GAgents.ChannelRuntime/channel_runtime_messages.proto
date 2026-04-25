@@ -282,6 +282,11 @@ message UserAgentCatalogDocument {
   google.protobuf.Timestamp next_run_at_utc = 21;
   int32 error_count = 22;
   string last_error = 23;
+  // Mirrors UserAgentCatalogEntry.lark_receive_id*. Required so catalog-backed
+  // outbound senders (FeishuCardHumanInteractionPort) read the typed target
+  // through the projection rather than re-deriving from conversation_id.
+  string lark_receive_id = 24;
+  string lark_receive_id_type = 25;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.
