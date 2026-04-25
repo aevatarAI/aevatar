@@ -68,6 +68,51 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenRenderingInteractiveCard_UsesLarkV2BodyElements()
+    {
+        var intent = new MessageContent
+        {
+            Text = "Choose an agent",
+        };
+        intent.Cards.Add(new CardBlock
+        {
+            Title = "Agents",
+            Text = "skill-runner",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "status",
+            Label = "Status",
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        payload.MessageType.ShouldBe("interactive");
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        document.RootElement.GetProperty("schema").GetString().ShouldBe("2.0");
+        document.RootElement.TryGetProperty("elements", out _).ShouldBeFalse();
+        var bodyElements = document.RootElement.GetProperty("body").GetProperty("elements");
+        bodyElements.GetArrayLength().ShouldBe(3);
+        bodyElements[0].GetProperty("content").GetString().ShouldBe("Choose an agent");
+        var cardMarkdown = bodyElements[1].GetProperty("content").GetString();
+        cardMarkdown.ShouldNotBeNull();
+        cardMarkdown.ShouldContain("skill-runner");
+        bodyElements[2].GetProperty("tag").GetString().ShouldBe("action");
+    }
+
+    [Fact]
     public void Compose_WhenFormInputCarriesValue_RendersLarkDefaultValue()
     {
         var intent = new MessageContent();
