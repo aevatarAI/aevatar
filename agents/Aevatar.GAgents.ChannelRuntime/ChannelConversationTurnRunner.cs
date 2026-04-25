@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -928,13 +927,34 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 null,
                 ct);
 
-            if (TryGetProxyError(response, out var detail))
+            if (LarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
             {
-                _logger.LogWarning(
-                    "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, detail={Detail}",
-                    providerSlug,
-                    platformMessageId,
-                    detail);
+                if (larkCode == LarkBotErrorCodes.NoPermissionToReact)
+                {
+                    // The bot is missing reaction permission on Lark — a
+                    // tenant-level config issue that recurs on every inbound
+                    // message until ops fixes the app scope. Log at Debug so
+                    // it stays discoverable when the channel is opted into
+                    // verbose logging without spamming Warnings on every turn.
+                    _logger.LogDebug(
+                        "Immediate Lark acknowledgment reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        detail);
+                }
+                else
+                {
+                    // Anything else — a Nyx envelope error, an unexpected Lark
+                    // business code (rate limit, archived message, bot kicked,
+                    // etc.) — is a real signal that should stay at Warning so
+                    // we notice when Lark behavior changes.
+                    _logger.LogWarning(
+                        "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        larkCode,
+                        detail);
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -982,67 +1002,6 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                !string.IsNullOrWhiteSpace(providerSlug) &&
                !string.IsNullOrWhiteSpace(platformMessageId) &&
                platformMessageId.StartsWith("om_", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool TryGetProxyError(string? response, out string detail)
-    {
-        detail = string.Empty;
-        if (string.IsNullOrWhiteSpace(response))
-            return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-
-            if (root.TryGetProperty("error", out var errorProperty))
-            {
-                if (errorProperty.ValueKind == JsonValueKind.True)
-                {
-                    detail = TryReadJsonString(root, "message") ??
-                             TryReadJsonString(root, "body") ??
-                             "proxy_error";
-                    return true;
-                }
-
-                if (errorProperty.ValueKind == JsonValueKind.String)
-                {
-                    var error = errorProperty.GetString()?.Trim();
-                    if (!string.IsNullOrWhiteSpace(error))
-                    {
-                        detail = error;
-                        return true;
-                    }
-                }
-            }
-
-            if (root.TryGetProperty("code", out var codeProperty) &&
-                codeProperty.ValueKind == JsonValueKind.Number &&
-                codeProperty.TryGetInt32(out var code) &&
-                code != 0)
-            {
-                detail = TryReadJsonString(root, "msg") ?? $"code={code}";
-                return true;
-            }
-        }
-        catch (JsonException)
-        {
-            // Ignore invalid bodies for best-effort acknowledgment.
-        }
-
-        return false;
-    }
-
-    private static string? TryReadJsonString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            property.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        var value = property.GetString()?.Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static ConversationTurnResult ToRelayFailure(EmitResult emit)

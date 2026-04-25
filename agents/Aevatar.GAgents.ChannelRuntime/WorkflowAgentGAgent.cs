@@ -72,6 +72,8 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             Enabled = command.Enabled,
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
             Platform = command.Platform?.Trim() ?? string.Empty,
+            LarkReceiveId = command.LarkReceiveId?.Trim() ?? string.Empty,
+            LarkReceiveIdType = command.LarkReceiveIdType?.Trim() ?? string.Empty,
         });
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
@@ -229,6 +231,8 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             ScheduleCron = State.ScheduleCron ?? string.Empty,
             ScheduleTimezone = State.ScheduleTimezone ?? string.Empty,
             Status = status,
+            LarkReceiveId = State.LarkReceiveId ?? string.Empty,
+            LarkReceiveIdType = State.LarkReceiveIdType ?? string.Empty,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
@@ -279,6 +283,8 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         next.Enabled = evt.Enabled;
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.Platform = evt.Platform ?? string.Empty;
+        next.LarkReceiveId = evt.LarkReceiveId ?? string.Empty;
+        next.LarkReceiveIdType = evt.LarkReceiveIdType ?? string.Empty;
         return next;
     }
 
