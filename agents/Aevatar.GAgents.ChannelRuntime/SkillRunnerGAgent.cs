@@ -284,20 +284,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 deliveryTarget.ReceiveIdType);
         }
 
-        var body = JsonSerializer.Serialize(new
-        {
-            receive_id = deliveryTarget.ReceiveId,
-            msg_type = "text",
-            content = JsonSerializer.Serialize(new { text = output }),
-        });
+        var outcome = await TrySendWithFallbackAsync(client, output, deliveryTarget, ct);
 
-        var response = await client.ProxyRequestAsync(
-            State.OutboundConfig.NyxApiKey,
-            State.OutboundConfig.NyxProviderSlug,
-            $"open-apis/im/v1/messages?receive_id_type={deliveryTarget.ReceiveIdType}",
-            "POST", body, null, ct);
-
-        if (LarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
+        if (!outcome.Succeeded)
         {
             // Surface downstream rejection so HandleTriggerAsync sees a real failure instead of
             // persisting SkillRunnerExecutionCompletedEvent on a silently-dropped Lark response.
@@ -306,8 +295,77 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             // message into actionable recovery guidance — otherwise the user sees a cryptic
             // `99992361 open_id cross app` and has no way to know they need to rebuild the
             // agent.
-            throw new InvalidOperationException(BuildLarkRejectionMessage(larkCode, detail));
+            throw new InvalidOperationException(BuildLarkRejectionMessage(outcome.LarkCode, outcome.Detail));
         }
+    }
+
+    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
+    {
+        public static SendOutcome Success() => new(true, null, string.Empty);
+        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
+    }
+
+    /// <summary>
+    /// Sends the outbound text via the typed primary delivery target, then on a Lark
+    /// <c>230002 bot not in chat</c> rejection retries once with the fallback target if one
+    /// was captured at agent-create time. The fallback covers cross-app same-tenant
+    /// deployments where the outbound app is not a member of the inbound DM chat — without
+    /// it, the chat_id-first priority would regress those deployments. Returns success vs.
+    /// failure (with Lark code+detail) so the caller can throw cleanly without re-parsing
+    /// the response.
+    /// </summary>
+    private async Task<SendOutcome> TrySendWithFallbackAsync(
+        NyxIdApiClient client,
+        string output,
+        LarkReceiveTarget primary,
+        CancellationToken ct)
+    {
+        var primaryResponse = await SendOutboundAsync(client, output, primary, ct);
+        if (!LarkProxyResponse.TryGetError(primaryResponse, out var larkCode, out var detail))
+            return SendOutcome.Success();
+
+        // Only Lark `bot not in chat` triggers the fallback. Nyx envelope errors (no Lark
+        // code) and other Lark business errors propagate directly so the user sees actionable
+        // recovery guidance for the actual failure mode.
+        if (larkCode != LarkBotErrorCodes.BotNotInChat)
+            return SendOutcome.Failed(larkCode, detail);
+
+        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
+        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
+        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
+            return SendOutcome.Failed(larkCode, detail);
+
+        Logger.LogInformation(
+            "Skill runner {ActorId} primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair (receive_id_type={FallbackType})",
+            Id,
+            fallbackType);
+
+        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
+        var fallbackResponse = await SendOutboundAsync(client, output, fallbackTarget, ct);
+        if (!LarkProxyResponse.TryGetError(fallbackResponse, out var fallbackCode, out var fallbackDetail))
+            return SendOutcome.Success();
+
+        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+    }
+
+    private async Task<string> SendOutboundAsync(
+        NyxIdApiClient client,
+        string output,
+        LarkReceiveTarget target,
+        CancellationToken ct)
+    {
+        var body = JsonSerializer.Serialize(new
+        {
+            receive_id = target.ReceiveId,
+            msg_type = "text",
+            content = JsonSerializer.Serialize(new { text = output }),
+        });
+
+        return await client.ProxyRequestAsync(
+            State.OutboundConfig.NyxApiKey,
+            State.OutboundConfig.NyxProviderSlug,
+            $"open-apis/im/v1/messages?receive_id_type={target.ReceiveIdType}",
+            "POST", body, null, ct);
     }
 
     private static string BuildLarkRejectionMessage(int? larkCode, string detail)
@@ -322,6 +380,21 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 $"Lark message delivery rejected (code={larkCode}): {detail}. " +
                 "This agent was created before cross-app union_id ingress existed; " +
                 "delete and recreate it (`/agents` → Delete → `/daily`) to pick up the cross-app safe target.";
+        }
+
+        if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
+        {
+            // Even union_id is rejected — the relay-side ingress and outbound apps are in
+            // different Lark tenants. No user-id-based identifier survives that boundary;
+            // recreating the agent makes the new chat_id-preferred path take effect (chat_id
+            // bypasses user-id translation entirely as long as the same app is on both ends).
+            return
+                $"Lark message delivery rejected (code={larkCode}): {detail}. " +
+                "The outbound Lark app is in a different tenant than the inbound app, so " +
+                "user-id translation is impossible. Delete and recreate the agent " +
+                "(`/agents` → Delete → `/daily`) so the new chat_id-preferred outbound path " +
+                "takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot that " +
+                "received the inbound event.";
         }
 
         return larkCode is { } code
@@ -383,6 +456,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             Status = status,
             LarkReceiveId = State.OutboundConfig?.LarkReceiveId ?? string.Empty,
             LarkReceiveIdType = State.OutboundConfig?.LarkReceiveIdType ?? string.Empty,
+            LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
+            LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);

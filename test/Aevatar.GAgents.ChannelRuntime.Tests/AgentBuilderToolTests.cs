@@ -231,14 +231,14 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_PinsLarkUnionId_When_RelayPropagatesIt()
+    public async Task ExecuteAsync_CreateAgent_DailyReport_PinsLarkChatId_When_RelayPropagatesIt()
     {
-        // Cross-app outbound delivery (`code:99992361 open_id cross app`) requires the
-        // tenant-stable `union_id`. When the relay surfaces it via
-        // ChannelMetadataKeys.LarkUnionId the typed delivery target on
-        // InitializeSkillRunnerCommand must pin (union_id, "union_id") instead of falling back
-        // to the relay-app-scoped open_id. Integration counterpart of
-        // LarkConversationTargetsTests.BuildFromInbound_ShouldPreferLarkUnionId_*.
+        // The new outbound priority pins (chat_id, "chat_id") whenever the relay surfaces
+        // ChannelMetadataKeys.LarkChatId — chat_id is the literal DM thread, no user-id
+        // translation is needed. This is the integration counterpart of
+        // LarkConversationTargetsTests.BuildFromInbound_ShouldPreferLarkChatId_ForP2pDirectMessages
+        // and is what survives both `99992361 open_id cross app` (PR #403/409) and
+        // `99992364 user id cross tenant` (PR after #409) failure modes in production.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionAsync("skill-runner-union-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
@@ -330,9 +330,123 @@ public sealed class AgentBuilderToolTests
                 Arg.Is<EventEnvelope>(e =>
                     e.Payload != null &&
                     e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "on_user_1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "union_id"),
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "oc_dm_chat_1" &&
+                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "chat_id"),
                 Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubProxyDeniedForNewKey()
+    {
+        // Issue aevatarAI/aevatar#411: a daily_report agent is created with the new agent API
+        // key flagged `allowed_service_ids=api-github`, but if NyxID's binding for the user's
+        // GitHub OAuth credential is missing/expired, every scheduled run hits 401/403 from
+        // the proxy and the user only sees an empty / degraded report. Preflight
+        // `proxy/s/api-github/rate_limit` with the freshly minted key and fail-fast with an
+        // actionable error so the agent is not persisted in a "always-fails-at-runtime" state.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-github-403");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-github-403").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-github-403", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active",
+                  "connected_at":"2026-04-15T00:00:00Z"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services?per_page=100", """
+            {
+              "services": [{"id":"svc-github","slug":"api-github"}],
+              "custom_services": [{"id":"svc-lark","slug":"api-lark-bot"}],
+              "total": 2,
+              "page": 1,
+              "per_page": 100
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-403","full_key":"full-key-403"}""");
+        // The preflight: `NyxIdApiClient.SendAsync` wraps any HTTP non-2xx as
+        // `{"error": true, "status": <http>, "body": "<raw downstream body>"}` (NyxIdApiClient.cs:680).
+        // Reviewer (PR #412 r3141699476) caught that the previous handler shape used `"code"`
+        // but real production uses `"status"` — mirror the actual envelope so the parser is
+        // exercised against what runtime delivers, not a synthetic shape.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"error": true, "status": 403, "body": "{\"message\":\"Bad credentials\",\"documentation_url\":\"https://docs.github.com/rest\"}"}""");
+        // Reviewer (PR #412 r3141699756): on the fail-fast path we must also revoke the
+        // freshly-created agent API key, otherwise repeated `/daily` attempts accumulate
+        // orphan proxy-scoped keys. Wire a DELETE handler so the test can verify it ran.
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-403", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-github-403",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_proxy_access_denied");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("api-keys");
+
+            // The actor must NOT receive InitializeSkillRunnerCommand — preflight aborts
+            // BEFORE the actor is invoked so we don't leave a broken agent in the catalog.
+            await skillRunnerActor.DidNotReceive().HandleEventAsync(
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>());
+
+            // Best-effort revoke of the freshly-minted API key so repeated `/daily` attempts
+            // that hit GitHub preflight don't accumulate orphan proxy-scoped keys (reviewer
+            // r3141699756). The DELETE call is the only proof from this layer that the orphan
+            // is being cleaned up.
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-403");
         }
         finally
         {
