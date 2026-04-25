@@ -67,6 +67,22 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, ct) is { } agentBuilderResult)
             return agentBuilderResult;
 
+        if (activity.Type == ActivityType.CardAction)
+        {
+            // A card_action that survived both routers has no actionable meaning for this
+            // bot: promoting it into an LLM turn would send a blank user message and waste
+            // a model call. Return a no-reply completion instead of falling through.
+            _logger.LogInformation(
+                "Ignoring unrecognized card_action inbound: activity={ActivityId}, conversation={CanonicalKey}, actionId={ActionId}",
+                activity.Id,
+                activity.Conversation?.CanonicalKey,
+                activity.Content?.CardAction?.ActionId);
+            return ConversationTurnResult.Ignored(
+                "unrecognized_card_action",
+                activity.Id,
+                "Card action payload did not match workflow resume or agent-builder routing.");
+        }
+
         if (string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
         {
             return ConversationTurnResult.PermanentFailure(

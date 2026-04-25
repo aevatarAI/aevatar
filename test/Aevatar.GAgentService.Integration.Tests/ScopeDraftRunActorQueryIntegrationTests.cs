@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -143,6 +144,7 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
                 options.EnableScriptingCapability = false;
             });
             builder.AddGAgentServiceCapabilityBundle();
+            builder.Services.AddSingleton<IGAgentActorStore, InMemoryGAgentActorStore>();
             builder.Services.AddAuthentication("Test")
                 .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
             builder.Services.AddAuthorization();
@@ -200,6 +202,65 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
 
             throw new InvalidOperationException("Unable to locate repository root from test base directory.");
         }
+    }
+
+    private sealed class InMemoryGAgentActorStore : IGAgentActorStore
+    {
+        private readonly List<ActorRegistration> _registrations = [];
+
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(BuildGroups(_registrations));
+
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(BuildGroups(_registrations.Where(registration =>
+                string.Equals(registration.ScopeId, scopeId, StringComparison.Ordinal))));
+
+        public Task AddActorAsync(
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default) =>
+            AddActorAsync(string.Empty, gagentType, actorId, cancellationToken);
+
+        public Task AddActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            _registrations.Add(new ActorRegistration(scopeId, gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default) =>
+            RemoveActorAsync(string.Empty, gagentType, actorId, cancellationToken);
+
+        public Task RemoveActorAsync(
+            string scopeId,
+            string gagentType,
+            string actorId,
+            CancellationToken cancellationToken = default)
+        {
+            _registrations.RemoveAll(registration =>
+                string.Equals(registration.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(registration.GAgentType, gagentType, StringComparison.Ordinal) &&
+                string.Equals(registration.ActorId, actorId, StringComparison.Ordinal));
+            return Task.CompletedTask;
+        }
+
+        private static IReadOnlyList<GAgentActorGroup> BuildGroups(IEnumerable<ActorRegistration> registrations) =>
+            registrations
+                .GroupBy(static registration => registration.GAgentType, StringComparer.Ordinal)
+                .Select(static group => new GAgentActorGroup(
+                    group.Key,
+                    group.Select(static registration => registration.ActorId).ToArray()))
+                .ToArray();
+
+        private sealed record ActorRegistration(string ScopeId, string GAgentType, string ActorId);
     }
 
     private sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
