@@ -134,7 +134,11 @@ public sealed class NyxIdLLMProviderRoutingTests
     [InlineData("gpt-5")]
     [InlineData("gpt-5.4")]
     [InlineData("openai/gpt-5.4")]
-    public async Task ResolveRouteAsync_ShouldOmitTemperature_ForGpt5Models(string model)
+    [InlineData("o1")]
+    [InlineData("o1-mini")]
+    [InlineData("openai/o3-mini")]
+    [InlineData("o4-mini")]
+    public async Task ResolveRouteAsync_ShouldOmitTemperature_ForReasoningModels(string model)
     {
         var provider = CreateProvider();
         var request = new LLMRequest
@@ -153,14 +157,17 @@ public sealed class NyxIdLLMProviderRoutingTests
         route.Request.Temperature.Should().BeNull();
     }
 
-    [Fact]
-    public async Task ResolveRouteAsync_ShouldKeepTemperature_ForNonGpt5Models()
+    [Theory]
+    [InlineData("gpt-4o")]
+    [InlineData("gpt-5-chat-latest")]
+    [InlineData("openai/gpt-5-chat-latest")]
+    public async Task ResolveRouteAsync_ShouldKeepTemperature_ForNonReasoningModels(string model)
     {
         var provider = CreateProvider();
         var request = new LLMRequest
         {
             Messages = [ChatMessage.User("hi")],
-            Model = "gpt-4o",
+            Model = model,
             Temperature = 0.2,
             Metadata = new Dictionary<string, string>
             {

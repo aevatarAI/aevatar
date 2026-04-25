@@ -312,11 +312,11 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         if (!temperature.HasValue)
             return null;
 
-        // NyxID's current OpenAI-compatible GPT-5 routes reject the temperature parameter.
-        return IsGpt5Model(model) ? null : temperature;
+        // NyxID's current OpenAI-compatible reasoning routes reject the temperature parameter.
+        return IsReasoningModel(model) ? null : temperature;
     }
 
-    private static bool IsGpt5Model(string? model)
+    private static bool IsReasoningModel(string? model)
     {
         var normalized = model?.Trim();
         if (string.IsNullOrWhiteSpace(normalized))
@@ -326,7 +326,19 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         if (slashIndex >= 0 && slashIndex < normalized.Length - 1)
             normalized = normalized[(slashIndex + 1)..];
 
-        return normalized.StartsWith("gpt-5", StringComparison.OrdinalIgnoreCase);
+        if (normalized.StartsWith("gpt-5-chat", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return normalized.StartsWith("gpt-5", StringComparison.OrdinalIgnoreCase)
+            || IsOpenAIReasoningFamily(normalized, "o1")
+            || IsOpenAIReasoningFamily(normalized, "o3")
+            || IsOpenAIReasoningFamily(normalized, "o4");
+    }
+
+    private static bool IsOpenAIReasoningFamily(string model, string family)
+    {
+        return model.Equals(family, StringComparison.OrdinalIgnoreCase)
+            || model.StartsWith(family + "-", StringComparison.OrdinalIgnoreCase);
     }
 
     private string ResolveModel(LLMRequest request)
