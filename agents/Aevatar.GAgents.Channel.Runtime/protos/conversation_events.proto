@@ -104,6 +104,27 @@ message DeferredLlmReplyDispatchRequestedEvent {
   int64 requested_at_unix_ms = 2;
 }
 
+// Actor self-message fired by the durable scheduler when an inbound turn retry
+// is due. The handler looks up `activity_id` in
+// ConversationGAgentState.pending_inbound_turns, rebuilds the runtime context
+// from the in-memory reply-token dict, and re-invokes the turn runner.
+message DeferredInboundTurnRetryRequestedEvent {
+  string activity_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
+// Persisted alongside each retry scheduling so that (a) pending_inbound_turns is
+// driven through the standard state matcher pipeline and (b) actor rehydration
+// after deactivation can walk the pending set and re-register durable timeouts.
+message InboundTurnRetryScheduledEvent {
+  string activity_id = 1;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 2;
+  int32 retry_count = 3;
+  int64 first_failed_unix_ms = 4;
+  int64 next_retry_unix_ms = 5;
+  int64 scheduled_at_unix_ms = 6;
+}
+
 message NyxRelayReplyTokenCleanupRequestedEvent {
   string correlation_id = 1;
   int64 requested_at_unix_ms = 2;

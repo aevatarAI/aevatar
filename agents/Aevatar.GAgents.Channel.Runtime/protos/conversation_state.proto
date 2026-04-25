@@ -14,10 +14,23 @@ message ConversationGAgentState {
   repeated PendingSession pending_sessions = 4;
   int64 last_updated_unix_ms = 5;
   repeated NeedsLlmReplyEvent pending_llm_reply_requests = 6;
+  repeated PendingInboundTurn pending_inbound_turns = 7;
 }
 
 message PendingSession {
   string session_id = 1;
   string correlation_id = 2;
   int64 started_at_unix_ms = 3;
+}
+
+// Tracks an inbound activity that hit a transient adapter failure and is waiting
+// for a grain-owned durable retry. The reply credential (if any) is intentionally
+// NOT persisted here; on retry firing the actor rebuilds the runtime context from
+// its in-memory _nyxRelayReplyTokens dict using activity.outbound_delivery.correlation_id.
+message PendingInboundTurn {
+  string activity_id = 1;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 2;
+  int32 retry_count = 3;
+  int64 first_failed_unix_ms = 4;
+  int64 next_retry_unix_ms = 5;
 }
