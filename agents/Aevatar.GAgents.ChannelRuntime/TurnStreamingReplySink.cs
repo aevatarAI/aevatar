@@ -29,7 +29,9 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// likewise stashed; the dispatch loop reflushes the most recent <c>_pendingText</c> after the
 /// in-flight chunk completes (reflush-on-conflict).</item>
 /// <item><see cref="FinalizeAsync"/> bypasses the throttle so the actor sees the complete text
-/// once the stream ends; if a dispatch is in flight, the final text reflushes after it.</item>
+/// once the stream ends; if a dispatch is in flight, the final text reflushes after it and
+/// <see cref="FinalizeAsync"/> awaits the dispatch loop's drain signal before returning so the
+/// caller (the inbox runtime) does not race the ready event past the final chunk.</item>
 /// </list>
 /// </para>
 /// <para>
@@ -59,6 +61,11 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private ITimer? _flushTimer;
     private bool _dispatchInProgress;
     private bool _disposed;
+    // Signaled by the dispatch loop when it fully drains. FinalizeAsync awaits this when a
+    // dispatch is already in flight so the caller does not race the inbox runtime's
+    // LlmReplyReadyEvent past the final chunk dispatch (the ConversationGAgent
+    // processed-command guard would otherwise drop the late chunk).
+    private TaskCompletionSource<bool>? _drainTcs;
 
     public TurnStreamingReplySink(
         IActor targetActor,
@@ -93,14 +100,16 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
     /// <summary>
     /// Applies the final accumulated text, bypassing the throttle so the actor can drive the final
-    /// edit once the stream ends. If a dispatch is already in flight, the final text is stashed
-    /// and the in-flight dispatch's reflush loop publishes it on completion.
+    /// edit once the stream ends. If a dispatch is already in flight, the final text is stashed and
+    /// this call awaits the dispatch loop's drain signal so the final chunk is on the wire before
+    /// the caller proceeds (the inbox runtime sends LlmReplyReadyEvent immediately after).
     /// </summary>
     public Task FinalizeAsync(string finalText, CancellationToken ct) =>
         FlushAsync(finalText, isFinal: true, ct);
 
     public void Dispose()
     {
+        TaskCompletionSource<bool>? signal;
         lock (_lock)
         {
             if (_disposed) return;
@@ -109,7 +118,13 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             _flushTimer = null;
             _hasPending = false;
             _pendingText = string.Empty;
+            signal = _drainTcs;
+            _drainTcs = null;
         }
+        // Unblock any FinalizeAsync caller still awaiting the drain signal. Disposing while a
+        // finalize is in flight is treated as "drained" — no further dispatches will run, so
+        // continuing to await would hang.
+        signal?.TrySetResult(false);
     }
 
     private async Task FlushAsync(string text, bool isFinal, CancellationToken ct)
@@ -118,6 +133,7 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             return;
 
         string? toDispatch = null;
+        Task? drainTask = null;
 
         lock (_lock)
         {
@@ -127,7 +143,9 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             if (string.Equals(text, _lastEmittedText, StringComparison.Ordinal))
             {
                 // Already on the wire; clear any deferred copy so the timer doesn't republish
-                // identical content.
+                // identical content. Even for isFinal we can return here: the final text is
+                // already the most recent dispatched chunk, so the actor will see it before
+                // any subsequent ready event.
                 _pendingText = string.Empty;
                 _hasPending = false;
                 return;
@@ -140,41 +158,55 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 // needed because the loop polls _hasPending after every dispatch.
                 _pendingText = text;
                 _hasPending = true;
-                return;
-            }
-
-            var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
-            if (isFinal || elapsed >= _throttle)
-            {
-                CancelTimerLocked();
-                _pendingText = string.Empty;
-                _hasPending = false;
-                _dispatchInProgress = true;
-                toDispatch = text;
+                if (isFinal)
+                {
+                    // Block FinalizeAsync until the dispatch loop drains the stashed final text.
+                    // Without this wait, ChannelLlmReplyInboxRuntime sends LlmReplyReadyEvent
+                    // first and ConversationGAgent's processed-command guard drops the late
+                    // final chunk.
+                    _drainTcs ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    drainTask = _drainTcs.Task;
+                }
             }
             else
             {
-                // Inside the throttle window: stash the latest text and arm the deferred flush
-                // timer if it isn't already armed. Subsequent deltas in this same window will
-                // simply overwrite _pendingText (collapse on the latest accumulated text).
-                _pendingText = text;
-                _hasPending = true;
-                if (_flushTimer is null)
+                var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
+                if (isFinal || elapsed >= _throttle)
                 {
-                    var delay = _throttle - elapsed;
-                    if (delay < TimeSpan.Zero)
-                        delay = TimeSpan.Zero;
-                    _flushTimer = _timeProvider.CreateTimer(
-                        OnFlushTimerFired,
-                        state: null,
-                        dueTime: delay,
-                        period: Timeout.InfiniteTimeSpan);
+                    CancelTimerLocked();
+                    _pendingText = string.Empty;
+                    _hasPending = false;
+                    _dispatchInProgress = true;
+                    toDispatch = text;
+                }
+                else
+                {
+                    // Inside the throttle window: stash the latest text and arm the deferred
+                    // flush timer if it isn't already armed. Subsequent deltas in this same
+                    // window will simply overwrite _pendingText (collapse on the latest
+                    // accumulated text).
+                    _pendingText = text;
+                    _hasPending = true;
+                    if (_flushTimer is null)
+                    {
+                        var delay = _throttle - elapsed;
+                        if (delay < TimeSpan.Zero)
+                            delay = TimeSpan.Zero;
+                        _flushTimer = _timeProvider.CreateTimer(
+                            OnFlushTimerFired,
+                            state: null,
+                            dueTime: delay,
+                            period: Timeout.InfiniteTimeSpan);
+                    }
                 }
             }
         }
 
         if (toDispatch is not null)
             await DispatchLoopAsync(toDispatch, ct).ConfigureAwait(false);
+
+        if (drainTask is not null)
+            await drainTask.ConfigureAwait(false);
     }
 
     private void OnFlushTimerFired(object? state)
@@ -219,6 +251,7 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private async Task DispatchLoopAsync(string firstText, CancellationToken ct)
     {
         var current = firstText;
+        TaskCompletionSource<bool>? drainSignal = null;
         try
         {
             while (true)
@@ -231,7 +264,9 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                     if (_disposed || !_hasPending)
                     {
                         _dispatchInProgress = false;
-                        return;
+                        drainSignal = _drainTcs;
+                        _drainTcs = null;
+                        break;
                     }
 
                     if (string.Equals(_pendingText, _lastEmittedText, StringComparison.Ordinal))
@@ -239,7 +274,9 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                         _pendingText = string.Empty;
                         _hasPending = false;
                         _dispatchInProgress = false;
-                        return;
+                        drainSignal = _drainTcs;
+                        _drainTcs = null;
+                        break;
                     }
 
                     next = _pendingText;
@@ -250,14 +287,20 @@ internal sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 current = next!;
             }
         }
-        catch
+        catch (Exception ex)
         {
+            TaskCompletionSource<bool>? errSignal;
             lock (_lock)
             {
                 _dispatchInProgress = false;
+                errSignal = _drainTcs;
+                _drainTcs = null;
             }
+            errSignal?.TrySetException(ex);
             throw;
         }
+
+        drainSignal?.TrySetResult(true);
     }
 
     private async Task DispatchOneAsync(string text, CancellationToken ct)

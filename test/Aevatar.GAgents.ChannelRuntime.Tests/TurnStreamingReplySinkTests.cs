@@ -113,6 +113,53 @@ public sealed class TurnStreamingReplySinkTests
     }
 
     [Fact]
+    public async Task FinalizeAsync_DispatchInFlight_WaitsForFinalChunkOnWire()
+    {
+        // Regression for the race where FinalizeAsync would return as soon as the final text
+        // was stashed (while a prior dispatch was still in flight), letting the inbox runtime
+        // send LlmReplyReadyEvent past the late final chunk and triggering the
+        // ConversationGAgent processed-command guard to drop it.
+        var firstDispatchGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var envelopes = new List<EventEnvelope>();
+        var dispatchCount = 0;
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("target-actor");
+        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                envelopes.Add(call.Arg<EventEnvelope>());
+                dispatchCount++;
+                return dispatchCount == 1 ? firstDispatchGate.Task : Task.CompletedTask;
+            });
+
+        var sink = CreateSink(actor, throttleMs: 0, out _);
+
+        // First dispatch enters the actor and suspends on firstDispatchGate.
+        var deltaTask = sink.OnDeltaAsync("first", CancellationToken.None);
+
+        // FinalizeAsync must observe _dispatchInProgress and wait for the dispatch loop's drain
+        // signal — not return immediately after stashing the final text.
+        var finalizeTask = sink.FinalizeAsync("first plus final", CancellationToken.None);
+
+        deltaTask.IsCompleted.Should().BeFalse();
+        finalizeTask.IsCompleted.Should().BeFalse();
+        envelopes.Should().ContainSingle("only the gated first chunk has been dispatched");
+
+        // Releasing the gate lets the loop dispatch the stashed final text; only then should
+        // FinalizeAsync complete.
+        firstDispatchGate.SetResult();
+
+        await deltaTask;
+        await finalizeTask;
+
+        envelopes.Should().HaveCount(2);
+        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText
+            .Should().Be("first plus final");
+        sink.ChunksEmitted.Should().Be(2);
+    }
+
+    [Fact]
     public async Task PendingTimerEqualsLastEmitted_DoesNotEmitDuplicate()
     {
         var (actor, envelopes) = BuildRecordingActor();
