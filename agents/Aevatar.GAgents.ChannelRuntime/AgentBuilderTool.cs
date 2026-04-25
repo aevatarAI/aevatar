@@ -232,6 +232,22 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
             return JsonSerializer.Serialize(new { error = apiKeyError });
 
+        // Issue #411: the new agent API key is allowed_service_ids=api-github but might lack a
+        // bound GitHub credential, in which case every scheduled run hits 401/403 from
+        // proxy/s/api-github and the user sees no useful daily report. Preflight a safe
+        // GitHub endpoint with the freshly minted key and fail the create with an actionable
+        // error rather than persisting an agent that will never produce a usable report.
+        //
+        // Reviewer (PR #412 r3141699756): on the fail-fast path the freshly created NyxID API
+        // key would be left behind — repeated `/daily` attempts that hit GitHub preflight
+        // accumulate orphan proxy keys. Best-effort revoke before returning.
+        var preflight = await PreflightGitHubProxyAsync(nyxClient, apiKeyValue!, providerSlug, ct);
+        if (preflight is not null)
+        {
+            await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "github_preflight_failed", ct);
+            return preflight;
+        }
+
         var actor = await actorRuntime.GetAsync(agentId)
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
 
@@ -257,8 +273,10 @@ public sealed class AgentBuilderTool : IAgentTool
                 NyxApiKey = apiKeyValue!,
                 OwnerNyxUserId = ownerNyxUserId!,
                 ApiKeyId = apiKeyId!,
-                LarkReceiveId = deliveryTarget.ReceiveId,
-                LarkReceiveIdType = deliveryTarget.ReceiveIdType,
+                LarkReceiveId = deliveryTarget.Primary.ReceiveId,
+                LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
+                LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
+                LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
             },
         };
 
@@ -396,8 +414,10 @@ public sealed class AgentBuilderTool : IAgentTool
             ApiKeyId = apiKeyId!,
             Enabled = true,
             ScopeId = scopeId.Trim(),
-            LarkReceiveId = deliveryTarget.ReceiveId,
-            LarkReceiveIdType = deliveryTarget.ReceiveIdType,
+            LarkReceiveId = deliveryTarget.Primary.ReceiveId,
+            LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
+            LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
+            LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
@@ -1412,31 +1432,162 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     /// <summary>
-    /// Builds the typed Lark delivery target from the current AgentToolRequestContext and emits
-    /// a LogDebug breadcrumb when <see cref="LarkConversationTargets.BuildFromInbound"/> falls
-    /// back from the cross-app safe pair (union_id / chat_id) to the legacy open_id /
-    /// conversation_id path. The fallback flag is intentionally NOT persisted on
-    /// <c>SkillRunnerOutboundConfig</c> / <c>InitializeWorkflowAgentCommand</c> because the
-    /// downstream <see cref="LarkConversationTargets.Resolve"/> path treats any populated typed
-    /// pair as authoritative — so this is the only place the cross-app risk surfaces. Operators
-    /// correlating Lark <c>code:99992361 open_id cross app</c> rejections need this log line to
-    /// confirm whether the relay surfaced <c>union_id</c> at agent-create time.
+    /// Builds the typed Lark delivery target (primary + optional fallback) from the current
+    /// AgentToolRequestContext, and emits a LogDebug breadcrumb when the primary fell back from
+    /// the cross-app safe pair (chat_id / union_id) to the legacy open_id / conversation_id
+    /// path. The primary is what <see cref="LarkConversationTargets.BuildFromInbound"/>
+    /// returns; the fallback (when the primary is a DM chat_id and we also have a union_id at
+    /// ingress) is captured so the runtime can retry once on a Lark
+    /// <c>230002 bot not in chat</c> rejection — the failure mode for cross-app same-tenant
+    /// deployments where the outbound app is not in the inbound DM. Operators correlating Lark
+    /// <c>99992361 open_id cross app</c> rejections need the log line to confirm whether the
+    /// relay surfaced <c>union_id</c> at agent-create time.
     /// </summary>
-    private LarkReceiveTarget ResolveDeliveryTarget(string conversationId, string agentId)
+    /// <summary>
+    /// Preflights GitHub proxy access using the newly created agent API key against
+    /// <c>/rate_limit</c> — an unauthenticated-friendly read endpoint that returns 401/403 when
+    /// the key lacks a bound GitHub credential. Returns a structured error JSON suitable for
+    /// returning verbatim from the tool when access is denied; returns <c>null</c> when access
+    /// works (or when the daily-report's required service list does not include GitHub, in
+    /// which case there's nothing to preflight). Issue aevatarAI/aevatar#411.
+    /// </summary>
+    private async Task<string?> PreflightGitHubProxyAsync(
+        NyxIdApiClient nyxClient,
+        string apiKey,
+        string nyxProviderSlug,
+        CancellationToken ct)
+    {
+        // Cheap read-only endpoint; succeeds even with a rate-limited token, fails with 401/403
+        // when the proxy can't resolve a bound GitHub credential.
+        var probe = await nyxClient.ProxyRequestAsync(
+            apiKey,
+            "api-github",
+            "/rate_limit",
+            "GET",
+            body: null,
+            extraHeaders: null,
+            ct);
+
+        if (string.IsNullOrWhiteSpace(probe))
+            return null;
+
+        // `NyxIdApiClient.SendAsync` (NyxIdApiClient.cs:680) wraps HTTP non-2xx as
+        // `{"error": true, "status": <http>, "body": "<raw downstream body>"}` — `status`,
+        // not `code`. Reviewer (PR #412 r3141699476): the previous parser only read `code`,
+        // so for the actual #411 production failures (HTTP 403 from /api/v1/proxy/s/api-github
+        // /rate_limit) it set status=0, returned null, and persisted a daily_report agent
+        // that would fail at runtime. Read both `status` (the SendAsync envelope) AND `code`
+        // (any future inverted-naming envelope or top-level Lark code). Treat 401/403 as the
+        // signal to fail-fast; let other shapes flow through (rate limits, 5xx etc are
+        // operational and not "agent fundamentally broken").
+        try
+        {
+            using var doc = JsonDocument.Parse(probe);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (!root.TryGetProperty("error", out var errorProp))
+                return null;
+            if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
+                return null;
+
+            var status = TryReadInt32Property(root, "status")
+                         ?? TryReadInt32Property(root, "code")
+                         ?? 0;
+            if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
+                return null;
+
+            var detail = root.TryGetProperty("message", out var msgProp) && msgProp.ValueKind == JsonValueKind.String
+                ? msgProp.GetString()
+                : null;
+            var body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
+                ? bodyProp.GetString()
+                : null;
+
+            return JsonSerializer.Serialize(new
+            {
+                error = "github_proxy_access_denied",
+                detail = string.IsNullOrWhiteSpace(detail) ? "GitHub proxy returned 401/403 for the new agent API key." : detail,
+                http_status = status,
+                proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
+                hint = "The new agent API key was created with `allowed_service_ids=api-github` but cannot reach GitHub via NyxID. Verify the GitHub OAuth provider is connected at NyxID and that the key picks up the binding (NyxID `api-keys/{id}/bindings`). Until this is resolved the daily report will return empty/degraded output every run.",
+                nyx_provider_slug = nyxProviderSlug,
+            });
+        }
+        catch (JsonException)
+        {
+            // Non-JSON probe response: don't pretend we know what's going on; let creation
+            // proceed so the agent can at least be created (operator can debug from logs).
+            return null;
+        }
+    }
+
+    private static int? TryReadInt32Property(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Number ||
+            !property.TryGetInt32(out var value))
+        {
+            return null;
+        }
+        return value;
+    }
+
+    /// <summary>
+    /// Best-effort revoke of an API key minted earlier in the create flow. Used when a
+    /// preflight (e.g. GitHub proxy access) detects that the agent will be DOA at runtime, so
+    /// we don't leave orphan proxy-scoped keys behind on every retry. Failures here are
+    /// logged at Warning but do NOT propagate — the structured create-time error is the
+    /// user-facing signal; an orphan key is an ops cleanup concern, not a hard failure.
+    /// </summary>
+    private async Task BestEffortRevokeApiKeyAsync(
+        NyxIdApiClient nyxClient,
+        string sessionToken,
+        string apiKeyId,
+        string reason,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+            return;
+
+        try
+        {
+            var response = await nyxClient.DeleteApiKeyAsync(sessionToken, apiKeyId, ct);
+            if (LarkProxyResponse.TryGetError(response, out _, out var detail))
+            {
+                _logger?.LogWarning(
+                    "Failed to revoke orphan agent API key {ApiKeyId} after {Reason}: {Detail}",
+                    apiKeyId,
+                    reason,
+                    detail);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Exception revoking orphan agent API key {ApiKeyId} after {Reason}",
+                apiKeyId,
+                reason);
+        }
+    }
+
+    private LarkReceiveTargetWithFallback ResolveDeliveryTarget(string conversationId, string agentId)
     {
         var chatType = AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType);
         var senderId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId);
         var unionId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkUnionId);
         var chatId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkChatId);
 
-        var target = LarkConversationTargets.BuildFromInbound(
+        var target = LarkConversationTargets.BuildFromInboundWithFallback(
             chatType,
             conversationId,
             senderId,
             unionId,
             chatId);
 
-        if (target.FellBackToPrefixInference)
+        if (target.Primary.FellBackToPrefixInference)
         {
             _logger?.LogDebug(
                 "Agent builder fell back to legacy delivery target inference for {AgentId}: chatType={ChatType}, hasUnionId={HasUnionId}, hasLarkChatId={HasLarkChatId}, hasSenderId={HasSenderId}, resolvedReceiveIdType={ReceiveIdType}. Cross-app outbound (e.g. customer api-lark-bot) may surface Lark `99992361 open_id cross app` until the relay propagates union_id.",
@@ -1445,7 +1596,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 !string.IsNullOrWhiteSpace(unionId),
                 !string.IsNullOrWhiteSpace(chatId),
                 !string.IsNullOrWhiteSpace(senderId),
-                target.ReceiveIdType);
+                target.Primary.ReceiveIdType);
         }
 
         return target;

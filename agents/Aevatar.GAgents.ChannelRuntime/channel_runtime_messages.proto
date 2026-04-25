@@ -187,10 +187,21 @@ message UserAgentCatalogEntry {
   int64 tombstone_state_version = 21;
   // Authoritative Lark outbound delivery target captured at create time. When
   // both fields are present, outbound senders use them verbatim instead of
-  // inferring receive_id_type from the conversation_id prefix. For p2p the
-  // creator stores the user open_id (`ou_*`) here, not the DM thread chat_id.
+  // inferring receive_id_type from the conversation_id prefix. The creator
+  // pins the chat-scoped `chat_id` (`oc_*`) here when available because it is
+  // the only identifier that survives both cross-app and cross-tenant
+  // boundaries when the same Lark app is on both ends of the relay.
   string lark_receive_id = 22;
   string lark_receive_id_type = 23;
+  // Secondary outbound delivery target. The runtime attempts the primary
+  // (`lark_receive_id`/`lark_receive_id_type`) first and falls back to this
+  // pair on a Lark `230002 bot not in chat` rejection — the failure mode
+  // when the outbound app is a different Lark app than the one that received
+  // the inbound DM (cross-app same-tenant deployment). The creator pins
+  // `union_id` (`on_*`) here so the fallback survives a chat_id rejection
+  // without needing a fresh ingress event.
+  string lark_receive_id_fallback = 24;
+  string lark_receive_id_type_fallback = 25;
 }
 
 message UserAgentCatalogState {
@@ -215,6 +226,9 @@ message UserAgentCatalogUpsertCommand {
   // preserve any existing entry value via the merge-non-empty upsert policy.
   string lark_receive_id = 14;
   string lark_receive_id_type = 15;
+  // See UserAgentCatalogEntry.lark_receive_id_fallback for semantics.
+  string lark_receive_id_fallback = 16;
+  string lark_receive_id_type_fallback = 17;
 }
 
 message UserAgentCatalogTombstoneCommand {
@@ -287,6 +301,11 @@ message UserAgentCatalogDocument {
   // through the projection rather than re-deriving from conversation_id.
   string lark_receive_id = 24;
   string lark_receive_id_type = 25;
+  // Mirrors UserAgentCatalogEntry.lark_receive_id_fallback*. Carried through
+  // the projection so catalog-backed senders see the same primary+fallback
+  // pair as actor-state senders.
+  string lark_receive_id_fallback = 26;
+  string lark_receive_id_type_fallback = 27;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.
@@ -315,6 +334,13 @@ message SkillRunnerOutboundConfig {
   // verbatim; conversation_id stays for LLM metadata propagation only.
   string lark_receive_id = 7;
   string lark_receive_id_type = 8;
+  // Secondary outbound delivery target. Used by SkillRunnerGAgent.SendOutputAsync
+  // when the primary chat_id-typed send is rejected with Lark `230002 bot not in
+  // chat` — the failure mode for cross-app same-tenant deployments where the
+  // outbound app is not a member of the inbound DM. See
+  // UserAgentCatalogEntry.lark_receive_id_fallback for the recommended pinning.
+  string lark_receive_id_fallback = 9;
+  string lark_receive_id_type_fallback = 10;
 }
 
 message SkillRunnerState {
@@ -442,6 +468,10 @@ message WorkflowAgentState {
   // (e.g. FeishuCardHumanInteractionPort) read the typed target.
   string lark_receive_id = 19;
   string lark_receive_id_type = 20;
+  // Secondary outbound delivery target. See UserAgentCatalogEntry
+  // .lark_receive_id_fallback for runtime fallback semantics.
+  string lark_receive_id_fallback = 21;
+  string lark_receive_id_type_fallback = 22;
 }
 
 message InitializeWorkflowAgentCommand {
@@ -462,6 +492,10 @@ message InitializeWorkflowAgentCommand {
   string platform = 14;
   string lark_receive_id = 15;
   string lark_receive_id_type = 16;
+  // Secondary outbound delivery target. See UserAgentCatalogEntry
+  // .lark_receive_id_fallback for runtime fallback semantics.
+  string lark_receive_id_fallback = 17;
+  string lark_receive_id_type_fallback = 18;
 }
 
 message WorkflowAgentInitializedEvent {
@@ -482,6 +516,10 @@ message WorkflowAgentInitializedEvent {
   string platform = 14;
   string lark_receive_id = 15;
   string lark_receive_id_type = 16;
+  // Secondary outbound delivery target. See UserAgentCatalogEntry
+  // .lark_receive_id_fallback for runtime fallback semantics.
+  string lark_receive_id_fallback = 17;
+  string lark_receive_id_type_fallback = 18;
 }
 
 message TriggerWorkflowAgentExecutionCommand {
