@@ -133,7 +133,10 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                 },
                 template,
             },
-            elements,
+            body = new
+            {
+                elements,
+            },
         });
 
         return new LarkOutboundMessage(
