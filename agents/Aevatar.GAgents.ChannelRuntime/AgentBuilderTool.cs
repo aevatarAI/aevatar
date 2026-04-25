@@ -236,6 +236,10 @@ public sealed class AgentBuilderTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        var deliveryTarget = LarkConversationTargets.BuildFromInbound(
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType),
+            conversationId,
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId));
         var initialize = new InitializeSkillRunnerCommand
         {
             SkillName = templateSpec.SkillName,
@@ -256,6 +260,8 @@ public sealed class AgentBuilderTool : IAgentTool
                 NyxApiKey = apiKeyValue!,
                 OwnerNyxUserId = ownerNyxUserId!,
                 ApiKeyId = apiKeyId!,
+                LarkReceiveId = deliveryTarget.ReceiveId,
+                LarkReceiveIdType = deliveryTarget.ReceiveIdType,
             },
         };
 
@@ -377,6 +383,10 @@ public sealed class AgentBuilderTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        var deliveryTarget = LarkConversationTargets.BuildFromInbound(
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType),
+            conversationId,
+            AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId));
         var initialize = new InitializeWorkflowAgentCommand
         {
             WorkflowId = workflowUpsert.Workflow.WorkflowId,
@@ -392,6 +402,8 @@ public sealed class AgentBuilderTool : IAgentTool
             ApiKeyId = apiKeyId!,
             Enabled = true,
             ScopeId = scopeId.Trim(),
+            LarkReceiveId = deliveryTarget.ReceiveId,
+            LarkReceiveIdType = deliveryTarget.ReceiveIdType,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);

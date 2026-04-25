@@ -323,10 +323,24 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         string failurePrefix,
         CancellationToken cancellationToken)
     {
-        var receiveIdType = LarkConversationTargets.ResolveReceiveIdType(target.ConversationId);
+        var deliveryTarget = LarkConversationTargets.Resolve(
+            target.LarkReceiveId,
+            target.LarkReceiveIdType,
+            target.ConversationId);
+        if (deliveryTarget.FellBackToPrefixInference)
+        {
+            // Catalog entry predates the typed lark_receive_id fields; fall back to the prefix
+            // heuristic on conversation_id and emit a breadcrumb so format drift is observable.
+            _logger.LogDebug(
+                "Feishu human interaction port resolved Lark receive target by prefix inference (legacy entry): agent={AgentId}, conversationId={ConversationId}, receiveIdType={ReceiveIdType}",
+                target.AgentId,
+                target.ConversationId,
+                deliveryTarget.ReceiveIdType);
+        }
+
         var body = JsonSerializer.Serialize(new
         {
-            receive_id = target.ConversationId,
+            receive_id = deliveryTarget.ReceiveId,
             msg_type = messageType,
             content = contentJson,
         });
@@ -334,7 +348,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         var result = await _nyxIdApiClient.ProxyRequestAsync(
             target.NyxApiKey,
             target.NyxProviderSlug,
-            $"open-apis/im/v1/messages?receive_id_type={receiveIdType}",
+            $"open-apis/im/v1/messages?receive_id_type={deliveryTarget.ReceiveIdType}",
             "POST",
             body,
             extraHeaders: null,
@@ -343,8 +357,13 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         if (string.IsNullOrWhiteSpace(result))
             throw new InvalidOperationException(emptyResponseMessage);
 
-        if (result.Contains("\"error\"", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"{failurePrefix}: {result}");
+        if (LarkProxyResponse.TryGetError(result, out var larkCode, out var detail))
+        {
+            throw new InvalidOperationException(
+                larkCode is { } code
+                    ? $"{failurePrefix} (code={code}): {detail}"
+                    : $"{failurePrefix}: {detail}");
+        }
     }
 
     private static bool SupportsApproveReject(HumanInteractionRequest request) =>
