@@ -584,6 +584,76 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldIgnoreEmptyTextPayload()
+    {
+        var relay = CreateRelayInvocationDependencies();
+        var payload = """
+            {
+              "message_id":"msg-empty-text",
+              "correlation_id":"corr-empty-text",
+              "platform":"slack",
+              "agent":{"api_key_id":"scope-test"},
+              "conversation":{"platform_id":"room-empty","type":"group"},
+              "content":{"text":"   "}
+            }
+            """;
+        var context = new DefaultHttpContext();
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-empty-text");
+
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            new StubActorRuntime(),
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("ignored");
+        response.Body.Should().Contain("empty_text");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldIgnoreInvalidCardActionPayload()
+    {
+        var relay = CreateRelayInvocationDependencies();
+        var payload = """
+            {
+              "message_id":"msg-invalid-card",
+              "correlation_id":"corr-invalid-card",
+              "platform":"lark",
+              "agent":{"api_key_id":"scope-test"},
+              "conversation":{"platform_id":"oc_chat_invalid","type":"private"},
+              "content":{"content_type":"card_action","text":"{ invalid"}
+            }
+            """;
+        var context = new DefaultHttpContext();
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-invalid-card");
+
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            new StubActorRuntime(),
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("ignored");
+        response.Body.Should().Contain("invalid_card_action_payload");
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldIgnoreUnsupportedConversationType()
     {
         var relay = CreateRelayInvocationDependencies();
@@ -882,7 +952,13 @@ public class NyxIdChatEndpointsCoverageTests
               "agent":{"api_key_id":"scope-daily"},
               "conversation":{"id":"oc_private_1","type":"private"},
               "sender":{"platform_id":"ou_user_1","display_name":"Alice"},
-              "content":{"type":"text","text":"/daily alice"}
+              "content":{"type":"text","text":"/daily alice"},
+              "raw_platform_data":{
+                "event":{
+                  "sender":{"sender_id":{"union_id":"on_union_1"}},
+                  "message":{"chat_id":"oc_lark_chat_1","message_id":"om_daily_1"}
+                }
+              }
             }
             """;
         var context = new DefaultHttpContext
@@ -932,6 +1008,9 @@ public class NyxIdChatEndpointsCoverageTests
         activity.OutboundDelivery.CorrelationId.Should().Be("corr-daily-1");
         activity.TransportExtras.NyxPlatform.Should().Be("lark");
         activity.TransportExtras.NyxConversationId.Should().Be("oc_private_1");
+        activity.TransportExtras.NyxPlatformMessageId.Should().Be("om_daily_1");
+        activity.TransportExtras.NyxLarkUnionId.Should().Be("on_union_1");
+        activity.TransportExtras.NyxLarkChatId.Should().Be("oc_lark_chat_1");
         activity.TransportExtras.NyxUserAccessToken.Should().Be(relay.UserToken);
     }
 
@@ -985,6 +1064,144 @@ public class NyxIdChatEndpointsCoverageTests
             call.Type == typeof(ConversationGAgent) &&
             call.Id == expectedActorId);
         runtime.Actors.Should().ContainKey(expectedActorId);
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldRejectWhenScopeResolverIsUnavailable()
+    {
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "nyx-key-no-resolver");
+        var payload = """
+            {
+              "message_id":"msg-no-scope-resolver",
+              "correlation_id":"corr-no-scope-resolver",
+              "platform":"lark",
+              "reply_token":"reply-token-no-scope-resolver",
+              "agent":{"api_key_id":"nyx-key-no-resolver"},
+              "conversation":{"platform_id":"ou_user_1","type":"private"},
+              "sender":{"platform_id":"ou_user_1"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-no-scope-resolver", includeSubject: false);
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldRejectWhenScopeResolverReturnsEmpty()
+    {
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "nyx-key-empty-scope");
+        var scopeResolver = new StubNyxIdRelayScopeResolver
+        {
+            ScopeId = " ",
+        };
+        var payload = """
+            {
+              "message_id":"msg-empty-scope",
+              "correlation_id":"corr-empty-scope",
+              "platform":"lark",
+              "reply_token":"reply-token-empty-scope",
+              "agent":{"api_key_id":"nyx-key-empty-scope"},
+              "conversation":{"platform_id":"ou_user_1","type":"private"},
+              "sender":{"platform_id":"ou_user_1"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxIdRelayScopeResolver>(scopeResolver)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-empty-scope", includeSubject: false);
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        scopeResolver.LastNyxAgentApiKeyId.Should().Be("nyx-key-empty-scope");
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldRejectWhenScopeResolverThrows()
+    {
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "nyx-key-throwing-scope");
+        var scopeResolver = new StubNyxIdRelayScopeResolver
+        {
+            Exception = new InvalidOperationException("registration projection unavailable"),
+        };
+        var payload = """
+            {
+              "message_id":"msg-throwing-scope",
+              "correlation_id":"corr-throwing-scope",
+              "platform":"lark",
+              "reply_token":"reply-token-throwing-scope",
+              "agent":{"api_key_id":"nyx-key-throwing-scope"},
+              "conversation":{"platform_id":"ou_user_1","type":"private"},
+              "sender":{"platform_id":"ou_user_1"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxIdRelayScopeResolver>(scopeResolver)
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-throwing-scope", includeSubject: false);
+
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        scopeResolver.LastNyxAgentApiKeyId.Should().Be("nyx-key-throwing-scope");
+        runtime.CreateCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -1098,6 +1315,41 @@ public class NyxIdChatEndpointsCoverageTests
         first.Should().Be(second);
         first.Length.Should().Be(16);
         first.Should().MatchRegex("^[a-f0-9]{16}$");
+    }
+
+    [Fact]
+    public void ResolveReplyTokenExpiresAtUnixMs_ShouldUseJwtExpiryAndFallbackTtl()
+    {
+        var relay = CreateRelayInvocationDependencies();
+        var method = EndpointsType.GetMethod("ResolveReplyTokenExpiresAtUnixMs", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var options = new RelayOptions
+        {
+            RelayReplyTokenRuntimeTtlSeconds = 7,
+        };
+        var before = DateTimeOffset.UtcNow;
+        var validReplyJwt = CreateRelayJwt(
+            relay.SigningKey,
+            relay.Issuer,
+            relay.RelayApiKeyId,
+            "reply-msg",
+            "lark",
+            "reply-jti",
+            "unused-body-hash");
+
+        var jwtExpiry = (long)method.Invoke(null, [validReplyJwt, options])!;
+        var missingFallback = (long)method.Invoke(null, [null, options])!;
+        var malformedFallback = (long)method.Invoke(null, ["not-a-jwt", options])!;
+        var after = DateTimeOffset.UtcNow;
+
+        DateTimeOffset.FromUnixTimeMilliseconds(jwtExpiry)
+            .Should().BeOnOrAfter(before.AddMinutes(4))
+            .And.BeOnOrBefore(after.AddMinutes(6));
+        DateTimeOffset.FromUnixTimeMilliseconds(missingFallback)
+            .Should().BeOnOrAfter(before.AddSeconds(6))
+            .And.BeOnOrBefore(after.AddSeconds(9));
+        DateTimeOffset.FromUnixTimeMilliseconds(malformedFallback)
+            .Should().BeOnOrAfter(before.AddSeconds(6))
+            .And.BeOnOrBefore(after.AddSeconds(9));
     }
 
     [Fact]
@@ -1680,6 +1932,7 @@ public class NyxIdChatEndpointsCoverageTests
     private sealed class StubNyxIdRelayScopeResolver : INyxIdRelayScopeResolver
     {
         public string? ScopeId { get; init; }
+        public Exception? Exception { get; init; }
         public string? LastNyxAgentApiKeyId { get; private set; }
 
         public Task<string?> ResolveScopeIdByApiKeyAsync(
@@ -1688,6 +1941,8 @@ public class NyxIdChatEndpointsCoverageTests
         {
             ct.ThrowIfCancellationRequested();
             LastNyxAgentApiKeyId = nyxAgentApiKeyId;
+            if (Exception is not null)
+                throw Exception;
             return Task.FromResult(ScopeId);
         }
     }
