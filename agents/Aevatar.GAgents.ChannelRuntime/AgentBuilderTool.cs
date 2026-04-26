@@ -19,11 +19,23 @@ public sealed class AgentBuilderTool : IAgentTool
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AgentBuilderTool>? _logger;
+    // Per-instance polling budget for actor -> projector -> document store
+    // propagation. Defaults to ProjectionWaitDefaults (15 s); tests inject
+    // shrunk values via the constructor instead of mutating a process-global,
+    // which would race other tests if the test surface ever parallelizes.
+    private readonly int _projectionWaitAttempts;
+    private readonly int _projectionWaitDelayMilliseconds;
 
-    public AgentBuilderTool(IServiceProvider serviceProvider, ILogger<AgentBuilderTool>? logger = null)
+    public AgentBuilderTool(
+        IServiceProvider serviceProvider,
+        ILogger<AgentBuilderTool>? logger = null,
+        int projectionWaitAttempts = ProjectionWaitDefaults.Attempts,
+        int projectionWaitDelayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _projectionWaitAttempts = projectionWaitAttempts;
+        _projectionWaitDelayMilliseconds = projectionWaitDelayMilliseconds;
     }
 
     public string Name => "agent_builder";
@@ -214,8 +226,8 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
         var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
-        if (requiredServiceIds.error != null)
-            return JsonSerializer.Serialize(new { error = requiredServiceIds.error });
+        if (requiredServiceIds.errorJson != null)
+            return requiredServiceIds.errorJson;
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? SkillRunnerDefaults.GenerateActorId()
@@ -232,10 +244,34 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
             return JsonSerializer.Serialize(new { error = apiKeyError });
 
+        // Issue aevatarAI/aevatar#411 / #417 follow-up: catch in-flight GitHub-side issues.
+        // The earlier `BuildGitHubAuthorizationResponseAsync` check covers the "no provider
+        // token at all" case; this preflight catches misconfigurations that only surface at
+        // request time (the original case under #421 was a missing `User-Agent` header that
+        // GitHub rejects with 403; OAuth grant revocation is the other one).
+        //
+        // PR #418 review r3141846175: revoke the freshly-minted key on preflight failure so
+        // each `/daily` retry doesn't leave another orphan proxy-scoped key behind in the
+        // user's NyxID account. The revoke is best-effort cleanup, not a safety claim about
+        // the key's correctness.
+        var preflight = await PreflightGitHubProxyAsync(nyxClient, apiKeyValue!, providerSlug, ct);
+        if (preflight is not null)
+        {
+            await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "github_preflight_failed", ct);
+            return preflight;
+        }
+
         var actor = await actorRuntime.GetAsync(agentId)
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
+        var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeSkillRunnerCommand
         {
             SkillName = templateSpec.SkillName,
@@ -256,17 +292,21 @@ public sealed class AgentBuilderTool : IAgentTool
                 NyxApiKey = apiKeyValue!,
                 OwnerNyxUserId = ownerNyxUserId!,
                 ApiKeyId = apiKeyId!,
+                LarkReceiveId = deliveryTarget.Primary.ReceiveId,
+                LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
+                LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
+                LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
             },
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
 
-        if (args.Bool("run_immediately") == true)
+        var runImmediatelyRequested = args.Bool("run_immediately") == true;
+        if (runImmediatelyRequested)
             await actor.HandleEventAsync(
                 BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
                 ct);
 
-        await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
@@ -274,12 +314,13 @@ public sealed class AgentBuilderTool : IAgentTool
             entry => string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
                      string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
             ct,
-            maxAttempts: args.Bool("run_immediately") == true ? 20 : 10);
+            maxAttempts: runImmediatelyRequested ? 20 : 10);
 
-        await SaveGithubUsernamePreferenceIfRequestedAsync(
+        var savePreferenceRequested = args.Bool("save_github_username_preference") == true;
+        var preferenceSaved = await SaveGithubUsernamePreferenceIfRequestedAsync(
             configScopeId,
             githubUsernameResolution.GithubUsername ?? string.Empty,
-            args.Bool("save_github_username_preference") == true,
+            savePreferenceRequested,
             ct);
 
         return JsonSerializer.Serialize(new
@@ -288,6 +329,9 @@ public sealed class AgentBuilderTool : IAgentTool
             agent_id = agentId,
             agent_type = SkillRunnerDefaults.AgentType,
             template = templateSpec.TemplateName,
+            github_username = githubUsernameResolution.GithubUsername,
+            github_username_preference_saved = preferenceSaved,
+            run_immediately_requested = runImmediatelyRequested,
             next_scheduled_run = nextRunAtUtc,
             conversation_id = conversationId,
             api_key_id = apiKeyId,
@@ -330,8 +374,8 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
         var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, [providerSlug], ct);
-        if (requiredServiceIds.error != null)
-            return JsonSerializer.Serialize(new { error = requiredServiceIds.error });
+        if (requiredServiceIds.errorJson != null)
+            return requiredServiceIds.errorJson;
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? WorkflowAgentDefaults.GenerateActorId()
@@ -372,6 +416,13 @@ public sealed class AgentBuilderTool : IAgentTool
                     ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(agentId, ct);
 
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
+        var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeWorkflowAgentCommand
         {
             WorkflowId = workflowUpsert.Workflow.WorkflowId,
@@ -387,11 +438,14 @@ public sealed class AgentBuilderTool : IAgentTool
             ApiKeyId = apiKeyId!,
             Enabled = true,
             ScopeId = scopeId.Trim(),
+            LarkReceiveId = deliveryTarget.Primary.ReceiveId,
+            LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
+            LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
+            LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
 
-        await EnsureUserAgentCatalogProjectionAsync(ct);
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
@@ -483,6 +537,18 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
+        // Capture the read-model version before issuing tombstone so the wait can
+        // distinguish "projection caught up" from "projector did not run yet".
+        var versionBefore = await queryPort.GetStateVersionAsync(entry.AgentId, ct) ?? -1;
+
+        // Prime the projection scope BEFORE any dispatch. If we primed after
+        // HandleEventAsync, an idle-deactivated projection grain would have
+        // already missed the published event and a late activation could not
+        // recover it (the activation contract is "be alive when the event
+        // arrives", not "replay missed events"). Activating up front costs at
+        // most one extra warm-grain round trip.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
         var disableResult = await DispatchAgentLifecycleAsync(entry, actorRuntime, "delete_agent", LifecycleAction.Disable, null, ct);
         if (disableResult.error != null)
             return disableResult.error;
@@ -496,42 +562,41 @@ public sealed class AgentBuilderTool : IAgentTool
             BuildDirectEnvelope(registryActor.Id, new UserAgentCatalogTombstoneCommand { AgentId = entry.AgentId }),
             ct);
 
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(500, ct);
+        var deleted = await WaitForTombstoneReflectedAsync(
+            queryPort,
+            entry.AgentId,
+            versionBefore,
+            ct,
+            _projectionWaitAttempts,
+            _projectionWaitDelayMilliseconds);
 
-            if (await queryPort.GetAsync(entry.AgentId, ct) == null)
-            {
-                var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
-                    ? entry.OwnerNyxUserId
-                    : await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-                var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
-                return JsonSerializer.Serialize(new
-                {
-                    status = "deleted",
-                    agent_id = entry.AgentId,
-                    revoked_api_key_id = entry.ApiKeyId,
-                    delete_notice = $"Deleted agent `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
-                    agents,
-                    total = agents.Length,
-                });
-            }
-        }
-
-        var acceptedOwnerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
+        var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
             ? entry.OwnerNyxUserId
             : await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-        var acceptedAgents = await QueryAgentsForOwnerAsync(queryPort, acceptedOwnerFilter, ct);
+        var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
+
+        if (deleted)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                status = "deleted",
+                agent_id = entry.AgentId,
+                revoked_api_key_id = entry.ApiKeyId,
+                delete_notice = $"Deleted agent `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
+                agents,
+                total = agents.Length,
+            });
+        }
+
         return JsonSerializer.Serialize(new
         {
             status = "accepted",
             agent_id = entry.AgentId,
             revoked_api_key_id = entry.ApiKeyId,
             delete_notice = $"Delete submitted for `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
-            agents = acceptedAgents,
-            total = acceptedAgents.Length,
-            note = "Delete was submitted but registry tombstone is not yet reflected.",
+            agents,
+            total = agents.Length,
+            note = "Tombstone is propagating. Run /agents in a few seconds to confirm the agent is gone.",
         });
     }
 
@@ -586,12 +651,31 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
+        // Capture baseline version BEFORE dispatch so the wait can distinguish
+        // "projection has materialized this disable" from "stale read replica
+        // happens to surface a historical disabled status". Capture must
+        // precede dispatch — capturing inside the wait helper would race
+        // against a fast projection that already advanced the version.
+        var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
+
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
         var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "disable_agent", LifecycleAction.Disable, null, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
-        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusDisabled, ct) ?? entry.value;
-        return SerializeAgentStatus(after, "Agent disabled. Scheduling paused.");
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusDisabled, ct);
+        if (observation.Confirmed)
+            return SerializeAgentStatus(observation.Entry!, "Agent disabled. Scheduling paused.");
+
+        // Dual gate never passed — the disable was dispatched but the read
+        // model has not confirmed the lifecycle change within the wait
+        // budget. Surface the pre-dispatch entry with an honest propagating
+        // note so the caller (LLM/user) does not assume the agent is paused.
+        return SerializeAgentStatus(entry.value, "Disable submitted. Run /agent-status in a few seconds to confirm the agent is paused.");
     }
 
     private async Task<string> EnableAgentAsync(
@@ -608,12 +692,25 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
 
+        // See DisableAgentAsync for why versionBefore is captured here (before
+        // any dispatch) and not inside WaitForAgentStatusAsync.
+        var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
+
+        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
+        // the rationale. A late prime can't recover an event the projector
+        // already missed.
+        await EnsureUserAgentCatalogProjectionAsync(ct);
+
         var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "enable_agent", LifecycleAction.Enable, null, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
-        var after = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, SkillRunnerDefaults.StatusRunning, ct) ?? entry.value;
-        return SerializeAgentStatus(after, "Agent enabled. Scheduling resumed.");
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusRunning, ct);
+        if (observation.Confirmed)
+            return SerializeAgentStatus(observation.Entry!, "Agent enabled. Scheduling resumed.");
+
+        // See DisableAgentAsync for the rationale on the un-confirmed branch.
+        return SerializeAgentStatus(entry.value, "Enable submitted. Run /agent-status in a few seconds to confirm the agent is running.");
     }
 
     private static EventEnvelope BuildDirectEnvelope(string targetActorId, IMessage payload)
@@ -630,6 +727,33 @@ public sealed class AgentBuilderTool : IAgentTool
         };
     }
 
+    /// <summary>
+    /// Builds the JSON body for <c>POST /api/v1/api-keys</c> when the agent-builder mints a
+    /// scoped child key for a new agent. Pins <c>allow_all_services = false</c> alongside the
+    /// resolved <c>allowed_service_ids</c> so the agent's proxy reach is bounded to exactly the
+    /// catalog slugs the template requires.
+    /// </summary>
+    /// <remarks>
+    /// PR #418 review (4175529548): NyxID's <c>CreateApiKeyRequest.allow_all_services</c>
+    /// (<c>backend/src/handlers/api_keys.rs:105</c>) is <c>#[serde(default = "default_true")]</c>,
+    /// and proxy enforcement (<c>backend/src/handlers/proxy.rs:1030</c>) only checks
+    /// <c>allowed_service_ids</c> when <c>!auth_user.allow_all_services</c>. Omitting the field
+    /// means NyxID stores <c>true</c>, the resolved <c>UserService.id</c> list is persisted but
+    /// never consulted, and the key has broad proxy reach across every service the parent token
+    /// can see. Setting <c>false</c> explicitly:
+    /// <list type="bullet">
+    ///   <item>activates the enforcement path #417 was written to satisfy,</item>
+    ///   <item>makes the narrow-scope intent first-class instead of relying on the parent
+    ///   delegation token's setting (which is what surfaced the bug in production), and</item>
+    ///   <item>triggers <c>validate_service_ids</c> at create-time
+    ///   (<c>backend/src/services/key_service.rs:183</c>), so a malformed
+    ///   <c>UserService.id</c> fails fast at <c>POST /api-keys</c> instead of silently passing
+    ///   through and 403'ing on every later proxy call.</item>
+    /// </list>
+    /// <c>allow_all_nodes</c> stays at the NyxID default — this flow does not restrict node
+    /// routing, and pinning it would surface a separate boundary that has nothing to do with
+    /// the agent's service reach.
+    /// </remarks>
     private static string BuildCreateApiKeyPayload(string agentId, IReadOnlyList<string> requiredServiceIds)
     {
         if (requiredServiceIds.Count == 0)
@@ -641,6 +765,7 @@ public sealed class AgentBuilderTool : IAgentTool
             ["scopes"] = "proxy",
             ["platform"] = "generic",
             ["allowed_service_ids"] = requiredServiceIds,
+            ["allow_all_services"] = false,
         };
 
         return JsonSerializer.Serialize(payload);
@@ -745,23 +870,88 @@ public sealed class AgentBuilderTool : IAgentTool
         await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
     }
 
-    private async Task<UserAgentCatalogEntry?> WaitForAgentStatusAsync(
+    private async Task<(bool Confirmed, UserAgentCatalogEntry? Entry)> WaitForAgentStatusAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
+        long versionBefore,
         string expectedStatus,
         CancellationToken ct)
     {
-        for (var attempt = 0; attempt < 10; attempt++)
+        // Status + version dual-condition (mirrors WaitForCreatedAgentAsync):
+        // wait until the read model both advances past the caller-captured
+        // baseline AND surfaces the expected status. Status alone is not
+        // enough — a stale replica can hold an expected-looking historical
+        // status (e.g., a previous disable→enable→disable cycle) and pass a
+        // status-only check while the actor has not yet processed *this*
+        // dispatch. Conversely, version alone is not enough either — an
+        // unrelated state event could advance the version without changing
+        // status. Both conditions together pin "this specific lifecycle
+        // event has materialized in the read model". Caller must capture
+        // versionBefore *before* dispatch, otherwise a fast projection that
+        // already advanced the version would make versionAfter == versionBefore
+        // and burn the entire budget. Projection scope priming also happens
+        // in the caller before dispatch (see DisableAgentAsync /
+        // EnableAgentAsync) — a late prime here cannot recover an event the
+        // projector already missed.
+        for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
-                await Task.Delay(500, ct);
+                await Task.Delay(_projectionWaitDelayMilliseconds, ct);
+
+            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+            if (versionAfter <= versionBefore)
+                continue;
 
             var entry = await queryPort.GetAsync(agentId, ct);
             if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
-                return entry;
+                return (Confirmed: true, Entry: entry);
         }
 
-        return await queryPort.GetAsync(agentId, ct);
+        // Budget exhausted: the dual gate never passed. Do NOT fall back to an
+        // un-gated GetAsync read — that would surface a stale-but-expected-
+        // looking entry and let callers report success despite the contract
+        // not being satisfied. Callers must surface honest "submitted /
+        // propagating" copy when Confirmed is false.
+        return (Confirmed: false, Entry: null);
+    }
+
+    /// <summary>
+    /// Polls the read model until the agent's tombstoned state is reflected as a
+    /// document deletion. The read-model contract guarantees that a tombstoned
+    /// entry causes <see cref="UserAgentCatalogProjector"/> to dispatch
+    /// <c>DeleteAsync</c>; document absence is therefore the authoritative signal.
+    /// </summary>
+    private static async Task<bool> WaitForTombstoneReflectedAsync(
+        IUserAgentCatalogQueryPort queryPort,
+        string agentId,
+        long versionBefore,
+        CancellationToken ct,
+        int maxAttempts = ProjectionWaitDefaults.Attempts,
+        int delayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
+    {
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(delayMilliseconds, ct);
+
+            // GetStateVersionAsync reads the same document; if it is null the
+            // document has been deleted by the projector.
+            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
+            if (versionAfter == null)
+                return true;
+
+            if (versionAfter.Value <= versionBefore)
+                continue;
+
+            // Version advanced (a fresh state event reached the projector) but the
+            // document still exists; if it is the tombstoned entry the projector
+            // would have deleted it on the same advance, so a non-null entry means
+            // either an interleaving upsert or a stale read replica - keep waiting.
+            if (await queryPort.GetAsync(agentId, ct) == null)
+                return true;
+        }
+
+        return false;
     }
 
     private async Task<(bool success, string? error)> DispatchAgentLifecycleAsync(
@@ -837,54 +1027,174 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
-    private async Task<(IReadOnlyList<string>? value, string? error)> ResolveProxyServiceIdsAsync(
+    /// <summary>
+    /// Resolves the per-user <c>UserService.id</c> values that the new agent's API key needs in
+    /// <c>allowed_service_ids</c> to reach each required catalog slug through the NyxID proxy.
+    /// </summary>
+    /// <remarks>
+    /// <para>Issue aevatarAI/aevatar#417. The previous implementation called
+    /// <c>GET /api/v1/proxy/services</c> (the <em>catalog</em> list) and pulled out each row's
+    /// <c>id</c>, which is a <c>DownstreamService.id</c> — a global catalog UUID shared across
+    /// all users. NyxID's proxy enforcement (<c>backend/src/handlers/proxy.rs:1030</c>) checks the
+    /// API key's <c>allowed_service_ids</c> against the per-user <c>UserService.id</c>, not the
+    /// catalog id. The mismatch silently passed at <c>POST /api-keys</c> creation time, then
+    /// surfaced as <c>403 ApiKeyScopeForbidden</c> on every proxy call.</para>
+    /// <para>Why the old code looked correct in development: <c>allow_all_services=true</c>
+    /// short-circuits the enforcement check (NyxID <c>proxy.rs:1030</c>). Session-token-minted
+    /// API keys default to <c>true</c>, so a developer reproducing the create-key + proxy-call
+    /// dance from a CLI never tripped the bug. The agent path mints child keys via the
+    /// channel-relay delegation token; NyxID forces those children to inherit
+    /// <c>allow_all_services=false</c> from the parent, which is when enforcement kicks in.
+    /// The <c>BuildCreateApiKeyPayload</c> change in PR #418 (review 4175529548) makes the
+    /// narrow-scope intent first-class by setting <c>allow_all_services=false</c> explicitly,
+    /// so this resolver's output is consulted regardless of the parent's setting.</para>
+    /// <para>The fix: use <c>GET /api/v1/user-services</c>, which lists this user's
+    /// <c>UserService</c> instances. For each instance the response carries the per-user
+    /// <c>id</c> (what enforcement actually checks) plus <c>slug</c>, <c>is_active</c>, and a
+    /// <c>credential_source</c> envelope. We filter to active rows whose slug matches a required
+    /// slug, and skip org-shared rows the caller cannot use as a proxy target — those would later
+    /// surface as a less-actionable <c>org_role_insufficient</c> error.</para>
+    /// </remarks>
+    private async Task<(IReadOnlyList<string>? value, string? errorJson)> ResolveProxyServiceIdsAsync(
         NyxIdApiClient client,
         string token,
         IReadOnlyList<string> requiredSlugs,
         CancellationToken ct)
     {
         if (requiredSlugs.Count == 0)
-            return (null, "At least one required Nyx proxy service slug must be provided.");
+        {
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "no_required_slugs",
+                hint = "At least one required Nyx proxy service slug must be provided.",
+            }));
+        }
 
-        var response = await client.DiscoverProxyServicesAsync(token, ct);
+        var response = await client.ListUserServicesAsync(token, ct);
         if (IsErrorPayload(response))
-            return (null, "Could not discover required Nyx proxy services.");
+        {
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "user_services_unavailable",
+                hint = "Could not list connected Nyx user-services. Try again or check NyxID availability.",
+            }));
+        }
 
         try
         {
             using var doc = JsonDocument.Parse(response);
-            var serviceIdsBySlug = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // List response shape: { "services": [ {id, slug, is_active, credential_source: {...}}, ... ] }
+            // The catalog response also nests under "services" (and additionally "custom_services"),
+            // so reusing EnumerateProxyServiceItems is safe — but we accept *only* rows that look
+            // like UserService instances by checking presence of `slug`.
+            //
+            // Codex review (PR #418 r3141846173): users with mixed bindings can have multiple
+            // rows for the same slug (e.g. an org-shared `allowed:false` row alongside a personal
+            // active row). NyxID does not guarantee any ordering, so the resolver must keep the
+            // *most eligible* row per slug rather than the first one seen. We track the first
+            // ineligible row anyway so that when no eligible row exists we can still emit a
+            // specific error (`service_inactive` / `service_org_viewer_only`) instead of a
+            // generic miss.
+            var bestBySlug = new Dictionary<string, ServiceResolution>(StringComparer.OrdinalIgnoreCase);
             foreach (var svc in EnumerateProxyServiceItems(doc.RootElement))
             {
                 var slug = ReadString(svc, "slug");
                 if (string.IsNullOrWhiteSpace(slug))
                     continue;
 
-                var id = ReadString(svc, "id", "service_id");
-                if (!string.IsNullOrWhiteSpace(id))
-                    serviceIdsBySlug[slug] = id;
+                var id = ReadString(svc, "id");
+                if (string.IsNullOrWhiteSpace(id))
+                    continue;
+
+                var isActive = TryReadBool(svc, "is_active") ?? true;
+                var credentialSource = svc.TryGetProperty("credential_source", out var cs) ? cs : default;
+                var sourceType = credentialSource.ValueKind == JsonValueKind.Object
+                    ? ReadString(credentialSource, "type")
+                    : null;
+                var orgAllowed = credentialSource.ValueKind == JsonValueKind.Object
+                    ? TryReadBool(credentialSource, "allowed")
+                    : null;
+
+                var candidate = new ServiceResolution(
+                    Id: id!,
+                    IsActive: isActive,
+                    CredentialSourceType: sourceType,
+                    OrgAllowed: orgAllowed);
+
+                if (bestBySlug.TryGetValue(slug, out var existing))
+                {
+                    // Already have an eligible row → never downgrade.
+                    if (existing.IsEligible)
+                        continue;
+                    // Existing is ineligible; only replace with another ineligible row if we
+                    // would otherwise lose information. Replace iff candidate is eligible.
+                    if (!candidate.IsEligible)
+                        continue;
+                }
+
+                bestBySlug[slug] = candidate;
             }
 
-            var missingSlugs = requiredSlugs
-                .Where(slug => !serviceIdsBySlug.ContainsKey(slug))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (missingSlugs.Length > 0)
+            var ids = new List<string>(requiredSlugs.Count);
+            foreach (var slug in requiredSlugs.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                return (null,
-                    $"Missing required Nyx proxy services: {string.Join(", ", missingSlugs)}. API key creation was rejected to avoid broad proxy access.");
+                if (!bestBySlug.TryGetValue(slug, out var resolution))
+                {
+                    return (null, JsonSerializer.Serialize(new
+                    {
+                        error = "service_not_connected",
+                        slug,
+                        hint = $"NyxID has no connected user-service for slug `{slug}`. Connect the provider at NyxID before creating this agent.",
+                    }));
+                }
+
+                if (resolution.IsEligible)
+                {
+                    ids.Add(resolution.Id);
+                    continue;
+                }
+
+                if (string.Equals(resolution.CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) &&
+                    resolution.OrgAllowed != true)
+                {
+                    return (null, JsonSerializer.Serialize(new
+                    {
+                        error = "service_org_viewer_only",
+                        slug,
+                        hint = $"NyxID user-service for slug `{slug}` is shared by your org but your role does not permit using it as a proxy target. Ask an admin to widen the org role scope, or connect a personal credential.",
+                    }));
+                }
+
+                // Remaining ineligible reason: !is_active.
+                return (null, JsonSerializer.Serialize(new
+                {
+                    error = "service_inactive",
+                    slug,
+                    hint = $"NyxID user-service for slug `{slug}` is inactive. Re-activate it at NyxID before creating this agent.",
+                }));
             }
 
-            var ids = requiredSlugs
-                .Select(slug => serviceIdsBySlug[slug])
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            return (ids, null);
+            return (ids.Distinct(StringComparer.Ordinal).ToArray(), null);
         }
         catch (JsonException)
         {
-            return (null, "Could not parse Nyx proxy service discovery response.");
+            return (null, JsonSerializer.Serialize(new
+            {
+                error = "user_services_parse_failed",
+                hint = "NyxID user-services response was not valid JSON.",
+            }));
         }
+    }
+
+    private readonly record struct ServiceResolution(
+        string Id,
+        bool IsActive,
+        string? CredentialSourceType,
+        bool? OrgAllowed)
+    {
+        public bool IsEligible =>
+            IsActive &&
+            !(string.Equals(CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) && OrgAllowed != true);
     }
 
     private async Task<string?> BuildGitHubAuthorizationResponseAsync(
@@ -1251,22 +1561,23 @@ public sealed class AgentBuilderTool : IAgentTool
         }
     }
 
-    private async Task SaveGithubUsernamePreferenceIfRequestedAsync(
+    private async Task<bool> SaveGithubUsernamePreferenceIfRequestedAsync(
         string scopeId,
         string githubUsername,
         bool shouldSave,
         CancellationToken ct)
     {
         if (!shouldSave || string.IsNullOrWhiteSpace(githubUsername))
-            return;
+            return false;
 
         var commandService = _serviceProvider.GetService<IUserConfigCommandService>();
         if (commandService is null)
-            return;
+            return false;
 
         try
         {
             await commandService.SaveGithubUsernameAsync(scopeId, githubUsername, ct);
+            return true;
         }
         catch (OperationCanceledException)
         {
@@ -1274,6 +1585,7 @@ public sealed class AgentBuilderTool : IAgentTool
         }
         catch
         {
+            return false;
         }
     }
 
@@ -1396,6 +1708,203 @@ public sealed class AgentBuilderTool : IAgentTool
     {
         var normalized = (value ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    /// <summary>
+    /// Builds the typed Lark delivery target (primary + optional fallback) from the current
+    /// AgentToolRequestContext, and emits a LogDebug breadcrumb when the primary fell back from
+    /// the cross-app safe pair (chat_id / union_id) to the legacy open_id / conversation_id
+    /// path. The primary is what <see cref="LarkConversationTargets.BuildFromInbound"/>
+    /// returns; the fallback (when the primary is a DM chat_id and we also have a union_id at
+    /// ingress) is captured so the runtime can retry once on a Lark
+    /// <c>230002 bot not in chat</c> rejection — the failure mode for cross-app same-tenant
+    /// deployments where the outbound app is not in the inbound DM. Operators correlating Lark
+    /// <c>99992361 open_id cross app</c> rejections need the log line to confirm whether the
+    /// relay surfaced <c>union_id</c> at agent-create time.
+    /// </summary>
+    /// <summary>
+    /// Preflights GitHub proxy access using the newly created agent API key against GitHub's
+    /// <c>/rate_limit</c> — a cheap read-only endpoint that returns 401/403 when NyxID's stored
+    /// OAuth token was revoked or had its scopes downgraded at GitHub between connect-time and
+    /// agent-create-time. Returns a structured error JSON suitable for returning verbatim from
+    /// the tool when access is denied; returns <c>null</c> on success or on probe shapes we
+    /// don't classify as "fundamentally broken" (rate limits, 5xx).
+    /// </summary>
+    /// <remarks>
+    /// Issue aevatarAI/aevatar#411 added this preflight to fail fast on a misdiagnosed root
+    /// cause (we thought the api-key was missing a GitHub binding). Issue #417 fixed that real
+    /// cause — the api-key now carries the right per-user <c>UserService.id</c>s. The probe is
+    /// retained because the OAuth grant can still be revoked outside our control (user clicks
+    /// "Revoke access" in GitHub Settings → Applications, GitHub temp-bans the account, etc.),
+    /// and surfacing that at create-time avoids persisting a daily-report agent that would
+    /// produce empty output on every run. The freshly minted api-key is best-effort revoked at
+    /// the call site so retries don't accumulate orphan proxy-scoped keys.
+    /// </remarks>
+    private async Task<string?> PreflightGitHubProxyAsync(
+        NyxIdApiClient nyxClient,
+        string apiKey,
+        string nyxProviderSlug,
+        CancellationToken ct)
+    {
+        // Cheap read-only endpoint; succeeds even with a rate-limited token, fails with 401/403
+        // when the proxy can't resolve a bound GitHub credential.
+        var probe = await nyxClient.ProxyRequestAsync(
+            apiKey,
+            "api-github",
+            "/rate_limit",
+            "GET",
+            body: null,
+            extraHeaders: null,
+            ct);
+
+        if (string.IsNullOrWhiteSpace(probe))
+            return null;
+
+        // `NyxIdApiClient.SendAsync` (NyxIdApiClient.cs:680) wraps HTTP non-2xx as
+        // `{"error": true, "status": <http>, "body": "<raw downstream body>"}` — `status`,
+        // not `code`. Reviewer (PR #412 r3141699476): the previous parser only read `code`,
+        // so for the actual #411 production failures (HTTP 403 from /api/v1/proxy/s/api-github
+        // /rate_limit) it set status=0, returned null, and persisted a daily_report agent
+        // that would fail at runtime. Read both `status` (the SendAsync envelope) AND `code`
+        // (any future inverted-naming envelope or top-level Lark code). Treat 401/403 as the
+        // signal to fail-fast; let other shapes flow through (rate limits, 5xx etc are
+        // operational and not "agent fundamentally broken").
+        try
+        {
+            using var doc = JsonDocument.Parse(probe);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (!root.TryGetProperty("error", out var errorProp))
+                return null;
+            if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
+                return null;
+
+            var status = TryReadInt32Property(root, "status")
+                         ?? TryReadInt32Property(root, "code")
+                         ?? 0;
+            if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
+                return null;
+
+            var detail = root.TryGetProperty("message", out var msgProp) && msgProp.ValueKind == JsonValueKind.String
+                ? msgProp.GetString()
+                : null;
+            var body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
+                ? bodyProp.GetString()
+                : null;
+
+            return JsonSerializer.Serialize(new
+            {
+                error = "github_proxy_access_denied",
+                detail = string.IsNullOrWhiteSpace(detail) ? "GitHub proxy returned 401/403 for the new agent API key." : detail,
+                http_status = status,
+                proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
+                hint = "GitHub returned 401/403 through the NyxID proxy. Common causes: (a) the OAuth grant for GitHub was revoked at github.com/settings/applications or its scopes were downgraded — re-authorize the GitHub provider at NyxID; (b) the request reached GitHub without a User-Agent header (NyxIdApiClient now sends a default; if you see this, check that the deployed binary includes that fix). The agent will not produce a useful daily report until proxy access succeeds.",
+                nyx_provider_slug = nyxProviderSlug,
+            });
+        }
+        catch (JsonException)
+        {
+            // Non-JSON probe response: don't pretend we know what's going on; let creation
+            // proceed so the agent can at least be created (operator can debug from logs).
+            return null;
+        }
+    }
+
+    private static int? TryReadInt32Property(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Number ||
+            !property.TryGetInt32(out var value))
+        {
+            return null;
+        }
+        return value;
+    }
+
+    private static bool? TryReadBool(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object ||
+            !element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Best-effort revoke of an API key minted earlier in the create flow. Used when GitHub
+    /// preflight fails so retries of <c>/daily</c> don't accumulate orphan proxy-scoped keys
+    /// in the user's NyxID account (codex review #418 r3141846175). Failures here are logged
+    /// at Warning but do NOT propagate — the structured create-time error is the user-facing
+    /// signal; an orphan key is an ops cleanup concern, not a hard failure.
+    /// </summary>
+    private async Task BestEffortRevokeApiKeyAsync(
+        NyxIdApiClient nyxClient,
+        string sessionToken,
+        string apiKeyId,
+        string reason,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+            return;
+
+        try
+        {
+            var response = await nyxClient.DeleteApiKeyAsync(sessionToken, apiKeyId, ct);
+            if (LarkProxyResponse.TryGetError(response, out _, out var detail))
+            {
+                _logger?.LogWarning(
+                    "Failed to revoke orphan agent API key {ApiKeyId} after {Reason}: {Detail}",
+                    apiKeyId,
+                    reason,
+                    detail);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Exception revoking orphan agent API key {ApiKeyId} after {Reason}",
+                apiKeyId,
+                reason);
+        }
+    }
+
+    private LarkReceiveTargetWithFallback ResolveDeliveryTarget(string conversationId, string agentId)
+    {
+        var chatType = AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType);
+        var senderId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId);
+        var unionId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkUnionId);
+        var chatId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkChatId);
+
+        var target = LarkConversationTargets.BuildFromInboundWithFallback(
+            chatType,
+            conversationId,
+            senderId,
+            unionId,
+            chatId);
+
+        if (target.Primary.FellBackToPrefixInference)
+        {
+            _logger?.LogDebug(
+                "Agent builder fell back to legacy delivery target inference for {AgentId}: chatType={ChatType}, hasUnionId={HasUnionId}, hasLarkChatId={HasLarkChatId}, hasSenderId={HasSenderId}, resolvedReceiveIdType={ReceiveIdType}. Cross-app outbound (e.g. customer api-lark-bot) may surface Lark `99992361 open_id cross app` until the relay propagates union_id.",
+                agentId,
+                chatType ?? string.Empty,
+                !string.IsNullOrWhiteSpace(unionId),
+                !string.IsNullOrWhiteSpace(chatId),
+                !string.IsNullOrWhiteSpace(senderId),
+                target.Primary.ReceiveIdType);
+        }
+
+        return target;
     }
 
     private sealed class BuilderArgs

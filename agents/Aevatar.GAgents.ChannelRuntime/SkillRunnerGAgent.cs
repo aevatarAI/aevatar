@@ -96,7 +96,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
-        await PersistDomainEventAsync(new SkillRunnerInitializedEvent
+        var initialized = new SkillRunnerInitializedEvent
         {
             SkillName = command.SkillName?.Trim() ?? string.Empty,
             TemplateName = command.TemplateName?.Trim() ?? string.Empty,
@@ -109,11 +109,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
             ProviderName = NormalizeProviderName(command.ProviderName),
             Model = command.Model?.Trim() ?? string.Empty,
-            Temperature = command.Temperature,
-            MaxTokens = command.MaxTokens,
-            MaxToolRounds = command.MaxToolRounds,
-            MaxHistoryMessages = command.MaxHistoryMessages,
-        });
+        };
+
+        if (command.HasTemperature)
+            initialized.Temperature = command.Temperature;
+        if (command.HasMaxTokens)
+            initialized.MaxTokens = command.MaxTokens;
+        if (command.HasMaxToolRounds)
+            initialized.MaxToolRounds = command.MaxToolRounds;
+        if (command.HasMaxHistoryMessages)
+            initialized.MaxHistoryMessages = command.MaxHistoryMessages;
+
+        await PersistDomainEventAsync(initialized);
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpsertRegistryAsync(State.Enabled ? SkillRunnerDefaults.StatusRunning : SkillRunnerDefaults.StatusDisabled, CancellationToken.None);
@@ -261,18 +268,138 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
+        var deliveryTarget = LarkConversationTargets.Resolve(
+            State.OutboundConfig.LarkReceiveId,
+            State.OutboundConfig.LarkReceiveIdType,
+            State.OutboundConfig.ConversationId);
+        if (deliveryTarget.FellBackToPrefixInference)
+        {
+            // No typed receive_id captured at create time; only legacy state predating the
+            // typed fields hits this path. Keep the breadcrumb so format drift is observable
+            // when the prefix heuristic stops matching.
+            Logger.LogDebug(
+                "Skill runner {ActorId} resolved Lark receive target by prefix inference (legacy state): conversationId={ConversationId}, receiveIdType={ReceiveIdType}",
+                Id,
+                State.OutboundConfig.ConversationId,
+                deliveryTarget.ReceiveIdType);
+        }
+
+        var outcome = await TrySendWithFallbackAsync(client, output, deliveryTarget, ct);
+
+        if (!outcome.Succeeded)
+        {
+            // Surface downstream rejection so HandleTriggerAsync sees a real failure instead of
+            // persisting SkillRunnerExecutionCompletedEvent on a silently-dropped Lark response.
+            // The Error field on SkillRunnerExecutionFailedEvent ends up in `/agent-status`'s
+            // `last_error`, so for known recurring stale-state codes we expand the bare Lark
+            // message into actionable recovery guidance — otherwise the user sees a cryptic
+            // `99992361 open_id cross app` and has no way to know they need to rebuild the
+            // agent.
+            throw new InvalidOperationException(BuildLarkRejectionMessage(outcome.LarkCode, outcome.Detail));
+        }
+    }
+
+    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
+    {
+        public static SendOutcome Success() => new(true, null, string.Empty);
+        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
+    }
+
+    /// <summary>
+    /// Sends the outbound text via the typed primary delivery target, then on a Lark
+    /// <c>230002 bot not in chat</c> rejection retries once with the fallback target if one
+    /// was captured at agent-create time. The fallback covers cross-app same-tenant
+    /// deployments where the outbound app is not a member of the inbound DM chat — without
+    /// it, the chat_id-first priority would regress those deployments. Returns success vs.
+    /// failure (with Lark code+detail) so the caller can throw cleanly without re-parsing
+    /// the response.
+    /// </summary>
+    private async Task<SendOutcome> TrySendWithFallbackAsync(
+        NyxIdApiClient client,
+        string output,
+        LarkReceiveTarget primary,
+        CancellationToken ct)
+    {
+        var primaryResponse = await SendOutboundAsync(client, output, primary, ct);
+        if (!LarkProxyResponse.TryGetError(primaryResponse, out var larkCode, out var detail))
+            return SendOutcome.Success();
+
+        // Only Lark `bot not in chat` triggers the fallback. Nyx envelope errors (no Lark
+        // code) and other Lark business errors propagate directly so the user sees actionable
+        // recovery guidance for the actual failure mode.
+        if (larkCode != LarkBotErrorCodes.BotNotInChat)
+            return SendOutcome.Failed(larkCode, detail);
+
+        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
+        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
+        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
+            return SendOutcome.Failed(larkCode, detail);
+
+        Logger.LogInformation(
+            "Skill runner {ActorId} primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair (receive_id_type={FallbackType})",
+            Id,
+            fallbackType);
+
+        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
+        var fallbackResponse = await SendOutboundAsync(client, output, fallbackTarget, ct);
+        if (!LarkProxyResponse.TryGetError(fallbackResponse, out var fallbackCode, out var fallbackDetail))
+            return SendOutcome.Success();
+
+        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+    }
+
+    private async Task<string> SendOutboundAsync(
+        NyxIdApiClient client,
+        string output,
+        LarkReceiveTarget target,
+        CancellationToken ct)
+    {
         var body = JsonSerializer.Serialize(new
         {
-            receive_id = State.OutboundConfig.ConversationId,
+            receive_id = target.ReceiveId,
             msg_type = "text",
             content = JsonSerializer.Serialize(new { text = output }),
         });
 
-        await client.ProxyRequestAsync(
+        return await client.ProxyRequestAsync(
             State.OutboundConfig.NyxApiKey,
             State.OutboundConfig.NyxProviderSlug,
-            "open-apis/im/v1/messages?receive_id_type=chat_id",
+            $"open-apis/im/v1/messages?receive_id_type={target.ReceiveIdType}",
             "POST", body, null, ct);
+    }
+
+    private static string BuildLarkRejectionMessage(int? larkCode, string detail)
+    {
+        if (larkCode == LarkBotErrorCodes.OpenIdCrossApp)
+        {
+            // The agent's persisted OutboundConfig was captured before union_id ingress existed
+            // (PR #409 added that), so `LarkReceiveIdType=open_id` is permanently scoped to a
+            // different Lark app than the customer outbound. Self-heal is not possible without
+            // a fresh ingress event carrying union_id; the user must rebuild the agent.
+            return
+                $"Lark message delivery rejected (code={larkCode}): {detail}. " +
+                "This agent was created before cross-app union_id ingress existed; " +
+                "delete and recreate it (`/agents` → Delete → `/daily`) to pick up the cross-app safe target.";
+        }
+
+        if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
+        {
+            // Even union_id is rejected — the relay-side ingress and outbound apps are in
+            // different Lark tenants. No user-id-based identifier survives that boundary;
+            // recreating the agent makes the new chat_id-preferred path take effect (chat_id
+            // bypasses user-id translation entirely as long as the same app is on both ends).
+            return
+                $"Lark message delivery rejected (code={larkCode}): {detail}. " +
+                "The outbound Lark app is in a different tenant than the inbound app, so " +
+                "user-id translation is impossible. Delete and recreate the agent " +
+                "(`/agents` → Delete → `/daily`) so the new chat_id-preferred outbound path " +
+                "takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot that " +
+                "received the inbound event.";
+        }
+
+        return larkCode is { } code
+            ? $"Lark message delivery rejected (code={code}): {detail}"
+            : $"Lark message delivery rejected: {detail}";
     }
 
     private async Task TrySendFailureAsync(string error, CancellationToken ct)
@@ -327,6 +454,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ScheduleCron = State.ScheduleCron ?? string.Empty,
             ScheduleTimezone = State.ScheduleTimezone ?? string.Empty,
             Status = status,
+            LarkReceiveId = State.OutboundConfig?.LarkReceiveId ?? string.Empty,
+            LarkReceiveIdType = State.OutboundConfig?.LarkReceiveIdType ?? string.Empty,
+            LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
+            LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
@@ -374,8 +505,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.ProviderName = NormalizeProviderName(evt.ProviderName);
         next.Model = evt.Model ?? string.Empty;
-        next.Temperature = evt.Temperature;
-        next.MaxTokens = evt.MaxTokens;
+
+        // Missing sampling fields intentionally use upstream model defaults;
+        // missing runner limits fall back to SkillRunner defaults.
+        if (evt.HasTemperature)
+            next.Temperature = evt.Temperature;
+        else
+            next.ClearTemperature();
+        if (evt.HasMaxTokens)
+            next.MaxTokens = evt.MaxTokens;
+        else
+            next.ClearMaxTokens();
+
         next.MaxToolRounds = evt.HasMaxToolRounds ? evt.MaxToolRounds : SkillRunnerDefaults.DefaultMaxToolRounds;
         next.MaxHistoryMessages = evt.HasMaxHistoryMessages ? evt.MaxHistoryMessages : SkillRunnerDefaults.DefaultMaxHistoryMessages;
         return next;

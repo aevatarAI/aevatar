@@ -73,8 +73,10 @@ public sealed class FileEventStore : IEventStore
             var currentVersion = stream.CurrentVersion;
             if (currentVersion != expectedVersion)
             {
-                throw new InvalidOperationException(
-                    $"Optimistic concurrency conflict: expected {expectedVersion}, actual {currentVersion}");
+                throw new EventStoreOptimisticConcurrencyException(
+                    agentId,
+                    expectedVersion,
+                    currentVersion);
             }
 
             stream.Events.AddRange(pendingEvents);

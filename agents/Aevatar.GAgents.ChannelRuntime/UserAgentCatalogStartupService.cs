@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -7,15 +10,26 @@ public sealed class UserAgentCatalogStartupService : IHostedService
 {
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
+    private static readonly string LegacyProjectionScopeActorId = ProjectionScopeActorId.Build(
+        new ProjectionRuntimeScopeKey(
+            UserAgentCatalogGAgent.WellKnownId,
+            UserAgentCatalogStorageContracts.LegacyDurableProjectionKind,
+            ProjectionRuntimeMode.DurableMaterialization));
 
     private readonly UserAgentCatalogProjectionPort _projectionPort;
+    private readonly IActorRuntime _actorRuntime;
+    private readonly IStreamProvider _streamProvider;
     private readonly ILogger<UserAgentCatalogStartupService> _logger;
 
     public UserAgentCatalogStartupService(
         UserAgentCatalogProjectionPort projectionPort,
+        IActorRuntime actorRuntime,
+        IStreamProvider streamProvider,
         ILogger<UserAgentCatalogStartupService> logger)
     {
         _projectionPort = projectionPort;
+        _actorRuntime = actorRuntime;
+        _streamProvider = streamProvider;
         _logger = logger;
     }
 
@@ -26,6 +40,7 @@ public sealed class UserAgentCatalogStartupService : IHostedService
         {
             try
             {
+                await CleanupLegacyProjectionScopeAsync(ct);
                 await _projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
                 _logger.LogInformation(
                     "User agent catalog projection scope activated for {ActorId} (attempt {Attempt})",
@@ -58,4 +73,19 @@ public sealed class UserAgentCatalogStartupService : IHostedService
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+
+    private async Task CleanupLegacyProjectionScopeAsync(CancellationToken ct)
+    {
+        await _streamProvider
+            .GetStream(UserAgentCatalogGAgent.WellKnownId)
+            .RemoveRelayAsync(LegacyProjectionScopeActorId, ct);
+
+        if (!await _actorRuntime.ExistsAsync(LegacyProjectionScopeActorId))
+            return;
+
+        await _actorRuntime.DestroyAsync(LegacyProjectionScopeActorId, ct);
+        _logger.LogInformation(
+            "Removed legacy user agent catalog projection scope {LegacyActorId}",
+            LegacyProjectionScopeActorId);
+    }
 }

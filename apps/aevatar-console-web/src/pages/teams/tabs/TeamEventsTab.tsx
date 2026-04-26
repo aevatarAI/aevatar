@@ -50,6 +50,7 @@ type TeamEventsTabProps = {
   readonly isRunsLoading: boolean;
   readonly memberMappingRows: readonly MemberMappingRow[];
   readonly onOpenAudit: () => void;
+  readonly onOpenMissionControl: () => void;
   readonly onSelectRun: (runId: string) => void;
   readonly openAuditButtonStyle: React.CSSProperties;
   readonly playbackSummary: string;
@@ -57,6 +58,7 @@ type TeamEventsTabProps = {
   readonly provenanceStyle: React.CSSProperties;
   readonly runSwitchOptions: readonly RunSwitchOption[];
   readonly showOpenAudit: boolean;
+  readonly showOpenMissionControl: boolean;
 };
 
 const TeamEventsTab: React.FC<TeamEventsTabProps> = ({
@@ -69,6 +71,7 @@ const TeamEventsTab: React.FC<TeamEventsTabProps> = ({
   isRunsLoading,
   memberMappingRows,
   onOpenAudit,
+  onOpenMissionControl,
   onSelectRun,
   openAuditButtonStyle,
   playbackSummary,
@@ -76,6 +79,7 @@ const TeamEventsTab: React.FC<TeamEventsTabProps> = ({
   provenanceStyle,
   runSwitchOptions,
   showOpenAudit,
+  showOpenMissionControl,
 }) => {
   const { token } = theme.useToken();
 
@@ -166,11 +170,22 @@ const TeamEventsTab: React.FC<TeamEventsTabProps> = ({
                   </div>
                 ) : null}
               </div>
-              {showOpenAudit ? (
+              {showOpenAudit || showOpenMissionControl ? (
                 <Space wrap>
-                  <Button onClick={onOpenAudit} style={openAuditButtonStyle}>
-                    打开完整审计
-                  </Button>
+                  {showOpenMissionControl ? (
+                    <Button
+                      onClick={onOpenMissionControl}
+                      style={openAuditButtonStyle}
+                      type="primary"
+                    >
+                      打开 Mission Control
+                    </Button>
+                  ) : null}
+                  {showOpenAudit ? (
+                    <Button onClick={onOpenAudit} style={openAuditButtonStyle}>
+                      打开完整审计
+                    </Button>
+                  ) : null}
                 </Space>
               ) : null}
             </div>

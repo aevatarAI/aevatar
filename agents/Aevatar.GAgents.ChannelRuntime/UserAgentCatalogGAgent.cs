@@ -53,6 +53,10 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             NextRunAt = existing?.NextRunAt,
             ErrorCount = existing?.ErrorCount ?? 0,
             LastError = existing?.LastError ?? string.Empty,
+            LarkReceiveId = MergeNonEmpty(command.LarkReceiveId, existing?.LarkReceiveId),
+            LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
+            LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
+            LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
         };
 
         await PersistDomainEventAsync(new UserAgentCatalogUpsertedEvent

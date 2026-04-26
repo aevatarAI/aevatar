@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Xunit;
@@ -24,8 +26,40 @@ public sealed class AgentBuilderCardFlowTests
 
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
-        decision.ReplyPayload.Should().Contain("saved-user");
-        decision.ReplyPayload.Should().Contain("Leave the field blank to reuse it.");
+        decision.ReplyContent.Should().NotBeNull();
+
+        var githubInput = decision.ReplyContent!.Actions.Single(a =>
+            a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username");
+        // Saved usernames belong in Value (rendered as default_value) so the user sees editable text
+        // rather than placeholder ghost text that disappears on click.
+        githubInput.Value.Should().Be("saved-user");
+
+        decision.ReplyContent.Cards.Single().Text.Should().Contain("saved-user");
+        decision.ReplyContent.Cards.Single().Text.Should().Contain("already filled in");
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_TemplatesCardButton_DispatchesListTemplatesTool()
+    {
+        // The /agents card surfaces a `Templates` button; PR #409 added it. Without an explicit
+        // case in the card_action switch the button click would no-op and confuse users who
+        // navigate by tapping rather than typing /templates. Pin the contract so a refactor can
+        // not silently drop the routing.
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "card_action",
+            RegistrationScopeId = "scope-1",
+        };
+        inbound.Extra["agent_builder_action"] = "list_templates";
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("list_templates");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be("list_templates");
     }
 
     [Fact]

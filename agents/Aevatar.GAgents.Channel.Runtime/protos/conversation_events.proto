@@ -32,6 +32,28 @@ message NeedsLlmReplyEvent {
   aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
   map<string, string> metadata = 5;
   int64 requested_at_unix_ms = 6;
+  // Transient inbox-only credential. The actor MUST clear `reply_token` and
+  // `reply_token_expires_at_unix_ms` (set them to the empty default) on the
+  // copy passed to PersistDomainEventAsync; only the inbox-bound copy may
+  // carry them so the LLM worker can echo the credential back without the
+  // actor's in-memory dict surviving deactivation. Never persist to event
+  // store, projection, or read model.
+  string reply_token = 7;
+  int64 reply_token_expires_at_unix_ms = 8;
+}
+
+// Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single
+// inbound callback turn to ConversationGAgent together with the short-lived reply
+// credential. The actor MUST NOT persist this message or any of its fields into
+// event store, projection, read model, or any durable state. The handler is
+// expected to immediately move `reply_token` and `reply_token_expires_at_unix_ms`
+// into actor-owned in-memory runtime state (keyed by `correlation_id`) and only
+// persist downstream domain events that omit the reply credential entirely.
+message NyxRelayInboundActivity {
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 1;
+  string reply_token = 2;
+  int64 reply_token_expires_at_unix_ms = 3;
+  string correlation_id = 4;
 }
 
 enum LlmReplyTerminalState {
@@ -50,11 +72,74 @@ message LlmReplyReadyEvent {
   string error_code = 7;
   string error_summary = 8;
   int64 ready_at_unix_ms = 9;
+  // Transient inbox-echoed credential carried back from the LLM worker so the
+  // actor's outbound relay reply does not depend on its in-memory token dict
+  // surviving deactivation. The actor consumes these fields directly and never
+  // persists them. The inbox subscriber copies the values from the inbound
+  // NeedsLlmReplyEvent verbatim.
+  string reply_token = 10;
+  int64 reply_token_expires_at_unix_ms = 11;
+}
+
+// Per-delta streaming signal dispatched from the LLM inbox runtime to the conversation actor while
+// the reply is still being generated. The actor owns the outbound reply credential and the
+// placeholder message identifier for the turn, so it must be the one issuing the relay placeholder
+// send and subsequent edit calls. This message carries only the cumulative accumulated text for
+// the current delta; the actor tracks streaming state (placeholder message id, disabled flag)
+// in-memory keyed by `correlation_id`. This event must never be persisted — it is a runtime-only
+// signal.
+message LlmReplyStreamChunkEvent {
+  string correlation_id = 1;
+  string registration_id = 2;
+  // Clone of the inbound activity so the actor/turn runner can resolve the platform, conversation,
+  // and outbound delivery without re-reading from durable state.
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
+  // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
+  string accumulated_text = 4;
+  int64 chunk_at_unix_ms = 5;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {
   string correlation_id = 1;
   int64 requested_at_unix_ms = 2;
+}
+
+// Actor self-message fired by the durable scheduler when an inbound turn retry
+// is due. The handler looks up `activity_id` in
+// ConversationGAgentState.pending_inbound_turns, rebuilds the runtime context
+// from the in-memory reply-token dict, and re-invokes the turn runner.
+message DeferredInboundTurnRetryRequestedEvent {
+  string activity_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
+// Persisted alongside each retry scheduling so that (a) pending_inbound_turns is
+// driven through the standard state matcher pipeline and (b) actor rehydration
+// after deactivation can walk the pending set and re-register durable timeouts.
+message InboundTurnRetryScheduledEvent {
+  string activity_id = 1;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 2;
+  int32 retry_count = 3;
+  int64 first_failed_unix_ms = 4;
+  int64 next_retry_unix_ms = 5;
+  int64 scheduled_at_unix_ms = 6;
+}
+
+message NyxRelayReplyTokenCleanupRequestedEvent {
+  string correlation_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
+// Sent by ChannelLlmReplyInboxRuntime when its pre-LLM gates (stale age,
+// missing relay credential, malformed payload) refuse to process a deferred
+// LLM reply. The actor consumes this to retire the matching pending entry
+// from State.PendingLlmReplyRequests via a NotRetryable
+// ConversationContinueFailedEvent, so the request never silently
+// accumulates in actor state.
+message DeferredLlmReplyDroppedEvent {
+  string correlation_id = 1;
+  string reason = 2;
+  int64 dropped_at_unix_ms = 3;
 }
 
 message ConversationContinueRequestedEvent {

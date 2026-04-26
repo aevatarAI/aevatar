@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -13,7 +14,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddChannelRuntime_RegistersOnlyPublicRegistrationProjectionServices_ForInMemoryStore()
+    public void AddChannelRuntime_RegistersRegistrationProjectionServices_ForInMemoryStore()
     {
         var services = new ServiceCollection();
 
@@ -24,12 +25,16 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IAevatarSecretsStore));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
@@ -78,12 +83,16 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IAevatarSecretsStore));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));

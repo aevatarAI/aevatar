@@ -72,6 +72,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             Enabled = command.Enabled,
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
             Platform = command.Platform?.Trim() ?? string.Empty,
+            LarkReceiveId = command.LarkReceiveId?.Trim() ?? string.Empty,
+            LarkReceiveIdType = command.LarkReceiveIdType?.Trim() ?? string.Empty,
+            LarkReceiveIdFallback = command.LarkReceiveIdFallback?.Trim() ?? string.Empty,
+            LarkReceiveIdTypeFallback = command.LarkReceiveIdTypeFallback?.Trim() ?? string.Empty,
         });
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
@@ -229,6 +233,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             ScheduleCron = State.ScheduleCron ?? string.Empty,
             ScheduleTimezone = State.ScheduleTimezone ?? string.Empty,
             Status = status,
+            LarkReceiveId = State.LarkReceiveId ?? string.Empty,
+            LarkReceiveIdType = State.LarkReceiveIdType ?? string.Empty,
+            LarkReceiveIdFallback = State.LarkReceiveIdFallback ?? string.Empty,
+            LarkReceiveIdTypeFallback = State.LarkReceiveIdTypeFallback ?? string.Empty,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
@@ -279,6 +287,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         next.Enabled = evt.Enabled;
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.Platform = evt.Platform ?? string.Empty;
+        next.LarkReceiveId = evt.LarkReceiveId ?? string.Empty;
+        next.LarkReceiveIdType = evt.LarkReceiveIdType ?? string.Empty;
+        next.LarkReceiveIdFallback = evt.LarkReceiveIdFallback ?? string.Empty;
+        next.LarkReceiveIdTypeFallback = evt.LarkReceiveIdTypeFallback ?? string.Empty;
         return next;
     }
 

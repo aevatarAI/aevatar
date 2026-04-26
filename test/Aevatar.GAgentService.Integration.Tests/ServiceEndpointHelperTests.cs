@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -108,13 +109,14 @@ public sealed class ServiceEndpointHelperTests
             null,
             Activator.CreateInstance(boundSecretType, "secret-a"),
             null)!;
+        var ownerContext = new ServiceIdentityContext("tenant", "app", "ns", "test");
 
         var serviceKind = (ServiceBindingKind)parseBindingKind.Invoke(null, ["service"])!;
         var connectorKind = (ServiceBindingKind)parseBindingKind.Invoke(null, [" connector "])!;
         var secretKind = (ServiceBindingKind)parseBindingKind.Invoke(null, ["SECRET"])!;
-        var serviceSpec = (ServiceBindingSpec)toSpec.Invoke(null, ["checkout", serviceRequest, "binding-service"])!;
-        var connectorSpec = (ServiceBindingSpec)toSpec.Invoke(null, ["checkout", connectorRequest, "binding-connector"])!;
-        var secretSpec = (ServiceBindingSpec)toSpec.Invoke(null, ["checkout", secretRequest, "binding-secret"])!;
+        var serviceSpec = InvokeToSpec(toSpec, serviceRequest, "binding-service", serviceKind, ownerContext);
+        var connectorSpec = InvokeToSpec(toSpec, connectorRequest, "binding-connector", connectorKind, ownerContext);
+        var secretSpec = InvokeToSpec(toSpec, secretRequest, "binding-secret", secretKind, ownerContext);
         Action invalidBindingKind = () => parseBindingKind.Invoke(null, ["unsupported"]);
 
         serviceKind.Should().Be(ServiceBindingKind.Service);
@@ -147,6 +149,14 @@ public sealed class ServiceEndpointHelperTests
             .WithInnerException<InvalidOperationException>()
             .WithMessage("*Unsupported binding kind*");
     }
+
+    private static ServiceBindingSpec InvokeToSpec(
+        MethodInfo toSpec,
+        object request,
+        string bindingId,
+        ServiceBindingKind bindingKind,
+        ServiceIdentityContext ownerContext) =>
+        (ServiceBindingSpec)toSpec.Invoke(null, ["checkout", request, bindingId, bindingKind, ownerContext, null])!;
 
     [Fact]
     public void ServiceServingEndpoints_ShouldParseServingState_AndMapTargetsAndStages()

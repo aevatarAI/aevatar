@@ -54,7 +54,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
         builder.Services.AddNyxIdChat(builder.Configuration);
-        builder.Services.AddStreamingProxy();
+        builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.Configure<DeviceEventOptions>(

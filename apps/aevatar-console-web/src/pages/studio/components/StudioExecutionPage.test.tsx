@@ -99,6 +99,9 @@ function createBaseProps(overrides = {}) {
     activeWorkflowName: 'workspace-demo',
     activeWorkflowDescription: 'A Studio workflow used in tests.',
     activeDirectoryLabel: 'Workspace',
+    selectedMemberLabel: 'workspace-demo',
+    currentImplementationLabel: 'workspace-demo',
+    emptyState: null,
     savePending: false,
     canSaveWorkflow: true,
     runPending: false,
@@ -129,7 +132,7 @@ describe('StudioExecutionPage', () => {
 
     expect(screen.getByText('Run Compare')).toBeInTheDocument();
     expect(screen.getByText('Health & Trust')).toBeInTheDocument();
-    expect(screen.getByText('Governance Snapshot')).toBeInTheDocument();
+    expect(screen.getByText('Member Snapshot')).toBeInTheDocument();
     expect(screen.getByText('Human Escalation Playback')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重新运行' })).toBeInTheDocument();
@@ -167,5 +170,36 @@ describe('StudioExecutionPage', () => {
     expect(screen.getAllByText('triage waiting for approval').length).toBeGreaterThan(0);
     expect(screen.getAllByText('triage approved').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Need L2 approval before refund.').length).toBeGreaterThan(0);
+  });
+
+  it('shows a clear member-first empty state when Observe has no selected member', () => {
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          currentImplementationLabel: '',
+          emptyState: {
+            title: 'Select a member to observe.',
+            description:
+              'Choose a member from Team members first so Observe stays pinned to one member context.',
+          },
+          executions: {
+            isLoading: false,
+            isError: false,
+            error: null,
+            data: [],
+          },
+          selectedExecution: {
+            isLoading: false,
+            isError: false,
+            error: null,
+            data: undefined,
+          },
+          selectedMemberLabel: '',
+        }) as any,
+      ),
+    );
+
+    expect(screen.getByText('Select a member to observe.')).toBeInTheDocument();
   });
 });

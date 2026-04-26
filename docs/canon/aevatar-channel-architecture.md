@@ -1650,7 +1650,7 @@ webhook / gateway 收到事件时，**必须**先把事件 commit 到**持久化
      - `UserMemory` projection 做长期记忆抽取
      - metrics / observability projection 聚合 `channel.bot.turn` 成功率和 latency
      - 审计 / 合规 projection 记录 bot outbound
-     
+
      `AGENTS.md` 原则："committed domain event 必须可观察：write-side 一旦完成 committed domain event，必须把该事实送入统一 observation/projection 主链；禁止只落 event store / actor state 而不进入可观察流"。`ConversationGAgent` 不得让 `ConversationTurnCompletedEvent` 只落自己的 event store；一旦 commit 就走 projection dispatch。
 
 ### 9.5.2.1 Discord interactions 的 ack 顺序特例（pre-ack durable journal）

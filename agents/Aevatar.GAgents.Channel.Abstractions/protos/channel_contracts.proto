@@ -55,6 +55,9 @@ message EmitResult {
   string error_code = 5;
   // The sanitized short error message for failed operations.
   string error_message = 6;
+  // The upstream platform-owned message identifier (for example, Lark `om_xxx`) when the adapter
+  // exposes it, required by the streaming reply path so later edits target the same message.
+  string platform_message_id = 7;
 }
 
 // Carries the normalized conversation and capability inputs used during composition.
@@ -83,8 +86,8 @@ message ChannelBotDescriptor {
 message ChannelTransportBinding {
   // The bot registration descriptor bound to the adapter.
   ChannelBotDescriptor bot = 1;
-  // The credential reference resolved by the adapter at runtime.
-  string credential_ref = 2;
+  reserved 2;
+  reserved "credential_ref";
   // The optional verification token used by webhook-style transports.
   string verification_token = 3;
 }

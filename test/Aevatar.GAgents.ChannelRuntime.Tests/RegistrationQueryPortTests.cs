@@ -47,7 +47,6 @@ public sealed class RegistrationQueryPortTests
                 NyxChannelBotId = "nyx-bot-1",
                 NyxAgentApiKeyId = "key-1",
                 NyxConversationRouteId = "route-1",
-                CredentialRef = "vault://channels/lark/registrations/bot-1/relay-hmac",
             }));
 
         var queryPort = new ChannelBotRegistrationQueryPort(reader);
@@ -62,7 +61,6 @@ public sealed class RegistrationQueryPortTests
         result.NyxChannelBotId.Should().Be("nyx-bot-1");
         result.NyxAgentApiKeyId.Should().Be("key-1");
         result.NyxConversationRouteId.Should().Be("route-1");
-        result.CredentialRef.Should().Be("vault://channels/lark/registrations/bot-1/relay-hmac");
     }
 
     [Fact]

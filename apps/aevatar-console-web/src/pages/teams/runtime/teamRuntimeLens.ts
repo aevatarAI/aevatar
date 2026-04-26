@@ -161,6 +161,8 @@ export type TeamRuntimeLensInput = {
   services: readonly ServiceCatalogSnapshot[];
   actors: readonly RuntimeGAgentActorGroup[];
   runs: readonly ScopeServiceRunSummary[];
+  currentRun?: ScopeServiceRunSummary | null;
+  baselineRun?: ScopeServiceRunSummary | null;
   actorGraph: WorkflowActorGraphEnrichedSnapshot | null;
   currentRunAudit: ScopeServiceRunAuditSnapshot | null;
   baselineRunAudit: ScopeServiceRunAuditSnapshot | null;
@@ -325,7 +327,6 @@ export function selectTeamCompareRuns(
     null;
   const baselineRun =
     sortedRuns.find((run) => run.runId !== currentRun?.runId && isSuccessfulRun(run)) ||
-    sortedRuns.find((run) => run.runId !== currentRun?.runId) ||
     null;
 
   return {
@@ -984,7 +985,14 @@ export function deriveTeamRuntimeLens(
     input.services.find((service) => service.serviceId === input.binding?.serviceId) ||
     input.services[0] ||
     null;
-  const { baselineRun, currentRun } = selectTeamCompareRuns(input.runs);
+  const selectedRuns =
+    input.currentRun !== undefined || input.baselineRun !== undefined
+      ? {
+          baselineRun: input.baselineRun ?? null,
+          currentRun: input.currentRun ?? null,
+        }
+      : selectTeamCompareRuns(input.runs);
+  const { baselineRun, currentRun } = selectedRuns;
   const focus = deriveFocusActorId(input, currentRun);
   const members = deriveMembers(input.actors, focus.actorId, trimOptional(input.binding?.primaryActorId));
   const compare = deriveCompareSummary({

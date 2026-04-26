@@ -19,11 +19,15 @@ public sealed partial class EmitResult
     /// <summary>
     /// Creates one successful emit result.
     /// </summary>
-    public static EmitResult Sent(string sentActivityId, ComposeCapability capability = ComposeCapability.Exact) => new()
+    public static EmitResult Sent(
+        string sentActivityId,
+        ComposeCapability capability = ComposeCapability.Exact,
+        string? platformMessageId = null) => new()
     {
         Success = true,
         SentActivityId = NormalizeRequired(sentActivityId, nameof(sentActivityId)),
         Capability = capability,
+        PlatformMessageId = string.IsNullOrWhiteSpace(platformMessageId) ? string.Empty : platformMessageId.Trim(),
     };
 
     /// <summary>

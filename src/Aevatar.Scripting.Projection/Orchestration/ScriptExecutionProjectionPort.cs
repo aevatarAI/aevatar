@@ -27,13 +27,19 @@ public sealed class ScriptExecutionProjectionPort
     public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
         string actorId,
         CancellationToken ct = default) =>
+        EnsureRunProjectionAsync(actorId, actorId, ct);
+
+    public Task<IScriptExecutionProjectionLease?> EnsureRunProjectionAsync(
+        string actorId,
+        string runId,
+        CancellationToken ct = default) =>
         EnsureProjectionAsync(
             new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
                 ProjectionKind = ScriptProjectionKinds.ExecutionSession,
                 Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = actorId,
+                SessionId = runId,
             },
             ct);
 }

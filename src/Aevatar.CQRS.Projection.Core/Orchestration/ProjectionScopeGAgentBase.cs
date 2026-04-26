@@ -124,6 +124,17 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         }
         catch (Exception ex)
         {
+            if (ProjectionObservationFailurePolicy.ShouldPropagate(ex))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Projection scope observation handling hit a retryable failure. actorId={ActorId} projectionKind={ProjectionKind} sessionId={SessionId}",
+                    Id,
+                    State.ProjectionKind,
+                    State.SessionId);
+                throw;
+            }
+
             _logger.LogWarning(
                 ex,
                 "Projection scope observation handling failed. actorId={ActorId} projectionKind={ProjectionKind} sessionId={SessionId}",

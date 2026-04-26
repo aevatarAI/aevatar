@@ -41,16 +41,17 @@ public sealed class NyxIdRelayOutboundPort
         ConversationReference conversation,
         MessageContent content,
         OutboundDeliveryContext delivery,
+        string replyToken,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(conversation);
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(delivery);
 
-        if (string.IsNullOrWhiteSpace(delivery.ReplyAccessToken))
+        if (string.IsNullOrWhiteSpace(replyToken))
         {
             return EmitResult.Failed(
-                "missing_reply_access_token",
+                "reply_token_missing_or_expired",
                 "Relay reply is missing the access token required for channel-relay/reply.");
         }
 
@@ -67,7 +68,7 @@ public sealed class NyxIdRelayOutboundPort
         }
 
         var result = await _nyxClient.SendChannelRelayTextReplyAsync(
-            delivery.ReplyAccessToken,
+            replyToken,
             delivery.ReplyMessageId,
             replyText,
             ct);
@@ -83,7 +84,78 @@ public sealed class NyxIdRelayOutboundPort
                 result.Detail ?? "Nyx relay reply rejected.");
         }
 
-        return EmitResult.Sent(result.MessageId ?? $"nyx-relay:{delivery.ReplyMessageId}");
+        return EmitResult.Sent(
+            result.MessageId ?? $"nyx-relay:{delivery.ReplyMessageId}",
+            platformMessageId: result.PlatformMessageId);
+    }
+
+    /// <summary>
+    /// Edits a previously-sent relay reply in place. Used by the progressive streaming reply path
+    /// to drive edit-in-place updates while the LLM is still generating.
+    /// </summary>
+    /// <param name="platformMessageId">
+    /// The upstream platform message identifier returned by a prior <see cref="SendAsync"/> call
+    /// (Lark: <c>om_xxx</c>).
+    /// </param>
+    /// <param name="replyToken">
+    /// Actor-owned relay reply token resolved from <c>ConversationTurnRuntimeContext.NyxRelayReplyToken</c>.
+    /// </param>
+    public async Task<EmitResult> UpdateAsync(
+        string platform,
+        ConversationReference conversation,
+        MessageContent content,
+        OutboundDeliveryContext delivery,
+        string platformMessageId,
+        string replyToken,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(delivery);
+
+        if (string.IsNullOrWhiteSpace(replyToken))
+        {
+            return EmitResult.Failed(
+                "reply_token_missing_or_expired",
+                "Relay reply update is missing the access token required for channel-relay/reply/update.");
+        }
+
+        if (string.IsNullOrWhiteSpace(platformMessageId))
+        {
+            return EmitResult.Failed(
+                "missing_platform_message_id",
+                "Relay reply update requires the upstream platform message id captured from the initial send.");
+        }
+
+        if (TryComposeReplyText(platform, conversation, content, out var replyText) is { } composeFailure)
+        {
+            return composeFailure;
+        }
+
+        var result = await _nyxClient.UpdateChannelRelayTextReplyAsync(
+            replyToken,
+            platformMessageId,
+            replyText,
+            ct);
+        if (!result.Succeeded)
+        {
+            _logger.LogWarning(
+                "Nyx relay reply update failed: platform={Platform}, platformMessageId={PlatformMessageId}, detail={Detail}, editUnsupported={EditUnsupported}",
+                platform,
+                platformMessageId,
+                result.Detail,
+                result.EditUnsupported);
+            var errorCode = result.EditUnsupported
+                ? "relay_reply_edit_unsupported"
+                : "relay_reply_update_rejected";
+            return EmitResult.Failed(
+                errorCode,
+                result.Detail ?? "Nyx relay reply update rejected.");
+        }
+
+        return EmitResult.Sent(
+            $"nyx-relay-update:{platformMessageId}",
+            platformMessageId: result.PlatformMessageId ?? platformMessageId);
     }
 
     private EmitResult? TryComposeReplyText(
