@@ -624,12 +624,12 @@ if rg -n "MapMakerCapabilityEndpoints|/api/maker" src -g '*.cs'; then
   exit 1
 fi
 
-if ! rg -n "AddAevatarPlatform\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+if ! rg -n "AddAevatarPlatform\(" src/Aevatar.Mainnet.Host.Api -g '*.cs' >/dev/null; then
   echo "Mainnet host must register platform capabilities via AddAevatarPlatform(...)."
   exit 1
 fi
 
-if ! rg -n "EnableMakerExtensions\s*=\s*true" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+if ! rg -n "EnableMakerExtensions\s*=\s*true" src/Aevatar.Mainnet.Host.Api -g '*.cs' >/dev/null; then
   echo "Mainnet host must enable Maker via AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })."
   exit 1
 fi
@@ -661,17 +661,17 @@ if ! rg -n "AddWorkflowModulePack<MakerModulePack>\(" src/workflow/extensions/Ae
   exit 1
 fi
 
-for host_program in \
-  src/Aevatar.Mainnet.Host.Api/Program.cs \
-  src/workflow/Aevatar.Workflow.Host.Api/Program.cs
+for host_root in \
+  src/Aevatar.Mainnet.Host.Api \
+  src/workflow/Aevatar.Workflow.Host.Api
 do
-  if ! rg -n "AddAevatarDefaultHost\(" "${host_program}" >/dev/null; then
-    echo "Missing AddAevatarDefaultHost in ${host_program}"
+  if ! rg -n "AddAevatarDefaultHost\(" "${host_root}" -g '*.cs' >/dev/null; then
+    echo "Missing AddAevatarDefaultHost in ${host_root}"
     exit 1
   fi
 
-  if ! rg -n "UseAevatarDefaultHost\(" "${host_program}" >/dev/null; then
-    echo "Missing UseAevatarDefaultHost in ${host_program}"
+  if ! rg -n "UseAevatarDefaultHost\(" "${host_root}" -g '*.cs' >/dev/null; then
+    echo "Missing UseAevatarDefaultHost in ${host_root}"
     exit 1
   fi
 done
