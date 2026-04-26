@@ -59,7 +59,6 @@ describe('bindContract', () => {
         scriptSourceHash: '',
         staticActorTypeName: '',
       },
-      scopeBinding: null,
       scopeId: 'scope-1',
       service: {
         serviceKey: 'scope-1:default:workspace-demo',

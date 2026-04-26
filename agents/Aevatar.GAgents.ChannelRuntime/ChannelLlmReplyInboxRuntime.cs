@@ -26,6 +26,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChannelLlmReplyInboxRuntime> _logger;
     private IAsyncDisposable? _subscription;
 
@@ -37,7 +38,8 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
         ILogger<ChannelLlmReplyInboxRuntime> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
-        IUserConfigQueryPort? userConfigQueryPort = null)
+        IUserConfigQueryPort? userConfigQueryPort = null,
+        TimeProvider? timeProvider = null)
     {
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
@@ -46,6 +48,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         _relayOptions = relayOptions;
         _scopeResolver = scopeResolver;
         _userConfigQueryPort = userConfigQueryPort;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -131,11 +134,15 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             return;
         }
 
+        var actor = await _actorRuntime.GetAsync(request.TargetActorId)
+                    ?? await _actorRuntime.CreateAsync<ConversationGAgent>(request.TargetActorId, CancellationToken.None);
+
         string replyText;
         MessageContent? outboundIntent = null;
         var terminalState = LlmReplyTerminalState.Completed;
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
+        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, actor);
 
         try
         {
@@ -149,12 +156,20 @@ internal sealed class ChannelLlmReplyInboxRuntime :
                 replyText = await _replyGenerator.GenerateReplyAsync(
                     request.Activity,
                     effectiveMetadata,
+                    streamingSink,
                     CancellationToken.None) ?? string.Empty;
                 outboundIntent = _interactiveReplyCollector?.TryTake();
             }
             finally
             {
                 interactiveReplyScope?.Dispose();
+            }
+
+            if (streamingSink is not null &&
+                outboundIntent is null &&
+                !string.IsNullOrWhiteSpace(replyText))
+            {
+                await streamingSink.FinalizeAsync(replyText, CancellationToken.None);
             }
 
             if (outboundIntent is null && string.IsNullOrWhiteSpace(replyText))
@@ -177,8 +192,6 @@ internal sealed class ChannelLlmReplyInboxRuntime :
                 request.CorrelationId);
         }
 
-        var actor = await _actorRuntime.GetAsync(request.TargetActorId)
-                    ?? await _actorRuntime.CreateAsync<ConversationGAgent>(request.TargetActorId, CancellationToken.None);
         var ready = new LlmReplyReadyEvent
         {
             CorrelationId = request.CorrelationId,
@@ -189,7 +202,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
             TerminalState = terminalState,
             ErrorCode = errorCode,
             ErrorSummary = errorSummary,
-            ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ReadyAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             // Echo the inbox-only relay credential straight back so ConversationGAgent's
             // outbound reply does not depend on its in-memory token dict still having the
             // entry. The actor consumes these fields and never persists them.
@@ -199,7 +212,7 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(ready),
             Route = new EnvelopeRoute
             {
@@ -208,6 +221,32 @@ internal sealed class ChannelLlmReplyInboxRuntime :
         };
 
         await actor.HandleEventAsync(envelope, CancellationToken.None);
+    }
+
+    private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, IActor targetActor)
+    {
+        if (_relayOptions is not { StreamingRepliesEnabled: true })
+            return null;
+        if (request.Activity?.OutboundDelivery is not
+            {
+                ReplyMessageId.Length: > 0,
+                CorrelationId.Length: > 0,
+            })
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(request.CorrelationId))
+            return null;
+
+        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, _relayOptions.StreamingFlushIntervalMs));
+        return new TurnStreamingReplySink(
+            targetActor,
+            request.CorrelationId,
+            request.RegistrationId,
+            request.Activity.Clone(),
+            throttle,
+            _timeProvider,
+            _logger);
     }
 
     private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(

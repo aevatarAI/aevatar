@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -66,6 +65,22 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, ct) is { } agentBuilderResult)
             return agentBuilderResult;
+
+        if (activity.Type == ActivityType.CardAction)
+        {
+            // A card_action that survived both routers has no actionable meaning for this
+            // bot: promoting it into an LLM turn would send a blank user message and waste
+            // a model call. Return a no-reply completion instead of falling through.
+            _logger.LogInformation(
+                "Ignoring unrecognized card_action inbound: activity={ActivityId}, conversation={CanonicalKey}, actionId={ActionId}",
+                activity.Id,
+                activity.Conversation?.CanonicalKey,
+                activity.Content?.CardAction?.ActionId);
+            return ConversationTurnResult.Ignored(
+                "unrecognized_card_action",
+                activity.Id,
+                "Card action payload did not match workflow resume or agent-builder routing.");
+        }
 
         if (string.IsNullOrWhiteSpace(activity.Conversation?.CanonicalKey))
         {
@@ -176,6 +191,83 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ct);
     }
 
+    public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+
+        if (chunk.Activity is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "activity_required",
+                "Stream chunk event is missing the source activity.");
+        }
+
+        var inbound = ToInboundMessage(chunk.Activity);
+        if (!HasRelayDelivery(inbound))
+        {
+            return ConversationStreamChunkResult.Failed(
+                "invalid_delivery",
+                "Stream chunk requires a relay outbound delivery context.");
+        }
+
+        var relayDelivery = inbound.OutboundDelivery!.Clone();
+        var relayToken = ResolveRelayReplyToken(relayDelivery, runtimeContext);
+        if (relayToken is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "reply_token_missing_or_expired",
+                "Nyx relay reply token is missing or expired for this streaming chunk.");
+        }
+
+        var conversation = chunk.Activity.Conversation;
+        var platform = ResolveRelayPlatform(inbound, conversation);
+        var content = new MessageContent { Text = NormalizeReplyText(chunk.AccumulatedText) };
+
+        EmitResult emit;
+        if (string.IsNullOrWhiteSpace(currentPlatformMessageId))
+        {
+            emit = await _relayOutboundPort.SendAsync(
+                platform,
+                conversation?.Clone() ?? new ConversationReference(),
+                content,
+                relayDelivery,
+                relayToken,
+                ct);
+        }
+        else
+        {
+            emit = await _relayOutboundPort.UpdateAsync(
+                platform,
+                conversation?.Clone() ?? new ConversationReference(),
+                content,
+                relayDelivery,
+                currentPlatformMessageId,
+                relayToken,
+                ct);
+        }
+
+        if (!emit.Success)
+        {
+            var editUnsupported = string.Equals(
+                emit.ErrorCode,
+                "relay_reply_edit_unsupported",
+                StringComparison.Ordinal);
+            return ConversationStreamChunkResult.Failed(
+                string.IsNullOrWhiteSpace(emit.ErrorCode) ? "stream_chunk_rejected" : emit.ErrorCode,
+                emit.ErrorMessage ?? "Relay stream chunk rejected.",
+                editUnsupported);
+        }
+
+        var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
+            ? currentPlatformMessageId
+            : emit.PlatformMessageId;
+        return ConversationStreamChunkResult.Succeeded(resolvedPlatformMessageId);
+    }
+
     private async Task<ConversationTurnResult?> TryHandleAgentBuilderAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
@@ -197,7 +289,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (decision is null)
             return null;
 
-        var replyPayload = decision.ReplyPayload;
+        var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
             var previousMetadata = AgentToolRequestContext.CurrentMetadata;
@@ -209,7 +301,7 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     ResolveUserAccessToken(activity));
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_services);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyPayload = relayDecisionMatched
+                replyContent = relayDecisionMatched
                     ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
                     : AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
             }
@@ -219,11 +311,18 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             }
         }
 
-        var result = await SendReplyAsync(replyPayload, activity, ToInboundMessage(activity), registration, runtimeContext, ct);
+        var result = await SendReplyAsync(
+            replyContent,
+            activity.Id,
+            activity.Conversation,
+            ToInboundMessage(activity),
+            registration,
+            runtimeContext,
+            ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
-                outbound: new MessageContent { Text = replyPayload },
+                outbound: replyContent.Clone(),
                 authPrincipal: "bot",
                 outboundDelivery: result.OutboundDelivery?.Clone())
             : result;
@@ -397,18 +496,32 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 relayDelivery);
         }
 
+        // The dispatcher has already consumed the relay reply token via NyxID's
+        // `channel-relay/reply` endpoint — even when the upstream returns 5xx, NyxID's
+        // single-use semantics mark the token as used before the failure surfaces. A second
+        // call with the same token (the previous "degrade to text" retry) lands as
+        // `401 Reply token already used`, which then escapes as a hard relay failure and
+        // queues an inbound turn retry that re-consumes the (already gone) token forever
+        // — observed in production after PR #409 introduced interactive cards: NyxID
+        // returned 502 for the card payload, the legacy fallback re-sent as text and got
+        // 401, and the bot looked silent on every subsequent DM.
+        //
+        // Use the distinct `relay_reply_token_consumed` error code so `ToRelayFailure` maps
+        // it to `PermanentFailure` (vs. transient). Without this, `ConversationGAgent
+        // .HandleInboundTurnTransientFailureAsync` would queue an `InboundTurnRetryScheduled
+        // Event` and re-run the same inbound turn with the same already-consumed token —
+        // shifting the 401 cascade from in-turn replay (fixed) to grain-level replay (still
+        // broken). The token is single-use, so we get exactly one attempt per inbound; if
+        // that fails, the only correct recovery is to NOT replay it.
         _logger.LogWarning(
-            "Interactive relay reply rejected; degrading to text. messageId={MessageId}, detail={Detail}",
+            "Interactive relay reply rejected; reply token consumed, not retrying. messageId={MessageId}, detail={Detail}",
             relayDelivery.ReplyMessageId,
             dispatch.Detail);
-        return await SendRelayTextFallbackAsync(
-            fallbackText,
-            sentActivitySeed,
-            conversation,
-            inbound,
-            relayDelivery,
-            relayToken,
-            ct);
+        return ToRelayFailure(EmitResult.Failed(
+            "relay_reply_token_consumed",
+            string.IsNullOrWhiteSpace(dispatch.Detail)
+                ? "Interactive relay reply rejected; reply token consumed."
+                : dispatch.Detail));
     }
 
     private async Task<ConversationTurnResult> SendRelayTextFallbackAsync(
@@ -581,6 +694,18 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
         if (!string.IsNullOrWhiteSpace(platformMessageId))
             metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
+
+        // Lark cross-app outbound delivery: agent-builder consumers prefer the tenant-stable
+        // union_id / chat_id captured at ingress over the relay-app-scoped open_id, so a
+        // mismatch between the relay-side Lark app and the customer's outbound Lark app does
+        // not surface as `code:99992361 open_id cross app` rejections at send time.
+        var larkUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkUnionId);
+        if (!string.IsNullOrWhiteSpace(larkUnionId))
+            metadata[ChannelMetadataKeys.LarkUnionId] = larkUnionId;
+
+        var larkChatId = NormalizeOptional(activity?.TransportExtras?.NyxLarkChatId);
+        if (!string.IsNullOrWhiteSpace(larkChatId))
+            metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
         return metadata;
     }
@@ -828,13 +953,34 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 null,
                 ct);
 
-            if (TryGetProxyError(response, out var detail))
+            if (LarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
             {
-                _logger.LogWarning(
-                    "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, detail={Detail}",
-                    providerSlug,
-                    platformMessageId,
-                    detail);
+                if (larkCode == LarkBotErrorCodes.NoPermissionToReact)
+                {
+                    // The bot is missing reaction permission on Lark — a
+                    // tenant-level config issue that recurs on every inbound
+                    // message until ops fixes the app scope. Log at Debug so
+                    // it stays discoverable when the channel is opted into
+                    // verbose logging without spamming Warnings on every turn.
+                    _logger.LogDebug(
+                        "Immediate Lark acknowledgment reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        detail);
+                }
+                else
+                {
+                    // Anything else — a Nyx envelope error, an unexpected Lark
+                    // business code (rate limit, archived message, bot kicked,
+                    // etc.) — is a real signal that should stay at Warning so
+                    // we notice when Lark behavior changes.
+                    _logger.LogWarning(
+                        "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        larkCode,
+                        detail);
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -884,67 +1030,6 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                platformMessageId.StartsWith("om_", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryGetProxyError(string? response, out string detail)
-    {
-        detail = string.Empty;
-        if (string.IsNullOrWhiteSpace(response))
-            return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-
-            if (root.TryGetProperty("error", out var errorProperty))
-            {
-                if (errorProperty.ValueKind == JsonValueKind.True)
-                {
-                    detail = TryReadJsonString(root, "message") ??
-                             TryReadJsonString(root, "body") ??
-                             "proxy_error";
-                    return true;
-                }
-
-                if (errorProperty.ValueKind == JsonValueKind.String)
-                {
-                    var error = errorProperty.GetString()?.Trim();
-                    if (!string.IsNullOrWhiteSpace(error))
-                    {
-                        detail = error;
-                        return true;
-                    }
-                }
-            }
-
-            if (root.TryGetProperty("code", out var codeProperty) &&
-                codeProperty.ValueKind == JsonValueKind.Number &&
-                codeProperty.TryGetInt32(out var code) &&
-                code != 0)
-            {
-                detail = TryReadJsonString(root, "msg") ?? $"code={code}";
-                return true;
-            }
-        }
-        catch (JsonException)
-        {
-            // Ignore invalid bodies for best-effort acknowledgment.
-        }
-
-        return false;
-    }
-
-    private static string? TryReadJsonString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            property.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        var value = property.GetString()?.Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : value;
-    }
-
     private static ConversationTurnResult ToRelayFailure(EmitResult emit)
     {
         var errorCode = string.IsNullOrWhiteSpace(emit.ErrorCode) ? "relay_reply_rejected" : emit.ErrorCode;
@@ -954,6 +1039,12 @@ internal sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         return errorCode switch
         {
+            // The reply token has already been consumed (single-use). Re-running the inbound
+            // turn at grain level (`ConversationGAgent.HandleInboundTurnTransientFailureAsync`)
+            // would replay the same token and get `401 Reply token already used` forever, so
+            // route to PermanentFailure to short-circuit the retry queue. The user-facing
+            // recovery is to send a fresh inbound message which carries a fresh token.
+            "relay_reply_token_consumed" or
             "reply_token_missing_or_expired" or "missing_reply_message_id" or "empty_reply" =>
                 ConversationTurnResult.PermanentFailure(errorCode, errorMessage),
             _ when emit.RetryAfterTimeSpan is { } retryAfter =>

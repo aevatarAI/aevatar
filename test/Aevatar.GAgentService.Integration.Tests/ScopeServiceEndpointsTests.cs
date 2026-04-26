@@ -28,6 +28,8 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -2270,6 +2272,122 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         body.Should().NotBeNull();
         body!["code"].Should().Be("SCOPE_SERVICE_INVOKE_TARGET_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task InvokeEndpoint_ShouldPackPayloadJson_AsTypedAny_UsingExplicitRevision()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await host.ArtifactStore.SaveAsync(
+            "scope-a:default:default:orders",
+            "rev-1",
+            new PreparedServiceRevisionArtifact
+            {
+                ProtocolDescriptorSet = ScopeBuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            revisionId = "rev-1",
+            payloadTypeUrl = "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            payloadJson = """{"tenantId":"hello-tenant","serviceId":"orders"}""",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.RevisionId.Should().Be("rev-1");
+        host.InvocationPort.LastRequest.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.gagentservice.ServiceIdentity");
+        var decoded = ServiceIdentity.Parser.ParseFrom(host.InvocationPort.LastRequest.Payload.Value);
+        decoded.TenantId.Should().Be("hello-tenant");
+        decoded.ServiceId.Should().Be("orders");
+    }
+
+    [Fact]
+    public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadJsonAndPayloadBase64BothSet()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            payloadBase64 = "AAAA",
+            payloadJson = """{"tenantId":"x"}""",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SCOPE_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("mutually exclusive");
+    }
+
+    [Fact]
+    public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadJsonTypeUrlMissingFromRevision()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await host.ArtifactStore.SaveAsync(
+            "scope-a:default:default:orders",
+            "rev-1",
+            new PreparedServiceRevisionArtifact
+            {
+                ProtocolDescriptorSet = ScopeBuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            revisionId = "rev-1",
+            payloadTypeUrl = "type.googleapis.com/demo.Unknown",
+            payloadJson = """{"foo":"bar"}""",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SCOPE_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("not found in revision");
+    }
+
+    [Fact]
+    public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadJsonIsMalformed()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await host.ArtifactStore.SaveAsync(
+            "scope-a:default:default:orders",
+            "rev-1",
+            new PreparedServiceRevisionArtifact
+            {
+                ProtocolDescriptorSet = ScopeBuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            revisionId = "rev-1",
+            payloadTypeUrl = "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+            payloadJson = "{this is not json",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body!["code"].Should().Be("INVALID_SCOPE_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("payloadJson");
+    }
+
+    private static ByteString ScopeBuildProtocolDescriptorSetFor(MessageDescriptor descriptor)
+    {
+        var fds = new FileDescriptorSet();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        ScopeCollectFileProto(descriptor.File, fds, seen);
+        return fds.ToByteString();
+    }
+
+    private static void ScopeCollectFileProto(FileDescriptor file, FileDescriptorSet fds, HashSet<string> seen)
+    {
+        if (!seen.Add(file.Name))
+            return;
+        foreach (var dep in file.Dependencies)
+        {
+            ScopeCollectFileProto(dep, fds, seen);
+        }
+
+        fds.File.Add(FileDescriptorProto.Parser.ParseFrom(file.SerializedData));
     }
 
     [Fact]

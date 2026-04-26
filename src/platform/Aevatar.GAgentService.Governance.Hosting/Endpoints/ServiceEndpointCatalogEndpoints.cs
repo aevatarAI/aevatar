@@ -1,7 +1,9 @@
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -19,45 +21,93 @@ internal static class ServiceEndpointCatalogEndpoints
     }
 
     private static async Task<IResult> HandleCreateAsync(
+        HttpContext http,
         string serviceId,
         ServiceEndpointCatalogHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (ServiceIdentityEndpointAccess.TryResolveContext(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                out _,
+                out var denied) == false)
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.CreateEndpointCatalogAsync(new CreateServiceEndpointCatalogCommand
         {
-            Spec = ToSpec(serviceId, request),
+            Spec = ToSpec(serviceId, request, identityResolver),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/endpoint-catalog", receipt);
     }
 
     private static async Task<IResult> HandleUpdateAsync(
+        HttpContext http,
         string serviceId,
         ServiceEndpointCatalogHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (ServiceIdentityEndpointAccess.TryResolveContext(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                out _,
+                out var denied) == false)
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.UpdateEndpointCatalogAsync(new UpdateServiceEndpointCatalogCommand
         {
-            Spec = ToSpec(serviceId, request),
+            Spec = ToSpec(serviceId, request, identityResolver),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/endpoint-catalog", receipt);
     }
 
-    private static Task<ServiceEndpointCatalogSnapshot?> HandleGetAsync(
+    private static async Task<IResult> HandleGetAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] GAgentServiceGovernanceEndpointModels.ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceGovernanceQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetEndpointCatalogAsync(
-            GAgentServiceGovernanceEndpointModels.ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
-
-    private static ServiceEndpointCatalogSpec ToSpec(string serviceId, ServiceEndpointCatalogHttpRequest request)
+        CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        return JsonOrNull(await queryPort.GetEndpointCatalogAsync(identity, ct));
+    }
+
+    private static ServiceEndpointCatalogSpec ToSpec(
+        string serviceId,
+        ServiceEndpointCatalogHttpRequest request,
+        IServiceIdentityContextResolver identityResolver)
+    {
+        var context = identityResolver.Resolve() ?? new ServiceIdentityContext(
+            request.TenantId?.Trim() ?? string.Empty,
+            request.AppId?.Trim() ?? string.Empty,
+            request.Namespace?.Trim() ?? string.Empty,
+            "request");
         var spec = new ServiceEndpointCatalogSpec
         {
-            Identity = GAgentServiceGovernanceEndpointModels.ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = GAgentServiceGovernanceEndpointModels.ToIdentity(context.TenantId, context.AppId, context.Namespace, serviceId),
         };
         spec.Endpoints.Add((request.Endpoints ?? [])
             .Select(x => new ServiceEndpointExposureSpec
@@ -73,6 +123,11 @@ internal static class ServiceEndpointCatalogEndpoints
             }));
         return spec;
     }
+
+    private static IResult JsonOrNull<T>(T? value) =>
+        value is null
+            ? Results.Text("null", "application/json")
+            : Results.Json(value);
 
     private static ServiceEndpointKind ParseEndpointKind(string? rawValue)
     {
