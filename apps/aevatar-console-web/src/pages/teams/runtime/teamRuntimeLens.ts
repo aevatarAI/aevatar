@@ -1,17 +1,13 @@
 import type { WorkflowActorGraphEnrichedSnapshot } from "@/shared/models/runtime/actors";
 import type { RuntimeGAgentActorGroup } from "@/shared/models/runtime/gagents";
 import type {
+  ScopeServiceRevisionCatalogSnapshot,
   ScopeServiceRunAuditSnapshot,
   ScopeServiceRunSummary,
 } from "@/shared/models/runtime/scopeServices";
+import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
-import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  getStudioScopeBindingCurrentRevision,
-  type StudioScopeBindingRevision,
-  type StudioScopeBindingStatus,
-} from "@/shared/studio/models";
+import type { StudioMemberBindingRevision } from "@/shared/studio/models";
 
 export type TeamHealthStatus =
   | "healthy"
@@ -129,8 +125,8 @@ export type TeamRuntimeLens = {
   scopeId: string;
   title: string;
   subtitle: string;
-  activeRevision: StudioScopeBindingRevision | null;
-  previousRevision: StudioScopeBindingRevision | null;
+  activeRevision: StudioMemberBindingRevision | null;
+  previousRevision: StudioMemberBindingRevision | null;
   currentService: ServiceCatalogSnapshot | null;
   currentRun: ScopeServiceRunSummary | null;
   baselineRun: ScopeServiceRunSummary | null;
@@ -150,14 +146,13 @@ export type TeamRuntimeLens = {
   serviceCount: number;
   recentRunCount: number;
   partialSignals: string[];
-  currentBindingTarget: string;
-  currentBindingContext: string;
   humanInterventionDetected: boolean;
 };
 
 export type TeamRuntimeLensInput = {
   scopeId: string;
-  binding: StudioScopeBindingStatus | null;
+  focusedServiceId: string | null;
+  serviceRevisionCatalog: ScopeServiceRevisionCatalogSnapshot | null;
   services: readonly ServiceCatalogSnapshot[];
   actors: readonly RuntimeGAgentActorGroup[];
   runs: readonly ScopeServiceRunSummary[];
@@ -193,6 +188,28 @@ function sortRuns(runs: readonly ScopeServiceRunSummary[]): ScopeServiceRunSumma
     const leftTime = Date.parse(left.lastUpdatedAt || "");
     const rightTime = Date.parse(right.lastUpdatedAt || "");
     return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+  });
+}
+
+function sortServices(
+  services: readonly ServiceCatalogSnapshot[],
+): ServiceCatalogSnapshot[] {
+  return [...services].sort((left, right) => {
+    const leftDisplayName = trimOptional(left.displayName);
+    const rightDisplayName = trimOptional(right.displayName);
+    if (leftDisplayName && rightDisplayName && leftDisplayName !== rightDisplayName) {
+      return leftDisplayName.localeCompare(rightDisplayName);
+    }
+
+    if (leftDisplayName && !rightDisplayName) {
+      return -1;
+    }
+
+    if (!leftDisplayName && rightDisplayName) {
+      return 1;
+    }
+
+    return trimOptional(left.serviceId).localeCompare(trimOptional(right.serviceId));
   });
 }
 
@@ -347,20 +364,24 @@ function deriveFocusActorId(input: TeamRuntimeLensInput, currentRun: ScopeServic
     };
   }
 
-  const activeRevision = getStudioScopeBindingCurrentRevision(input.binding);
+  const activeRevision = getScopeServiceCurrentRevision(input.serviceRevisionCatalog);
   const activeRevisionActorId = trimOptional(activeRevision?.primaryActorId);
   if (activeRevisionActorId) {
     return {
       actorId: activeRevisionActorId,
-      reason: "Focused on the currently serving revision actor because no active run was selected.",
+      reason: "Focused on the currently selected service revision actor because no active run was selected.",
     };
   }
 
-  const bindingActorId = trimOptional(input.binding?.primaryActorId);
-  if (bindingActorId) {
+  const focusedServiceActorId = trimOptional(
+    input.services.find(
+      (service) => trimOptional(service.serviceId) === trimOptional(input.focusedServiceId),
+    )?.primaryActorId,
+  );
+  if (focusedServiceActorId) {
     return {
-      actorId: bindingActorId,
-      reason: "Focused on the team primary actor from the current binding.",
+      actorId: focusedServiceActorId,
+      reason: "Focused on the currently selected service actor because no stronger runtime signal was available.",
     };
   }
 
@@ -590,7 +611,7 @@ function deriveCompareSummary(input: {
 }
 
 function deriveHealth(input: {
-  binding: StudioScopeBindingStatus | null;
+  activeRevision: StudioMemberBindingRevision | null;
   currentRun: ScopeServiceRunSummary | null;
   currentRunAudit: ScopeServiceRunAuditSnapshot | null;
   currentService: ServiceCatalogSnapshot | null;
@@ -603,21 +624,28 @@ function deriveHealth(input: {
   const details: string[] = [];
   const humanInterventionDetected = hasHumanIntervention(input.currentRunAudit);
 
-  if (!input.binding?.available) {
-    return {
-      status: "attention",
-      tone: "warning",
-      summary: "The current team binding is unavailable, so runtime truth is incomplete.",
-      details: ["Binding data is missing or not yet ready for this team."],
-    };
-  }
-
   if (humanInterventionDetected) {
     details.push("A human-in-the-loop step is visible in the current run.");
   }
 
+  if (trimOptional(input.activeRevision?.revisionId)) {
+    details.push(`Focused revision is ${input.activeRevision?.revisionId}.`);
+  }
+
   if (trimOptional(input.currentService?.deploymentStatus)) {
     details.push(`Service deployment is ${input.currentService?.deploymentStatus}.`);
+  }
+
+  if (!input.currentService && !input.activeRevision && !input.currentRun) {
+    return {
+      status: "attention",
+      tone: "warning",
+      summary:
+        "The current team does not have a published member service or visible run yet.",
+      details: [
+        "No published member-scoped service is visible for the current team focus.",
+      ],
+    };
   }
 
   if (!input.currentRun) {
@@ -626,10 +654,10 @@ function deriveHealth(input: {
         status: "attention",
         tone: "info",
         summary:
-          "The current team has an active serving deployment, but no recent run is available to prove runtime health.",
+          "The current team has a published member service, but no recent run is available to prove runtime health.",
         details: [
           ...details,
-          "No recent team activity is available to verify the active deployment.",
+          "No recent team activity is available to verify the current member service.",
         ],
       };
     }
@@ -976,15 +1004,12 @@ function derivePlaybackSummary(
 export function deriveTeamRuntimeLens(
   input: TeamRuntimeLensInput,
 ): TeamRuntimeLens {
-  const activeRevision = getStudioScopeBindingCurrentRevision(input.binding);
+  const activeRevision = getScopeServiceCurrentRevision(input.serviceRevisionCatalog);
   const previousRevision =
-    input.binding?.revisions.find(
+    input.serviceRevisionCatalog?.revisions.find(
       (revision) => revision.revisionId !== activeRevision?.revisionId,
     ) || null;
-  const currentService =
-    input.services.find((service) => service.serviceId === input.binding?.serviceId) ||
-    input.services[0] ||
-    null;
+  const sortedServices = sortServices(input.services);
   const selectedRuns =
     input.currentRun !== undefined || input.baselineRun !== undefined
       ? {
@@ -993,8 +1018,26 @@ export function deriveTeamRuntimeLens(
         }
       : selectTeamCompareRuns(input.runs);
   const { baselineRun, currentRun } = selectedRuns;
+  const currentService =
+    sortedServices.find(
+      (service) => trimOptional(service.serviceId) === trimOptional(input.focusedServiceId),
+    ) ||
+    sortedServices.find(
+      (service) =>
+        trimOptional(service.serviceId) ===
+        trimOptional(input.serviceRevisionCatalog?.serviceId),
+    ) ||
+    sortedServices.find(
+      (service) => trimOptional(service.serviceId) === trimOptional(currentRun?.serviceId),
+    ) ||
+    sortedServices[0] ||
+    null;
   const focus = deriveFocusActorId(input, currentRun);
-  const members = deriveMembers(input.actors, focus.actorId, trimOptional(input.binding?.primaryActorId));
+  const members = deriveMembers(
+    input.actors,
+    focus.actorId,
+    trimOptional(currentService?.primaryActorId) || trimOptional(activeRevision?.primaryActorId),
+  );
   const compare = deriveCompareSummary({
     baselineRun,
     baselineRunAudit: input.baselineRunAudit,
@@ -1003,7 +1046,7 @@ export function deriveTeamRuntimeLens(
   });
   const playback = derivePlaybackSummary(input.currentRunAudit);
   const health = deriveHealth({
-    binding: input.binding,
+    activeRevision,
     currentRun,
     currentRunAudit: input.currentRunAudit,
     currentService,
@@ -1018,14 +1061,19 @@ export function deriveTeamRuntimeLens(
   if (!currentRun) {
     partialSignals.push("No recent runs");
   }
+  const subtitleParts = [
+    input.workflowCount > 0 ? `${input.workflowCount} 个 workflow` : "",
+    input.scriptCount > 0 ? `${input.scriptCount} 个 script` : "",
+    input.services.length > 0 ? `${input.services.length} 个 service` : "",
+  ].filter(Boolean);
 
   return {
     scopeId: input.scopeId,
-    title:
-      trimOptional(input.binding?.displayName) || `Team ${input.scopeId}`,
+    title: "当前团队",
     subtitle:
-      trimOptional(input.binding?.serviceKey) ||
-      "Team-first runtime workspace",
+      subtitleParts.length > 0
+        ? `团队容器 · ${subtitleParts.join(" / ")}`
+        : "团队容器，成员绑定与运行信号会在这里汇总。",
     activeRevision,
     previousRevision,
     currentService,
@@ -1046,7 +1094,11 @@ export function deriveTeamRuntimeLens(
     compare,
     playback,
     governance: {
-      servingRevision: activeRevision?.revisionId || "Unknown",
+      servingRevision:
+        activeRevision?.revisionId ||
+        trimOptional(currentService?.activeServingRevisionId) ||
+        trimOptional(currentService?.defaultServingRevisionId) ||
+        "Unknown",
       traceability: currentRun
         ? `Recent run ${currentRun.runId} is traceable through team activity.`
         : "No recent run is available yet.",
@@ -1065,8 +1117,6 @@ export function deriveTeamRuntimeLens(
     serviceCount: input.services.length,
     recentRunCount: input.runs.length,
     partialSignals,
-    currentBindingTarget: describeStudioScopeBindingRevisionTarget(activeRevision),
-    currentBindingContext: describeStudioScopeBindingRevisionContext(activeRevision),
     humanInterventionDetected: hasHumanIntervention(input.currentRunAudit),
   };
 }

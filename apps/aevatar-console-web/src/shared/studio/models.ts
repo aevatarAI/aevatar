@@ -159,6 +159,18 @@ export interface StudioExecutionSummary {
   readonly completedAtUtc: string | null;
   readonly actorId: string | null;
   readonly error: string | null;
+  readonly serviceId?: string | null;
+  readonly revisionId?: string | null;
+  readonly definitionActorId?: string | null;
+  readonly stateVersion?: number | null;
+  readonly lastEventId?: string | null;
+  readonly updatedAtUtc?: string | null;
+  readonly totalSteps?: number | null;
+  readonly completedSteps?: number | null;
+  readonly roleReplyCount?: number | null;
+  readonly output?: string | null;
+  readonly auditUpdatedAtUtc?: string | null;
+  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session';
 }
 
 export interface StudioExecutionFrame {
@@ -376,6 +388,117 @@ export function getStudioScopeBindingCurrentRevision(
     null
   );
 }
+
+export type StudioMemberBindingImplementationKind =
+  StudioScopeBindingImplementationKind;
+export type StudioMemberImplementationKind =
+  StudioScopeBindingImplementationKind;
+export type StudioMemberLifecycleStage =
+  | 'created'
+  | 'build_ready'
+  | 'bind_ready'
+  | 'unknown';
+
+export function normalizeStudioMemberLifecycleStage(
+  value: string | null | undefined,
+): StudioMemberLifecycleStage {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'created':
+      return 'created';
+    case 'build_ready':
+    case 'buildready':
+      return 'build_ready';
+    case 'bind_ready':
+    case 'bindready':
+      return 'bind_ready';
+    default:
+      return 'unknown';
+  }
+}
+
+export function formatStudioMemberLifecycleStage(
+  value: StudioMemberLifecycleStage | string | null | undefined,
+): string {
+  switch (normalizeStudioMemberLifecycleStage(value)) {
+    case 'created':
+      return 'Created';
+    case 'build_ready':
+      return 'Build ready';
+    case 'bind_ready':
+      return 'Bind ready';
+    default:
+      return 'Unknown';
+  }
+}
+
+export interface StudioMemberSummary {
+  readonly memberId: string;
+  readonly scopeId: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly lifecycleStage: StudioMemberLifecycleStage;
+  readonly publishedServiceId: string;
+  readonly lastBoundRevisionId: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface StudioMemberImplementationRef {
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly workflowId?: string | null;
+  readonly workflowRevision?: string | null;
+  readonly scriptId?: string | null;
+  readonly scriptRevision?: string | null;
+  readonly actorTypeName?: string | null;
+}
+
+export interface StudioMemberBindingContract {
+  readonly publishedServiceId: string;
+  readonly revisionId: string;
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly boundAt: string;
+}
+
+export interface StudioMemberDetail {
+  readonly summary: StudioMemberSummary;
+  readonly implementationRef?: StudioMemberImplementationRef | null;
+  readonly lastBinding?: StudioMemberBindingContract | null;
+}
+
+export interface StudioMemberRoster {
+  readonly scopeId: string;
+  readonly members: readonly StudioMemberSummary[];
+  readonly nextPageToken?: string | null;
+}
+
+export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
+export type StudioMemberBindingResult = StudioScopeBindingResult;
+export type StudioMemberBindingRevision = StudioScopeBindingRevision;
+export type StudioMemberBindingStatus = StudioScopeBindingStatus;
+export type StudioMemberBindingActivationResult =
+  StudioScopeBindingActivationResult;
+export type StudioMemberBindingRetirementResult =
+  StudioScopeBindingRetirementResult;
+export const normalizeStudioMemberBindingImplementationKind =
+  normalizeStudioScopeBindingImplementationKind;
+export const formatStudioMemberBindingImplementationKind =
+  formatStudioScopeBindingImplementationKind;
+export const describeStudioMemberBindingRevisionTarget =
+  describeStudioScopeBindingRevisionTarget;
+export const describeStudioMemberBindingRevisionContext =
+  describeStudioScopeBindingRevisionContext;
+export const getStudioMemberBindingCurrentRevision =
+  getStudioScopeBindingCurrentRevision;
+
+export type StudioDefaultRouteTargetRevision = StudioScopeBindingRevision;
+export type StudioDefaultRouteTargetStatus = StudioScopeBindingStatus;
+export const describeStudioDefaultRouteTargetRevisionTarget =
+  describeStudioScopeBindingRevisionTarget;
+export const describeStudioDefaultRouteTargetRevisionContext =
+  describeStudioScopeBindingRevisionContext;
+export const getStudioDefaultRouteTargetCurrentRevision =
+  getStudioScopeBindingCurrentRevision;
 
 export interface StudioScopeScriptBindingInput {
   readonly scopeId: string;

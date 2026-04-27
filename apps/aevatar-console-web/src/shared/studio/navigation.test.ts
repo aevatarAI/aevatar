@@ -127,7 +127,7 @@ describe('buildStudioRoute', () => {
         memberKey: 'workflow:workflow-1',
         step: 'bind',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind&tab=bindings');
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind');
   });
 
   it('builds dedicated workflow and script workspace routes', () => {

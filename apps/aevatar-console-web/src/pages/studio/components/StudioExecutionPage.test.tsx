@@ -101,6 +101,7 @@ function createBaseProps(overrides = {}) {
     activeDirectoryLabel: 'Workspace',
     selectedMemberLabel: 'workspace-demo',
     currentImplementationLabel: 'workspace-demo',
+    currentImplementationKind: 'workflow',
     emptyState: null,
     savePending: false,
     canSaveWorkflow: true,
@@ -127,7 +128,28 @@ function createBaseProps(overrides = {}) {
 describe('StudioExecutionPage', () => {
   it('renders the current execution runtime chrome', () => {
     render(
-      React.createElement(StudioExecutionPage, createBaseProps() as any),
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          workflowGraph: {
+            roles: [],
+            steps: [],
+            nodes: [
+              {
+                id: 'node-1',
+                type: 'role',
+                position: { x: 0, y: 0 },
+                data: {
+                  stepId: 'triage',
+                  label: 'Triage',
+                  nodeType: 'role',
+                },
+              },
+            ],
+            edges: [],
+          },
+        }) as any,
+      ),
     );
 
     expect(screen.getByText('Run Compare')).toBeInTheDocument();
@@ -139,6 +161,7 @@ describe('StudioExecutionPage', () => {
     expect(screen.getByRole('button', { name: /停\s*止/ })).toBeInTheDocument();
     expect(screen.getByText('执行日志')).toBeInTheDocument();
     expect(screen.getByLabelText('选择测试运行')).toBeInTheDocument();
+    expect(screen.getByText('Graph canvas')).toBeInTheDocument();
   });
 
   it('shows the selected execution actor id and lets users copy it', async () => {
@@ -170,6 +193,96 @@ describe('StudioExecutionPage', () => {
     expect(screen.getAllByText('triage waiting for approval').length).toBeGreaterThan(0);
     expect(screen.getAllByText('triage approved').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Need L2 approval before refund.').length).toBeGreaterThan(0);
+  });
+
+  it('allows sending a signal when the selected run is waiting on wait_signal', async () => {
+    const onResumeExecution = jest.fn(async () => {});
+
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          onResumeExecution,
+          selectedExecution: {
+            isLoading: false,
+            isError: false,
+            error: null,
+            data: {
+              ...createBaseProps().selectedExecution.data,
+              frames: [
+                {
+                  receivedAtUtc: '2026-03-18T00:00:01Z',
+                  payload: JSON.stringify({
+                    custom: {
+                      name: 'aevatar.step.request',
+                      payload: {
+                        stepId: 'wait_external',
+                        stepType: 'wait_signal',
+                        targetRole: 'support',
+                        input: 'Wait for external confirmation.',
+                      },
+                    },
+                  }),
+                },
+                {
+                  receivedAtUtc: '2026-03-18T00:00:02Z',
+                  payload: JSON.stringify({
+                    custom: {
+                      name: 'aevatar.wait_signal.request',
+                      payload: {
+                        runId: 'execution-1',
+                        stepId: 'wait_external',
+                        suspensionType: 'wait_signal',
+                        prompt: 'Need external confirmation.',
+                        signalName: 'customer_confirmed',
+                      },
+                    },
+                  }),
+                },
+              ],
+            },
+          },
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '发送信号' }));
+
+    await waitFor(() => {
+      expect(onResumeExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'wait_signal',
+          runId: 'execution-1',
+          stepId: 'wait_external',
+          signalName: 'customer_confirmed',
+        }),
+        'signal',
+        '',
+      );
+    });
+  });
+
+  it('shows an honest graph downgrade for script members', () => {
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          currentImplementationKind: 'script',
+          workflowGraph: {
+            roles: [],
+            steps: [],
+            nodes: [],
+            edges: [],
+          },
+        }) as any,
+      ),
+    );
+
+    expect(
+      screen.getByText('Script members do not expose a workflow graph.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Graph canvas')).toBeNull();
+    expect(screen.getByText('执行日志')).toBeInTheDocument();
   });
 
   it('shows a clear member-first empty state when Observe has no selected member', () => {
