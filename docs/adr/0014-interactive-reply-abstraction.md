@@ -173,5 +173,5 @@ behaviour without redeploying.
 - Issue `#328` — unified inbound trunk; this ADR's outbound abstraction slots into the
   same `IChannelOutboundPort` surface once #328 lands.
 - PR `#324` — inbound `card.action.trigger` processing; this ADR is its outbound dual.
-- ADR-0011 (`docs/decisions/0011-lark-nyx-relay-webhook.md`) — relay webhook topology;
+- ADR-0011 (`docs/adr/0011-lark-nyx-relay-webhook.md`) — relay webhook topology;
   not superseded, outbound completeness augments it.

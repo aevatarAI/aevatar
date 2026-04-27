@@ -4,7 +4,7 @@ status: draft
 owner: tbd
 last_updated: 2026-04-23
 references:
-  - "../decisions/0012-studio-member-first-published-service.md"
+  - "../adr/0016-studio-member-first-published-service.md"
   - "./2026-04-22-team-member-first-prd.md"
   - "./2026-04-22-studio-member-lifecycle-spec.md"
 ---
@@ -13,7 +13,7 @@ references:
 
 ## 0. 目标
 
-把 [ADR-0012](../decisions/0012-studio-member-first-published-service.md) 落成可执行的后端实施清单。
+把 [ADR-0016](../adr/0016-studio-member-first-published-service.md) 落成可执行的后端实施清单。
 
 这份 checklist 锁定的不是视觉设计，而是后端事实模型：
 
