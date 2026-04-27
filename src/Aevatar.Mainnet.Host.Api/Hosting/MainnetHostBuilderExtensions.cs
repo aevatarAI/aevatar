@@ -1,6 +1,7 @@
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
@@ -68,6 +69,10 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
+        });
+        builder.Services.AddTelegramTools(o =>
+        {
+            o.ProviderSlug = builder.Configuration["Aevatar:Telegram:NyxProviderSlug"] ?? "api-telegram-bot";
         });
         builder.Services.AddChronoStorageTools(o =>
         {

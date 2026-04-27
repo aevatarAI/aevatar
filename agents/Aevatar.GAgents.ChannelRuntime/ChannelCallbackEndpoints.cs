@@ -104,11 +104,7 @@ public static class ChannelCallbackEndpoints
             });
         }
 
-        var accessToken = http.Request.Headers.Authorization.ToString();
-        const string bearerPrefix = "Bearer ";
-        if (accessToken.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
-            accessToken = accessToken[bearerPrefix.Length..].Trim();
-
+        var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 
@@ -132,7 +128,8 @@ public static class ChannelCallbackEndpoints
                 Lark: new NyxChannelLarkCredentials(
                     AppId: request.AppId?.Trim() ?? string.Empty,
                     AppSecret: request.AppSecret?.Trim() ?? string.Empty,
-                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty)),
+                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty),
+                Credentials: BuildCredentialsMap(platformNormalized, request)),
             ct);
 
         var payload = new
@@ -141,7 +138,7 @@ public static class ChannelCallbackEndpoints
             registration_id = result.RegistrationId ?? string.Empty,
             platform = result.Platform,
             nyx_provider_slug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
-                ? "api-lark-bot"
+                ? ResolveDefaultProviderSlug(platformNormalized)
                 : request.NyxProviderSlug.Trim(),
             nyx_channel_bot_id = result.NyxChannelBotId ?? string.Empty,
             nyx_agent_api_key_id = result.NyxAgentApiKeyId ?? string.Empty,
@@ -358,7 +355,7 @@ public static class ChannelCallbackEndpoints
         {
             "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
-            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_webhook_base_url" or "missing_scope_id" => StatusCodes.Status400BadRequest,
+            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" => StatusCodes.Status400BadRequest,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status502BadGateway,
         };
@@ -440,8 +437,48 @@ public static class ChannelCallbackEndpoints
         string? NyxProviderSlug,
         string? ScopeId,
         string? WebhookBaseUrl,
+        // Lark-specific (legacy explicit fields kept for backward compatibility; Telegram and
+        // future platforms use the Credentials map below).
         string? AppId,
         string? AppSecret,
         string? VerificationToken,
+        // Telegram-specific shorthand: equivalent to Credentials["bot_token"].
+        string? BotToken,
+        // Platform-extensible credential bag. Per-platform provisioning services document
+        // which keys they expect (e.g. Telegram reads "bot_token").
+        IReadOnlyDictionary<string, string>? Credentials,
         string? Label);
+
+    private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
+        string platform,
+        RegistrationRequest request)
+    {
+        var bag = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (request.Credentials is { Count: > 0 } incoming)
+        {
+            foreach (var (key, value) in incoming)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                    bag[key] = value.Trim();
+            }
+        }
+
+        if (string.Equals(platform, "telegram", StringComparison.OrdinalIgnoreCase) &&
+            !bag.ContainsKey("bot_token") &&
+            !string.IsNullOrWhiteSpace(request.BotToken))
+        {
+            bag["bot_token"] = request.BotToken!.Trim();
+        }
+
+        return bag.Count == 0 ? null : bag;
+    }
+
+    /// <summary>
+    /// Builds the default Nyx provider slug echoed back to the client when the registration request
+    /// did not pin <c>nyx_provider_slug</c>. The convention is <c>api-{platform}-bot</c>, so adding
+    /// a new platform doesn't need a new switch arm and a future <c>discord</c> registration would
+    /// surface <c>api-discord-bot</c> rather than silently echoing <c>api-lark-bot</c>.
+    /// </summary>
+    private static string ResolveDefaultProviderSlug(string platform) =>
+        $"api-{platform}-bot";
 }
