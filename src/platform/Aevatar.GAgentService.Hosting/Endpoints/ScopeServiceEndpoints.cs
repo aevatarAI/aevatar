@@ -22,6 +22,7 @@ using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -647,6 +648,7 @@ public static class ScopeServiceEndpoints
         StreamScopeServiceHttpRequest request,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
@@ -671,6 +673,7 @@ public static class ScopeServiceEndpoints
                 appId: null,
                 resolutionService,
                 admissionAuthorizer,
+                serviceRunRegistrationPort,
                 chatRunService,
                 gagentDraftRunService,
                 scriptRuntimeCommandPort,
@@ -769,6 +772,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
@@ -796,6 +800,7 @@ public static class ScopeServiceEndpoints
                 null,
                 resolutionService,
                 admissionAuthorizer,
+                serviceRunRegistrationPort,
                 chatRunService,
                 gagentDraftRunService,
                 scriptRuntimeCommandPort,
@@ -863,7 +868,7 @@ public static class ScopeServiceEndpoints
         string scopeId,
         int take,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
@@ -873,7 +878,7 @@ public static class ScopeServiceEndpoints
             ResolveDefaultScopeServiceId(options.Value),
             take,
             lifecycleQueryPort,
-            workflowRunBindingReader,
+            serviceRunQueryPort,
             workflowExecutionQueryService,
             options,
             ct);
@@ -884,7 +889,7 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
@@ -895,7 +900,7 @@ public static class ScopeServiceEndpoints
             runId,
             actorId,
             lifecycleQueryPort,
-            workflowRunBindingReader,
+            serviceRunQueryPort,
             workflowExecutionQueryService,
             options,
             ct);
@@ -906,7 +911,7 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
@@ -917,7 +922,7 @@ public static class ScopeServiceEndpoints
             runId,
             actorId,
             lifecycleQueryPort,
-            workflowRunBindingReader,
+            serviceRunQueryPort,
             workflowExecutionQueryService,
             options,
             ct);
@@ -1334,7 +1339,7 @@ public static class ScopeServiceEndpoints
         string serviceId,
         int take,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -1343,23 +1348,17 @@ public static class ScopeServiceEndpoints
         if (resolution.Failure != null)
             return resolution.Failure;
 
-        var bindings = await ListScopeServiceRunsAsync(
-            scopeId,
-            resolution.Service!,
-            resolution.Deployments,
-            workflowRunBindingReader,
-            take,
+        var snapshots = await serviceRunQueryPort.ListAsync(
+            new ServiceRunQuery(scopeId, serviceId, Math.Clamp(take <= 0 ? 50 : take, 1, 200)),
             ct);
 
-        var summaries = new List<ScopeServiceRunSummaryHttpResponse>(bindings.Count);
-        foreach (var binding in bindings)
+        var summaries = new List<ScopeServiceRunSummaryHttpResponse>(snapshots.Count);
+        foreach (var snapshot in snapshots)
         {
-            summaries.Add(await BuildScopeRunSummaryAsync(
+            summaries.Add(await BuildScopeRunSummaryFromRegistryAsync(
                 scopeId,
                 serviceId,
-                binding,
-                resolution.Service!,
-                resolution.Deployments,
+                snapshot,
                 workflowExecutionQueryService,
                 ct));
         }
@@ -1379,30 +1378,29 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        var resolution = await ResolveScopeServiceRunAsync(
-            http,
-            options.Value,
-            scopeId,
-            serviceId,
-            runId,
-            actorId,
-            lifecycleQueryPort,
-            workflowRunBindingReader,
-            ct);
-        if (resolution.Failure != null)
-            return resolution.Failure;
+        var serviceResolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct);
+        if (serviceResolution.Failure != null)
+            return serviceResolution.Failure;
 
-        return Results.Ok(await BuildScopeRunSummaryAsync(
+        var snapshot = await ResolveServiceRunSnapshotAsync(scopeId, serviceId, runId, serviceRunQueryPort, ct);
+        if (snapshot == null)
+        {
+            return Results.NotFound(new
+            {
+                code = "SERVICE_RUN_NOT_FOUND",
+                message = BuildScopeServiceRunNotFoundMessage(scopeId, serviceId, runId?.Trim() ?? string.Empty),
+            });
+        }
+
+        return Results.Ok(await BuildScopeRunSummaryFromRegistryAsync(
             scopeId,
             serviceId,
-            resolution.Binding!,
-            resolution.Service!,
-            resolution.Deployments,
+            snapshot,
             workflowExecutionQueryService,
             ct));
     }
@@ -1414,43 +1412,108 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        var resolution = await ResolveScopeServiceRunAsync(
-            http,
-            options.Value,
-            scopeId,
-            serviceId,
-            runId,
-            actorId,
-            lifecycleQueryPort,
-            workflowRunBindingReader,
-            ct);
-        if (resolution.Failure != null)
-            return resolution.Failure;
+        var serviceResolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct);
+        if (serviceResolution.Failure != null)
+            return serviceResolution.Failure;
 
-        var summary = await BuildScopeRunSummaryAsync(
+        var snapshot = await ResolveServiceRunSnapshotAsync(scopeId, serviceId, runId, serviceRunQueryPort, ct);
+        if (snapshot == null)
+        {
+            return Results.NotFound(new
+            {
+                code = "SERVICE_RUN_NOT_FOUND",
+                message = BuildScopeServiceRunNotFoundMessage(scopeId, serviceId, runId?.Trim() ?? string.Empty),
+            });
+        }
+
+        var summary = await BuildScopeRunSummaryFromRegistryAsync(
             scopeId,
             serviceId,
-            resolution.Binding!,
-            resolution.Service!,
-            resolution.Deployments,
+            snapshot,
             workflowExecutionQueryService,
             ct);
-        var report = await workflowExecutionQueryService.GetActorReportAsync(resolution.Binding!.ActorId, ct);
+
+        if (snapshot.ImplementationKind != ServiceImplementationKind.Workflow ||
+            string.IsNullOrWhiteSpace(snapshot.TargetActorId))
+        {
+            return Results.NotFound(new
+            {
+                code = "SERVICE_RUN_AUDIT_NOT_AVAILABLE",
+                message = $"Audit detail for run '{snapshot.RunId}' is not available for {snapshot.ImplementationKind} services.",
+            });
+        }
+
+        var report = await workflowExecutionQueryService.GetActorReportAsync(snapshot.TargetActorId, ct);
         if (report == null)
         {
             return Results.NotFound(new
             {
                 code = "SERVICE_RUN_AUDIT_NOT_FOUND",
-                message = $"Audit report for run '{resolution.Binding.RunId}' was not found on service '{serviceId}' in scope '{scopeId}'.",
+                message = $"Audit report for run '{snapshot.RunId}' was not found on service '{serviceId}' in scope '{scopeId}'.",
             });
         }
 
         return Results.Ok(new ScopeServiceRunAuditHttpResponse(summary, report));
+    }
+
+    // Registers a stream-invocation run with the durable service-run registry using the
+    // actual run id that the implementation pipeline produced (workflow run actor id /
+    // draft-run command id / scripting-generated run id). Called once the downstream
+    // run id is known so /runs/{runId} resolves the same id the client receives via SSE.
+    private static ValueTask RegisterStreamServiceRunAsync(
+        IServiceRunRegistrationPort serviceRunRegistrationPort,
+        ServiceInvocationResolvedTarget target,
+        ServiceInvocationRequest invocationRequest,
+        string scopeId,
+        string serviceId,
+        string runId,
+        string commandId,
+        string correlationId,
+        string targetActorId,
+        CancellationToken ct)
+    {
+        var record = new ServiceRunRecord
+        {
+            ScopeId = scopeId,
+            ServiceId = serviceId,
+            ServiceKey = target.Service.ServiceKey ?? string.Empty,
+            RunId = runId,
+            CommandId = string.IsNullOrWhiteSpace(commandId) ? runId : commandId,
+            CorrelationId = string.IsNullOrWhiteSpace(correlationId) ? runId : correlationId,
+            EndpointId = target.Endpoint.EndpointId ?? string.Empty,
+            ImplementationKind = target.Artifact.ImplementationKind,
+            TargetActorId = string.IsNullOrWhiteSpace(targetActorId)
+                ? target.Service.PrimaryActorId ?? string.Empty
+                : targetActorId,
+            RevisionId = target.Service.RevisionId ?? string.Empty,
+            DeploymentId = target.Service.DeploymentId ?? string.Empty,
+            Status = ServiceRunStatus.Accepted,
+            Identity = invocationRequest.Identity?.Clone(),
+        };
+        return new ValueTask(serviceRunRegistrationPort.RegisterAsync(record, ct));
+    }
+
+    private static async Task<ServiceRunSnapshot?> ResolveServiceRunSnapshotAsync(
+        string scopeId,
+        string serviceId,
+        string runId,
+        IServiceRunQueryPort serviceRunQueryPort,
+        CancellationToken ct)
+    {
+        var normalized = runId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        var byRun = await serviceRunQueryPort.GetByRunIdAsync(scopeId, serviceId, normalized, ct);
+        if (byRun != null)
+            return byRun;
+
+        return await serviceRunQueryPort.GetByCommandIdAsync(scopeId, serviceId, normalized, ct);
     }
 
     private static async Task HandleInvokeStreamAsync(
@@ -1462,6 +1525,7 @@ public static class ScopeServiceEndpoints
         string? appId,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
@@ -1493,7 +1557,6 @@ public static class ScopeServiceEndpoints
                 target.Endpoint,
                 invocationRequest,
                 ct);
-
             switch (target.Artifact.ImplementationKind)
             {
                 case ServiceImplementationKind.Workflow:
@@ -1510,7 +1573,20 @@ public static class ScopeServiceEndpoints
                             Metadata = scopedHeaders,
                         },
                         chatRunService,
-                        ct);
+                        ct,
+                        onAcceptedHook: (receipt, token) => RegisterStreamServiceRunAsync(
+                            serviceRunRegistrationPort,
+                            target,
+                            invocationRequest,
+                            scopeId,
+                            serviceId,
+                            // For workflow, the SSE RunStarted carries the workflow run actor id as the run identifier;
+                            // use the same id so /runs/{runId} resolves to this run after refresh.
+                            runId: receipt.ActorId,
+                            commandId: receipt.CommandId,
+                            correlationId: receipt.CorrelationId,
+                            targetActorId: receipt.ActorId,
+                            token));
                     break;
 
                 case ServiceImplementationKind.Static:
@@ -1521,9 +1597,12 @@ public static class ScopeServiceEndpoints
                         request.ActorId,
                         request.SessionId,
                         scopeId,
+                        serviceId,
                         scopedHeaders,
                         request.InputParts,
                         gagentDraftRunService,
+                        invocationRequest,
+                        serviceRunRegistrationPort,
                         ct);
                     break;
 
@@ -1534,9 +1613,12 @@ public static class ScopeServiceEndpoints
                         normalizedPrompt,
                         request.SessionId,
                         scopeId,
+                        serviceId,
                         scopedHeaders,
                         scriptRuntimeCommandPort,
                         scriptExecutionProjectionPort,
+                        invocationRequest,
+                        serviceRunRegistrationPort,
                         ct);
                     break;
 
@@ -1572,9 +1654,12 @@ public static class ScopeServiceEndpoints
         string? actorId,
         string? sessionId,
         string scopeId,
+        string serviceId,
         IReadOnlyDictionary<string, string>? headers,
         IReadOnlyList<StreamContentPartHttpRequest>? inputParts,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        ServiceInvocationRequest invocationRequest,
+        IServiceRunRegistrationPort serviceRunRegistrationPort,
         CancellationToken ct)
     {
         var plan = target.Artifact.DeploymentPlan.StaticPlan;
@@ -1607,6 +1692,19 @@ public static class ScopeServiceEndpoints
         async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
         {
             http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+            // Register the service run with the same id we are about to send to the client
+            // so /runs/{runId} resolves immediately on refresh.
+            await RegisterStreamServiceRunAsync(
+                serviceRunRegistrationPort,
+                target,
+                invocationRequest,
+                scopeId,
+                serviceId,
+                runId: receipt.CommandId,
+                commandId: receipt.CommandId,
+                correlationId: receipt.CorrelationId,
+                targetActorId: receipt.ActorId,
+                token);
             await EnsureSseStartedAsync(token);
             await writer.WriteAsync(
                 new AGUIEvent
@@ -1694,9 +1792,12 @@ public static class ScopeServiceEndpoints
         string prompt,
         string? sessionId,
         string scopeId,
+        string serviceId,
         IReadOnlyDictionary<string, string>? headers,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
         IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        ServiceInvocationRequest invocationRequest,
+        IServiceRunRegistrationPort serviceRunRegistrationPort,
         CancellationToken ct)
     {
         var actorId = target.Service.PrimaryActorId;
@@ -1705,6 +1806,18 @@ public static class ScopeServiceEndpoints
                 "Script runtime actor is not available. The service may not be activated.");
 
         var runId = Guid.NewGuid().ToString("N");
+        // Register the service run with the same id the SSE RunStarted frame will carry.
+        await RegisterStreamServiceRunAsync(
+            serviceRunRegistrationPort,
+            target,
+            invocationRequest,
+            scopeId,
+            serviceId,
+            runId: runId,
+            commandId: runId,
+            correlationId: runId,
+            targetActorId: actorId,
+            ct);
         var chatRequest = new ChatRequestEvent
         {
             Prompt = prompt,
@@ -2726,7 +2839,58 @@ const response = await fetch("{{invokePath}}", {
             snapshot?.CompletedSteps ?? 0,
             snapshot?.RoleReplyCount ?? 0,
             snapshot?.LastOutput ?? string.Empty,
-            snapshot?.LastError ?? string.Empty);
+            snapshot?.LastError ?? string.Empty,
+            ServiceImplementationKind.Workflow.ToString(),
+            ServiceRunStatus.Accepted.ToString(),
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            binding.ActorId,
+            binding.CreatedAt);
+    }
+
+    private static async Task<ScopeServiceRunSummaryHttpResponse> BuildScopeRunSummaryFromRegistryAsync(
+        string scopeId,
+        string serviceId,
+        ServiceRunSnapshot snapshot,
+        IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
+        CancellationToken ct)
+    {
+        var workflowSnapshot = snapshot.ImplementationKind == ServiceImplementationKind.Workflow &&
+                               !string.IsNullOrWhiteSpace(snapshot.TargetActorId)
+            ? await workflowExecutionQueryService.GetActorSnapshotAsync(snapshot.TargetActorId, ct)
+            : null;
+
+        return new ScopeServiceRunSummaryHttpResponse(
+            scopeId,
+            serviceId,
+            snapshot.RunId,
+            // ActorId stays the controllable target so existing resume/signal/stop
+            // round-trips keep working; the registry actor is internal infra.
+            snapshot.TargetActorId,
+            string.Empty,
+            snapshot.RevisionId,
+            snapshot.DeploymentId,
+            workflowSnapshot?.WorkflowName ?? string.Empty,
+            workflowSnapshot?.CompletionStatus ?? WorkflowRunCompletionStatus.Unknown,
+            workflowSnapshot?.StateVersion ?? snapshot.StateVersion,
+            workflowSnapshot?.LastEventId ?? snapshot.LastEventId,
+            workflowSnapshot?.LastUpdatedAt ?? snapshot.UpdatedAt,
+            snapshot.CreatedAt,
+            snapshot.UpdatedAt,
+            workflowSnapshot?.LastSuccess,
+            workflowSnapshot?.TotalSteps ?? 0,
+            workflowSnapshot?.CompletedSteps ?? 0,
+            workflowSnapshot?.RoleReplyCount ?? 0,
+            workflowSnapshot?.LastOutput ?? string.Empty,
+            workflowSnapshot?.LastError ?? string.Empty,
+            snapshot.ImplementationKind.ToString(),
+            snapshot.Status.ToString(),
+            snapshot.CommandId,
+            snapshot.CorrelationId,
+            snapshot.EndpointId,
+            snapshot.TargetActorId,
+            snapshot.CreatedAt);
     }
 
     private static MemberScopeServiceRunSummaryHttpResponse BuildMemberRunSummaryResponse(
@@ -3489,7 +3653,14 @@ const response = await fetch("{{invokePath}}", {
         int CompletedSteps,
         int RoleReplyCount,
         string LastOutput,
-        string LastError);
+        string LastError,
+        string ImplementationKind,
+        string Status,
+        string CommandId,
+        string CorrelationId,
+        string EndpointId,
+        string TargetActorId,
+        DateTimeOffset? CreatedAt = null);
 
     public sealed record MemberScopeServiceRunSummaryHttpResponse(
         string ScopeId,
