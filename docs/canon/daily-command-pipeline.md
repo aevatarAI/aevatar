@@ -152,13 +152,17 @@ QA 关注点：
 - 优先用 JWT 里的 `scope_id`
 - 缺失时用 `payload.Agent.ApiKeyId` 反查
 
-**响应码语义**：
-| 状态 | 含义 | 测试关注 |
-|------|------|----------|
-| `202 Accepted` (ignored) | payload 合法但被透传层标记为忽略（如非聊天事件）；handler 永远只回 `202`，不返回 `200`（[NyxIdChatEndpoints.Relay.cs:87](../../agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs)） | 不应触发任何下游逻辑 |
-| `400 invalid_relay_payload` | parse 失败 | 期望 NyxID 重试或上报 |
-| `400 conversation_key_missing` | activity 解析后没有 canonical conversation key | 等价上 |
-| `401 Unauthorized` | JWT 校验失败 / scope 解析失败 | 不应有任何业务副作用，日志含 `Relay callback authentication failed` |
+**响应码语义**（handler 永远只回 `202` / `400` / `401` / `499` / `500`，**不返回 `200`**——成功与忽略路径都是 `202`，靠 body 里的 `status` 字段区分；见 [NyxIdChatEndpoints.Relay.cs:87,147](../../agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs)）：
+
+| 状态 | body | 含义 | 测试关注 |
+|------|------|------|----------|
+| `202 Accepted` | `{status:"accepted", message_id, actor_id}` | **正常成功路径**：activity 已派发到 `ConversationGAgent` inbox | QA 看到 `202` 不能默认是"忽略"，必须读 body `status` 字段 |
+| `202 Accepted` | `{status:"ignored", reason, detail}` | payload 合法但被透传层标记为忽略（如非聊天事件） | 不应触发任何下游逻辑 |
+| `400 Bad Request` | `{error:"invalid_relay_payload", detail}` | parse 失败 | 期望 NyxID 重试或上报 |
+| `400 Bad Request` | `{error:"conversation_key_missing", detail}` | activity 解析后没有 canonical conversation key | 等价上 |
+| `401 Unauthorized` | — | JWT 校验失败 / scope 解析失败 | 不应有任何业务副作用，日志含 `Relay callback authentication failed` |
+| `499` | — | 客户端取消 | — |
+| `500 Internal Server Error` | — | handler 未捕获异常 | 日志含 `Relay handler unexpected error` |
 
 **派发**：成功后构造 `NyxRelayInboundActivity`（含 reply token、user access token、normalized `ChatActivity`），包装成 `EventEnvelope` 后直接调用 `ConversationGAgent.HandleEventAsync`（actor id 由 conversation canonical key 推出）。
 
@@ -428,7 +432,7 @@ string lark_receive_id_type_fallback = 10;
 
 ### 9.2 用户看到，但语义可能错（关键 bug 区！）
 - **Issue #439（silent failure）**：proxy 返回 4xx/5xx/7xxx 时 `nyxid_proxy` 工具把错误 JSON 原样返回，LLM 误判为"无活动"，输出空的 daily 报告 + `Status: running, error_count: 0`。**测试关键**：要能区分"GitHub 真无活动"和"工具失败被吞掉"。
-- **Issue #436/#437（cross-user leak）**：在同一个机器人下，多个 Lark 用户各自的 GitHub username 互相覆盖（last writer wins）。**测试关键**：两个不同 sender_id 在同一 registration_scope_id 下，分别 `/daily a` 和 `/daily b`，第三步 user A 再 `/daily` 必须看到自己的 username `a`，不应是 `b`。
+- **Issue #436/#437（cross-user leak）** ✅ 已由 [#438](https://github.com/aevatarAI/aevatar/pull/438) 修复——composite scope `{regScope}:lark:{senderId}` 让 user-config 按 Lark 用户隔离。**回归测试关键**：两个不同 sender_id 在同一 registration_scope_id 下，分别 `/daily a` 和 `/daily b`，第三步 user A 再 `/daily` 必须看到自己的 username `a`，不应是 `b`。
 
 ### 9.3 用户看不到（更隐蔽，需要查日志或 `/agent-status` 才能发现）
 - **Issue #440**：首次执行成功后 `/agent-status` 的 `Last run` / `Next run` 一直 `n/a`。
@@ -465,8 +469,8 @@ string lark_receive_id_type_fallback = 10;
 
 | Issue | 严重度 | 标题简述 | 影响层 | QA 复现要点 |
 |-------|--------|---------|--------|-------------|
-| #437 | 高（数据隔离） | `/daily` binding causes cross-user data leakage（用户视角） | UserConfigGAgent scope key | 同 bot 两个 Lark user 各自 `/daily X` / `/daily Y`，A 再 `/daily` 应得 X，实得 Y |
-| #436 | 高（同上 #437 的工程分析） | GitHub username binding shared across all Lark users（last writer wins） | 同上 | 同上 |
+| ~~#437~~ ✅ | 高（数据隔离） | `/daily` binding causes cross-user data leakage（用户视角） | UserConfigGAgent scope key | **已由 [#438](https://github.com/aevatarAI/aevatar/pull/438) 修复**（composite scope `{regScope}:lark:{senderId}`）；下表 12.6 #8 / 12.8 E11 转为回归测试 |
+| ~~#436~~ ✅ | 高（同上 #437 的工程分析） | GitHub username binding shared across all Lark users（last writer wins） | 同上 | 同上 |
 | #439 | 高（语义错） | SkillRunner masks GitHub tool failures as silent "no activity" success | prompt + nyxid_proxy 工具 + runner 的"非空即成功"路径 | 强制 GitHub 接口返回 4xx/5xx，验证报告必须显式标错而不是出 `No X surfaced` |
 | #440 | 中（运维可见性） | `/agent-status` 首次执行不刷新 `Last run`/`Next run` | UserAgentCatalogGAgent.HandleExecutionUpdateAsync early-return guard | `/daily X`（run_immediately）→ 30s 后 `/agent-status <id>` 看 `Last run` 应非 n/a |
 | #423 | 中（增强 + 失败通知短板） | richer report content + progressive delivery；副带失败通知通道脆弱 | prompt + SendOutputAsync + TrySendFailureAsync | 当前一次性投递；除 ✓ reaction 外缺少进度反馈，创建确认也可能延迟到首次执行尝试之后；构造投递失败场景看通知是否能到 |
@@ -612,7 +616,7 @@ string lark_receive_id_type_fallback = 10;
 | E8 | `/disable-agent <id>` 后等过 cron 时刻 | 不应执行；`/agent-status` `Status: disabled` |
 | E9 | `/enable-agent <id>` 后等 cron 时刻 | 应执行 |
 | E10 | `/delete-agent <id> confirm` | 注册表里消失；NyxID 上 api key 撤销 |
-| E11 | 两台测试机分别用不同 Lark 账号在同 bot 下 `/daily a` / `/daily b`，A 再 `/daily` | A 必须拿回 `a`（#436/#437 修复后） |
+| E11 | 两台测试机分别用不同 Lark 账号在同 bot 下 `/daily a` / `/daily b`，A 再 `/daily` | A 必须拿回 `a`（#438 已修，此用例转回归） |
 | E12 | 触发 GitHub 接口失败（吊销 NyxID 上的 GitHub OAuth 后立即跑 `/run-agent`） | 报告应显式说"GitHub 工具失败 + 状态码"（#439 修复后），`/agent-status` `error_count` 增加 |
 | E13 | 跨 app 部署：从 inbound bot 私聊发起，outbound bot 不在该 chat | 主投返回 230002 → fallback 用 union_id 投到用户单聊；如全失败应有失败通知（#423 §C） |
 | E14 | 关掉 NyxID 上 callback_url 指向，发 `/daily` | aevatar 收不到 webhook（验日志），用户看不到任何回复（#398 复现） |
@@ -724,7 +728,7 @@ Lark 开发者后台：
 
 - 报告内容更丰富 + 渐进式投递 (#423)
 - GitHub 工具失败需明确暴露给用户（#439 修复后）
-- 多 Lark 用户独立 `github_username`（#436/#437 修复后）
+- ~~多 Lark 用户独立 `github_username`~~ ✅ 已由 [#438](https://github.com/aevatarAI/aevatar/pull/438) 修复（composite scope）；结构性升级到 `LarkUserGAgent` 仍是未来选项
 - `/agent-status` 首次执行后秒级反映（#440 修复后）
 - 失败通知通道与主投递解耦，避免一起死（#423 §C）
 - 富 / 长报告超 Lark 30KB 体限的分段处理（#423 §C）
