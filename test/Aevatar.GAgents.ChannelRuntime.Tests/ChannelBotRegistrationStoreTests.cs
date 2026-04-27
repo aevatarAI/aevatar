@@ -81,12 +81,27 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRegister_RejectsLarkRegistrationWithoutScopeId()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            RequestedId = "reg-1",
+            NyxAgentApiKeyId = "key-1",
+        });
+
+        _agent.State.Registrations.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleUnregister_TombstonesEntry()
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand
         {
             Platform = "lark",
             NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
             RequestedId = "reg-1",
         });
 
@@ -107,6 +122,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         {
             Platform = "lark",
             NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
             RequestedId = "reg-1",
         });
 
@@ -131,6 +147,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         {
             Platform = "lark",
             NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
             RequestedId = "reg-1",
             NyxAgentApiKeyId = "key-1",
         });

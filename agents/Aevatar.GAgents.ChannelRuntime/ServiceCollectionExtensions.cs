@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -101,9 +102,12 @@ public static class ServiceCollectionExtensions
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<Aevatar.GAgents.NyxidChat.INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelPlatformReplyService>();
+        services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<INyxRelayApiKeyOwnershipVerifier, NyxRelayApiKeyOwnershipVerifier>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
         services.AddHostedService<ChannelBotRegistrationStartupService>();

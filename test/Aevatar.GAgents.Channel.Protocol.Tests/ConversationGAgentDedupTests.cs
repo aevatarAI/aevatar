@@ -107,8 +107,12 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleInboundActivityAsync_WhenRunnerReportsFailure_EmitsFailedEvent()
+    public async Task HandleInboundActivityAsync_WhenRunnerReportsTransientFailure_SchedulesGrainOwnedRetry()
     {
+        // Grain-level retry pattern (issue #399): a transient inbound-turn failure must land as
+        // an InboundTurnRetryScheduledEvent with a bounded retry count rather than a leaf
+        // ConversationContinueFailedEvent, because the webhook adapter no longer surfaces a
+        // retryable 503 back to NyxID and the end-user reply would otherwise be dropped.
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later", TimeSpan.FromMilliseconds(250)),
@@ -118,12 +122,185 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleInboundActivityAsync(CreateActivity("act-fail", "conv:slack:C1"));
 
         agent.State.ProcessedMessageIds.ShouldBeEmpty();
+        agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-fail");
+        var pending = agent.State.PendingInboundTurns.Single(entry => entry.ActivityId == "act-fail");
+        pending.RetryCount.ShouldBe(1);
+        pending.FirstFailedUnixMs.ShouldBeGreaterThan(0);
+        pending.NextRetryUnixMs.ShouldBeGreaterThan(pending.FirstFailedUnixMs);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(InboundTurnRetryScheduledEvent));
+        var parsed = InboundTurnRetryScheduledEvent.Parser.ParseFrom(events[0].EventData.Value);
+        parsed.ActivityId.ShouldBe("act-fail");
+        parsed.RetryCount.ShouldBe(1);
+        parsed.Activity.Id.ShouldBe("act-fail");
+    }
+
+    [Fact]
+    public async Task HandleDeferredInboundTurnRetryRequestedAsync_AfterTransientFailure_RerunsTurnAndClearsPendingOnSuccess()
+    {
+        // Issue #399 success path: once the adapter recovers, the durable reminder fires the
+        // retry, the runner returns a proper ConversationTurnResult.Sent, and the pending entry
+        // is reaped by ApplyTurnCompleted via ProcessedActivityId.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationTurnResult.TransientFailure("rate_limited", "retry later");
+                return ConversationTurnResult.Sent(
+                    "sent:act-retry-success",
+                    new MessageContent { Text = "ok" },
+                    "bot");
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-retry-success");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-retry-success", "conv:slack:C1"));
+        agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-retry-success");
+
+        await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+        {
+            ActivityId = "act-retry-success",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(2);
+        agent.State.ProcessedMessageIds.ShouldContain("act-retry-success");
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-retry-success");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(2);
+        events[0].EventType.ShouldContain(nameof(InboundTurnRetryScheduledEvent));
+        events[1].EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+    }
+
+    [Fact]
+    public async Task HandleDeferredInboundTurnRetryRequestedAsync_WhenRetriesExhausted_EmitsNotRetryableTerminalFailure()
+    {
+        // Issue #399 exhaustion path: after MaxInboundTurnRetryCount successive transient
+        // failures, the actor persists a terminal NotRetryable ConversationContinueFailedEvent
+        // so the pending set does not leak and downstream observers see a final state.
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.TransientFailure("stuck", "persistent transient error"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-retry-exhaust");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-exhaust", "conv:slack:C1"));
+        agent.State.PendingInboundTurns.Single(e => e.ActivityId == "act-exhaust").RetryCount.ShouldBe(1);
+
+        // Fire MaxInboundTurnRetryCount - 1 retries, each bumps the retry count but stays pending.
+        for (var i = 0; i < ConversationGAgent.MaxInboundTurnRetryCount - 1; i++)
+        {
+            await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+            {
+                ActivityId = "act-exhaust",
+                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            });
+        }
+        agent.State.PendingInboundTurns.Single(e => e.ActivityId == "act-exhaust").RetryCount
+            .ShouldBe(ConversationGAgent.MaxInboundTurnRetryCount);
+
+        // One more retry pushes retry_count past the cap; the actor emits a terminal failure
+        // and reaps the pending entry.
+        await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+        {
+            ActivityId = "act-exhaust",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(ConversationGAgent.MaxInboundTurnRetryCount + 1);
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-exhaust");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
+        var terminal = ConversationContinueFailedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        terminal.CorrelationId.ShouldBe("act-exhaust");
+        terminal.Kind.ShouldBe(FailureKind.TransientAdapterError);
+        terminal.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
+    public async Task ApplyLlmReplyRequested_AfterTransientFailureRetryPending_ReapsPendingInboundTurn()
+    {
+        // Codex review on #399 retry: a transient-failed activity that later succeeds via
+        // redelivery on the LLM reply path must reap the pending retry entry. Without this,
+        // the deferred retry would find the stale pending entry, hit the dedup guard, and
+        // silently no-op — but the entry would survive to be re-registered on every
+        // activation, growing PendingInboundTurns unboundedly.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationTurnResult.TransientFailure("rate_limited", "retry later");
+                return ConversationTurnResult.LlmReplyRequested(
+                    new NeedsLlmReplyEvent
+                    {
+                        CorrelationId = activity.Id,
+                        TargetActorId = "conversation:actor",
+                        RegistrationId = "reg-1",
+                        Activity = activity.Clone(),
+                        RequestedAtUnixMs = 7,
+                    });
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-llm-supersedes-retry");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-llm-supersedes", "conv:slack:C1"));
+        agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-llm-supersedes");
+
+        // Redelivery hits the LLM reply branch; ApplyLlmReplyRequested must reap the pending
+        // entry alongside adding the activity id to ProcessedMessageIds.
+        await agent.HandleInboundActivityAsync(CreateActivity("act-llm-supersedes", "conv:slack:C1"));
+
+        runner.InboundCount.ShouldBe(2);
+        agent.State.ProcessedMessageIds.ShouldContain("act-llm-supersedes");
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-llm-supersedes");
+
+        var eventsAfterRedelivery = await store.GetEventsAsync(agent.Id);
+
+        // The deferred retry that was scheduled on the first delivery now fires. With the
+        // pending entry already reaped, the handler is a true no-op: no runner invocation,
+        // no further events persisted, and PendingInboundTurns stays empty.
+        await agent.HandleDeferredInboundTurnRetryRequestedAsync(new DeferredInboundTurnRetryRequestedEvent
+        {
+            ActivityId = "act-llm-supersedes",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(2);
+        agent.State.PendingInboundTurns.ShouldNotContain(entry => entry.ActivityId == "act-llm-supersedes");
+        var eventsAfterRetryFire = await store.GetEventsAsync(agent.Id);
+        eventsAfterRetryFire.Count.ShouldBe(eventsAfterRedelivery.Count);
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_WhenRunnerReportsPermanentFailure_EmitsTerminalWithoutScheduling()
+    {
+        // Issue #399 non-regression: permanent-adapter failures must skip the retry pipeline and
+        // land as terminal ConversationContinueFailedEvent with NotRetryable semantics, as before.
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.PermanentFailure("bad_input", "rejected"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-permanent-inbound");
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-permanent", "conv:slack:C1"));
+
+        agent.State.PendingInboundTurns.ShouldBeEmpty();
         var events = await store.GetEventsAsync(agent.Id);
         events.Count.ShouldBe(1);
         events[0].EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
         var parsed = ConversationContinueFailedEvent.Parser.ParseFrom(events[0].EventData.Value);
-        parsed.Kind.ShouldBe(FailureKind.TransientAdapterError);
-        parsed.RetryAfterMs.ShouldBe(250);
+        parsed.Kind.ShouldBe(FailureKind.PermanentAdapterError);
+        parsed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
     }
 
     [Fact]
@@ -281,6 +458,7 @@ public sealed class ConversationGAgentDedupTests
 
         inbox.Enqueued.Count.ShouldBe(1);
         inbox.Enqueued[0].CorrelationId.ShouldBe("act-direct");
+        inbox.Enqueued[0].TargetActorId.ShouldBe(agent.Id);
     }
 
     [Fact]
@@ -369,6 +547,109 @@ public sealed class ConversationGAgentDedupTests
                 return true;
         }
         return false;
+    }
+
+    [Fact]
+    public async Task HandleDeferredLlmReplyDispatchRequestedAsync_RehydratesRelayTokenUsingOutboundDeliveryCorrelation()
+    {
+        // NyxID's message_id and callback correlation_id are distinct. Pending LLM
+        // requests are tracked by message_id, while reply tokens are keyed by the
+        // callback correlation_id carried in OutboundDelivery.
+        const string sentinelReplyToken = "sentinel-retry-token-7c10";
+        var inbox = new RecordingInbox();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "stale-unscoped-actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner", inbox);
+
+        var inboundActivity = CreateActivity("nyx-msg-1", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "nyx-msg-1",
+            CorrelationId = "callback-jti-1",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+            CorrelationId = "legacy-callback-jti-1",
+        });
+
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].ReplyToken.ShouldBe(sentinelReplyToken);
+        inbox.Enqueued[0].TargetActorId.ShouldBe(agent.Id);
+        inbox.Enqueued.Clear();
+
+        await agent.HandleDeferredLlmReplyDispatchRequestedAsync(new DeferredLlmReplyDispatchRequestedEvent
+        {
+            CorrelationId = "nyx-msg-1",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        inbox.Enqueued.Count.ShouldBe(1);
+        inbox.Enqueued[0].CorrelationId.ShouldBe("nyx-msg-1");
+        inbox.Enqueued[0].ReplyToken.ShouldBe(sentinelReplyToken);
+        inbox.Enqueued[0].TargetActorId.ShouldBe(agent.Id);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_RemovesRelayTokenUsingOutboundDeliveryCorrelation()
+    {
+        const string sentinelReplyToken = "sentinel-cleanup-token-6d41";
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "stale-unscoped-actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner");
+
+        var inboundActivity = CreateActivity("nyx-msg-cleanup", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "nyx-msg-cleanup",
+            CorrelationId = "callback-jti-cleanup",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+            CorrelationId = "legacy-callback-jti-cleanup",
+        });
+
+        GetNyxRelayReplyTokenCount(agent).ShouldBe(1);
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "nyx-msg-cleanup",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = inboundActivity.Clone(),
+            Outbound = new MessageContent { Text = "reply-from-llm" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        GetNyxRelayReplyTokenCount(agent).ShouldBe(0);
     }
 
     [Fact]
@@ -507,7 +788,7 @@ public sealed class ConversationGAgentDedupTests
 
         await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
-            CorrelationId = "corr-inbox-echo",
+            CorrelationId = "nyx-msg-inbox-echo",
             RegistrationId = "reg-1",
             SourceActorId = "llm-worker-1",
             Activity = activity.Clone(),
@@ -614,6 +895,321 @@ public sealed class ConversationGAgentDedupTests
         runner.ContinueCount.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_FirstChunk_CallsRunStreamChunkWithoutPlatformMessageId()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-first");
+        SeedReplyToken(agent, "act-stream", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream", "relay-msg-1", "hello"));
+
+        runner.StreamChunkCount.ShouldBe(1);
+        runner.LastStreamChunkCurrentPlatformMessageId.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_SubsequentChunk_PassesStoredPlatformMessageId()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-2");
+        SeedReplyToken(agent, "act-stream-2", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk plus more"));
+
+        runner.StreamChunkCount.ShouldBe(2);
+        runner.LastStreamChunkCurrentPlatformMessageId.ShouldBe("om_first");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_WhenRunnerFails_MarksDisabledAndDropsFurtherChunks()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, _) =>
+                ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-fail");
+        SeedReplyToken(agent, "act-stream-fail", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fail", "relay-msg-1", "first"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fail", "relay-msg-1", "first plus second"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fail", "relay-msg-1", "first plus second plus third"));
+
+        runner.StreamChunkCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_WithoutReplyToken_DisablesStreamingForTurn()
+    {
+        var runner = new RecordingTurnRunner();
+        var (agent, _) = CreateAgent(runner, "conv-stream-no-token");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-no-token", "relay-msg-1", "hello"));
+
+        runner.StreamChunkCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenStreamingSucceeded_PersistsCompletedWithoutInvokingRunLlmReply()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_stream"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-short-circuit");
+        SeedReplyToken(agent, "act-stream-sc", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-sc", "relay-msg-1", "final text"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-sc",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-sc", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "final text" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        runner.LlmReplyCount.ShouldBe(0);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldNotBeEmpty();
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.Outbound.Text.ShouldBe("final text");
+        completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenStreamingDisabled_FallsBackToRunLlmReplyAsync()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, _) =>
+                ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-fallback");
+        SeedReplyToken(agent, "act-stream-fb", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-fb", "relay-msg-1", "partial"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-fb",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-fb", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "final text" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        runner.LlmReplyCount.ShouldBe(1);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_InterimEditFailureAfterTokenConsumed_SuppressesSubsequentChunksWithoutDisablingFinalEdit()
+    {
+        // Regression for PR#374 P1 review: once the first chunk consumes the NyxID /reply token,
+        // an interim /reply/update failure must NOT mark the turn as fallback-safe. Marking it
+        // Disabled would send the final LlmReplyReady path into RunLlmReplyAsync, which re-uses
+        // the already-consumed JTI and yields 401. Instead the state must be SuppressInterim so
+        // later interim chunks are dropped but the final edit can still reconcile the user
+        // message.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_first_consumed");
+                return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
+            },
+        };
+        var (agent, _) = CreateAgent(runner, "conv-stream-suppress");
+        SeedReplyToken(agent, "act-stream-suppress", "token-1", "relay-msg-1");
+
+        // First chunk consumes the reply token.
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello"));
+        // Interim edit fails after token consumed.
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world"));
+        // Later interim chunk must be dropped (not dispatched to runner).
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world again"));
+
+        callCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenTokenAlreadyConsumedAndInterimEditFailed_RetriesFinalEditInsteadOfReusingToken()
+    {
+        // Regression for PR#374 P1 review: final LlmReplyReady must try the final /reply/update
+        // via RunStreamChunkAsync instead of falling through to RunLlmReplyAsync (which would
+        // reuse the already-consumed reply token and 401).
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_first_consumed");
+                if (callCount == 2)
+                    return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
+                // Third call is the final edit initiated by TryCompleteStreamedReplyAsync.
+                return ConversationStreamChunkResult.Succeeded(pmid ?? "om_first_consumed");
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-retry");
+        SeedReplyToken(agent, "act-stream-final-retry", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello world"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-final-retry",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-final-retry", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello world final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        // Must not fall back to RunLlmReplyAsync — the token is already consumed.
+        runner.LlmReplyCount.ShouldBe(0);
+        // Third RunStreamChunkAsync call is the final edit.
+        callCount.ShouldBe(3);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.Outbound.Text.ShouldBe("hello world final");
+        completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenTokenConsumedAndFinalEditAlsoFails_PersistsLastFlushedPartialAsTerminalWithoutReusingToken()
+    {
+        // Regression for PR#374 P1 review: if the final edit also fails after the token was
+        // consumed, the actor must not fall back to RunLlmReplyAsync (would 401 on dead token).
+        // Instead it persists the last flushed partial as the terminal user-visible state so the
+        // pipeline stops spinning on a guaranteed-failing send.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_first_consumed");
+                return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-degraded");
+        SeedReplyToken(agent, "act-stream-final-degraded", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial more"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-final-degraded",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-final-degraded", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello partial more final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        runner.LlmReplyCount.ShouldBe(0);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        // The user sees the last successfully flushed partial, not the final LLM text.
+        completed.Outbound.Text.ShouldBe("hello partial");
+    }
+
+    private static LlmReplyStreamChunkEvent CreateStreamChunk(string correlationId, string replyMessageId, string accumulatedText) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            RegistrationId = "reg-1",
+            Activity = CreateRelayActivity(correlationId, replyMessageId),
+            AccumulatedText = accumulatedText,
+            ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+
+    private static ChatActivity CreateRelayActivity(string correlationId, string replyMessageId) =>
+        new()
+        {
+            Id = correlationId,
+            Type = ActivityType.Message,
+            ChannelId = new ChannelId { Value = "lark" },
+            Bot = new BotInstanceId { Value = "lark-bot" },
+            Conversation = new ConversationReference
+            {
+                Channel = new ChannelId { Value = "lark" },
+                Bot = new BotInstanceId { Value = "lark-bot" },
+                Scope = ConversationScope.Group,
+                CanonicalKey = "conv:lark:grp",
+            },
+            Content = new MessageContent { Text = "user question" },
+            OutboundDelivery = new OutboundDeliveryContext
+            {
+                ReplyMessageId = replyMessageId,
+                CorrelationId = correlationId,
+            },
+        };
+
+    private static void SeedReplyToken(ConversationGAgent agent, string correlationId, string replyToken, string replyMessageId)
+    {
+        var field = typeof(ConversationGAgent).GetField(
+            "_nyxRelayReplyTokens",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var dict = (Dictionary<string, NyxRelayReplyTokenContext>)field.GetValue(agent)!;
+        dict[correlationId] = new NyxRelayReplyTokenContext(
+            correlationId,
+            replyToken,
+            replyMessageId,
+            DateTimeOffset.UtcNow.AddMinutes(5));
+    }
+
     private static (ConversationGAgent agent, IEventStore store) CreateAgent(
         RecordingTurnRunner runner,
         string agentId,
@@ -667,6 +1263,17 @@ public sealed class ConversationGAgentDedupTests
         }
 
         throw new InvalidOperationException("Unable to set agent id via reflection.");
+    }
+
+    private static int GetNyxRelayReplyTokenCount(ConversationGAgent agent)
+    {
+        var field = typeof(ConversationGAgent).GetField(
+            "_nyxRelayReplyTokens",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        field.ShouldNotBeNull();
+        var value = field.GetValue(agent);
+        value.ShouldNotBeNull();
+        return (int)value.GetType().GetProperty("Count")!.GetValue(value)!;
     }
 
     private static ChatActivity CreateActivity(string id, string canonicalKey) => new()
@@ -747,6 +1354,25 @@ public sealed class ConversationGAgentDedupTests
             var result = ContinueResultFactory is null
                 ? ConversationTurnResult.Sent("sent:" + command.CommandId, new MessageContent { Text = "ack" }, "bot")
                 : ContinueResultFactory(command);
+            return Task.FromResult(result);
+        }
+
+        public int StreamChunkCount;
+        public string? LastStreamChunkCurrentPlatformMessageId { get; private set; }
+        public Func<LlmReplyStreamChunkEvent, string?, ConversationStreamChunkResult>? StreamChunkResultFactory { get; set; }
+
+        public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+            LlmReplyStreamChunkEvent chunk,
+            string? currentPlatformMessageId,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
+        {
+            Interlocked.Increment(ref StreamChunkCount);
+            LastStreamChunkCurrentPlatformMessageId = currentPlatformMessageId;
+            var result = StreamChunkResultFactory is null
+                ? ConversationStreamChunkResult.Succeeded(
+                    currentPlatformMessageId ?? $"om_{chunk.CorrelationId}")
+                : StreamChunkResultFactory(chunk, currentPlatformMessageId);
             return Task.FromResult(result);
         }
     }

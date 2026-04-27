@@ -1024,6 +1024,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByText("Support Escalation Triage");
     fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
 
     await waitFor(() => {
@@ -1031,16 +1032,17 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("member")).toBe("workflow:workflow-1");
+    expect(params.get("memberId")).toBeNull();
+    expect(params.get("focus")).toBeNull();
     expect(params.get("tab")).toBe("studio");
-    if (params.get("focus")) {
-      expect(params.get("focus")).toBe("workflow:workflow-1");
-    }
   });
 
   it("opens workflow and script Studio deep links from assets with scope context", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByText("Support Escalation Triage");
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
     await screen.findByText("当前 Team 资产");
 
@@ -1050,7 +1052,8 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain(
+    expect(window.location.search).toContain("member=workflow%3Aworkflow-1");
+    expect(window.location.search).not.toContain(
       "focus=workflow%3Aworkflow-1",
     );
 
@@ -1065,7 +1068,8 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("focus=script%3Ascript-1");
+    expect(window.location.search).toContain("member=script%3Ascript-1");
+    expect(window.location.search).not.toContain("focus=script%3Ascript-1");
     expect(window.location.search).toContain("tab=scripts");
   });
 

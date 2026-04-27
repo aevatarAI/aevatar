@@ -1,4 +1,5 @@
 import {
+  buildStudioWorkflowMemberKey,
   buildStudioRoute,
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
@@ -119,6 +120,16 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?focus=script%3Ascript-1&tab=scripts');
   });
 
+  it('keeps selected member routing separate from lifecycle steps', () => {
+    expect(
+      buildStudioRoute({
+        scopeId: 'scope-1',
+        memberKey: 'workflow:workflow-1',
+        step: 'bind',
+      }),
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind&tab=bindings');
+  });
+
   it('builds dedicated workflow and script workspace routes', () => {
     expect(buildStudioWorkflowWorkspaceRoute({ scopeId: 'scope-1' })).toBe(
       '/studio?scopeId=scope-1&tab=studio',
@@ -130,7 +141,7 @@ describe('buildStudioRoute', () => {
         memberId: 'service-alpha',
         memberLabel: '默认成员',
       }),
-    ).toBe('/studio?scopeId=scope-a&memberId=service-alpha&tab=studio');
+    ).toBe('/studio?scopeId=scope-a&member=member%3Aservice-alpha&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
@@ -138,11 +149,36 @@ describe('buildStudioRoute', () => {
       }),
     ).toBe('/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio');
     expect(
+      buildStudioWorkflowEditorRoute({
+        scopeId: 'scope-1',
+        memberKey: 'workflow:workflow-1',
+        workflowId: 'workflow-1',
+      }),
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&tab=studio');
+    expect(
+      buildStudioWorkflowEditorRoute({
+        scopeId: 'scope-1',
+        memberKey: buildStudioWorkflowMemberKey({
+          workflowId: 'default',
+          workflowName: 'draft2',
+          fileName: 'draft2.yaml',
+        }),
+        workflowId: 'default',
+      }),
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Adraft2&tab=studio');
+    expect(
       buildStudioScriptsWorkspaceRoute({
         scopeId: 'scope-1',
         scriptId: 'script-1',
       }),
     ).toBe('/studio?scopeId=scope-1&focus=script%3Ascript-1&tab=scripts');
+    expect(
+      buildStudioScriptsWorkspaceRoute({
+        scopeId: 'scope-1',
+        memberKey: 'script:script-1',
+        scriptId: 'script-1',
+      }),
+    ).toBe('/studio?scopeId=scope-1&member=script%3Ascript-1&tab=scripts');
   });
 
   it('infers the workflow editor when only a workflow id is provided', () => {
@@ -182,6 +218,8 @@ describe('buildStudioRoute', () => {
         memberLabel: '成员 Alpha',
         focus: 'workflow:workflow-1',
       }),
-    ).toBe('/studio?scopeId=scope-a&memberId=service-alpha&focus=workflow%3Aworkflow-1&tab=studio');
+    ).toBe(
+      '/studio?scopeId=scope-a&member=member%3Aservice-alpha&focus=workflow%3Aworkflow-1&tab=studio',
+    );
   });
 });

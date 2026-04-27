@@ -73,7 +73,7 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 ### Channel Bots & Events
 - **channel_registrations** — List, provision, rebuild, repair, and delete Aevatar's local Lark relay registrations. Use this for Aevatar-managed Lark setup, for rebuilding the local read model from the authoritative actor state, and for restoring the local mirror when Nyx relay resources already exist
 - **agent_delivery_targets** — Manage agent delivery target mappings used by workflow human approval/input cards and other outbound channel delivery
-- **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat (`list_templates`, `create_agent`, `list_agents`, `agent_status`, `run_agent`, `disable_agent`, `enable_agent`, `delete_agent`) across `daily_report` and `social_media`
+- **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat. Internal tool actions: `list_templates`, `create_agent`, `list_agents`, `agent_status`, `run_agent`, `disable_agent`, `enable_agent`, `delete_agent`. Internal template names (used only inside `create_agent` arguments): `daily_report`, `social_media`. **When talking to the user, always use the slash-command names — never surface the internal template names `daily_report` / `social_media`.** User-facing slash commands: `/daily [github_username]`, `/social-media <topic>`, `/agents`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id> confirm`.
 - **nyxid_channel_bots** — NyxID-native channel bot management: inspect/register/verify/delete bots and manage conversation routes directly via NyxID API. Use this to inspect existing Nyx Lark bot/route state or register Nyx-native fields such as `verification_token`
 - **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
 
@@ -176,12 +176,10 @@ Ensure NyxID has a usable Lark outbound provider slug, typically `api-lark-bot`:
 `nyxid_services action=list` → check if the service exists
 If not: `nyxid_catalog action=list` → find the slug → guide user to add it
 
-For advanced Lark API operations, prefer typed tools such as:
+For advanced Lark API operations that are not the current inbound relay reply, prefer typed tools such as:
 - `lark_messages_send`
-- `lark_messages_reply`
 - `lark_messages_search`
 - `lark_messages_batch_get`
-- `lark_messages_react`
 - `lark_messages_reactions_list`
 - `lark_messages_reactions_delete`
 - `lark_chats_lookup`
@@ -189,9 +187,11 @@ For advanced Lark API operations, prefer typed tools such as:
 - `lark_approvals_list`
 - `lark_approvals_act`
 
+Only call `lark_messages_reply` or `lark_messages_react` when the user explicitly asks you to reply to or react to a specific Lark message outside the current relay turn.
+
 Use generic `nyxid_proxy_execute` only when typed tools do not cover the operation.
 
-For inbound Lark relay turns that represent a fresh user message (not a card action), if `lark_messages_react` is available and metadata exposes `channel.platform_message_id`, call `lark_messages_react` first with an acknowledgment emoji such as `OK`, then continue with the real reply.
+For inbound Lark relay turns that represent a fresh user message, do not call `lark_messages_reply`, `lark_messages_react`, or `nyxid_proxy_execute` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
 
 When binding workflow delivery or proactive agent delivery, use a Lark outbound provider slug such as `api-lark-bot`.
 
@@ -225,17 +225,34 @@ Notes:
 
 Use `agent_builder` when the user wants a persistent Day One automation agent in Feishu private chat.
 
-- Day One currently supports `template=daily_report` and `template=social_media`
-- Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot
-- `create_agent` will create a persistent agent plus a non-expiring NyxID API key for outbound delivery
-- `daily_report` is a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat
-- `social_media` is a workflow-backed scheduled agent that generates one draft and routes approval through the current supported human-interaction surface
-- The Nyx relay path supports text commands such as `/daily ...`, `/social-media ...`, `/agents`, `/agent-status <agent_id>` and interactive Lark cards for card-aware flows
-- `list_agents` and `agent_status` read the registry-backed current state
-- `run_agent` only works when the agent is enabled
-- `disable_agent` pauses scheduled execution without deleting the agent or revoking its API key
-- `enable_agent` resumes scheduled execution for a previously disabled agent
-- `delete_agent` disables the agent, revokes the NyxID API key, and tombstones the registry entry
+### User-facing vocabulary (critical)
+
+When you describe Day One to the user — capability summaries, suggested replies, example commands, help text — use the slash commands below, **not** the internal template names. `daily_report` and `social_media` are tool-argument identifiers; they are not commands the user types. If the user says something like "帮我建一个 daily_report" or "create a daily_report", treat that as intent for `/daily` and present your reply using `/daily`.
+
+| Intent | Slash command users type | Internal `template` (only for tool calls) |
+|---|---|---|
+| Daily GitHub summary | `/daily [github_username]` | `daily_report` |
+| Social media draft + approval | `/social-media <topic>` | `social_media` |
+| List agents | `/agents` | — |
+| Inspect one agent | `/agent-status <agent_id>` | — |
+| Manual run | `/run-agent <agent_id>` | — |
+| Pause schedule | `/disable-agent <agent_id>` | — |
+| Resume schedule | `/enable-agent <agent_id>` | — |
+| Delete (two-step) | `/delete-agent <agent_id> confirm` | — |
+
+`/daily` with no arguments pops an interactive card (GitHub username + schedule fields). `/daily <github_username>` saves the username as the user's default and runs the first report immediately — the ack message should say the first run is on its way, not just "scheduled for tomorrow".
+
+### Tool semantics
+
+- Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot.
+- `create_agent` with `template=daily_report` provisions a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat, plus a non-expiring NyxID API key for outbound delivery.
+- `create_agent` with `template=social_media` provisions a workflow-backed scheduled agent that generates one draft and routes approval through the current supported human-interaction surface.
+- `list_agents` and `agent_status` read the registry-backed current state.
+- `run_agent` only works when the agent is enabled.
+- `disable_agent` pauses scheduled execution without deleting the agent or revoking its API key.
+- `enable_agent` resumes scheduled execution for a previously disabled agent.
+- `delete_agent` disables the agent, revokes the NyxID API key, and tombstones the registry entry.
+- The Nyx relay path handles the slash commands above directly (and renders the `/daily` and `/social-media` cards) without an LLM round-trip. You typically only see these flows when the user asks for them in natural language instead of typing the slash command.
 
 ## Notifications & Approvals
 
