@@ -66,8 +66,15 @@ already excluded from the supported production contract.
 - rendering: new `Aevatar.GAgents.Platform.Telegram` package mirrors
   `Aevatar.GAgents.Platform.Lark` — `TelegramMessageComposer` + `TelegramChannelNativeMessageProducer`
   + `TelegramOutboundMessage` + `TelegramPayloadRedactor`. Telegram has no card layout
-  primitive, so cards degrade into the rendered text body and action buttons render as a
-  single-row `inline_keyboard` with `callback_data` truncated to the 64-byte Bot API limit.
+  primitive, so cards degrade into the rendered text body. Action buttons also degrade
+  into a plain-text bullet list of labels (`DefaultCapabilities.SupportsActionButtons = false`),
+  not an `inline_keyboard`: NyxID's Telegram channel adapter does not subscribe
+  `callback_query` updates and its `parse_inbound` returns empty for them, so an
+  `inline_keyboard` click would never round-trip back to Aevatar. Body text is escaped
+  for Telegram legacy Markdown (`_`, `*`, `[`, `` ` ``) because NyxID's relay sends every
+  reply with `parse_mode="Markdown"`. Once NyxID grows the `callback_query` subscribe +
+  parse + forward contract end-to-end, flip `SupportsActionButtons` back, restore the
+  `inline_keyboard` + `callback_data` 64-byte truncation logic, and update §10.2.
 - provisioning: new `NyxTelegramProvisioningService` parallels `NyxLarkProvisioningService`
   but registers `platform="telegram"` with a real `bot_token` (no Lark
   `__unused_for_lark__` placeholder) and no `app_id` / `app_secret` /

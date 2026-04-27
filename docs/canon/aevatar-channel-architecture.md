@@ -731,7 +731,7 @@ if (adapter is IChannelTypingAdapter typingAdapter
 | **Streaming** | **Native** | **EditLoopRateLimited** | **EditLoopRateLimited** | **EditLoopRateLimited** |
 | SupportsFiles | ✅ | ✅ | ✅ | ✅ |
 | MaxMessageLength | 30k | 4096 | 40k (blocks) | 2000 |
-| SupportsActionButtons | ✅ | ✅ (inline keyboard) | ✅ (block actions) | ✅ (components) |
+| SupportsActionButtons | ✅ | ❌ (degrade to text bullets — see §10.2) | ✅ (block actions) | ✅ (components) |
 | SupportsConfirmDialog | ✅ | ❌ | ✅ | ⚠️ modal 替代 |
 | SupportsModal | ❌ | ❌ | ✅ (views) | ✅ (modal) |
 | SupportsMention | ✅ | ✅ | ✅ | ✅ |
