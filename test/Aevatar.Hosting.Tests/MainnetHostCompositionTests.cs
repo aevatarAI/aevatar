@@ -1,3 +1,6 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -67,6 +70,14 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/webhooks/nyxid-relay/health");
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/services/");
+
+        // Both Lark and Telegram tool providers must register with IAgentToolSource so the
+        // declared agent tools (lark_messages_send / telegram_messages_send / telegram_chats_lookup
+        // / etc.) are actually discoverable at runtime. Without this assertion the host can
+        // silently drop a tool provider after a project-reference change and tests still pass.
+        var toolSources = app.Services.GetServices<IAgentToolSource>().ToList();
+        toolSources.Should().Contain(source => source is LarkAgentToolSource);
+        toolSources.Should().Contain(source => source is TelegramAgentToolSource);
 
         await app.StopAsync();
     }
