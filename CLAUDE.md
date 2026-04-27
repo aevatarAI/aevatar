@@ -125,11 +125,11 @@
 - 新增状态/事件/持久化载荷：先定义 `.proto` 并生成类型，再接入实现；禁止先写临时结构后补 Protobuf。
 
 ## 文档系统（强制）
-- `docs/canon/` 是唯一权威参考；一个 topic 一个文件，不可有重复。
-- `docs/decisions/` 是 ADR（Architecture Decision Records），不可变，只可被新决策 supersede。
+- `docs/canon/` 是唯一权威参考；一个 topic 一个文件，不可有重复。架构评审与重构讨论统一用 [docs/canon/architecture-vocabulary.md](docs/canon/architecture-vocabulary.md) 的词汇（Module / Interface / Depth / Seam / Adapter / Leverage / Locality）。
+- `docs/adr/` 是 ADR（Architecture Decision Records），不可变，只可被新决策 supersede。文件名 `NNNN-slug.md`，编号唯一不可重用。
 - `docs/history/` 存放已归档的思考快照，按月份组织，明确标记非权威。
 - AI 生成的设计文档在会话结束后默认不保留到 `docs/`；需要保留的必须添加 frontmatter（title/status/owner）并放入对应目录。
-- 所有 `docs/canon/` 和 `docs/decisions/` 文件必须有 YAML frontmatter，包含 `title`、`status`、`owner` 字段。
+- 所有 `docs/canon/` 和 `docs/adr/` 文件必须有 YAML frontmatter，包含 `title`、`status`、`owner` 字段。
 - Lint 操作由 `tools/docs/lint.sh` 执行，已集成到 CI 门禁。
 - 根目录允许的 `.md` 文件：`CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`。`src/` 下各项目允许自身 `README.md`。
 - `docs/README.md` 由 `tools/docs/build-index.sh` 自动生成，不手动编辑。
@@ -137,7 +137,7 @@
 ## 项目结构
 - `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：对应测试项目（单元、集成、API）。
-- `docs/`：架构文档（`canon/` 权威参考、`decisions/` ADR、`history/` 归档、`audit-scorecard/` 审计）。
+- `docs/`：架构文档（`canon/` 权威参考、`adr/` ADR、`history/` 归档、`audit-scorecard/` 审计）。
 - `workflows/`：YAML 工作流定义；`tools/`：开发工具；`demos/`：示例程序。
 - **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
 

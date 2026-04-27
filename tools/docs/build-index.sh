@@ -42,13 +42,13 @@ extract_field() {
   echo ""
   echo "Immutable records of architectural choices and their rationale."
   echo ""
-  if [ -d "$DOCS_DIR/decisions" ]; then
-    for file in "$DOCS_DIR"/decisions/*.md; do
+  if [ -d "$DOCS_DIR/adr" ]; then
+    for file in "$DOCS_DIR"/adr/*.md; do
       [ -f "$file" ] || continue
       basename=$(basename "$file")
       title=$(extract_field "$file" "title")
       [ -z "$title" ] && title="$basename"
-      echo "- [${title}](decisions/${basename})"
+      echo "- [${title}](adr/${basename})"
     done
   else
     echo "_No decision records yet._"

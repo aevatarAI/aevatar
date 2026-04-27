@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/docs/lint.sh — Validate docs frontmatter
-# Checks: all docs/canon/ and docs/decisions/ files have required frontmatter fields
+# Checks: all docs/canon/ and docs/adr/ files have required frontmatter fields
 # Required fields: title, status, owner
 # Exit 1 on first failure (CI gate mode) or accumulate all errors (report mode)
 set -euo pipefail
@@ -46,22 +46,33 @@ if [ -d "$DOCS_DIR/canon" ]; then
   done
 fi
 
-# Lint decision docs
-if [ -d "$DOCS_DIR/decisions" ]; then
-  for file in "$DOCS_DIR"/decisions/*.md; do
+# Lint ADR docs
+if [ -d "$DOCS_DIR/adr" ]; then
+  for file in "$DOCS_DIR"/adr/*.md; do
     [ -f "$file" ] || continue
     check_frontmatter "$file"
   done
 fi
 
-# Check decision file naming: must start with NNNN-
-if [ -d "$DOCS_DIR/decisions" ]; then
-  for file in "$DOCS_DIR"/decisions/*.md; do
+# Check ADR file naming: must start with NNNN- and numbers must be unique
+if [ -d "$DOCS_DIR/adr" ]; then
+  numbers_file=$(mktemp)
+  trap 'rm -f "$numbers_file"' EXIT
+  for file in "$DOCS_DIR"/adr/*.md; do
     [ -f "$file" ] || continue
     basename=$(basename "$file")
     if ! echo "$basename" | grep -qE '^[0-9]{4}-'; then
-      echo "FAIL: docs/decisions/$basename — must start with NNNN- (e.g., 0001-topic.md)"
+      echo "FAIL: docs/adr/$basename — must start with NNNN- (e.g., 0001-topic.md)"
       ERRORS=$((ERRORS + 1))
+      continue
+    fi
+    number="${basename:0:4}"
+    existing=$(grep "^${number} " "$numbers_file" 2>/dev/null | cut -d' ' -f2- || true)
+    if [ -n "$existing" ]; then
+      echo "FAIL: docs/adr/$basename — duplicate ADR number $number (also: $existing)"
+      ERRORS=$((ERRORS + 1))
+    else
+      echo "$number $basename" >> "$numbers_file"
     fi
   done
 fi

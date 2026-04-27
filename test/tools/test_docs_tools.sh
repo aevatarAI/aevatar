@@ -14,7 +14,7 @@ trap "rm -rf $TMPDIR_TEST" EXIT
 
 setup_test_docs() {
   rm -rf "$TMPDIR_TEST/docs"
-  mkdir -p "$TMPDIR_TEST/docs/canon" "$TMPDIR_TEST/docs/decisions"
+  mkdir -p "$TMPDIR_TEST/docs/canon" "$TMPDIR_TEST/docs/adr"
 }
 
 run_lint() {
@@ -45,7 +45,7 @@ assert_pass() {
         CHECKED=$((CHECKED+1))
       }
       for file in "$DOCS_DIR"/canon/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
-      for file in "$DOCS_DIR"/decisions/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
+      for file in "$DOCS_DIR"/adr/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
       exit $ERRORS
     '
   ) > /dev/null 2>&1
@@ -77,7 +77,7 @@ assert_fail() {
         CHECKED=$((CHECKED+1))
       }
       for file in "$DOCS_DIR"/canon/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
-      for file in "$DOCS_DIR"/decisions/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
+      for file in "$DOCS_DIR"/adr/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
       exit $ERRORS
     '
   ) > /dev/null 2>&1
