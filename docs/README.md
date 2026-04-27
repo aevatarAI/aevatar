@@ -12,6 +12,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Workflow Chat API 能力说明（框架层）](canon/chat-api.md)
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
+- [/daily Command Pipeline — Test Reference](canon/daily-command-pipeline.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
@@ -64,6 +65,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Audit Scorecard
 
 - [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
+- [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates

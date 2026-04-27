@@ -66,19 +66,23 @@ message ConnectorDraftEntry {
 message ConnectorCatalogState {
   repeated ConnectorDefinitionEntry connectors = 1;
   ConnectorDraftEntry draft = 2;  // null when no draft exists
+  int64 last_applied_event_version = 3;
 }
 
 // ─── Events ───
 
 message ConnectorCatalogSavedEvent {
   repeated ConnectorDefinitionEntry connectors = 1;
+  optional int64 expected_version = 2;  // unset = skip optimistic concurrency check
 }
 
 message ConnectorDraftSavedEvent {
   ConnectorDefinitionEntry draft = 1;
   google.protobuf.Timestamp updated_at_utc = 2;
+  optional int64 expected_version = 3;  // unset = skip optimistic concurrency check
 }
 
 message ConnectorDraftDeletedEvent {
+  optional int64 expected_version = 1;  // unset = skip optimistic concurrency check
 }
 
