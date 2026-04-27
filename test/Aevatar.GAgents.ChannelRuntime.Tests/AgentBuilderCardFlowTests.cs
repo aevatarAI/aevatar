@@ -13,16 +13,21 @@ public sealed class AgentBuilderCardFlowTests
     [Fact]
     public async Task TryResolveAsync_DailyReportLaunch_PrefillsSavedGithubUsername()
     {
+        // Inbound carries Platform + SenderId so the prefill query must hit the per-user
+        // scope (`scope-1:lark:ou_alice`), not the bot-level `scope-1` — otherwise multiple
+        // Lark users sharing a bot would see each other's saved usernames (issue #436).
         var inbound = new ChannelInboundEvent
         {
             ChatType = "p2p",
             RegistrationScopeId = "scope-1",
+            Platform = "lark",
+            SenderId = "ou_alice",
             Text = "/daily",
         };
+        var queryPort = new MapStubUserConfigQueryPort();
+        queryPort.SetGithubUsername("scope-1:lark:ou_alice", "saved-user");
 
-        var decision = await AgentBuilderCardFlow.TryResolveAsync(
-            inbound,
-            new StubUserConfigQueryPort(new StudioUserConfig(DefaultModel: string.Empty, GithubUsername: "saved-user")));
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, queryPort);
 
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
@@ -36,6 +41,51 @@ public sealed class AgentBuilderCardFlowTests
 
         decision.ReplyContent.Cards.Single().Text.Should().Contain("saved-user");
         decision.ReplyContent.Cards.Single().Text.Should().Contain("already filled in");
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_DailyReportLaunch_TwoLarkUsersInSameBot_SeeIndependentSavedUsernames()
+    {
+        // Issue #436: when colleagues share one Lark bot, the prefill must read each
+        // sender's own saved github_username — not the most recent writer's value.
+        // Pin that the per-user scope (`{bot}:{platform}:{sender}`) is what reaches the
+        // query port, so the read isn't accidentally collapsed back to the bot scope.
+        var queryPort = new MapStubUserConfigQueryPort();
+        queryPort.SetGithubUsername("scope-1:lark:ou_alice", "alice");
+        queryPort.SetGithubUsername("scope-1:lark:ou_bob", "bob");
+
+        var aliceInbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Platform = "lark",
+            SenderId = "ou_alice",
+            Text = "/daily",
+        };
+        var bobInbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Platform = "lark",
+            SenderId = "ou_bob",
+            Text = "/daily",
+        };
+
+        var aliceDecision = await AgentBuilderCardFlow.TryResolveAsync(aliceInbound, queryPort);
+        var bobDecision = await AgentBuilderCardFlow.TryResolveAsync(bobInbound, queryPort);
+
+        aliceDecision!.ReplyContent!.Actions
+            .Single(a => a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username")
+            .Value.Should().Be("alice");
+        bobDecision!.ReplyContent!.Actions
+            .Single(a => a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username")
+            .Value.Should().Be("bob");
+
+        queryPort.QueriedScopes.Should().BeEquivalentTo(new[]
+        {
+            "scope-1:lark:ou_alice",
+            "scope-1:lark:ou_bob",
+        });
     }
 
     [Fact]
@@ -85,17 +135,27 @@ public sealed class AgentBuilderCardFlowTests
         body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
-    private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
+    private sealed class MapStubUserConfigQueryPort : IUserConfigQueryPort
     {
-        private readonly StudioUserConfig _config;
+        private readonly Dictionary<string, StudioUserConfig> _byScope = new(StringComparer.Ordinal);
+        private readonly List<string> _queriedScopes = new();
 
-        public StubUserConfigQueryPort(StudioUserConfig config)
+        public IReadOnlyList<string> QueriedScopes => _queriedScopes;
+
+        public void SetGithubUsername(string scopeId, string githubUsername)
         {
-            _config = config;
+            _byScope[scopeId] = new StudioUserConfig(DefaultModel: string.Empty, GithubUsername: githubUsername);
         }
 
-        public Task<StudioUserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
+        public Task<StudioUserConfig> GetAsync(CancellationToken ct = default) =>
+            throw new NotSupportedException("Channel paths must call GetAsync(scopeId).");
 
-        public Task<StudioUserConfig> GetAsync(string scopeId, CancellationToken ct = default) => Task.FromResult(_config);
+        public Task<StudioUserConfig> GetAsync(string scopeId, CancellationToken ct = default)
+        {
+            _queriedScopes.Add(scopeId);
+            return Task.FromResult(_byScope.TryGetValue(scopeId, out var config)
+                ? config
+                : new StudioUserConfig(DefaultModel: string.Empty, GithubUsername: null));
+        }
     }
 }
