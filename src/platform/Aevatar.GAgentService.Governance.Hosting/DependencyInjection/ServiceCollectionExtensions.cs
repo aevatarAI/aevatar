@@ -2,8 +2,10 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Application.Services;
+using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Governance.Infrastructure.Activation;
 using Aevatar.GAgentService.Governance.Infrastructure.Admission;
 using Aevatar.GAgentService.Governance.Hosting.Migration;
@@ -26,6 +28,8 @@ public static class ServiceCollectionExtensions
 
         services.AddGAgentServiceGovernanceProjection();
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
+        services.AddHttpContextAccessor();
+        services.TryAddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
         services.TryAddSingleton<IServiceGovernanceCommandTargetProvisioner, DefaultServiceGovernanceCommandTargetProvisioner>();
         services.TryAddSingleton<IActivationAdmissionEvaluator, DefaultActivationAdmissionEvaluator>();
         services.TryAddSingleton<IInvokeAdmissionEvaluator, DefaultInvokeAdmissionEvaluator>();

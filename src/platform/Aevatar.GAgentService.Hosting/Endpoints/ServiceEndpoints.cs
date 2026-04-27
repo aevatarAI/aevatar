@@ -1,8 +1,11 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Hosting.Endpoints;
+using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Hosting.Serialization;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -36,35 +39,64 @@ public static partial class ServiceEndpoints
     }
 
     private static async Task<IResult> HandleCreateServiceAsync(
+        HttpContext http,
         CreateServiceHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                request.ServiceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
         {
             Spec = new ServiceDefinitionSpec
             {
-                Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, request.ServiceId),
+                Identity = identity,
                 DisplayName = request.DisplayName ?? string.Empty,
                 Endpoints = { request.Endpoints.Select(ToEndpointSpec) },
                 PolicyIds = { request.PolicyIds ?? [] },
             },
         }, ct);
-        return Results.Accepted($"/api/services/{request.ServiceId}", receipt);
+        return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
     }
 
     private static async Task<IResult> HandleCreateRevisionAsync(
+        HttpContext http,
         string serviceId,
         CreateRevisionHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var spec = new ServiceRevisionSpec
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RevisionId = request.RevisionId ?? string.Empty,
             ImplementationKind = ParseImplementationKind(request.ImplementationKind),
         };
+
         switch (spec.ImplementationKind)
         {
             case ServiceImplementationKind.Static:
@@ -111,127 +143,341 @@ public static partial class ServiceEndpoints
     }
 
     private static async Task<IResult> HandlePrepareRevisionAsync(
+        HttpContext http,
         string serviceId,
         string revisionId,
         ServiceIdentityHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.PrepareRevisionAsync(new PrepareServiceRevisionCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RevisionId = revisionId,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/revisions/{revisionId}", receipt);
     }
 
     private static async Task<IResult> HandlePublishRevisionAsync(
+        HttpContext http,
         string serviceId,
         string revisionId,
         ServiceIdentityHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.PublishRevisionAsync(new PublishServiceRevisionCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RevisionId = revisionId,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/revisions/{revisionId}", receipt);
     }
 
     private static async Task<IResult> HandleRetireRevisionAsync(
+        HttpContext http,
         string serviceId,
         string revisionId,
         ServiceIdentityHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.RetireRevisionAsync(new RetireServiceRevisionCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RevisionId = revisionId,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/revisions/{revisionId}", receipt);
     }
 
     private static async Task<IResult> HandleSetDefaultServingRevisionAsync(
+        HttpContext http,
         string serviceId,
         SetDefaultServingRevisionHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RevisionId = request.RevisionId ?? string.Empty,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}", receipt);
     }
 
     private static async Task<IResult> HandleActivateAsync(
+        HttpContext http,
         string serviceId,
         ActivateServiceRevisionHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
         var receipt = await commandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             RevisionId = request.RevisionId ?? string.Empty,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}", receipt);
     }
 
-    private static Task<IReadOnlyList<ServiceCatalogSnapshot>> HandleListServicesAsync(
+    private static async Task<IResult> HandleListServicesAsync(
+        HttpContext http,
         [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceLifecycleQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.ListServicesAsync(query.TenantId ?? string.Empty, query.AppId ?? string.Empty, query.Namespace ?? string.Empty, query.Take, ct);
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveContext(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                out var context,
+                out var denied))
+        {
+            return denied;
+        }
 
-    private static Task<ServiceCatalogSnapshot?> HandleGetServiceAsync(
+        var services = await queryPort.ListServicesAsync(context.TenantId, context.AppId, context.Namespace, query.Take, ct);
+        return JsonOrNull(services);
+    }
+
+    private static async Task<IResult> HandleGetServiceAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceLifecycleQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetServiceAsync(
-            ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
 
-    private static Task<ServiceRevisionCatalogSnapshot?> HandleGetRevisionsAsync(
+        return JsonOrNull(await queryPort.GetServiceAsync(identity, ct));
+    }
+
+    private static async Task<IResult> HandleGetRevisionsAsync(
+        HttpContext http,
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceLifecycleQueryPort queryPort,
-        CancellationToken ct) =>
-        queryPort.GetServiceRevisionsAsync(
-            ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
-            ct);
+        CancellationToken ct)
+    {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                query.TenantId,
+                query.AppId,
+                query.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        return JsonOrNull(await queryPort.GetServiceRevisionsAsync(identity, ct));
+    }
 
     private static async Task<IResult> HandleInvokeAsync(
+        HttpContext http,
         string serviceId,
         string endpointId,
         InvokeServiceHttpRequest request,
+        [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceInvocationPort invocationPort,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionArtifactStore artifactStore,
         CancellationToken ct)
     {
+        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
+                identityResolver,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                serviceId,
+                out var identity,
+                out var denied))
+        {
+            return denied;
+        }
+
+        Any payload;
+        string revisionId;
+        try
+        {
+            (payload, revisionId) = await ResolveInvocationPayloadAsync(
+                request,
+                identity,
+                catalogReader,
+                artifactStore,
+                ct);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SERVICE_INVOKE_REQUEST",
+                message = ex.Message,
+            });
+        }
+
         var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
         {
-            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            Identity = identity,
             EndpointId = endpointId,
             CommandId = request.CommandId ?? string.Empty,
             CorrelationId = request.CorrelationId ?? string.Empty,
-            Payload = ServiceJsonPayloads.PackBase64(
-                request.PayloadTypeUrl ?? string.Empty,
-                request.PayloadBase64),
-            Caller = new ServiceInvocationCaller
-            {
-                ServiceKey = request.CallerServiceKey ?? string.Empty,
-                TenantId = request.CallerTenantId ?? string.Empty,
-                AppId = request.CallerAppId ?? string.Empty,
-            },
+            RevisionId = revisionId,
+            Payload = payload,
+            Caller = ResolveInvocationCaller(identityResolver, request),
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}", receipt);
     }
+
+    private static async Task<(Any Payload, string RevisionId)> ResolveInvocationPayloadAsync(
+        InvokeServiceHttpRequest request,
+        ServiceIdentity identity,
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionArtifactStore artifactStore,
+        CancellationToken ct)
+    {
+        var typeUrl = request.PayloadTypeUrl ?? string.Empty;
+        var requestedRevisionId = request.RevisionId?.Trim() ?? string.Empty;
+        var hasJson = !string.IsNullOrWhiteSpace(request.PayloadJson);
+        var hasBase64 = !string.IsNullOrWhiteSpace(request.PayloadBase64);
+        if (hasJson && hasBase64)
+            throw new InvalidOperationException(
+                "payloadJson and payloadBase64 are mutually exclusive; specify only one.");
+
+        if (hasJson)
+        {
+            if (string.IsNullOrWhiteSpace(typeUrl))
+                throw new InvalidOperationException("payloadTypeUrl is required when payloadJson is provided.");
+
+            var revisionId = requestedRevisionId;
+            if (string.IsNullOrWhiteSpace(revisionId))
+            {
+                var catalog = await catalogReader.GetAsync(identity, ct);
+                revisionId = catalog?.ActiveServingRevisionId ?? string.Empty;
+            }
+
+            var packed = await ServiceJsonPayloads.PackJsonAsync(
+                artifactStore,
+                ServiceKeys.Build(identity),
+                revisionId,
+                typeUrl,
+                request.PayloadJson!,
+                ct);
+            return (packed, revisionId);
+        }
+
+        return (ServiceJsonPayloads.PackBase64(typeUrl, request.PayloadBase64), requestedRevisionId);
+    }
+
+    private static ServiceInvocationCaller ResolveInvocationCaller(
+        IServiceIdentityContextResolver identityResolver,
+        InvokeServiceHttpRequest request)
+    {
+        var authenticatedContext = identityResolver.Resolve();
+        if (authenticatedContext is null)
+        {
+            return new ServiceInvocationCaller
+            {
+                ServiceKey = request.CallerServiceKey?.Trim() ?? string.Empty,
+                TenantId = request.CallerTenantId?.Trim() ?? string.Empty,
+                AppId = request.CallerAppId?.Trim() ?? string.Empty,
+            };
+        }
+
+        return new ServiceInvocationCaller
+        {
+            // Authenticated /api/services callers do not currently carry a
+            // verifiable caller service id/service key contract.
+            ServiceKey = string.Empty,
+            TenantId = authenticatedContext.TenantId,
+            AppId = authenticatedContext.AppId,
+        };
+    }
+
+    private static IResult JsonOrNull<T>(T? value) =>
+        value is null
+            ? Results.Text("null", "application/json")
+            : Results.Json(value);
 
     internal static ServiceIdentity ToIdentity(string? tenantId, string? appId, string? @namespace, string serviceId)
     {
@@ -363,5 +609,7 @@ public static partial class ServiceEndpoints
         string? PayloadBase64,
         string? CallerServiceKey = null,
         string? CallerTenantId = null,
-        string? CallerAppId = null);
+        string? CallerAppId = null,
+        string? PayloadJson = null,
+        string? RevisionId = null);
 }

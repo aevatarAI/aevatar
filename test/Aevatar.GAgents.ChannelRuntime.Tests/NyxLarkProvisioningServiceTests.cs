@@ -76,15 +76,17 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Theory]
-    [InlineData("", "cli_a1b2c3", "secret-xyz", "https://aevatar.example.com", "missing_access_token")]
-    [InlineData("user-token", "", "secret-xyz", "https://aevatar.example.com", "missing_app_id")]
-    [InlineData("user-token", "cli_a1b2c3", "", "https://aevatar.example.com", "missing_app_secret")]
-    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "", "missing_webhook_base_url")]
+    [InlineData("", "cli_a1b2c3", "secret-xyz", "https://aevatar.example.com", "scope-1", "missing_access_token")]
+    [InlineData("user-token", "", "secret-xyz", "https://aevatar.example.com", "scope-1", "missing_app_id")]
+    [InlineData("user-token", "cli_a1b2c3", "", "https://aevatar.example.com", "scope-1", "missing_app_secret")]
+    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "", "scope-1", "missing_webhook_base_url")]
+    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "https://aevatar.example.com", "", "missing_scope_id")]
     public async Task ProvisionAsync_ShouldRejectInvalidRequests_BeforeCallingNyx(
         string accessToken,
         string appId,
         string appSecret,
         string webhookBaseUrl,
+        string scopeId,
         string expectedError)
     {
         var handler = new RecordingHandler();
@@ -97,7 +99,7 @@ public class NyxLarkProvisioningServiceTests
                 AppSecret: appSecret,
                 VerificationToken: string.Empty,
                 WebhookBaseUrl: webhookBaseUrl,
-                ScopeId: "scope-1",
+                ScopeId: scopeId,
                 Label: "Ops Bot",
                 NyxProviderSlug: "api-lark-bot"),
             CancellationToken.None);

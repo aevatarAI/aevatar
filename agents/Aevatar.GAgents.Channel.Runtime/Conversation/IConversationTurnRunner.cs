@@ -35,6 +35,39 @@ public interface IConversationTurnRunner
     /// Executes one bot turn for a proactive continue command.
     /// </summary>
     Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct);
+
+    /// <summary>
+    /// Delivers one progressive streaming chunk to the downstream platform. If
+    /// <paramref name="currentPlatformMessageId"/> is <c>null</c>, the chunk is dispatched as the
+    /// initial placeholder send; otherwise it is dispatched as an edit targeting that upstream
+    /// platform message. Only invoked by <see cref="ConversationGAgent"/> while it holds the reply
+    /// token in-memory.
+    /// </summary>
+    Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
+}
+
+/// <summary>
+/// Outcome of one progressive streaming chunk dispatch.
+/// </summary>
+public sealed record ConversationStreamChunkResult(
+    bool Success,
+    string? PlatformMessageId,
+    bool EditUnsupported,
+    string ErrorCode,
+    string ErrorSummary)
+{
+    public static ConversationStreamChunkResult Succeeded(string? platformMessageId) =>
+        new(true, platformMessageId, false, string.Empty, string.Empty);
+
+    public static ConversationStreamChunkResult Failed(
+        string errorCode,
+        string errorSummary,
+        bool editUnsupported = false) =>
+        new(false, null, editUnsupported, errorCode, errorSummary);
 }
 
 public sealed record NyxRelayReplyTokenContext(
@@ -100,6 +133,28 @@ public sealed record ConversationTurnResult(
             request?.Clone() ?? throw new ArgumentNullException(nameof(request)));
 
     /// <summary>
+    /// Ignored-inbound success factory. Used when the turn runner deliberately produces no
+    /// reply for a well-formed inbound activity (for example an unrecognized card action
+    /// that should not be promoted into an LLM turn). The <paramref name="reasonCode"/>
+    /// is stamped into <see cref="SentActivityId"/> as <c>ignored:{reasonCode}:{activityId}</c>
+    /// so observers can filter these no-op completions without guessing from an empty id.
+    /// </summary>
+    public static ConversationTurnResult Ignored(string reasonCode, string activityId, string detail = "") =>
+        new(
+            true,
+            string.IsNullOrWhiteSpace(activityId)
+                ? $"ignored:{reasonCode}"
+                : $"ignored:{reasonCode}:{activityId}",
+            new MessageContent(),
+            "bot",
+            null,
+            string.Empty,
+            detail ?? string.Empty,
+            FailureKind.Unspecified,
+            null,
+            null);
+
+    /// <summary>
     /// Transient failure factory.
     /// </summary>
     public static ConversationTurnResult TransientFailure(string errorCode, string errorSummary, TimeSpan? retryAfter = null) =>
@@ -154,4 +209,12 @@ public sealed class NullConversationTurnRunner : IConversationTurnRunner
     /// <inheritdoc />
     public Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct) =>
         Task.FromResult(ConversationTurnResult.TransientFailure("no_runner", "no IConversationTurnRunner registered"));
+
+    /// <inheritdoc />
+    public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
+        Task.FromResult(ConversationStreamChunkResult.Failed("no_runner", "no IConversationTurnRunner registered"));
 }

@@ -81,9 +81,48 @@ message LlmReplyReadyEvent {
   int64 reply_token_expires_at_unix_ms = 11;
 }
 
+// Per-delta streaming signal dispatched from the LLM inbox runtime to the conversation actor while
+// the reply is still being generated. The actor owns the outbound reply credential and the
+// placeholder message identifier for the turn, so it must be the one issuing the relay placeholder
+// send and subsequent edit calls. This message carries only the cumulative accumulated text for
+// the current delta; the actor tracks streaming state (placeholder message id, disabled flag)
+// in-memory keyed by `correlation_id`. This event must never be persisted — it is a runtime-only
+// signal.
+message LlmReplyStreamChunkEvent {
+  string correlation_id = 1;
+  string registration_id = 2;
+  // Clone of the inbound activity so the actor/turn runner can resolve the platform, conversation,
+  // and outbound delivery without re-reading from durable state.
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
+  // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
+  string accumulated_text = 4;
+  int64 chunk_at_unix_ms = 5;
+}
+
 message DeferredLlmReplyDispatchRequestedEvent {
   string correlation_id = 1;
   int64 requested_at_unix_ms = 2;
+}
+
+// Actor self-message fired by the durable scheduler when an inbound turn retry
+// is due. The handler looks up `activity_id` in
+// ConversationGAgentState.pending_inbound_turns, rebuilds the runtime context
+// from the in-memory reply-token dict, and re-invokes the turn runner.
+message DeferredInboundTurnRetryRequestedEvent {
+  string activity_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
+// Persisted alongside each retry scheduling so that (a) pending_inbound_turns is
+// driven through the standard state matcher pipeline and (b) actor rehydration
+// after deactivation can walk the pending set and re-register durable timeouts.
+message InboundTurnRetryScheduledEvent {
+  string activity_id = 1;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 2;
+  int32 retry_count = 3;
+  int64 first_failed_unix_ms = 4;
+  int64 next_retry_unix_ms = 5;
+  int64 scheduled_at_unix_ms = 6;
 }
 
 message NyxRelayReplyTokenCleanupRequestedEvent {

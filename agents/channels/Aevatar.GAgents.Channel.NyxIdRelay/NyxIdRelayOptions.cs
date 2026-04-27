@@ -30,4 +30,25 @@ public class NyxIdRelayOptions
     public int RelayReplyTokenRuntimeTtlSeconds { get; set; } = 30 * 60;
 
     public bool InteractiveRepliesEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Enables the progressive (streaming) reply path that sends a placeholder message immediately
+    /// and edits it in place while the LLM streams. When disabled, the channel runtime falls back
+    /// to the legacy single-shot reply after the LLM completes.
+    /// </summary>
+    public bool StreamingRepliesEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Minimum interval between progressive edit dispatches, in milliseconds. The final flush
+    /// always bypasses this throttle so the user sees the complete text once the stream ends.
+    /// </summary>
+    public int StreamingFlushIntervalMs { get; set; } = 750;
+
+    /// <summary>
+    /// Placeholder text emitted as the first streaming chunk before the LLM produces any delta.
+    /// Guarantees a visible "working" state within the outbound RTT even when the LLM suffers
+    /// cold-start, router handoff, or tool-call latency before the first token. Set to empty
+    /// to disable and instead wait for the first real delta (slower time-to-first-visible).
+    /// </summary>
+    public string StreamingPlaceholderText { get; set; } = "…";
 }

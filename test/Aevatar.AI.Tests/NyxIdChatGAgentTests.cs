@@ -186,6 +186,9 @@ public class NyxIdChatGAgentTests
         var systemPrompt = llmProviderFactory.StreamRequests[0].Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
+        systemPrompt.Should().Contain("do not call `lark_messages_reply`, `lark_messages_react`, or `nyxid_proxy_execute` to deliver the answer");
+        systemPrompt.Should().Contain("the channel runtime will send it through the Nyx relay reply token");
+        systemPrompt.Should().NotContain("call `lark_messages_react` first");
     }
 
     private static ServiceProvider BuildServiceProvider()
