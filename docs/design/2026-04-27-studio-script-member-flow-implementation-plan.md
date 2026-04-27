@@ -32,6 +32,73 @@ There is also a smaller UX problem in the Create member modal. Script and GAgent
 - No GAgent direct member creation API work.
 - No query-time replay, projection priming, or frontend-owned fact registry.
 
+## UX Structure
+
+Script should read as a member implementation workbench, not as a loose code editor tab. The core structure is:
+
+```text
+Create member
+  -> choose Script
+  -> Open Script builder
+  -> Build > Script
+  -> validate source
+  -> optional draft-run
+  -> save revision
+  -> observe catalog applied
+  -> continue to Bind
+  -> invoke through bound service contract
+  -> observe member facts
+```
+
+The Create member modal stays small and honest:
+
+- Workflow is the only type that asks for `Member name` and creates a draft member immediately.
+- Script and GAgent are visible member types, but they act as builder entries until their member APIs are available.
+- Script action label is `Open Script builder`.
+- GAgent action label is `Open GAgent builder`.
+- The modal should not imply that a Script or GAgent member has been created before the builder and binding lifecycle actually completes.
+
+Build > Script should have a stable three-part layout:
+
+```text
++--------------------------------------------------------------------------------+
+| Script member implementation                                                    |
+| Status: Dirty / Validation failed / Save accepted / Catalog applied / Bound      |
++----------------------------------------------+---------------------------------+
+| Source editor                                 | Readiness checklist             |
+|                                              | [ ] Source selected             |
+|                                              | [ ] Validation clean            |
+|                                              | [ ] Draft-run tested, optional  |
+|                                              | [ ] Save accepted               |
+|                                              | [ ] Catalog applied             |
+|                                              |                                 |
+|                                              | Primary action                  |
+|                                              | Validate / Save revision /      |
+|                                              | Waiting for catalog / Bind      |
++----------------------------------------------+---------------------------------+
+| Draft-run input/output, clearly marked as unsaved-source testing                 |
++--------------------------------------------------------------------------------+
+```
+
+Primary actions should be state-driven:
+
+| State | Primary action | Bind availability |
+| --- | --- | --- |
+| No script selected | Select Script | Hidden |
+| Dirty or unknown | Validate | Hidden |
+| Validation clean | Save revision | Hidden |
+| Save accepted | Waiting for catalog | Hidden |
+| Catalog applied | Continue to Bind | Visible |
+| Bound | Invoke member | Uses the bound service contract |
+
+Key UX rules:
+
+- `Continue to Bind` is not a generic footer action. It appears only after Studio observes the applied Script revision through the catalog or equivalent read model state.
+- Draft-run is explicitly labeled as testing the current editor source. It must not imply that the Script is saved, catalog-applied, or callable as a member service.
+- Bind shows Script as a pending candidate only when the applied revision is clean and not dirty.
+- Invoke is contract-first. If the bound Script exposes a chat-compatible endpoint, Studio can show chat-style invocation. Otherwise it should show the endpoint contract or a clear unsupported state.
+- Observe should prioritize member facts: selected Script revision, binding status, service id, endpoint, actor ids, and latest observed version. Runtime debug details can remain secondary or collapsible.
+
 ## Delivery Slices
 
 ### Slice 1: Create Member Modal UX
@@ -353,4 +420,3 @@ Recommended order:
 - Script Invoke is based on bound endpoint contract.
 - Non-chat Script endpoints are not misrepresented as chat.
 - Tests cover both UI entry behavior and Script lifecycle gates.
-
