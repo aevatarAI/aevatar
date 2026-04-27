@@ -16,7 +16,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Authoring;
+namespace Aevatar.GAgents.Authoring.Lark;
 
 public sealed class AgentBuilderTool : IAgentTool
 {

@@ -14,7 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Xunit;
-using Aevatar.GAgents.Authoring;
+using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;

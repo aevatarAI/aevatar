@@ -53,6 +53,7 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
         services.TryAddSingleton<IUserAgentCatalogRuntimeQueryPort, UserAgentCatalogRuntimeQueryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
+        services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
         services.AddHostedService<UserAgentCatalogStartupService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITombstoneCompactionTarget, UserAgentCatalogTombstoneCompactionTarget>());

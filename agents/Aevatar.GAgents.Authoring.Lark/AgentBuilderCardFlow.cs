@@ -5,7 +5,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
-namespace Aevatar.GAgents.Authoring;
+namespace Aevatar.GAgents.Authoring.Lark;
 
 public static class AgentBuilderCardFlow
 {

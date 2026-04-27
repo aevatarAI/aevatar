@@ -90,7 +90,6 @@ public sealed class AgentDeliveryTargetToolTests
                 },
             ]));
 
-        var actorRuntime = Substitute.For<IActorRuntime>();
         var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
         {
             BaseAddress = new Uri("https://nyx.example.com"),
@@ -98,7 +97,6 @@ public sealed class AgentDeliveryTargetToolTests
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
         services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
@@ -130,7 +128,7 @@ public sealed class AgentDeliveryTargetToolTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IUserAgentCatalogRuntimeQueryPort>());
-        services.AddSingleton(Substitute.For<IActorRuntime>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -150,27 +148,12 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Upsert_Dispatches_Command_And_Resolves_Current_User()
+    public async Task ExecuteAsync_Upsert_Forwards_Command_To_Port_And_Resolves_Current_User()
     {
         var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
-        queryPort.GetStateVersionAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(3));
-        queryPort.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "agent-1",
-                Platform = "lark",
-                ConversationId = "oc_chat_1",
-                NyxProviderSlug = "api-lark-bot",
-                NyxApiKey = "api-key-1234",
-                OwnerNyxUserId = "user-1",
-            }));
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogUpsertResult(CatalogCommandOutcome.Observed)));
 
         var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
         {
@@ -180,7 +163,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(commandPort);
         services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
@@ -204,17 +187,14 @@ public sealed class AgentDeliveryTargetToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be("upserted");
             doc.RootElement.GetProperty("owner_nyx_user_id").GetString().Should().Be("user-1");
 
-            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
-                e.Route != null &&
-                e.Route.Direct != null &&
-                e.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId &&
-                e.Payload != null &&
-                e.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor) &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().AgentId == "agent-1" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().ConversationId == "oc_chat_1" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().NyxProviderSlug == "api-lark-bot" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().NyxApiKey == "api-key-1234" &&
-                e.Payload.Unpack<UserAgentCatalogUpsertCommand>().OwnerNyxUserId == "user-1"));
+            await commandPort.Received(1).UpsertAsync(
+                Arg.Is<UserAgentCatalogUpsertCommand>(c =>
+                    c.AgentId == "agent-1" &&
+                    c.ConversationId == "oc_chat_1" &&
+                    c.NyxProviderSlug == "api-lark-bot" &&
+                    c.NyxApiKey == "api-key-1234" &&
+                    c.OwnerNyxUserId == "user-1"),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -243,7 +223,7 @@ public sealed class AgentDeliveryTargetToolTests
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(Substitute.For<IActorRuntime>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
@@ -277,7 +257,7 @@ public sealed class AgentDeliveryTargetToolTests
                 OwnerNyxUserId = "user-2",
             }));
 
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
         {
             BaseAddress = new Uri("https://nyx.example.com"),
@@ -286,7 +266,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(commandPort);
         services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
@@ -299,7 +279,7 @@ public sealed class AgentDeliveryTargetToolTests
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-2","confirm":true}""");
 
             result.Should().Contain("not found");
-            await actorRuntime.DidNotReceive().GetAsync(UserAgentCatalogGAgent.WellKnownId);
+            await commandPort.DidNotReceive().TombstoneAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -308,28 +288,21 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Delete_Dispatches_Tombstone_Command()
+    public async Task ExecuteAsync_Delete_Forwards_Tombstone_To_Port()
     {
         var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.GetAsync("agent-3", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "agent-3",
-                    Platform = "lark",
-                    ConversationId = "oc_chat_3",
-                    NyxProviderSlug = "api-lark-bot",
-                    OwnerNyxUserId = "user-1",
-                }),
-                Task.FromResult<UserAgentCatalogEntry?>(null));
-        queryPort.GetStateVersionAsync("agent-3", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null));
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "agent-3",
+                Platform = "lark",
+                ConversationId = "oc_chat_3",
+                NyxProviderSlug = "api-lark-bot",
+                OwnerNyxUserId = "user-1",
+            }));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed)));
 
         var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
         {
@@ -338,7 +311,7 @@ public sealed class AgentDeliveryTargetToolTests
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(commandPort);
         services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 
@@ -352,10 +325,7 @@ public sealed class AgentDeliveryTargetToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
 
-            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
-                e.Payload != null &&
-                e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
-                e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "agent-3"));
+            await commandPort.Received(1).TombstoneAsync("agent-3", Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -364,33 +334,26 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Delete_ConfirmsOnDocumentAbsence_WhenStateVersionIsGoneAfterTombstone()
+    public async Task ExecuteAsync_Delete_ReturnsDeleted_WhenCommandPortReportsObserved()
     {
-        // Regression guard for #278 review: the prior confirmation loop required
-        // versionAfter > versionBefore before checking document absence. Under
-        // the new tombstone-retention contract DeleteAsync removes the document
-        // (and its StateVersion) outright, so a successful tombstone must still
-        // surface as "deleted" when GetStateVersionAsync permanently returns null.
+        // Regression guard for #278 review: under the tombstone-retention contract
+        // DeleteAsync removes the document outright, so a successful tombstone must
+        // surface as "deleted" once the command port reports `Observed`. The polling
+        // loop now lives in UserAgentCatalogCommandPort; the tool just maps outcome
+        // to status text.
         var queryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
         queryPort.GetAsync("agent-7", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-                {
-                    AgentId = "agent-7",
-                    Platform = "lark",
-                    ConversationId = "oc_chat_7",
-                    NyxProviderSlug = "api-lark-bot",
-                    OwnerNyxUserId = "user-1",
-                }),
-                Task.FromResult<UserAgentCatalogEntry?>(null));
-        queryPort.GetStateVersionAsync("agent-7", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(null));
-
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "agent-7",
+                Platform = "lark",
+                ConversationId = "oc_chat_7",
+                NyxProviderSlug = "api-lark-bot",
+                OwnerNyxUserId = "user-1",
+            }));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.TombstoneAsync("agent-7", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed)));
 
         var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
         {
@@ -399,7 +362,7 @@ public sealed class AgentDeliveryTargetToolTests
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(commandPort);
         services.AddSingleton(nyxClient);
         var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
 

@@ -3,11 +3,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.GAgents.Authoring</AssemblyName>
-    <RootNamespace>Aevatar.GAgents.Authoring</RootNamespace>
+    <AssemblyName>Aevatar.GAgents.Authoring.Lark</AssemblyName>
+    <RootNamespace>Aevatar.GAgents.Authoring.Lark</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="Aevatar.GAgents.Authoring.Tests" />
+    <InternalsVisibleTo Include="Aevatar.GAgents.Authoring.Lark.Tests" />
     <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
   </ItemGroup>
   <ItemGroup>

@@ -5,7 +5,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 
-namespace Aevatar.GAgents.Authoring;
+namespace Aevatar.GAgents.Authoring.Lark;
 
 public static class NyxRelayAgentBuilderFlow
 {

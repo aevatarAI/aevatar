@@ -49,9 +49,11 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         actorRuntime.GetAsync(DeviceRegistrationGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(deviceActor));
         actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
 
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
         var sut = new ChannelRuntimeTombstoneCompactor(
             watermarkQueryPort,
             actorRuntime,
+            dispatchPort,
             new ITombstoneCompactionTarget[]
             {
                 new ChannelBotRegistrationTombstoneCompactionTarget(),
@@ -62,13 +64,16 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
 
         await sut.RunOnceAsync();
 
-        await channelActor.Received(1).HandleEventAsync(
+        await dispatchPort.Received(1).DispatchAsync(
+            ChannelBotRegistrationGAgent.WellKnownId,
             Arg.Is<EventEnvelope>(env => IsChannelBotCompaction(env, 12)),
             Arg.Any<CancellationToken>());
-        await deviceActor.Received(1).HandleEventAsync(
+        await dispatchPort.Received(1).DispatchAsync(
+            DeviceRegistrationGAgent.WellKnownId,
             Arg.Is<EventEnvelope>(env => IsDeviceCompaction(env, 22)),
             Arg.Any<CancellationToken>());
-        await registryActor.Received(1).HandleEventAsync(
+        await dispatchPort.Received(1).DispatchAsync(
+            UserAgentCatalogGAgent.WellKnownId,
             Arg.Is<EventEnvelope>(env => IsUserAgentCatalogCompaction(env, 32)),
             Arg.Any<CancellationToken>());
     }
@@ -81,9 +86,11 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
             .Returns((long?)null);
         var actorRuntime = Substitute.For<IActorRuntime>();
 
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
         var sut = new ChannelRuntimeTombstoneCompactor(
             watermarkQueryPort,
             actorRuntime,
+            dispatchPort,
             new ITombstoneCompactionTarget[]
             {
                 new ChannelBotRegistrationTombstoneCompactionTarget(),
@@ -95,6 +102,7 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         await sut.RunOnceAsync();
 
         actorRuntime.ReceivedCalls().Should().BeEmpty();
+        dispatchPort.ReceivedCalls().Should().BeEmpty();
     }
 
     private static bool IsChannelBotCompaction(EventEnvelope envelope, long safeStateVersion)

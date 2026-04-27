@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Channel.Runtime;
 using FluentAssertions;
 using Xunit;
 

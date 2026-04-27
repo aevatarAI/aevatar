@@ -2,10 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.AI.ToolProviders.AgentCatalog;
@@ -16,20 +13,10 @@ namespace Aevatar.AI.ToolProviders.AgentCatalog;
 public sealed class AgentDeliveryTargetTool : IAgentTool
 {
     private readonly IServiceProvider _serviceProvider;
-    // Per-instance polling budget (see ProjectionWaitDefaults). Tests inject
-    // shrunk values via the constructor to exercise the budget-exhausted
-    // branch without burning the production 15 s.
-    private readonly int _projectionWaitAttempts;
-    private readonly int _projectionWaitDelayMilliseconds;
 
-    public AgentDeliveryTargetTool(
-        IServiceProvider serviceProvider,
-        int projectionWaitAttempts = ProjectionWaitDefaults.Attempts,
-        int projectionWaitDelayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
+    public AgentDeliveryTargetTool(IServiceProvider serviceProvider)
     {
         _serviceProvider = serviceProvider;
-        _projectionWaitAttempts = projectionWaitAttempts;
-        _projectionWaitDelayMilliseconds = projectionWaitDelayMilliseconds;
     }
 
     public string Name => "agent_delivery_targets";
@@ -87,21 +74,28 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
         var queryPort = _serviceProvider.GetService<IUserAgentCatalogRuntimeQueryPort>();
-        var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
-        if (queryPort is null || actorRuntime is null)
-            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogRuntimeQueryPort or IActorRuntime not registered in DI."}""";
+        if (queryPort is null)
+            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogRuntimeQueryPort not registered in DI."}""";
 
         using var doc = JsonDocument.Parse(argumentsJson);
         var root = doc.RootElement;
         var action = GetStr(root, "action") ?? "list";
 
-        return action switch
+        if (action is "upsert" or "delete")
         {
-            "list" => await ListAsync(queryPort, token, ct),
-            "upsert" => await UpsertAsync(queryPort, actorRuntime, token, root, ct),
-            "delete" => await DeleteAsync(queryPort, actorRuntime, token, root, ct),
-            _ => await ListAsync(queryPort, token, ct),
-        };
+            var commandPort = _serviceProvider.GetService<IUserAgentCatalogCommandPort>();
+            if (commandPort is null)
+                return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogCommandPort not registered in DI."}""";
+
+            return action switch
+            {
+                "upsert" => await UpsertAsync(commandPort, token, root, ct),
+                "delete" => await DeleteAsync(queryPort, commandPort, token, root, ct),
+                _ => await ListAsync(queryPort, token, ct),
+            };
+        }
+
+        return await ListAsync(queryPort, token, ct);
     }
 
     private static string? GetStr(JsonElement el, params string[] properties)
@@ -163,8 +157,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     }
 
     private async Task<string> UpsertAsync(
-        IUserAgentCatalogRuntimeQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        IUserAgentCatalogCommandPort commandPort,
         string token,
         JsonElement args,
         CancellationToken ct)
@@ -195,62 +188,19 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
-        if (projectionPort != null)
-            await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
-
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId.value!, ct) ?? -1;
-
-        var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-                    ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
-
-        var cmd = new UserAgentCatalogUpsertCommand
-        {
-            AgentId = agentId.value!,
-            Platform = platform,
-            ConversationId = conversationId.value!,
-            NyxProviderSlug = nyxProviderSlug.value!,
-            NyxApiKey = nyxApiKey.value!,
-            OwnerNyxUserId = ownerNyxUserId,
-        };
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(cmd),
-            Route = new EnvelopeRoute
+        var result = await commandPort.UpsertAsync(
+            new UserAgentCatalogUpsertCommand
             {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
+                AgentId = agentId.value!,
+                Platform = platform,
+                ConversationId = conversationId.value!,
+                NyxProviderSlug = nyxProviderSlug.value!,
+                NyxApiKey = nyxApiKey.value!,
+                OwnerNyxUserId = ownerNyxUserId,
             },
-        };
+            ct);
 
-        await actor.HandleEventAsync(envelope);
-
-        var confirmed = false;
-        for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(_projectionWaitDelayMilliseconds, ct);
-
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId.value!, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-
-            var after = await queryPort.GetAsync(agentId.value!, ct);
-            if (after == null)
-                continue;
-
-            if (string.Equals(after.Platform, platform, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(after.ConversationId, conversationId.value, StringComparison.Ordinal) &&
-                string.Equals(after.NyxProviderSlug, nyxProviderSlug.value, StringComparison.Ordinal) &&
-                string.Equals(after.NyxApiKey, nyxApiKey.value, StringComparison.Ordinal))
-            {
-                confirmed = true;
-                break;
-            }
-        }
-
+        var confirmed = result.Outcome == CatalogCommandOutcome.Observed;
         return JsonSerializer.Serialize(new
         {
             status = confirmed ? "upserted" : "accepted",
@@ -267,7 +217,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
     private async Task<string> DeleteAsync(
         IUserAgentCatalogRuntimeQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        IUserAgentCatalogCommandPort commandPort,
         string token,
         JsonElement args,
         CancellationToken ct)
@@ -301,62 +251,11 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        // Capture version + ensure projection scope is alive (matches the Upsert path
-        // above). Without priming, an idle-deactivated projection grain leaves the
-        // tombstone enqueued with no consumer and the document persists indefinitely.
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        var result = await commandPort.TombstoneAsync(agentId, ct);
+        if (result.Outcome == CatalogCommandOutcome.NotFound)
+            return JsonSerializer.Serialize(new { error = $"Delivery target '{agentId}' not found" });
 
-        var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
-        if (projectionPort != null)
-            await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
-
-        var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-                    ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand
-            {
-                AgentId = agentId,
-            }),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(envelope);
-
-        // Tombstone triggers IProjectionWriteDispatcher.DeleteAsync (Channel RFC §7.1.1),
-        // which also removes the document's projected StateVersion. Gate confirmation
-        // on either document absence or a state-version advance that materializes the
-        // delete — the prior absence-only check returned false negatives whenever the
-        // 5 s budget lost the race to projection lag.
-        var confirmed = false;
-        for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(_projectionWaitDelayMilliseconds, ct);
-
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
-            if (versionAfter == null)
-            {
-                confirmed = true;
-                break;
-            }
-
-            if (versionAfter.Value <= versionBefore)
-                continue;
-
-            if (await queryPort.GetAsync(agentId, ct) == null)
-            {
-                confirmed = true;
-                break;
-            }
-        }
-
+        var confirmed = result.Outcome == CatalogCommandOutcome.Observed;
         return JsonSerializer.Serialize(new
         {
             status = confirmed ? "deleted" : "accepted",

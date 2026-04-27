@@ -1,6 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 
-namespace Aevatar.GAgents.Authoring;
+namespace Aevatar.GAgents.Authoring.Lark;
 
 public sealed class AgentBuilderToolSource : IAgentToolSource
 {

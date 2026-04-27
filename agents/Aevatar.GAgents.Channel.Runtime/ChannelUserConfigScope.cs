@@ -12,7 +12,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// intact for downstream tools that legitimately need NyxID tenant scope
 /// (binding store, service invocation, etc.).
 /// </summary>
-internal static class ChannelUserConfigScope
+public static class ChannelUserConfigScope
 {
     private const string DefaultScope = "default";
     private const string DefaultPlatform = "channel";

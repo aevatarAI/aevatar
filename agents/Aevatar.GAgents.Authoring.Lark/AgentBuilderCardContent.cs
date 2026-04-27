@@ -2,7 +2,7 @@ using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Scheduled;
 
-namespace Aevatar.GAgents.Authoring;
+namespace Aevatar.GAgents.Authoring.Lark;
 
 /// <summary>
 /// Builds channel-neutral <see cref="MessageContent"/> payloads for the Day One agent builder flow.

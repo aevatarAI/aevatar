@@ -18,6 +18,8 @@ internal static class UserAgentCatalogLegacyAliases
     internal const string ExecutionUpdatedEventProto = ProtoPrefix + "ExecutionUpdatedEvent";
     internal const string TombstonesCompactedEventProto = ProtoPrefix + "TombstonesCompactedEvent";
     internal const string DocumentProto = ProtoPrefix + "Document";
+    internal const string NyxCredentialDocumentProto =
+        "aevatar.gagents.channelruntime.UserAgentCatalogNyxCredentialDocument";
 
     internal const string StateClr = ClrPrefix + "State";
 }
@@ -55,3 +57,6 @@ public sealed partial class UserAgentCatalogTombstonesCompactedEvent;
 
 [LegacyProtoFullName(UserAgentCatalogLegacyAliases.DocumentProto)]
 public sealed partial class UserAgentCatalogDocument;
+
+[LegacyProtoFullName(UserAgentCatalogLegacyAliases.NyxCredentialDocumentProto)]
+public sealed partial class UserAgentCatalogNyxCredentialDocument;

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Aevatar.GAgents.Authoring;
+namespace Aevatar.GAgents.Authoring.Lark;
 
 public static class AgentBuilderTemplates
 {

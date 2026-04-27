@@ -7,19 +7,26 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed class ChannelRuntimeTombstoneCompactor
 {
+    // Stable publisher id for envelope routing — keeps compactor traffic
+    // distinguishable from end-user / tool dispatches in tracing + log fields.
+    private const string PublisherActorId = "channel-runtime.tombstone-compactor";
+
     private readonly IProjectionScopeWatermarkQueryPort _watermarkQueryPort;
     private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IEnumerable<ITombstoneCompactionTarget> _targets;
     private readonly ILogger<ChannelRuntimeTombstoneCompactor> _logger;
 
     public ChannelRuntimeTombstoneCompactor(
         IProjectionScopeWatermarkQueryPort watermarkQueryPort,
         IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
         IEnumerable<ITombstoneCompactionTarget> targets,
         ILogger<ChannelRuntimeTombstoneCompactor> logger)
     {
         _watermarkQueryPort = watermarkQueryPort ?? throw new ArgumentNullException(nameof(watermarkQueryPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _targets = targets ?? throw new ArgumentNullException(nameof(targets));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -40,22 +47,18 @@ public sealed class ChannelRuntimeTombstoneCompactor
         if (!safeVersion.HasValue || safeVersion.Value <= 0)
             return;
 
-        var actor = await _actorRuntime.GetAsync(target.ActorId);
-        if (actor is null)
-            return;
+        // Lifecycle only — the compactor does not own message delivery.
+        await target.EnsureActorAsync(_actorRuntime, ct);
 
-        await actor.HandleEventAsync(
-            new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(target.CreateCommand(safeVersion.Value)),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            },
-            ct);
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(target.CreateCommand(safeVersion.Value)),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, target.ActorId),
+        };
+
+        await _actorDispatchPort.DispatchAsync(target.ActorId, envelope, ct);
 
         _logger.LogDebug(
             "Dispatched tombstone compaction for {TargetName}: actorId={ActorId} safeStateVersion={SafeStateVersion}",

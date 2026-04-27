@@ -7,7 +7,7 @@ using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Authoring;
+namespace Aevatar.GAgents.Authoring.Lark;
 
 /// <summary>
 /// Delivers workflow human-interaction suspensions and resolutions as Lark interactive cards

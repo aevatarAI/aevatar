@@ -3,7 +3,7 @@ using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Xunit;
-using Aevatar.GAgents.Authoring;
+using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
