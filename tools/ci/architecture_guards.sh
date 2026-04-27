@@ -73,6 +73,11 @@ if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver
   exit 1
 fi
 
+if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
+  echo "Legacy GAgent actor store is forbidden. Use registry command/query/admission ports."
+  exit 1
+fi
+
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"

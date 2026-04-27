@@ -49,7 +49,7 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         [FromBody] CreateRoomRequest? request,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -63,22 +63,12 @@ public static class StreamingProxyEndpoints
             roomName = "Group Chat";
 
         var roomId = StreamingProxyDefaults.GenerateRoomId();
-        try
-        {
-            await actorStore.AddActorAsync(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId, ct);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to register room {RoomId} before activation", roomId);
-            return Results.Json(
-                new { error = "Failed to create room" },
-                statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
-
+        var targetCreated = false;
+        var registrationAttempted = false;
         try
         {
             var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(roomId, ct);
+            targetCreated = true;
 
             var initEvent = new GroupChatRoomInitializedEvent { RoomName = roomName };
             var envelope = new EventEnvelope
@@ -89,12 +79,30 @@ public static class StreamingProxyEndpoints
                 Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
             };
             await actor.HandleEventAsync(envelope, ct);
+
+            registrationAttempted = true;
+            var receipt = await registryCommandPort.RegisterActorAsync(
+                new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
+                ct);
+            if (!receipt.IsAdmissionVisible)
+            {
+                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger, registrationAttempted);
+                return Results.Json(
+                    new { error = "Failed to create room" },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
         }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException)
+        {
+            if (targetCreated)
+                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger, registrationAttempted);
+            throw;
+        }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to activate room {RoomId}; rolling back registration", roomId);
-            await TryRollbackRoomCreationAsync(scopeId, roomId, actorStore, actorRuntime, logger);
+            logger.LogError(ex, "Failed to create room {RoomId}", roomId);
+            if (targetCreated)
+                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger, registrationAttempted);
             return Results.Json(
                 new { error = "Failed to create room" },
                 statusCode: StatusCodes.Status500InternalServerError);
@@ -106,7 +114,7 @@ public static class StreamingProxyEndpoints
     private static async Task<IResult> HandleListRoomsAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -116,17 +124,31 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            var groups = await actorStore.GetAsync(scopeId, ct);
-            var group = groups.FirstOrDefault(g =>
+            var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
+            var group = snapshot.Groups.FirstOrDefault(g =>
                 string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentTypeName, StringComparison.Ordinal));
             var roomIds = group?.ActorIds ?? [];
-            return Results.Ok(roomIds.Select(id => new { roomId = id }));
+            return Results.Ok(new
+            {
+                snapshot.ScopeId,
+                snapshot.StateVersion,
+                snapshot.UpdatedAt,
+                snapshot.ObservedAt,
+                Rooms = roomIds.Select(id => new { roomId = id }),
+            });
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to list rooms from actor store");
-            return Results.Ok(Array.Empty<object>());
+            logger.LogWarning(ex, "Failed to list rooms from registry read model");
+            return Results.Ok(new
+            {
+                ScopeId = scopeId,
+                StateVersion = 0L,
+                UpdatedAt = DateTimeOffset.MinValue,
+                ObservedAt = DateTimeOffset.UtcNow,
+                Rooms = Array.Empty<object>(),
+            });
         }
     }
 
@@ -134,7 +156,8 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         string roomId,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -143,14 +166,25 @@ public static class StreamingProxyEndpoints
             return denied;
 
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
+        var admissionError = await AuthorizeRoomAsync(
+            admissionPort,
+            scopeId,
+            roomId,
+            ScopeResourceOperation.Delete,
+            ct);
+        if (admissionError != null)
+            return admissionError;
+
         try
         {
-            await actorStore.RemoveActorAsync(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId, ct);
+            await registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
+                ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to remove room {RoomId} from actor store", roomId);
+            logger.LogWarning(ex, "Failed to unregister room {RoomId} from registry", roomId);
         }
         try
         {
@@ -172,6 +206,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         ChatTopicRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         [FromServices] StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
         [FromServices] IStreamingProxyParticipantStore participantStore,
@@ -187,6 +222,15 @@ public static class StreamingProxyEndpoints
         try
         {
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
+            if (!await TryAuthorizeRoomAsync(
+                    http,
+                    admissionPort,
+                    scopeId,
+                    roomId,
+                    ScopeResourceOperation.Chat,
+                    ct))
                 return;
 
             var prompt = request.Prompt?.Trim() ?? string.Empty;
@@ -389,6 +433,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         PostMessageRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -396,6 +441,15 @@ public static class StreamingProxyEndpoints
 
         if (string.IsNullOrWhiteSpace(request.AgentId) || string.IsNullOrWhiteSpace(request.Content))
             return Results.BadRequest(new { error = "agentId and content are required" });
+
+        var admissionError = await AuthorizeRoomAsync(
+            admissionPort,
+            scopeId,
+            roomId,
+            ScopeResourceOperation.Use,
+            ct);
+        if (admissionError != null)
+            return admissionError;
 
         var actor = await actorRuntime.GetAsync(roomId);
         if (actor is null)
@@ -428,6 +482,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -438,6 +493,15 @@ public static class StreamingProxyEndpoints
         try
         {
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
+            if (!await TryAuthorizeRoomAsync(
+                    http,
+                    admissionPort,
+                    scopeId,
+                    roomId,
+                    ScopeResourceOperation.Stream,
+                    ct))
                 return;
 
             var actor = await actorRuntime.GetAsync(roomId);
@@ -511,12 +575,22 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         string roomId,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
+
+        var admissionError = await AuthorizeRoomAsync(
+            admissionPort,
+            scopeId,
+            roomId,
+            ScopeResourceOperation.ListParticipants,
+            ct);
+        if (admissionError != null)
+            return admissionError;
 
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
@@ -540,6 +614,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         JoinRoomRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -549,6 +624,15 @@ public static class StreamingProxyEndpoints
 
         if (string.IsNullOrWhiteSpace(request.AgentId))
             return Results.BadRequest(new { error = "agentId is required" });
+
+        var admissionError = await AuthorizeRoomAsync(
+            admissionPort,
+            scopeId,
+            roomId,
+            ScopeResourceOperation.Join,
+            ct);
+        if (admissionError != null)
+            return admissionError;
 
         var actor = await actorRuntime.GetAsync(roomId);
         if (actor is null)
@@ -854,9 +938,10 @@ public static class StreamingProxyEndpoints
     private static async Task TryRollbackRoomCreationAsync(
         string scopeId,
         string roomId,
-        IGAgentActorStore actorStore,
+        IGAgentActorRegistryCommandPort registryCommandPort,
         IActorRuntime actorRuntime,
-        ILogger logger)
+        ILogger logger,
+        bool unregisterFromRegistry)
     {
         try
         {
@@ -867,19 +952,78 @@ public static class StreamingProxyEndpoints
             logger.LogError(ex, "Failed to destroy room actor {RoomId} during rollback", roomId);
         }
 
+        if (!unregisterFromRegistry)
+            return;
+
         try
         {
-            await actorStore.RemoveActorAsync(
-                scopeId,
-                StreamingProxyDefaults.GAgentTypeName,
-                roomId,
+            await registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(
+                    scopeId,
+                    StreamingProxyDefaults.GAgentTypeName,
+                    roomId),
                 CancellationToken.None);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to remove room {RoomId} from actor store during rollback", roomId);
+            logger.LogError(ex, "Failed to unregister room {RoomId} from registry during rollback", roomId);
         }
     }
+
+    private static async Task<IResult?> AuthorizeRoomAsync(
+        IScopeResourceAdmissionPort admissionPort,
+        string scopeId,
+        string roomId,
+        ScopeResourceOperation operation,
+        CancellationToken ct)
+    {
+        var admission = await admissionPort.AuthorizeTargetAsync(
+            new ScopeResourceTarget(
+                scopeId,
+                ScopeResourceKind.GAgentActor,
+                StreamingProxyDefaults.GAgentTypeName,
+                roomId,
+                operation),
+            ct);
+        return MapAdmissionError(admission);
+    }
+
+    private static async Task<bool> TryAuthorizeRoomAsync(
+        HttpContext http,
+        IScopeResourceAdmissionPort admissionPort,
+        string scopeId,
+        string roomId,
+        ScopeResourceOperation operation,
+        CancellationToken ct)
+    {
+        var admissionError = await AuthorizeRoomAsync(admissionPort, scopeId, roomId, operation, ct);
+        if (admissionError == null)
+            return true;
+
+        switch (admissionError)
+        {
+            case IStatusCodeHttpResult { StatusCode: { } statusCode }:
+                http.Response.StatusCode = statusCode;
+                break;
+            default:
+                http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                break;
+        }
+
+        return false;
+    }
+
+    private static IResult? MapAdmissionError(ScopeResourceAdmissionResult admission) =>
+        admission.Status switch
+        {
+            ScopeResourceAdmissionStatus.Allowed => null,
+            ScopeResourceAdmissionStatus.NotFound => Results.NotFound(new { error = "Room not found" }),
+            ScopeResourceAdmissionStatus.Denied or ScopeResourceAdmissionStatus.ScopeMismatch =>
+                Results.Json(new { error = "Room access denied" }, statusCode: StatusCodes.Status403Forbidden),
+            ScopeResourceAdmissionStatus.Unavailable =>
+                Results.Json(new { error = "Room admission unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Json(new { error = "Room admission failed" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
 
     // ─── Request DTOs ───
 

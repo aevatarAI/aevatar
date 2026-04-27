@@ -13,6 +13,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
+- [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
@@ -35,6 +36,11 @@ Immutable records of architectural choices and their rationale.
 - [Channel Bot Callback Architecture — Lessons from Lark Integration](decisions/0009-channel-bot-callback-architecture.md)
 - [Channel Phase 0 Persistent Provider Validation Result](decisions/0010-channel-phase0-provider-validation.md)
 - [AGUI / SSE Projection Session Pipeline](decisions/0011-agui-sse-projection-session-pipeline.md)
+- [Lark Nyx Relay Webhook Topology](decisions/0011-lark-nyx-relay-webhook.md)
+- [Channel Runtime Credential Boundary](decisions/0012-channel-runtime-credential-boundary.md)
+- [Studio Member-First Published Service Identity](decisions/0012-studio-member-first-published-service.md)
+- [Unified Channel Inbound Backbone](decisions/0013-unified-channel-inbound-backbone.md)
+- [Channel Interactive Reply Abstraction](decisions/0014-interactive-reply-abstraction.md)
 
 ## History
 
@@ -52,6 +58,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-04-09-scripting-authority-write-path-cqrs-closure](history/2026-04/2026-04-09-scripting-authority-write-path-cqrs-closure.md)
 - [2026-04-17-issue-204-agui-sse-projection-session-design](history/2026-04/2026-04-17-issue-204-agui-sse-projection-session-design.md)
 - [2026-04-17-nyxid-chat-registry-lifecycle](history/2026-04/2026-04-17-nyxid-chat-registry-lifecycle.md)
+- [2026-04-27-registry-ownership-ports-design](history/2026-04/2026-04-27-registry-ownership-ports-design.md)
 - [claude-code-architecture-learnings](history/2026-04/claude-code-architecture-learnings.md)
 - [nyxid-chat-console-design](history/2026-04/nyxid-chat-console-design.md)
 

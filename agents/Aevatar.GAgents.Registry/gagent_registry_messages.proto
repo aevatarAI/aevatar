@@ -25,3 +25,22 @@ message ActorUnregisteredEvent {
   string actor_id = 2;
 }
 
+// ─── Admission ───
+
+enum GAgentRegistryOperation {
+  UNKNOWN = 0;
+  USE = 1;
+  DELETE = 2;
+  CHAT = 3;
+  STREAM = 4;
+  APPROVE = 5;
+  JOIN = 6;
+  LIST_PARTICIPANTS = 7;
+  DRAFT_RUN_REUSE = 8;
+}
+
+message ScopeResourceAdmissionRequested {
+  string gagent_type = 1;
+  string actor_id = 2;
+  GAgentRegistryOperation operation = 3;
+}
