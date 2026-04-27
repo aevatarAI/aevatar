@@ -13,9 +13,15 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 internal interface IConversationReplyGenerator
 {
+    /// <summary>
+    /// Generates the full LLM reply text. If <paramref name="streamingSink"/> is supplied, the
+    /// generator forwards progressive deltas as the stream advances; implementations must tolerate
+    /// a null sink by simply accumulating the final text.
+    /// </summary>
     Task<string?> GenerateReplyAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
+        IStreamingReplySink? streamingSink,
         CancellationToken ct);
 }
 
@@ -32,6 +38,8 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly SkillRegistry? _skillRegistry;
     private readonly NyxIdRelayOptions? _relayOptions;
+    private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
+    private readonly IUserMemoryStore? _userMemoryStore;
 
     public NyxIdConversationReplyGenerator(
         ILLMProviderFactory llmProviderFactory,
@@ -40,7 +48,9 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         SkillRegistry? skillRegistry = null,
-        NyxIdRelayOptions? relayOptions = null)
+        NyxIdRelayOptions? relayOptions = null,
+        INyxIdUserLlmPreferencesStore? preferencesStore = null,
+        IUserMemoryStore? userMemoryStore = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -49,16 +59,20 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _skillRegistry = skillRegistry;
         _relayOptions = relayOptions;
+        _preferencesStore = preferencesStore;
+        _userMemoryStore = userMemoryStore;
     }
 
     public async Task<string?> GenerateReplyAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
+        IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
         ArgumentNullException.ThrowIfNull(metadata);
 
+        var effectiveMetadata = await BuildEffectiveMetadataAsync(metadata, ct);
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
             MaxMessages = MaxHistoryMessages,
@@ -82,7 +96,7 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
                 [
                     ChatMessage.System(BuildSystemPrompt()),
                 ],
-                Metadata = new Dictionary<string, string>(metadata, StringComparer.Ordinal),
+                Metadata = new Dictionary<string, string>(effectiveMetadata, StringComparer.Ordinal),
                 Tools = FilterValidTools(tools),
             },
             agentMiddlewares: _agentMiddlewares,
@@ -91,19 +105,76 @@ internal sealed class NyxIdConversationReplyGenerator : IConversationReplyGenera
             agentName: "NyxIdConversationReply",
             streamBufferCapacity: StreamBufferCapacity);
 
+        // Emit a placeholder immediately so the user sees a message within the outbound RTT,
+        // regardless of LLM cold-start, router selection, or tool-call latency before the
+        // first real delta. The first real delta overwrites this placeholder via edit-in-place;
+        // if no delta ever arrives (tool-only or empty turn), the caller's FinalizeAsync edits
+        // the placeholder to the final text. Disabled by setting the option to empty/whitespace.
+        if (streamingSink is not null)
+        {
+            var placeholder = _relayOptions?.StreamingPlaceholderText;
+            if (!string.IsNullOrWhiteSpace(placeholder))
+                await streamingSink.OnDeltaAsync(placeholder, ct);
+        }
+
         var output = new StringBuilder();
         await foreach (var chunk in runtime.ChatStreamAsync(
                            activity.Content.Text,
                            MaxToolRounds,
                            activity.Id,
-                           metadata,
+                           effectiveMetadata,
                            ct))
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                output.Append(chunk.DeltaContent);
+            if (string.IsNullOrEmpty(chunk.DeltaContent))
+                continue;
+
+            output.Append(chunk.DeltaContent);
+            if (streamingSink is not null)
+                await streamingSink.OnDeltaAsync(output.ToString(), ct);
         }
 
         return output.ToString();
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken ct)
+    {
+        var effective = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+
+        if (_preferencesStore is not null)
+        {
+            try
+            {
+                var preferences = await _preferencesStore.GetAsync(ct);
+                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
+                    effective[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
+                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
+                    effective[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
+                if (preferences.MaxToolRounds > 0)
+                    effective[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
+            }
+            catch
+            {
+                // User config is additive only; channel runtime falls back to server defaults on failure.
+            }
+        }
+
+        if (_userMemoryStore is not null)
+        {
+            try
+            {
+                var promptSection = await _userMemoryStore.BuildPromptSectionAsync(2000, ct);
+                if (!string.IsNullOrWhiteSpace(promptSection))
+                    effective[LLMRequestMetadataKeys.UserMemoryPrompt] = promptSection;
+            }
+            catch
+            {
+                // User memory is best-effort context and must not break the main reply path.
+            }
+        }
+
+        return effective;
     }
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)

@@ -23,7 +23,7 @@ describe("teamRuntimeLens", () => {
     });
   });
 
-  it("honors a preferred current run when one is explicitly requested", () => {
+  it("honors a preferred current run without promoting failed runs to baseline", () => {
     const runs = [
       {
         runId: "run-2",
@@ -45,7 +45,29 @@ describe("teamRuntimeLens", () => {
       }),
     ).toEqual({
       currentRun: runs[1],
-      baselineRun: runs[0],
+      baselineRun: null,
+    });
+  });
+
+  it("keeps baseline empty when no successful prior run exists", () => {
+    const runs = [
+      {
+        runId: "run-2",
+        lastUpdatedAt: "2026-04-09T09:05:00Z",
+        completionStatus: "failed",
+        lastSuccess: false,
+      },
+      {
+        runId: "run-1",
+        lastUpdatedAt: "2026-04-09T09:00:00Z",
+        completionStatus: "waiting_approval",
+        lastSuccess: false,
+      },
+    ] as any;
+
+    expect(selectTeamCompareRuns(runs)).toEqual({
+      currentRun: runs[0],
+      baselineRun: null,
     });
   });
 

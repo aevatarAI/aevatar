@@ -8,8 +8,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -27,6 +27,7 @@ public static class ChannelCallbackEndpoints
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
+        group.MapPost("/registrations/rebuild", HandleRebuildRegistrationsAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
@@ -34,18 +35,6 @@ public static class ChannelCallbackEndpoints
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
-    }
-
-    /// <summary>
-    /// Gets or creates the well-known ChannelBotRegistrationGAgent singleton actor.
-    /// Lifecycle: created on first request, never destroyed (long-lived fact owner per CLAUDE.md).
-    /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
-    /// CreateAsync calls from multiple requests safely converge to the same grain.
-    /// </summary>
-    private static async Task<IActor> GetOrCreateRegistrationActorAsync(IActorRuntime actorRuntime)
-    {
-        return await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-               ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(ChannelBotRegistrationGAgent.WellKnownId);
     }
 
     /// <summary>
@@ -82,7 +71,7 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
-        [FromServices] INyxLarkProvisioningService provisioningService,
+        [FromServices] IEnumerable<INyxChannelBotProvisioningService> provisioningServices,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -106,11 +95,12 @@ public static class ChannelCallbackEndpoints
         }
 
         var platformNormalized = request.Platform.Trim().ToLowerInvariant();
-        if (!string.Equals(platformNormalized, "lark", StringComparison.OrdinalIgnoreCase))
+        var provisioningServiceMap = BuildProvisioningServiceMap(provisioningServices);
+        if (!provisioningServiceMap.TryGetValue(platformNormalized, out var provisioningService))
         {
             return Results.Conflict(new
             {
-                error = $"Platform '{platformNormalized}' is not in the supported production contract. ChannelRuntime currently provisions only Lark via Nyx relay ingress.",
+                error = $"Platform '{platformNormalized}' is not in the supported production contract. ChannelRuntime currently provisions relay registrations for: {string.Join(", ", provisioningServiceMap.Keys.OrderBy(static key => key, StringComparer.OrdinalIgnoreCase))}.",
             });
         }
 
@@ -120,33 +110,36 @@ public static class ChannelCallbackEndpoints
             accessToken = accessToken[bearerPrefix.Length..].Trim();
 
         if (string.IsNullOrWhiteSpace(accessToken))
-        {
             return Results.Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
+        {
+            return Results.BadRequest(new { error = "webhook_base_url is required for Nyx-backed relay provisioning" });
         }
 
-        if (string.IsNullOrWhiteSpace(request.AppId) ||
-            string.IsNullOrWhiteSpace(request.AppSecret) ||
-            string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
-        {
-            return Results.BadRequest(new { error = "app_id, app_secret, and webhook_base_url are required for Nyx-backed Lark provisioning" });
-        }
+        var scopeResolution = ResolveScopeId(http, request.ScopeId, required: true);
+        if (scopeResolution.Error is not null)
+            return Results.BadRequest(new { error = scopeResolution.Error });
 
         var result = await provisioningService.ProvisionAsync(
-            new NyxLarkProvisioningRequest(
+            new NyxChannelBotProvisioningRequest(
+                Platform: platformNormalized,
                 AccessToken: accessToken,
-                AppId: request.AppId.Trim(),
-                AppSecret: request.AppSecret.Trim(),
                 WebhookBaseUrl: request.WebhookBaseUrl.Trim(),
-                ScopeId: request.ScopeId?.Trim() ?? string.Empty,
+                ScopeId: scopeResolution.ScopeId!,
                 Label: request.Label?.Trim() ?? string.Empty,
-                NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty),
+                NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty,
+                Lark: new NyxChannelLarkCredentials(
+                    AppId: request.AppId?.Trim() ?? string.Empty,
+                    AppSecret: request.AppSecret?.Trim() ?? string.Empty,
+                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty)),
             ct);
 
         var payload = new
         {
             status = result.Status,
             registration_id = result.RegistrationId ?? string.Empty,
-            platform = "lark",
+            platform = result.Platform,
             nyx_provider_slug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
                 ? "api-lark-bot"
                 : request.NyxProviderSlug.Trim(),
@@ -164,7 +157,8 @@ public static class ChannelCallbackEndpoints
 
         var statusCode = ResolveProvisioningFailureStatusCode(result.Error);
         logger.LogWarning(
-            "Nyx-backed Lark provisioning rejected: statusCode={StatusCode}, error={Error}",
+            "Nyx-backed channel provisioning rejected: platform={Platform}, statusCode={StatusCode}, error={Error}",
+            result.Platform,
             statusCode,
             result.Error);
         return Results.Json(payload, statusCode: statusCode);
@@ -191,9 +185,100 @@ public static class ChannelCallbackEndpoints
         return Results.Ok(result);
     }
 
+    private static async Task<IResult> HandleRebuildRegistrationsAsync(
+        HttpContext http,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] INyxRelayApiKeyOwnershipVerifier? apiKeyOwnershipVerifier,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
+        ChannelRegistrationRebuildRequest? request;
+        try
+        {
+            request = await ReadOptionalRebuildRequestAsync(http, ct);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Invalid channel registration rebuild request payload");
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "Unsupported channel registration rebuild request content type");
+            return Results.BadRequest(new { error = "Unsupported content type. Use application/json for rebuild request payloads." });
+        }
+
+        var scopeResolution = ResolveScopeId(http, request?.ScopeId, required: false);
+        if (scopeResolution.Error is not null)
+            return Results.BadRequest(new { error = scopeResolution.Error });
+
+        var accessToken = ResolveBearerAccessToken(http);
+        int? observedRegistrationsBeforeRebuild = null;
+        ChannelBotRegistrationScopeBackfillResult? backfill = null;
+        var note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.";
+
+        try
+        {
+            var registrations = await queryPort.QueryAllAsync(ct);
+            observedRegistrationsBeforeRebuild = registrations.Count;
+            backfill = await ChannelBotRegistrationScopeBackfill.BackfillAsync(
+                registrations,
+                scopeResolution.ScopeId,
+                new ChannelBotRegistrationScopeBackfillSelection(
+                    request?.RegistrationId,
+                    request?.NyxAgentApiKeyId,
+                    request?.Force ?? false),
+                actorRuntime,
+                dispatchPort,
+                new ChannelBotRegistrationScopeBackfillAuthorization(
+                    accessToken,
+                    apiKeyOwnershipVerifier),
+                ct);
+            if (backfill.EmptyScopeRegistrationsObserved > 0)
+                note = $"{note} {backfill.Note}";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Channel registration query failed before dispatching a manual rebuild");
+            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side observation is currently unavailable; registrations may still refresh asynchronously.";
+        }
+
+        await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
+            actorRuntime,
+            dispatchPort,
+            string.IsNullOrWhiteSpace(request?.Reason)
+                ? "http_api_manual_rebuild"
+                : request.Reason.Trim(),
+            ct);
+
+        return Results.Accepted(value: new
+        {
+            status = "accepted",
+            actor_id = ChannelBotRegistrationGAgent.WellKnownId,
+            observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
+            empty_scope_registrations_observed = backfill?.EmptyScopeRegistrationsObserved,
+            empty_scope_registrations_backfilled = backfill?.BackfilledRegistrations,
+            note,
+        });
+    }
+
+    private static string? ResolveBearerAccessToken(HttpContext http)
+    {
+        var accessToken = http.Request.Headers.Authorization.ToString();
+        const string bearerPrefix = "Bearer ";
+        if (accessToken.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+            accessToken = accessToken[bearerPrefix.Length..].Trim();
+
+        return string.IsNullOrWhiteSpace(accessToken) ? null : accessToken;
+    }
+
     private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         CancellationToken ct)
     {
@@ -201,20 +286,11 @@ public static class ChannelCallbackEndpoints
         if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
-        var cmd = new ChannelBotUnregisterCommand { RegistrationId = registrationId };
-        var cmdEnvelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(cmd),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await actor.HandleEventAsync(cmdEnvelope);
+        await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
+            actorRuntime,
+            dispatchPort,
+            registrationId,
+            ct);
         return Results.Ok(new { status = "deleted" });
     }
 
@@ -280,12 +356,84 @@ public static class ChannelCallbackEndpoints
     {
         return error switch
         {
+            "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
-            "missing_app_id" or "missing_app_secret" or "missing_webhook_base_url" => StatusCodes.Status400BadRequest,
+            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_webhook_base_url" or "missing_scope_id" => StatusCodes.Status400BadRequest,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status502BadGateway,
         };
     }
+
+    private static IReadOnlyDictionary<string, INyxChannelBotProvisioningService> BuildProvisioningServiceMap(
+        IEnumerable<INyxChannelBotProvisioningService> provisioningServices)
+    {
+        ArgumentNullException.ThrowIfNull(provisioningServices);
+
+        var serviceMap = new Dictionary<string, INyxChannelBotProvisioningService>(StringComparer.OrdinalIgnoreCase);
+        foreach (var provisioningService in provisioningServices)
+        {
+            if (provisioningService is null)
+                continue;
+
+            var platformKey = provisioningService.Platform?.Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(platformKey))
+                continue;
+
+            if (!serviceMap.TryAdd(platformKey, provisioningService))
+            {
+                throw new InvalidOperationException(
+                    $"Multiple Nyx channel provisioning services are registered for platform '{platformKey}'.");
+            }
+        }
+
+        return serviceMap;
+    }
+
+    private static async Task<ChannelRegistrationRebuildRequest?> ReadOptionalRebuildRequestAsync(
+        HttpContext http,
+        CancellationToken ct)
+    {
+        if (http.Request.ContentLength == 0)
+            return null;
+        if (http.Request.Body.CanSeek && http.Request.Body.Length == http.Request.Body.Position)
+            return null;
+
+        // ReadFromJsonAsync throws InvalidOperationException for unsupported content types.
+        return await http.Request.ReadFromJsonAsync<ChannelRegistrationRebuildRequest>(RegistrationJsonOptions, ct);
+    }
+
+    private static ScopeIdResolution ResolveScopeId(HttpContext http, string? explicitScopeId, bool required)
+    {
+        var explicitNormalized = NormalizeOptional(explicitScopeId);
+        var claimNormalized = NormalizeOptional(http.User.FindFirst("scope_id")?.Value);
+        if (explicitNormalized is not null &&
+            claimNormalized is not null &&
+            !string.Equals(explicitNormalized, claimNormalized, StringComparison.Ordinal))
+        {
+            return new ScopeIdResolution(null, "scope_id does not match the authenticated scope");
+        }
+
+        var resolved = explicitNormalized ?? claimNormalized;
+        if (required && resolved is null)
+            return new ScopeIdResolution(null, "scope_id is required");
+
+        return new ScopeIdResolution(resolved, null);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private sealed record ScopeIdResolution(string? ScopeId, string? Error);
+
+    private sealed record ChannelRegistrationRebuildRequest(
+        string? ScopeId,
+        string? RegistrationId,
+        string? NyxAgentApiKeyId,
+        string? Reason,
+        bool Force);
 
     private sealed record RegistrationRequest(
         string? Platform,
@@ -294,6 +442,6 @@ public static class ChannelCallbackEndpoints
         string? WebhookBaseUrl,
         string? AppId,
         string? AppSecret,
+        string? VerificationToken,
         string? Label);
-
 }

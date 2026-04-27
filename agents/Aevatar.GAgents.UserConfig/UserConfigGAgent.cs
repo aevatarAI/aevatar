@@ -23,6 +23,12 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
         await PersistDomainEventAsync(evt);
     }
 
+    [EventHandler(EndpointName = "updateGithubUsername")]
+    public async Task HandleGithubUsernameUpdated(UserConfigGithubUsernameUpdatedEvent evt)
+    {
+        await PersistDomainEventAsync(evt);
+    }
+
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
@@ -34,6 +40,7 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
         return StateTransitionMatcher
             .Match(current, evt)
             .On<UserConfigUpdatedEvent>(ApplyConfigUpdated)
+            .On<UserConfigGithubUsernameUpdatedEvent>(ApplyGithubUsernameUpdated)
             .OrCurrent();
     }
 
@@ -48,7 +55,22 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
             LocalRuntimeBaseUrl = evt.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl = evt.RemoteRuntimeBaseUrl,
             MaxToolRounds = evt.MaxToolRounds,
+            GithubUsername = evt.GithubUsername,
         };
     }
 
+    private static UserConfigGAgentState ApplyGithubUsernameUpdated(
+        UserConfigGAgentState state, UserConfigGithubUsernameUpdatedEvent evt)
+    {
+        return new UserConfigGAgentState
+        {
+            DefaultModel = state.DefaultModel,
+            PreferredLlmRoute = state.PreferredLlmRoute,
+            RuntimeMode = state.RuntimeMode,
+            LocalRuntimeBaseUrl = state.LocalRuntimeBaseUrl,
+            RemoteRuntimeBaseUrl = state.RemoteRuntimeBaseUrl,
+            MaxToolRounds = state.MaxToolRounds,
+            GithubUsername = evt.GithubUsername,
+        };
+    }
 }

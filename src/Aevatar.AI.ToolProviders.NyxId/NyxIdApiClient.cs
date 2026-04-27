@@ -17,11 +17,25 @@ public sealed record NyxIdChannelRelayReplyResult(
     bool Succeeded,
     string? MessageId = null,
     string? PlatformMessageId = null,
-    string? Detail = null);
+    string? Detail = null,
+    bool EditUnsupported = false);
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient
 {
+    /// <summary>
+    /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
+    /// when the caller does not specify one in <c>extraHeaders</c>. GitHub's REST API rejects
+    /// requests without a <c>User-Agent</c> with HTTP 403 ("Request forbidden by administrative
+    /// rules") — see https://docs.github.com/en/rest/overview/resources-in-the-rest-api#user-agent-required.
+    /// .NET's <c>HttpClient</c> does not set one by default; NyxID proxies the client's headers
+    /// through to GitHub, so the absence at the .NET layer manifests as a GitHub 403 in
+    /// production. CLI tools written against <c>reqwest</c> (e.g. <c>nyxid proxy request</c>)
+    /// happen to send <c>reqwest/x.y</c> as their default and so never hit this.
+    /// </summary>
+    public const string DefaultProxyUserAgent = "aevatar-agent-builder";
+    private const string UserAgentHeaderName = "User-Agent";
+
     private readonly HttpClient _http;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
@@ -130,11 +144,25 @@ public sealed class NyxIdApiClient
         using var request = new HttpRequestMessage(httpMethod, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+        var callerSpecifiedUserAgent = false;
         if (extraHeaders != null)
         {
             foreach (var (key, value) in extraHeaders)
+            {
                 request.Headers.TryAddWithoutValidation(key, value);
+                if (string.Equals(key, UserAgentHeaderName, StringComparison.OrdinalIgnoreCase))
+                    callerSpecifiedUserAgent = true;
+            }
         }
+
+        // GitHub-required User-Agent (#417 follow-up). NyxID proxies whatever the .NET client
+        // sends, and HttpClient sends none by default, so without this every GitHub call lands
+        // as 403 "Request forbidden by administrative rules". Inject a default for *all* proxy
+        // targets — non-GitHub services don't care about UA either way, and pinning it at the
+        // proxy boundary means SkillRunner / agent-builder / preflight all benefit without
+        // every call site remembering to pass it.
+        if (!callerSpecifiedUserAgent)
+            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
 
         if (!string.IsNullOrEmpty(body) && httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head)
         {
@@ -208,13 +236,16 @@ public sealed class NyxIdApiClient
 
     // ─── User Services (for route command) ───
 
+    public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/user-services", ct);
+
     public Task<string> UpdateUserServiceAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
 
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/proxy/services", ct);
+        GetAsync(token, "/api/v1/proxy/services?per_page=100", ct);
 
     // ─── API Keys (additions) ───
 
@@ -419,18 +450,47 @@ public sealed class NyxIdApiClient
     public Task<string> PushChannelEventAsync(string token, string conversationId, string body, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/channel-events/{Uri.EscapeDataString(conversationId)}", body, ct);
 
-    public async Task<NyxIdChannelRelayReplyResult> SendChannelRelayTextReplyAsync(
+    /// <summary>
+    /// Sends a channel relay reply with plain text only.
+    /// </summary>
+    /// <remarks>
+    /// Kept as a thin wrapper over <see cref="SendChannelRelayReplyAsync"/> so legacy call sites that
+    /// only need a text fallback continue to compile. New call sites should prefer the rich overload.
+    /// </remarks>
+    public Task<NyxIdChannelRelayReplyResult> SendChannelRelayTextReplyAsync(
         string token,
         string messageId,
         string text,
         CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+
+        return SendChannelRelayReplyAsync(token, messageId, new ChannelRelayReplyBody(text), ct);
+    }
+
+    /// <summary>
+    /// Sends a channel relay reply with arbitrary body shape — text fallback and/or rich card metadata.
+    /// </summary>
+    /// <remarks>
+    /// The <paramref name="body"/> is serialized as <c>{ message_id, reply: { text?, metadata: { card? } } }</c>.
+    /// Transport-neutral callers (for example, the interactive reply dispatcher) use this overload to
+    /// forward composer output verbatim; NyxID's per-platform adapter renders the card for each platform.
+    /// </remarks>
+    public async Task<NyxIdChannelRelayReplyResult> SendChannelRelayReplyAsync(
+        string token,
+        string messageId,
+        ChannelRelayReplyBody body,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
         if (string.IsNullOrWhiteSpace(token))
             return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
         if (string.IsNullOrWhiteSpace(messageId))
             return new NyxIdChannelRelayReplyResult(false, Detail: "missing_message_id");
-        if (string.IsNullOrWhiteSpace(text))
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text");
+        if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
 
         var response = await PostAsync(
             token,
@@ -438,10 +498,7 @@ public sealed class NyxIdApiClient
             JsonSerializer.Serialize(new
             {
                 message_id = messageId,
-                reply = new
-                {
-                    text,
-                },
+                reply = BuildReplyNode(body),
             }),
             ct);
 
@@ -467,6 +524,103 @@ public sealed class NyxIdApiClient
             _logger.LogWarning(ex, "Nyx channel relay reply returned invalid JSON");
             return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_response");
         }
+    }
+
+    private static object BuildReplyNode(ChannelRelayReplyBody body)
+    {
+        var hasText = !string.IsNullOrWhiteSpace(body.Text);
+        var hasCard = body.Metadata?.Card is not null;
+
+        if (hasText && hasCard)
+            return new { text = body.Text, metadata = new { card = body.Metadata!.Card } };
+        if (hasText)
+            return new { text = body.Text };
+
+        return new { metadata = new { card = body.Metadata!.Card } };
+    }
+
+    /// <summary>
+    /// Edits a previously sent channel-relay reply so the downstream platform sees updated content
+    /// (per NyxID #480 / #483: <c>POST /api/v1/channel-relay/reply/update</c>).
+    /// </summary>
+    /// <param name="platformMessageId">
+    /// The upstream platform-owned message identifier (for Lark, the <c>om_xxx</c> value) returned
+    /// by a prior send call.
+    /// </param>
+    /// <remarks>
+    /// Callers must treat <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> as a terminal
+    /// signal and stop issuing edits against this message for the remainder of the turn.
+    /// </remarks>
+    public async Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayReplyAsync(
+        string token,
+        string platformMessageId,
+        ChannelRelayReplyBody body,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
+        if (string.IsNullOrWhiteSpace(token))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+        if (string.IsNullOrWhiteSpace(platformMessageId))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_platform_message_id");
+        if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
+
+        var response = await PostAsync(
+            token,
+            "/api/v1/channel-relay/reply/update",
+            JsonSerializer.Serialize(new
+            {
+                message_id = platformMessageId,
+                reply = BuildReplyNode(body),
+            }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+        {
+            var editUnsupported =
+                errorDetail.Contains("edit_unsupported", StringComparison.Ordinal) ||
+                errorDetail.Contains("nyx_status=501", StringComparison.Ordinal);
+            return new NyxIdChannelRelayReplyResult(
+                false,
+                Detail: errorDetail,
+                EditUnsupported: editUnsupported);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var upstream = root.TryGetProperty("upstream_message_id", out var upstreamProp) &&
+                           upstreamProp.ValueKind == JsonValueKind.String
+                ? upstreamProp.GetString()
+                : null;
+            return new NyxIdChannelRelayReplyResult(
+                true,
+                MessageId: null,
+                PlatformMessageId: upstream);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Nyx channel relay reply update returned invalid JSON");
+            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_update_response");
+        }
+    }
+
+    /// <summary>
+    /// Text-only convenience wrapper over
+    /// <see cref="UpdateChannelRelayReplyAsync(string, string, ChannelRelayReplyBody, CancellationToken)"/>.
+    /// </summary>
+    public Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayTextReplyAsync(
+        string token,
+        string platformMessageId,
+        string text,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+
+        return UpdateChannelRelayReplyAsync(token, platformMessageId, new ChannelRelayReplyBody(text), ct);
     }
 
     // ─── Admin Invite Codes ───

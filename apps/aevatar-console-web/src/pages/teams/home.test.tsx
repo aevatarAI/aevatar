@@ -192,6 +192,8 @@ describe("TeamsHomePage", () => {
 
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("member")).toBe("workflow:workflow-alpha");
+    expect(params.get("focus")).toBeNull();
     expect(params.get("tab")).toBe("studio");
     expect(params.get("scopeLabel")).toBeNull();
   });

@@ -6,7 +6,6 @@ import { isChatServiceEndpoint } from '@/shared/runs/scopeConsole';
 import type {
   StudioAuthSession,
   StudioScopeBindingRevision,
-  StudioScopeBindingStatus,
 } from '@/shared/studio/models';
 
 export type StudioBindStreaming = {
@@ -44,7 +43,6 @@ type BuildStudioBindContractInput = {
   readonly endpoint: ServiceEndpointSnapshot | null;
   readonly origin?: string;
   readonly revision?: StudioScopeBindingRevision | null;
-  readonly scopeBinding?: StudioScopeBindingStatus | null;
   readonly scopeId: string;
   readonly service: ServiceCatalogSnapshot | null;
 };
@@ -168,8 +166,6 @@ export function buildStudioBindContract(
     trimOptional(input.revision?.revisionId) ||
     trimOptional(input.service.activeServingRevisionId) ||
     trimOptional(input.service.defaultServingRevisionId) ||
-    trimOptional(input.scopeBinding?.activeServingRevisionId) ||
-    trimOptional(input.scopeBinding?.defaultServingRevisionId) ||
     'n/a';
 
   return {
@@ -178,9 +174,7 @@ export function buildStudioBindContract(
     authHint: authDescriptor.authHint,
     authLabel: authDescriptor.authLabel,
     deploymentStatus:
-      trimOptional(input.service.deploymentStatus) ||
-      trimOptional(input.scopeBinding?.deploymentStatus) ||
-      'draft',
+      trimOptional(input.service.deploymentStatus) || 'draft',
     endpointDescription:
       trimOptional(input.endpoint.description) || 'No endpoint description.',
     endpointDisplayName:
@@ -192,8 +186,7 @@ export function buildStudioBindContract(
     invokeUrl,
     method: 'POST',
     primaryActorId:
-      trimOptional(input.service.primaryActorId) ||
-      trimOptional(input.scopeBinding?.primaryActorId),
+      trimOptional(input.service.primaryActorId),
     requestTypeUrl: trimOptional(input.endpoint.requestTypeUrl),
     responseTypeUrl: trimOptional(input.endpoint.responseTypeUrl),
     revisionId,
@@ -206,7 +199,6 @@ export function buildStudioBindContract(
     serviceId: trimOptional(input.service.serviceId),
     serviceKey:
       trimOptional(input.service.serviceKey) ||
-      trimOptional(input.scopeBinding?.serviceKey) ||
       `${trimOptional(input.scopeId)}:${trimOptional(input.service.serviceId)}`,
     streaming: {
       aguiFrames: isChatEndpoint,

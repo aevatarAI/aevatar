@@ -47,6 +47,10 @@ import {
 } from '@/shared/ui/proComponents';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { describeError } from '@/shared/ui/errorText';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_PRESSABLE_CARD_CLASS,
+} from '@/shared/ui/interactionStandards';
 
 type QueryState<T> = {
   readonly isLoading: boolean;
@@ -557,6 +561,12 @@ export type StudioExecutionPageProps = {
   readonly activeWorkflowName: string;
   readonly activeWorkflowDescription: string;
   readonly activeDirectoryLabel: string;
+  readonly selectedMemberLabel?: string;
+  readonly currentImplementationLabel?: string;
+  readonly emptyState?: {
+    readonly title: string;
+    readonly description: string;
+  } | null;
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
   readonly runPending: boolean;
@@ -592,6 +602,9 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   activeWorkflowName,
   activeWorkflowDescription,
   activeDirectoryLabel,
+  selectedMemberLabel,
+  currentImplementationLabel,
+  emptyState = null,
   runPending,
   canRunWorkflow,
   executionCanStop,
@@ -631,17 +644,10 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     setExecutionActionPendingKey('');
   }, [executionTrace, selectedExecutionDetail?.executionId]);
 
-  const currentWorkflowExecutions = React.useMemo(() => {
-    const workflowName = activeWorkflowName.trim().toLowerCase();
-    const items = executions.data ?? [];
-    if (!workflowName) {
-      return items;
-    }
-
-    return items.filter(
-      (item) => item.workflowName.trim().toLowerCase() === workflowName,
-    );
-  }, [activeWorkflowName, executions.data]);
+  const currentMemberExecutions = React.useMemo(
+    () => executions.data ?? [],
+    [executions.data],
+  );
 
   const selectedExecutionActorId = selectedExecutionDetail?.actorId || null;
   const activeExecutionLog =
@@ -738,7 +744,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       )
     : '';
   const baselineExecution =
-    currentWorkflowExecutions.find(
+    currentMemberExecutions.find(
       (item) => item.executionId !== selectedExecutionDetail?.executionId,
     ) || null;
   const observeCompareRows = React.useMemo(
@@ -760,13 +766,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     () =>
       buildObserveHealthItems({
         activeExecutionInteraction,
-        executions: currentWorkflowExecutions,
+        executions: currentMemberExecutions,
         selectedExecution: selectedExecutionDetail,
         traceLogCount: executionLogCount,
       }),
     [
       activeExecutionInteraction,
-      currentWorkflowExecutions,
+      currentMemberExecutions,
       executionLogCount,
       selectedExecutionDetail,
     ],
@@ -847,7 +853,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   };
 
   const renderExecutionLogs = (fullscreen: boolean) => {
-    const hasRuns = currentWorkflowExecutions.length > 0;
+    const hasRuns = currentMemberExecutions.length > 0;
 
     return (
       <section
@@ -907,9 +913,9 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 <option value="">
                   {selectedExecutionDetail
                     ? `${formatDateTime(selectedExecutionDetail.startedAtUtc)} · ${selectedExecutionDetail.status}`
-                    : `${currentWorkflowExecutions.length} 次运行`}
+                    : `${currentMemberExecutions.length} 次运行`}
                 </option>
-                {currentWorkflowExecutions.map((execution) => (
+                {currentMemberExecutions.map((execution) => (
                   <option key={execution.executionId} value={execution.executionId}>
                     {formatDateTime(execution.startedAtUtc)} · {execution.status}
                   </option>
@@ -919,6 +925,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             {executionTrace?.logs?.length ? (
               <button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={panelIconButtonStyle}
                 title="复制全部执行日志"
@@ -948,6 +955,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                   {selectedExecutionActorId}
                 </code>
                 <button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   type="button"
                   style={panelIconButtonStyle}
                   title="复制 Actor ID"
@@ -967,6 +975,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             {selectedExecutionDetail?.executionId && !fullscreen ? (
               <button
+                aria-pressed={logsDetached}
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={{
                   ...panelIconButtonStyle,
@@ -983,6 +993,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             {fullscreen ? (
               <button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 type="button"
                 style={panelIconButtonStyle}
                 title="关闭窗口"
@@ -1161,6 +1172,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           ) : executionTrace?.logs?.length ? (
             executionTrace.logs.map((log, index) => (
               <button
+                className={AEVATAR_PRESSABLE_CARD_CLASS}
                 key={`${log.timestamp}-${log.stepId || 'run'}-${log.title}`}
                 type="button"
                 onClick={() => void handleExecutionLogClick(log, index)}
@@ -1280,6 +1292,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           description={selectedExecutionDetail.error}
         />
       ) : null}
+      {emptyState ? (
+        <StudioNoticeCard
+          type="info"
+          title={emptyState.title}
+          description={emptyState.description}
+        />
+      ) : null}
 
       <div style={observeSummaryGridStyle}>
         <div style={observeSummaryStackStyle}>
@@ -1368,14 +1387,23 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           </AevatarPanel>
 
           <AevatarPanel
-            title="Governance Snapshot"
-            titleHelp="Observe keeps the current workflow identity, active actor, and execution provenance visible without sending operators back into Bind."
+            title="Member Snapshot"
+            titleHelp="Observe keeps the current member identity, active actor, and selected run provenance visible without sending operators back into Bind."
           >
             <div style={observeMetricGridStyle}>
               <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Workflow</Typography.Text>
+                <Typography.Text type="secondary">Member</Typography.Text>
                 <Typography.Text strong>
-                  {activeWorkflowName || draftWorkflowName || '当前流程'}
+                  {selectedMemberLabel || activeWorkflowName || draftWorkflowName || 'Current member'}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Implementation</Typography.Text>
+                <Typography.Text strong>
+                  {currentImplementationLabel ||
+                    activeWorkflowName ||
+                    draftWorkflowName ||
+                    'Current implementation'}
                 </Typography.Text>
               </div>
               <div style={observeMetricCardStyle}>
@@ -1462,7 +1490,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 </Tag>
               </Space>
               <Typography.Text type="secondary">
-                {activeWorkflowDescription || '当前 Observe 页展示的是 workflow 级执行回放，不承担契约配置。'}
+                {activeWorkflowDescription ||
+                  '当前 Observe 页只展示当前 member 的运行事实；契约与发布信息留在 Bind。'}
               </Typography.Text>
               <Typography.Text type="secondary">
                 {baselineExecution

@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -29,8 +31,7 @@ internal static class AgentBuilderCardFlow
 
     private static readonly HashSet<string> LaunchIntents = new(StringComparer.OrdinalIgnoreCase)
     {
-        "/daily-report",
-        "/create-daily-report",
+        "/daily",
         "create daily report",
         "创建日报助手",
         "创建日报agent",
@@ -60,7 +61,43 @@ internal static class AgentBuilderCardFlow
         "模板列表",
     };
 
-    public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision)
+    public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision) =>
+        TryResolve(evt, preferredGithubUsername: null, out decision);
+
+    public static async Task<AgentBuilderFlowDecision?> TryResolveAsync(
+        ChannelInboundEvent evt,
+        IUserConfigQueryPort? userConfigQueryPort,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        string? preferredGithubUsername = null;
+        if (ShouldLoadPreferredGithubUsername(evt) && userConfigQueryPort is not null)
+        {
+            try
+            {
+                preferredGithubUsername = (await userConfigQueryPort.GetAsync(
+                    NormalizeScopeId(evt.RegistrationScopeId),
+                    ct)).GithubUsername;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                preferredGithubUsername = null;
+            }
+        }
+
+        TryResolve(evt, preferredGithubUsername, out var decision);
+        return decision;
+    }
+
+    private static bool TryResolve(
+        ChannelInboundEvent evt,
+        string? preferredGithubUsername,
+        out AgentBuilderFlowDecision? decision)
     {
         ArgumentNullException.ThrowIfNull(evt);
         decision = null;
@@ -70,13 +107,18 @@ internal static class AgentBuilderCardFlow
             var normalized = NormalizeText(evt.Text);
             if (LaunchIntents.Contains(normalized))
             {
-                decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard());
+                // Direct webhook deployments hit this path (no Nyx relay in front); the pre-serialized
+                // Lark JSON card from BuildDailyReportCard used to land in MessageContent.Text and
+                // render as raw JSON. Route through the channel-neutral form builder so the composer
+                // emits a real interactive card.
+                decision = AgentBuilderFlowDecision.DirectReply(
+                    AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername));
                 return true;
             }
 
             if (SocialMediaIntents.Contains(normalized))
             {
-                decision = AgentBuilderFlowDecision.DirectReply(BuildSocialMediaCard());
+                decision = AgentBuilderFlowDecision.DirectReply(AgentBuilderCardContent.BuildSocialMediaForm());
                 return true;
             }
 
@@ -107,11 +149,12 @@ internal static class AgentBuilderCardFlow
         switch ((action ?? string.Empty).Trim())
         {
             case OpenDailyReportFormAction:
-                decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard());
+                decision = AgentBuilderFlowDecision.DirectReply(
+                    AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername));
                 return true;
 
             case OpenSocialMediaFormAction:
-                decision = AgentBuilderFlowDecision.DirectReply(BuildSocialMediaCard());
+                decision = AgentBuilderFlowDecision.DirectReply(AgentBuilderCardContent.BuildSocialMediaForm());
                 return true;
 
             case DailyReportAction:
@@ -136,6 +179,13 @@ internal static class AgentBuilderCardFlow
 
             case ListAgentsAction:
                 decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
+                return true;
+
+            case ListTemplatesAction:
+                // The /agents card surfaces a `Templates` button (also reachable via the
+                // text-flow `/templates` slash command). Without this branch, clicking the
+                // button leaves the user with an unhandled card action and no feedback.
+                decision = AgentBuilderFlowDecision.ToolCall(ListTemplatesAction, """{"action":"list_templates"}""");
                 return true;
 
             case AgentStatusAction:
@@ -205,7 +255,7 @@ internal static class AgentBuilderCardFlow
         }
     }
 
-    public static string FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
+    public static MessageContent FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
@@ -214,23 +264,28 @@ internal static class AgentBuilderCardFlow
             using var doc = JsonDocument.Parse(toolResultJson);
             return decision.ToolAction switch
             {
-                DailyReportAction => FormatCreateDailyReportResult(doc.RootElement),
-                SocialMediaAction => FormatCreateSocialMediaResult(doc.RootElement),
-                ListTemplatesAction => FormatListTemplatesResult(doc.RootElement),
-                ListAgentsAction => FormatListAgentsResult(doc.RootElement),
-                AgentStatusAction => FormatAgentStatusResult(doc.RootElement),
-                RunAgentAction => FormatRunAgentResult(doc.RootElement),
-                DisableAgentAction => FormatDisableAgentResult(doc.RootElement),
-                EnableAgentAction => FormatEnableAgentResult(doc.RootElement),
-                DeleteAgentAction => FormatDeleteAgentResult(doc.RootElement),
-                _ => toolResultJson,
+                // Daily report creation uses the shared formatter so Nyx-relay slash commands and
+                // Feishu card-action submits render the same "running now, I'll reply when done"
+                // acknowledgment instead of one path dumping the legacy JSON card as text.
+                DailyReportAction => AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement),
+                SocialMediaAction => ToTextContent(FormatCreateSocialMediaResult(doc.RootElement)),
+                ListTemplatesAction => ToTextContent(FormatListTemplatesResult(doc.RootElement)),
+                ListAgentsAction => ToTextContent(FormatListAgentsResult(doc.RootElement)),
+                AgentStatusAction => ToTextContent(FormatAgentStatusResult(doc.RootElement)),
+                RunAgentAction => ToTextContent(FormatRunAgentResult(doc.RootElement)),
+                DisableAgentAction => ToTextContent(FormatDisableAgentResult(doc.RootElement)),
+                EnableAgentAction => ToTextContent(FormatEnableAgentResult(doc.RootElement)),
+                DeleteAgentAction => ToTextContent(FormatDeleteAgentResult(doc.RootElement)),
+                _ => ToTextContent(toolResultJson),
             };
         }
         catch (JsonException)
         {
-            return toolResultJson;
+            return ToTextContent(toolResultJson);
         }
     }
+
+    private static MessageContent ToTextContent(string text) => new() { Text = text };
 
     public static string ResolveToolChatType(ChannelInboundEvent evt)
     {
@@ -248,12 +303,9 @@ internal static class AgentBuilderCardFlow
     {
         argumentsJson = null;
         validationError = null;
-
-        if (!TryGetRequiredExtra(evt, "github_username", out var githubUsername))
-        {
-            validationError = "GitHub username is required. Send /daily-report and fill in the form again.";
-            return false;
-        }
+        var githubUsername = evt.Extra.TryGetValue("github_username", out var rawGithubUsername)
+            ? NormalizeOptional(rawGithubUsername)
+            : null;
 
         if (!TryBuildDailyCron(evt.Extra.TryGetValue("schedule_time", out var scheduleTime) ? scheduleTime : null, out var scheduleCron, out validationError))
             return false;
@@ -278,6 +330,7 @@ internal static class AgentBuilderCardFlow
             action = "create_agent",
             template = "daily_report",
             github_username = githubUsername,
+            save_github_username_preference = githubUsername is not null,
             repositories,
             schedule_cron = scheduleCron,
             schedule_timezone = scheduleTimezone,
@@ -521,6 +574,19 @@ internal static class AgentBuilderCardFlow
         string.Equals(evt.ChatType, PrivateChatType, StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(evt.Text);
 
+    private static bool ShouldLoadPreferredGithubUsername(ChannelInboundEvent evt)
+    {
+        if (IsPrivateChatText(evt))
+        {
+            var normalized = NormalizeText(evt.Text);
+            return LaunchIntents.Contains(normalized);
+        }
+
+        return string.Equals(evt.ChatType, CardActionChatType, StringComparison.Ordinal) &&
+               evt.Extra.TryGetValue("agent_builder_action", out var action) &&
+               string.Equals(action, OpenDailyReportFormAction, StringComparison.Ordinal);
+    }
+
     private static string NormalizeText(string? text) => (text ?? string.Empty).Trim();
 
     private static string? NormalizeOptional(string? value)
@@ -529,256 +595,8 @@ internal static class AgentBuilderCardFlow
         return normalized.Length == 0 ? null : normalized;
     }
 
-    private static string BuildDailyReportCard()
-    {
-        return JsonSerializer.Serialize(new
-        {
-            schema = "2.0",
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Create Daily Report Agent",
-                },
-                template = "blue",
-            },
-            body = new
-            {
-                elements = new object[]
-                {
-                    new
-                    {
-                        tag = "markdown",
-                        content =
-                            "**Day One template:** Daily GitHub report\nFill in the fields below. The agent will run once now and then repeat every day at your chosen local time.",
-                    },
-                    BuildForm(
-                        "daily_report_form",
-                        BuildInput("github_username", "GitHub Username", "alice"),
-                        BuildInput("repositories", "Repositories (Optional)", "owner/repo, owner/repo"),
-                        BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
-                        BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                        BuildSubmitButton("Create Agent", "primary", "submit_daily_report", new
-                        {
-                            agent_builder_action = DailyReportAction,
-                            run_immediately = true,
-                        })),
-                    new
-                    {
-                        tag = "action",
-                        actions = new object[]
-                        {
-                            BuildButton("List Agents", "default", new
-                            {
-                                agent_builder_action = ListAgentsAction,
-                            }),
-                        },
-                    }
-                }
-            },
-        });
-    }
-
-    private static string BuildSocialMediaCard()
-    {
-        return JsonSerializer.Serialize(new
-        {
-            schema = "2.0",
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Create Social Media Agent",
-                },
-                template = "orange",
-            },
-            body = new
-            {
-                elements = new object[]
-                {
-                    new
-                    {
-                        tag = "markdown",
-                        content =
-                            "**Workflow-backed template:** Social media draft + approval\nFill in the fields below. Each scheduled run will generate one draft and send approval instructions into this Feishu private chat.",
-                    },
-                    BuildForm(
-                        "social_media_form",
-                        BuildInput("topic", "Topic", "Launch update for the new workflow feature"),
-                        BuildInput("audience", "Audience (Optional)", "Developers and technical founders"),
-                        BuildInput("style", "Style (Optional)", "Confident, concise, product-focused"),
-                        BuildInput("schedule_time", "Daily Time (HH:mm)", DefaultScheduleTime),
-                        BuildInput("schedule_timezone", "Time Zone", SkillRunnerDefaults.DefaultTimezone),
-                        BuildSubmitButton("Create Agent", "primary", "submit_social_media", new
-                        {
-                            agent_builder_action = SocialMediaAction,
-                            run_immediately = true,
-                        })),
-                    new
-                    {
-                        tag = "action",
-                        actions = new object[]
-                        {
-                            BuildButton("List Agents", "default", new
-                            {
-                                agent_builder_action = ListAgentsAction,
-                            }),
-                        },
-                    }
-                }
-            },
-        });
-    }
-
-    private static object BuildForm(string name, params object[] elements) =>
-        new
-        {
-            tag = "form",
-            name,
-            elements,
-        };
-
-    private static object BuildInput(string name, string label, string placeholder)
-    {
-        return new
-        {
-            tag = "input",
-            name,
-            label = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            placeholder = new
-            {
-                tag = "plain_text",
-                content = placeholder,
-            },
-        };
-    }
-
-    private static object BuildSubmitButton(string label, string style, string name, object value) =>
-        new
-        {
-            tag = "button",
-            type = style,
-            name,
-            form_action_type = "submit",
-            text = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            value,
-        };
-
-    private static string FormatCreateDailyReportResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"Create daily report agent failed: {error}";
-
-        var status = ReadString(root, "status") ?? "accepted";
-        if (string.Equals(status, "credentials_required", StringComparison.OrdinalIgnoreCase))
-        {
-            var providerId = ReadString(root, "provider_id") ?? "unknown-provider";
-            var documentationUrl = ReadString(root, "documentation_url");
-            var credentialsNote = ReadString(root, "note") ??
-                                  "Set your GitHub OAuth app credentials in NyxID first, then submit the daily report form again.";
-
-            var credentialsLines = new List<string>
-            {
-                credentialsNote,
-                $"Provider ID: `{providerId}`",
-            };
-
-            var actions = new List<object>();
-            if (!string.IsNullOrWhiteSpace(documentationUrl))
-                actions.Add(BuildLinkButton("OAuth Docs", "default", documentationUrl!));
-
-            actions.Add(BuildButton("Back to Form", "primary", new
-            {
-                agent_builder_action = OpenDailyReportFormAction,
-            }));
-
-            return BuildInfoCard(
-                "GitHub Credentials Required",
-                string.Join("\n", credentialsLines),
-                "orange",
-                actions.ToArray());
-        }
-
-        if (string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase))
-        {
-            var providerId = ReadString(root, "provider_id") ?? "unknown-provider";
-            var authorizationUrl = ReadString(root, "authorization_url")
-                                   ?? ReadString(root, "auth_url")
-                                   ?? ReadString(root, "url");
-            var oauthNote = ReadString(root, "note") ??
-                            "Connect GitHub in NyxID, then return here and submit the daily report form again.";
-
-            var oauthLines = new List<string>
-            {
-                oauthNote,
-                $"Provider ID: `{providerId}`",
-            };
-
-            var actions = new List<object>();
-            if (!string.IsNullOrWhiteSpace(authorizationUrl))
-                actions.Add(BuildLinkButton("Connect GitHub", "primary", authorizationUrl!));
-
-            actions.Add(BuildButton("Back to Form", "default", new
-            {
-                agent_builder_action = OpenDailyReportFormAction,
-            }));
-
-            return BuildInfoCard(
-                "GitHub Authorization Required",
-                string.Join("\n", oauthLines),
-                "orange",
-                actions.ToArray());
-        }
-
-        var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
-        var nextRun = ReadString(root, "next_scheduled_run") ?? "pending";
-        var note = ReadString(root, "note");
-
-        var lines = new List<string>
-        {
-            string.Equals(status, "created", StringComparison.OrdinalIgnoreCase)
-                ? $"Daily report agent created: {agentId}"
-                : $"Daily report agent accepted: {agentId}",
-            $"Next scheduled run: {nextRun}",
-        };
-
-        if (!string.IsNullOrWhiteSpace(note))
-            lines.Add(note!);
-
-        return BuildInfoCard(
-            "Daily Report Agent",
-            string.Join("\n", lines),
-            "green",
-            new object[]
-            {
-                BuildButton("View Agents", "primary", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Create Another", "default", new
-                {
-                    agent_builder_action = OpenDailyReportFormAction,
-                }),
-            });
-    }
+    private static string NormalizeScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
 
     private static string FormatCreateSocialMediaResult(JsonElement root)
     {
@@ -1110,7 +928,7 @@ internal static class AgentBuilderCardFlow
             new
             {
                 tag = "markdown",
-                content = "Quick commands: `/daily-report`, `/social-media`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
+                content = "Quick commands: `/daily`, `/social-media`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
             },
         };
 
@@ -1219,7 +1037,7 @@ internal static class AgentBuilderCardFlow
         elements.Add(new
         {
             tag = "markdown",
-            content = "Quick commands: `/templates`, `/daily-report`, `/social-media`, `/agent-status <agent_id>`",
+            content = "Quick commands: `/templates`, `/daily`, `/social-media`, `/agent-status <agent_id>`",
         });
         elements.Add(new
         {
@@ -1450,10 +1268,22 @@ internal sealed record AgentBuilderFlowDecision(
     bool RequiresToolExecution,
     string ReplyPayload,
     string? ToolArgumentsJson,
-    string? ToolAction)
+    string? ToolAction,
+    MessageContent? ReplyContent = null)
 {
     public static AgentBuilderFlowDecision DirectReply(string replyPayload) =>
         new(false, replyPayload, null, null);
+
+    public static AgentBuilderFlowDecision DirectReply(MessageContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return new AgentBuilderFlowDecision(
+            RequiresToolExecution: false,
+            ReplyPayload: string.IsNullOrWhiteSpace(content.Text) ? string.Empty : content.Text,
+            ToolArgumentsJson: null,
+            ToolAction: null,
+            ReplyContent: content);
+    }
 
     public static AgentBuilderFlowDecision ToolCall(string toolAction, string argumentsJson) =>
         new(true, string.Empty, argumentsJson, toolAction);

@@ -7,6 +7,8 @@ const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
 const CHRONO_STORAGE_SERVICE_ERROR_CODE = 'chrono_storage_service_unavailable';
 const CHRONO_STORAGE_SERVICE_DEPENDENCY = 'chrono-storage-service';
 const DEFAULT_CHRONO_STORAGE_SERVICE_MESSAGE = 'Studio could not access chrono-storage-service. It may not be enabled for this host, the service may be unavailable, or NyxID may be configured to require approval for every proxy request.';
+const SCOPE_SERVICE_DEFAULT_APP_ID = 'default';
+const SCOPE_SERVICE_DEFAULT_NAMESPACE = 'default';
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAccessToken();
@@ -234,6 +236,27 @@ export function getChronoStorageServiceErrorMessage(error: any) {
   }
 
   return DEFAULT_CHRONO_STORAGE_SERVICE_MESSAGE;
+}
+
+export function buildScopeServiceQuery(
+  scopeId: string,
+  extraParameters?: Record<string, string>,
+) {
+  const query = new URLSearchParams();
+  const normalizedScopeId = String(scopeId || '').trim();
+  if (normalizedScopeId) {
+    query.set('tenantId', normalizedScopeId);
+    query.set('appId', SCOPE_SERVICE_DEFAULT_APP_ID);
+    query.set('namespace', SCOPE_SERVICE_DEFAULT_NAMESPACE);
+  }
+
+  if (extraParameters) {
+    for (const [key, value] of Object.entries(extraParameters)) {
+      query.set(key, value);
+    }
+  }
+
+  return query.toString();
 }
 
 async function streamSse(
@@ -650,9 +673,9 @@ export const scope = {
     );
   },
 
-  /** GET /api/services?tenantId=... — list services in scope */
+  /** GET /api/services?take=... — list services for the current scope or authenticated identity */
   listServices: (scopeId: string, take = 20) =>
-    request<any[]>(`/services?tenantId=${enc(scopeId)}&appId=default&namespace=default&take=${take}`),
+    request<any[]>(`/services?${buildScopeServiceQuery(scopeId, { take: String(take) })}`),
 
   /** POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume — resume a suspended workflow run (human_input) */
   resumeRun: (

@@ -148,6 +148,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
         StateTransitionMatcher
             .Match(current, evt)
             .On<UserConfigUpdatedEvent>(ApplyConfigUpdated)
+            .On<UserConfigGithubUsernameUpdatedEvent>(ApplyConfigGithubUsernameUpdated)
             .OrCurrent();
 
     private static UserConfigGAgentState ApplyConfigUpdated(
@@ -160,6 +161,20 @@ public sealed class ActorBackedGAgentStateTransitionTests
             LocalRuntimeBaseUrl = evt.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl = evt.RemoteRuntimeBaseUrl,
             MaxToolRounds = evt.MaxToolRounds,
+            GithubUsername = evt.GithubUsername,
+        };
+
+    private static UserConfigGAgentState ApplyConfigGithubUsernameUpdated(
+        UserConfigGAgentState state, UserConfigGithubUsernameUpdatedEvent evt) =>
+        new()
+        {
+            DefaultModel = state.DefaultModel,
+            PreferredLlmRoute = state.PreferredLlmRoute,
+            RuntimeMode = state.RuntimeMode,
+            LocalRuntimeBaseUrl = state.LocalRuntimeBaseUrl,
+            RemoteRuntimeBaseUrl = state.RemoteRuntimeBaseUrl,
+            MaxToolRounds = state.MaxToolRounds,
+            GithubUsername = evt.GithubUsername,
         };
 
     #endregion
@@ -629,6 +644,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "remote",
             LocalRuntimeBaseUrl = "http://old-local",
             RemoteRuntimeBaseUrl = "http://old-remote",
+            GithubUsername = "old-user",
             MaxToolRounds = 5,
         };
 
@@ -639,6 +655,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "local",
             LocalRuntimeBaseUrl = "http://new-local",
             RemoteRuntimeBaseUrl = "http://new-remote",
+            GithubUsername = "new-user",
             MaxToolRounds = 10,
         };
 
@@ -649,6 +666,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
         next.RuntimeMode.Should().Be("local");
         next.LocalRuntimeBaseUrl.Should().Be("http://new-local");
         next.RemoteRuntimeBaseUrl.Should().Be("http://new-remote");
+        next.GithubUsername.Should().Be("new-user");
         next.MaxToolRounds.Should().Be(10);
     }
 
@@ -664,12 +682,14 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "remote",
             LocalRuntimeBaseUrl = "",
             RemoteRuntimeBaseUrl = "https://api.example.com",
+            GithubUsername = "fresh-user",
             MaxToolRounds = 3,
         };
 
         var next = ApplyConfig(state, evt);
 
         next.DefaultModel.Should().Be("gpt-4");
+        next.GithubUsername.Should().Be("fresh-user");
         next.MaxToolRounds.Should().Be(3);
     }
 
@@ -690,6 +710,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             RuntimeMode = "",
             LocalRuntimeBaseUrl = "",
             RemoteRuntimeBaseUrl = "",
+            GithubUsername = "",
             MaxToolRounds = 0,
         };
 
@@ -697,7 +718,38 @@ public sealed class ActorBackedGAgentStateTransitionTests
 
         next.DefaultModel.Should().Be("new-model");
         next.MaxToolRounds.Should().Be(0);
+        next.GithubUsername.Should().BeEmpty();
         next.PreferredLlmRoute.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UserConfig_GithubUsernameUpdate_PreservesOtherFields()
+    {
+        var state = new UserConfigGAgentState
+        {
+            DefaultModel = "kept-model",
+            PreferredLlmRoute = "kept-route",
+            RuntimeMode = "remote",
+            LocalRuntimeBaseUrl = "http://local",
+            RemoteRuntimeBaseUrl = "http://remote",
+            GithubUsername = "old-user",
+            MaxToolRounds = 9,
+        };
+
+        var evt = new UserConfigGithubUsernameUpdatedEvent
+        {
+            GithubUsername = "new-user",
+        };
+
+        var next = ApplyConfig(state, evt);
+
+        next.DefaultModel.Should().Be("kept-model");
+        next.PreferredLlmRoute.Should().Be("kept-route");
+        next.RuntimeMode.Should().Be("remote");
+        next.LocalRuntimeBaseUrl.Should().Be("http://local");
+        next.RemoteRuntimeBaseUrl.Should().Be("http://remote");
+        next.MaxToolRounds.Should().Be(9);
+        next.GithubUsername.Should().Be("new-user");
     }
 
     [Fact]

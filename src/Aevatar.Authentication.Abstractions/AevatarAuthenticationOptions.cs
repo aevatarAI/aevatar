@@ -8,7 +8,11 @@ public sealed class AevatarAuthenticationOptions
 {
     public const string SectionName = "Aevatar:Authentication";
 
-    /// <summary>Enable JWT Bearer authentication. Default: false.</summary>
+    /// <summary>
+    /// Explicitly enable or disable JWT Bearer authentication.
+    /// The host defaults to enabled when this setting is omitted, and only honors
+    /// <c>false</c> in Development.
+    /// </summary>
     public bool Enabled { get; set; }
 
     /// <summary>OIDC discovery authority URL (e.g. "https://idp.example.com").</summary>

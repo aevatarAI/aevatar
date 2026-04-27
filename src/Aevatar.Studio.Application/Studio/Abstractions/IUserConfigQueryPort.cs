@@ -7,4 +7,6 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 public interface IUserConfigQueryPort
 {
     Task<UserConfig> GetAsync(CancellationToken ct = default);
+
+    Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default);
 }

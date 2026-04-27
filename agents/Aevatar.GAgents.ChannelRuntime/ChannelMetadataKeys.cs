@@ -11,5 +11,21 @@ public static class ChannelMetadataKeys
     public const string SenderName = "channel.sender_name";
     public const string ConversationId = "channel.conversation_id";
     public const string MessageId = "channel.message_id";
+    public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
+    /// <summary>
+    /// Lark <c>union_id</c> (<c>on_*</c>) of the inbound sender. Tenant-stable and cross-app safe;
+    /// downstream Lark senders prefer this over <see cref="SenderId"/> (<c>open_id</c>) for p2p
+    /// outbound delivery so a relay-app vs outbound-app mismatch does not produce
+    /// <c>open_id cross app</c> rejections from Lark. Empty when the platform is not Lark or the
+    /// relay did not surface a <c>union_id</c>.
+    /// </summary>
+    public const string LarkUnionId = "channel.lark.union_id";
+    /// <summary>
+    /// Lark <c>chat_id</c> (<c>oc_*</c>) as observed by the relay-side Lark app. Cross-app safe
+    /// within the tenant for groups/threads/channels. Downstream Lark senders prefer this for
+    /// non-p2p outbound delivery instead of inferring a chat_id from the routing
+    /// <see cref="ConversationId"/> (which may be a NyxID-internal route id).
+    /// </summary>
+    public const string LarkChatId = "channel.lark.chat_id";
 }

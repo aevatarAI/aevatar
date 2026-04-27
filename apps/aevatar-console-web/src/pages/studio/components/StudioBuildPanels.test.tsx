@@ -1,5 +1,5 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
@@ -160,9 +160,11 @@ function buildWorkflowYaml(document: typeof initialDocument): string {
 }
 
 function WorkflowBuildHarness({
+  onApplyStepDraftOverride,
   onContinueToBind,
   onSaveDraft,
 }: {
+  readonly onApplyStepDraftOverride?: (draft: any) => Promise<void>;
   readonly onContinueToBind: jest.Mock;
   readonly onSaveDraft: jest.Mock;
 }) {
@@ -204,13 +206,17 @@ function WorkflowBuildHarness({
       draftYaml={draftYaml}
       dryRunModelLabel="gpt-5.4-mini"
       dryRunRouteLabel="OpenAI"
-      onApplyStepDraft={async (draft) => {
-        const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
-        const result = applyStepInspectorDraft(document, currentStepId, draft);
-        await commitDocument(result.document as typeof initialDocument, {
-          nextSelectedNodeId: result.nodeId,
-        });
-      }}
+      onApplyStepDraft={
+        onApplyStepDraftOverride
+          ? onApplyStepDraftOverride
+          : async (draft) => {
+              const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
+              const result = applyStepInspectorDraft(document, currentStepId, draft);
+              await commitDocument(result.document as typeof initialDocument, {
+                nextSelectedNodeId: result.nodeId,
+              });
+            }
+      }
       onAutoLayout={() => setLayout(null)}
       onConnectNodes={(sourceNodeId: string, targetNodeId: string) => {
         const sourceStepId = sourceNodeId.replace(/^step:/, '');
@@ -251,6 +257,17 @@ function WorkflowBuildHarness({
       onRemoveSelectedStep={async () => {
         const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
         const result = removeStep(document, currentStepId);
+        await commitDocument(result.document as typeof initialDocument, {
+          nextSelectedNodeId: result.nodeId,
+        });
+      }}
+      onDeleteWorkflowNodes={async (nodeIds: string[]) => {
+        const selectedNodeId = nodeIds[0]?.replace(/^step:/, '') || '';
+        if (!selectedNodeId) {
+          return;
+        }
+
+        const result = removeStep(document, selectedNodeId);
         await commitDocument(result.document as typeof initialDocument, {
           nextSelectedNodeId: result.nodeId,
         });
@@ -363,12 +380,21 @@ describe('StudioWorkflowBuildPanel', () => {
 
     expect(await screen.findByText('DAG Canvas')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-stage-actions')).toBeInTheDocument();
-    expect(screen.getByTestId('workflow-build-primary-column')).toHaveStyle({
-      alignSelf: 'start',
-    });
+    const workflowEditorWorkspace = screen.getByTestId('workflow-editor-workspace');
+    const workflowDryRunPanel = screen.getByTestId('workflow-dry-run-panel');
+    expect(workflowEditorWorkspace).toBeInTheDocument();
+    expect(workflowDryRunPanel).toBeInTheDocument();
+    expect(within(workflowEditorWorkspace).queryByText('Dry-run')).not.toBeInTheDocument();
+    expect(
+      workflowEditorWorkspace.compareDocumentPosition(workflowDryRunPanel) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
     expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-step-type-picker-grid')).toHaveStyle({
+      overflowY: 'auto',
+    });
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
@@ -439,6 +465,84 @@ describe('StudioWorkflowBuildPanel', () => {
     );
   });
 
+  it('keeps runtime metadata out of output and only exposes it in debug details', async () => {
+    mockedParseBackendSSEStream.mockImplementationOnce(async function* () {
+      yield {
+        type: AGUIEventType.RUN_STARTED,
+        actorId: 'actor-1',
+        runId: 'run-1',
+      };
+      yield {
+        type: AGUIEventType.CUSTOM,
+        name: 'run_context',
+      } as any;
+      yield {
+        type: AGUIEventType.TEXT_MESSAGE_END,
+        message: 'final workflow answer',
+      };
+    });
+
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(await screen.findByText('final workflow answer')).toBeInTheDocument();
+
+    const outputSection = screen.getByText('Output');
+    const outputPanel = outputSection.parentElement;
+    expect(outputPanel).not.toBeNull();
+    expect(within(outputPanel as HTMLElement).getByText('final workflow answer')).toBeInTheDocument();
+    expect(within(outputPanel as HTMLElement).queryByText(/runId:/i)).not.toBeInTheDocument();
+    expect(within(outputPanel as HTMLElement).queryByText(/actorId:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Run summary')).not.toBeInTheDocument();
+
+    const debugDetailsToggle = await screen.findByText('Debug details');
+    fireEvent.click(debugDetailsToggle);
+    expect(await screen.findByText(/runId: run-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/actorId: actor-1/i)).toBeInTheDocument();
+  });
+
+  it('prefers the final workflow output over earlier streamed node text', async () => {
+    mockedParseBackendSSEStream.mockImplementationOnce(async function* () {
+      yield {
+        type: AGUIEventType.RUN_STARTED,
+        runId: 'run-2',
+        threadId: 'actor-2',
+      };
+      yield {
+        type: AGUIEventType.TEXT_MESSAGE_CONTENT,
+        delta: 'first node answer',
+      };
+      yield {
+        type: AGUIEventType.RUN_FINISHED,
+        result: {
+          output: 'second node final answer',
+        },
+      };
+    });
+
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(await screen.findByText('second node final answer')).toBeInTheDocument();
+    const outputSection = screen.getByText('Output');
+    const outputPanel = outputSection.parentElement;
+    expect(outputPanel).not.toBeNull();
+    expect(within(outputPanel as HTMLElement).queryByText('first node answer')).toBeNull();
+    expect(within(outputPanel as HTMLElement).getByText('second node final answer')).toBeInTheDocument();
+  });
+
   it('shows a friendly provider guidance message when draft run backend rejects the route', async () => {
     mockedRuntimeRunsApi.streamDraftRun.mockRejectedValueOnce(
       new Error(
@@ -458,5 +562,40 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(
       await screen.findByText(/provider 还没有连好/i),
     ).toBeInTheDocument();
+  });
+
+  it('locks apply changes while the step mutation is pending', async () => {
+    let resolveApply: (() => void) | null = null;
+    const handleApplyStepDraft = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveApply = resolve;
+        }),
+    );
+
+    render(
+      <WorkflowBuildHarness
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    const applyButton = screen.getByRole('button', { name: 'Apply changes' });
+    fireEvent.click(applyButton);
+    fireEvent.click(applyButton);
+
+    await waitFor(() => {
+      expect(handleApplyStepDraft).toHaveBeenCalledTimes(1);
+      expect(applyButton).toBeDisabled();
+    });
+
+    act(() => {
+      resolveApply?.();
+    });
+
+    await waitFor(() => {
+      expect(applyButton).not.toBeDisabled();
+    });
   });
 });

@@ -1,4 +1,7 @@
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -6,9 +9,11 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.GAgents.Channel.Lark;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.ChannelRuntime.Outbound;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -96,10 +101,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<Aevatar.GAgents.NyxidChat.INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.TryAddSingleton<ChannelPlatformReplyService>();
+        services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<INyxRelayApiKeyOwnershipVerifier, NyxRelayApiKeyOwnershipVerifier>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)
@@ -163,9 +173,6 @@ public static class ServiceCollectionExtensions
                 static doc => doc.Id, static key => key);
         }
 
-        // Register platform adapters
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
-
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
 
         // channel runtime tools
@@ -175,6 +182,10 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
+
+        // interactive reply composer registry, collector, dispatcher, and LLM-facing tool
+        services.AddChannelInteractiveReplyTools();
+        services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
         services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
         services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
 
@@ -183,9 +194,23 @@ public static class ServiceCollectionExtensions
             client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
         });
         services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<LarkChannelNativeMessageProducer>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
+            sp => sp.GetRequiredService<LarkMessageComposer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
+        services.TryAddSingleton<NyxIdRelayOutboundPort>();
+        services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>
+        {
+            var relayOptions = sp.GetService<NyxIdRelayOptions>() ?? new NyxIdRelayOptions();
+            return new NyxIdRelayReplayGuard(
+                TimeSpan.FromSeconds(Math.Max(1, relayOptions.CallbackReplayWindowSeconds)),
+                TimeProvider.System);
+        });
         services.TryAddSingleton<ConversationDispatchMiddleware>();
-        services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, LarkConversationTurnRunner>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, ChannelContextMiddleware>());
+        services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
         services.Replace(ServiceDescriptor.Singleton(_ => new MiddlewarePipelineBuilder()
             .Use<TracingMiddleware>()
             .Use<LoggingMiddleware>()
@@ -193,6 +218,9 @@ public static class ServiceCollectionExtensions
             .Use<ConversationDispatchMiddleware>()));
         services.TryAddSingleton<ChannelPipeline>(sp => sp.GetRequiredService<MiddlewarePipelineBuilder>().Build(sp));
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+        services.TryAddSingleton<ChannelLlmReplyInboxRuntime>();
+        services.TryAddSingleton<IChannelLlmReplyInbox>(sp => sp.GetRequiredService<ChannelLlmReplyInboxRuntime>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ChannelLlmReplyInboxHostedService>());
         services.TryAddSingleton<LarkConversationInboxRuntime>();
         services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, LarkConversationInboxHostedService>());

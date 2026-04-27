@@ -13,6 +13,7 @@ import {
   type AevatarStatusDomain,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 
 export type GovernanceAuditEventTargetKind =
   | "service"
@@ -150,6 +151,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
               ),
               children: (
                 <button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   onClick={() => onSelect?.(event)}
                   style={{
                     background: "transparent",

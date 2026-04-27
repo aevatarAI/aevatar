@@ -1,5 +1,6 @@
 import {
   buildRuntimeExplorerHref,
+  buildRuntimeMissionControlHref,
   buildRuntimeRunsHref,
 } from './runtimeRoutes';
 
@@ -33,5 +34,30 @@ describe('runtimeRoutes', () => {
     ).toContain(
       'returnTo=%2Fruntime%2Fexplorer%2Fdetail%3FactorId%3Dactor%253A%252F%252Fselected%26runId%3Drun-1',
     );
+  });
+
+  it('builds Mission Control deep links with live run context', () => {
+    expect(
+      buildRuntimeMissionControlHref({
+        actorId: 'actor://selected',
+        autoStream: false,
+        endpointId: 'chat',
+        prompt: 'inspect this run',
+        runId: 'run-1',
+        scopeId: 'scope-a',
+        serviceId: 'draft',
+      }),
+    ).toBe(
+      '/runtime/mission-control?actorId=actor%3A%2F%2Fselected&autoStream=false&endpointId=chat&prompt=inspect+this+run&runId=run-1&scopeId=scope-a&serviceId=draft',
+    );
+  });
+
+  it('omits empty Mission Control query values', () => {
+    expect(
+      buildRuntimeMissionControlHref({
+        runId: 'run-1',
+        scopeId: 'scope-a',
+      }),
+    ).toBe('/runtime/mission-control?runId=run-1&scopeId=scope-a');
   });
 });

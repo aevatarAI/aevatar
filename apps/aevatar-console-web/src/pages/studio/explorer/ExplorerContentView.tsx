@@ -11,6 +11,7 @@ import {
   type ExplorerChatMessage,
   type ExplorerScriptFile,
 } from "./explorerContent";
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 
 type ExplorerContentViewProps = {
   content: string | null;
@@ -208,6 +209,7 @@ function ThinkingBlock({ text }: { text: string }): React.ReactElement {
   return (
     <div style={{ marginBottom: 10 }}>
       <button
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         type="button"
         onClick={() => setOpen((current) => !current)}
         style={{

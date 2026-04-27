@@ -11,6 +11,7 @@ message UserConfigGAgentState {
   string local_runtime_base_url = 4;
   string remote_runtime_base_url = 5;
   int32 max_tool_rounds = 6;
+  string github_username = 7;
 }
 
 // ─── Events ───
@@ -22,5 +23,9 @@ message UserConfigUpdatedEvent {
   string local_runtime_base_url = 4;
   string remote_runtime_base_url = 5;
   int32 max_tool_rounds = 6;
+  string github_username = 7;
 }
 
+message UserConfigGithubUsernameUpdatedEvent {
+  string github_username = 1;
+}

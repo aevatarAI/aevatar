@@ -6,6 +6,7 @@ import {
   AevatarPageShell,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { AEVATAR_INTERACTIVE_CHIP_CLASS } from "@/shared/ui/interactionStandards";
 
 export type TeamTabOption = {
   readonly label: string;
@@ -116,6 +117,7 @@ export const TeamTabBar: React.FC<TeamTabBarProps> = ({
         return (
           <button
             aria-current={active ? "page" : undefined}
+            className={AEVATAR_INTERACTIVE_CHIP_CLASS}
             key={option.value}
             onClick={() => onSelectTab(option.value)}
             style={{
@@ -199,12 +201,30 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
             </Typography.Link>
             {` / 团队详情 / ${activeTabLabel}`}
           </Typography.Text>
-          <Space align="center" wrap size={12}>
-            <Typography.Title level={1} style={{ margin: 0 }}>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              minWidth: 0,
+            }}
+          >
+            <Typography.Title
+              level={1}
+              style={{
+                lineHeight: 1.08,
+                margin: 0,
+                maxWidth: "100%",
+                minWidth: 0,
+                overflowWrap: "anywhere",
+                whiteSpace: "normal",
+              }}
+            >
               {teamTitle}
             </Typography.Title>
             {statusBadge}
-          </Space>
+          </div>
           {teamMeta ? (
             <div
               style={{

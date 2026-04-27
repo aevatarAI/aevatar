@@ -44,6 +44,19 @@ public sealed class ChannelAbstractionsProtoTests
             },
             ReplyToActivityId = "orig-1",
             RawPayloadBlobRef = "blob://payload/1",
+            OutboundDelivery = new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-1",
+                CorrelationId = "corr-relay-1",
+            },
+            TransportExtras = new TransportExtras
+            {
+                NyxMessageId = "nyx-msg-1",
+                NyxAgentApiKeyId = "nyx-key-1",
+                NyxPlatform = "lark",
+                NyxConversationId = "nyx-conv-1",
+                NyxPlatformMessageId = "om_123",
+            },
         };
         activity.Mentions.Add(new ParticipantRef
         {
@@ -82,12 +95,19 @@ public sealed class ChannelAbstractionsProtoTests
         parsed.Content.CardAction.ActionId.ShouldBe("approve");
         parsed.Content.Actions[0].Kind.ShouldBe(ActionElementKind.Button);
         parsed.Conversation.Scope.ShouldBe(ConversationScope.Thread);
+        parsed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
+        parsed.TransportExtras.NyxAgentApiKeyId.ShouldBe("nyx-key-1");
+        parsed.TransportExtras.NyxPlatformMessageId.ShouldBe("om_123");
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ChatActivity));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(MessageContent));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(CardActionSubmission));
+        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(OutboundDeliveryContext));
+        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(TransportExtras));
     }
 
     [Fact]
@@ -140,11 +160,13 @@ public sealed class ChannelAbstractionsProtoTests
                 Channel = new ChannelId { Value = "discord" },
                 ScopeId = "scope-1",
             },
-            CredentialRef = "vault://bots/helper",
             VerificationToken = "verify-me",
         };
         binding.Clone().ShouldBe(binding);
         binding.Bot.ScopeId.ShouldBe("scope-1");
+        ChannelTransportBinding.Descriptor.FindFieldByName("credential_ref").ShouldBeNull();
+        OutboundDeliveryContext.Descriptor.FindFieldByName("reply_access_token").ShouldBeNull();
+        OutboundDeliveryContext.Descriptor.FindFieldByName("correlation_id")!.FieldNumber.ShouldBe(3);
         var channelCapabilities = ChannelContractsReflection.Descriptor.MessageTypes
             .Single(x => x.Name == nameof(ChannelCapabilities));
         channelCapabilities.FindFieldByName("transport").FieldNumber.ShouldBe(17);

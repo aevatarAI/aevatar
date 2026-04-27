@@ -1502,7 +1502,10 @@ export const studioApi = {
       body: JSON.stringify({
         defaultModel: input.defaultModel.trim(),
         preferredLlmRoute: trimOptional(input.preferredLlmRoute),
-        runtimeBaseUrl: trimOptional(input.runtimeBaseUrl) ?? "",
+        runtimeMode: trimOptional(input.runtimeMode),
+        localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
+        remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
+        maxToolRounds: input.maxToolRounds ?? null,
       }),
     });
   },

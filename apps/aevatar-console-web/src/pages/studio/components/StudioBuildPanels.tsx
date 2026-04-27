@@ -16,6 +16,7 @@ import {
   Button,
   Empty,
   Input,
+  message,
   Radio,
   Select,
   Space,
@@ -54,6 +55,11 @@ import type {
 } from '@/shared/studio/scriptsModels';
 import type { StudioGraphStep } from '@/shared/studio/graph';
 import { describeError } from '@/shared/ui/errorText';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  joinInteractiveClassNames,
+} from '@/shared/ui/interactionStandards';
 import ScriptCodeEditor, {
   type ScriptEditorMarker,
 } from '@/modules/studio/scripts/ScriptCodeEditor';
@@ -71,6 +77,24 @@ const buildWorkbenchPrimaryColumnStyle: React.CSSProperties = {
   display: 'grid',
   gap: 16,
   minHeight: 0,
+  minWidth: 0,
+};
+
+const workflowWorkbenchLayoutStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  minHeight: 0,
+  minWidth: 0,
+};
+
+const workflowEditingSurfaceHeight = 'clamp(560px, calc(100vh - 320px), 760px)';
+
+const workflowWorkspaceRowStyle: React.CSSProperties = {
+  alignItems: 'stretch',
+  display: 'flex',
+  gap: 16,
+  minHeight: workflowEditingSurfaceHeight,
   minWidth: 0,
 };
 
@@ -155,17 +179,79 @@ const workflowCanvasSurfaceStyle: React.CSSProperties = {
   background: '#fdfaf4',
   border: '1px solid #ede5d8',
   borderRadius: 22,
-  minHeight: 456,
+  flex: '1 1 auto',
+  minHeight: 0,
   overflow: 'hidden',
   padding: 12,
 };
 
-const workflowSideRailStyle: React.CSSProperties = {
-  alignSelf: 'start',
+const workflowCanvasPanelStyle: React.CSSProperties = {
+  ...buildSurfaceCardStyle,
   display: 'grid',
+  flex: '8 1 0',
   gap: 16,
-  position: 'sticky',
-  top: 12,
+  gridTemplateRows: 'auto minmax(0, 1fr)',
+  height: '100%',
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const workflowCanvasBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+  minHeight: 0,
+};
+
+const workflowStepDetailCardStyle: React.CSSProperties = {
+  ...buildSurfaceCardStyle,
+  display: 'grid',
+  flex: '2 1 320px',
+  gap: 16,
+  gridTemplateRows: 'auto auto minmax(0, 1fr)',
+  height: '100%',
+  maxWidth: 360,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const workflowStepDetailBodyStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+  minHeight: 0,
+  overflowY: 'auto',
+  paddingRight: 4,
+};
+
+const workflowDryRunSectionStyle: React.CSSProperties = {
+  alignSelf: 'stretch',
+  background: '#ffffff',
+  border: '1px solid #e8dfd0',
+  borderRadius: 20,
+  display: 'grid',
+  gap: 12,
+  minWidth: 0,
+  padding: 18,
+  position: 'relative',
+  width: '100%',
+  zIndex: 0,
+};
+
+const workflowDryRunOutputStyle: React.CSSProperties = {
+  background: '#faf8f3',
+  border: '1px solid #efe7da',
+  borderRadius: 14,
+  color: '#425466',
+  fontFamily: 'Monaco, Menlo, monospace',
+  fontSize: 12,
+  lineHeight: '20px',
+  margin: 0,
+  maxHeight: 140,
+  minHeight: 96,
+  overflow: 'auto',
+  padding: 12,
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
 };
 
 const workflowDetailsGridStyle: React.CSSProperties = {
@@ -200,13 +286,21 @@ const workflowTypePickerStyle: React.CSSProperties = {
   borderRadius: 18,
   display: 'grid',
   gap: 10,
+  gridTemplateRows: 'auto auto minmax(0, 1fr)',
+  maxHeight: 'min(360px, calc(100vh - 420px))',
+  minHeight: 0,
+  overflow: 'hidden',
   padding: 14,
 };
 
 const workflowTypePickerGridStyle: React.CSSProperties = {
+  alignContent: 'start',
   display: 'grid',
   gap: 10,
   gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+  minHeight: 0,
+  overflowY: 'auto',
+  paddingRight: 4,
 };
 
 const workflowTypeOptionStyle: React.CSSProperties = {
@@ -263,6 +357,28 @@ const dryRunOutputStyle: React.CSSProperties = {
   wordBreak: 'break-word',
 };
 
+const dryRunSummaryStyle: React.CSSProperties = {
+  ...dryRunOutputStyle,
+  color: '#5f5b53',
+  maxHeight: 140,
+  minHeight: 0,
+};
+
+const dryRunDebugDetailsStyle: React.CSSProperties = {
+  background: '#fcfaf6',
+  border: '1px solid #efe7da',
+  borderRadius: 14,
+  padding: 12,
+};
+
+const dryRunDebugSummaryStyle: React.CSSProperties = {
+  color: '#5f5b53',
+  cursor: 'pointer',
+  fontSize: 12,
+  fontWeight: 600,
+  listStyle: 'none',
+};
+
 const modalCardStyle: React.CSSProperties = {
   background: '#fcfaf6',
   border: '1px solid #efe7da',
@@ -278,6 +394,7 @@ type DraftRunState = {
   readonly commandId: string;
   readonly error: string;
   readonly events: readonly AGUIEvent[];
+  readonly finalOutput: string;
   readonly runId: string;
   readonly status: 'idle' | 'running' | 'success' | 'error';
 };
@@ -288,31 +405,60 @@ const IDLE_DRAFT_RUN_STATE: DraftRunState = {
   commandId: '',
   error: '',
   events: [],
+  finalOutput: '',
   runId: '',
   status: 'idle',
 };
+
+function getRunDebugLines(state: DraftRunState): string[] {
+  return [
+    state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
+    state.actorId.trim() ? `actorId: ${state.actorId.trim()}` : '',
+    state.commandId.trim() ? `commandId: ${state.commandId.trim()}` : '',
+    state.events.length > 0 ? `events: ${state.events.length}` : '',
+  ].filter(Boolean);
+}
 
 function renderRunOutput(state: DraftRunState): string {
   if (state.error.trim()) {
     return state.error.trim();
   }
 
+  if (state.finalOutput.trim()) {
+    return state.finalOutput.trim();
+  }
+
   if (state.assistantText.trim()) {
     return state.assistantText.trim();
   }
 
-  if (state.runId.trim() || state.actorId.trim() || state.commandId.trim()) {
-    return [
-      state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
-      state.actorId.trim() ? `actorId: ${state.actorId.trim()}` : '',
-      state.commandId.trim() ? `commandId: ${state.commandId.trim()}` : '',
-      state.events.length > 0 ? `events: ${state.events.length}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
+  if (state.status === 'running') {
+    return 'Waiting for assistant output...';
   }
 
-  return 'Run the current draft to inspect transcript and runtime context here.';
+  if (state.status === 'success' && getRunDebugLines(state).length > 0) {
+    return 'Run completed, but no assistant output was returned.';
+  }
+
+  return 'Run the current draft to inspect the assistant output here.';
+}
+
+function renderRunSummary(state: DraftRunState): string {
+  return getRunDebugLines(state).join('\n');
+}
+
+function extractRunFinishedOutput(result: unknown): string {
+  if (typeof result === 'string') {
+    return result;
+  }
+
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return '';
+  }
+
+  const record = result as Record<string, unknown>;
+  const candidate = record.output ?? record.Output ?? record.message ?? record.text;
+  return typeof candidate === 'string' ? candidate : '';
 }
 
 function tryParseStepParameters(
@@ -416,7 +562,7 @@ function updateStepDraftParameterValue(
 async function consumeAguiDraftRun(
   response: Response,
   signal: AbortSignal,
-  onChange: React.Dispatch<React.SetStateAction<DraftRunState>>,
+    onChange: React.Dispatch<React.SetStateAction<DraftRunState>>,
 ): Promise<void> {
   for await (const event of parseBackendSSEStream(response, { signal })) {
     if (signal.aborted) {
@@ -426,6 +572,7 @@ async function consumeAguiDraftRun(
     onChange((current) => {
       const nextEvents = [...current.events, event];
       let nextAssistantText = current.assistantText;
+      let nextFinalOutput = current.finalOutput;
       let nextActorId = current.actorId;
       let nextCommandId = current.commandId;
       let nextRunId = current.runId;
@@ -436,9 +583,38 @@ async function consumeAguiDraftRun(
         nextAssistantText += String((event as { delta?: string }).delta || '');
       }
 
+      if (event.type === AGUIEventType.TEXT_MESSAGE_END) {
+        const finalAssistantText =
+          String(
+            (event as { message?: string; delta?: string }).message ||
+              (event as { delta?: string }).delta ||
+              '',
+          ) || '';
+        if (!nextAssistantText.trim() && finalAssistantText.trim()) {
+          nextAssistantText = finalAssistantText;
+        }
+        if (finalAssistantText.trim()) {
+          nextFinalOutput = finalAssistantText.trim();
+        }
+      }
+
       if (event.type === AGUIEventType.RUN_STARTED) {
         nextRunId = String((event as { runId?: string }).runId || nextRunId);
-        nextActorId = String((event as { threadId?: string }).threadId || nextActorId);
+        nextActorId = String(
+          (event as { actorId?: string; threadId?: string }).actorId ||
+            (event as { threadId?: string }).threadId ||
+            nextActorId,
+        );
+      }
+
+      if (event.type === AGUIEventType.RUN_FINISHED) {
+        const finalOutput = extractRunFinishedOutput(
+          (event as { result?: unknown }).result,
+        );
+        if (finalOutput.trim()) {
+          nextFinalOutput = finalOutput.trim();
+        }
+        nextStatus = 'success';
       }
 
       if (event.type === AGUIEventType.CUSTOM) {
@@ -467,6 +643,7 @@ async function consumeAguiDraftRun(
         commandId: nextCommandId,
         error: nextError,
         events: nextEvents,
+        finalOutput: nextFinalOutput,
         runId: nextRunId,
         status: nextStatus,
       };
@@ -524,8 +701,15 @@ function ScriptLeaveDialog(props: {
         当前脚本草稿还没有保存。离开 Build 会丢掉这次 source editor 里的未保存修改。
       </Typography.Text>
       <Space>
-        <Button onClick={props.onStay}>继续编辑</Button>
-        <Button danger type="primary" onClick={props.onLeave}>
+        <Button className={AEVATAR_INTERACTIVE_BUTTON_CLASS} onClick={props.onStay}>
+          继续编辑
+        </Button>
+        <Button
+          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+          danger
+          type="primary"
+          onClick={props.onLeave}
+        >
           离开页面
         </Button>
       </Space>
@@ -568,6 +752,7 @@ export type StudioWorkflowBuildPanelProps = {
     draft: StudioStepInspectorDraft,
   ) => Promise<void> | void;
   readonly onRemoveSelectedStep: () => Promise<void> | void;
+  readonly onDeleteWorkflowNodes: (nodeIds: string[]) => Promise<void> | void;
   readonly onAutoLayout: () => void;
   readonly onConnectNodes: (sourceNodeId: string, targetNodeId: string) => void;
   readonly onNodeLayoutChange: (
@@ -602,11 +787,13 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   onInsertStep,
   onApplyStepDraft,
   onRemoveSelectedStep,
+  onDeleteWorkflowNodes,
   onAutoLayout,
   onConnectNodes,
   onNodeLayoutChange,
   onContinueToBind,
 }) => {
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
   const [viewMode, setViewMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [runState, setRunState] = React.useState<DraftRunState>(IDLE_DRAFT_RUN_STATE);
   const [workflowRunError, setWorkflowRunError] = React.useState('');
@@ -619,6 +806,29 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   >('');
   const [stepMutationError, setStepMutationError] = React.useState('');
   const abortControllerRef = React.useRef<AbortController | null>(null);
+  const runPendingRef = React.useRef(false);
+  const stepMutationPendingRef = React.useRef(false);
+  const stepDraftRef = React.useRef<StudioStepInspectorDraft | null>(null);
+  const updateStepDraft = React.useCallback(
+    (
+      updater:
+        | StudioStepInspectorDraft
+        | null
+        | ((
+            current: StudioStepInspectorDraft | null,
+          ) => StudioStepInspectorDraft | null),
+    ) => {
+      setStepDraft((current) => {
+        const nextDraft =
+          typeof updater === 'function'
+            ? updater(current)
+            : updater;
+        stepDraftRef.current = nextDraft;
+        return nextDraft;
+      });
+    },
+    [],
+  );
   const selectedStep = React.useMemo(() => {
     const stepId = selectedGraphNodeId.startsWith('step:')
       ? selectedGraphNodeId.slice('step:'.length)
@@ -643,6 +853,20 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           ? selectedGraphNodeId.slice('step:'.length)
           : '',
     [selectedGraphNodeId, selectedStep],
+  );
+  const selectedStepDraftSeed = React.useMemo(
+    () =>
+      selectedStep
+        ? createStepInspectorDraft(selectedStep)
+        : null,
+    [
+      selectedStep?.id,
+      selectedStep?.type,
+      selectedStep?.targetRole,
+      selectedStep?.next,
+      JSON.stringify(selectedStep?.parameters ?? {}),
+      JSON.stringify(selectedStep?.branches ?? {}),
+    ],
   );
   const workflowRoleIds = React.useMemo(
     () => workflowRoles.map((item) => item.id).filter(Boolean),
@@ -710,15 +934,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   }, [onSelectGraphNode, selectedNodeId, selectedStep]);
 
   React.useEffect(() => {
-    if (!selectedStep) {
-      setStepDraft(null);
+    if (!selectedStepDraftSeed) {
+      updateStepDraft(null);
       setStepMutationError('');
       return;
     }
 
-    setStepDraft(createStepInspectorDraft(selectedStep));
+    updateStepDraft(selectedStepDraftSeed);
     setStepMutationError('');
-  }, [selectedStep]);
+  }, [selectedStepDraftSeed, updateStepDraft]);
 
   React.useEffect(
     () => () => {
@@ -728,21 +952,32 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   );
 
   const handleRun = React.useCallback(async () => {
+    if (runPendingRef.current) {
+      return;
+    }
+
     if (!scopeId) {
-      setWorkflowRunError('Resolve the current scope before running the workflow draft.');
+      const visibleMessage = 'Resolve the current scope before running the workflow draft.';
+      setWorkflowRunError(visibleMessage);
+      void message.error(visibleMessage);
       return;
     }
 
     if (dryRunBlockedReason?.trim()) {
-      setWorkflowRunError(dryRunBlockedReason.trim());
+      const visibleMessage = dryRunBlockedReason.trim();
+      setWorkflowRunError(visibleMessage);
+      void message.error(visibleMessage);
       return;
     }
 
     if (!runPrompt.trim()) {
-      setWorkflowRunError('Sample input is required before running the workflow draft.');
+      const visibleMessage = 'Sample input is required before running the workflow draft.';
+      setWorkflowRunError(visibleMessage);
+      void message.error(visibleMessage);
       return;
     }
 
+    runPendingRef.current = true;
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -779,17 +1014,21 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
 
       const rawMessage = describeError(error);
       const disconnectedProvider = rawMessage.match(/Provider '([^']+)' not connected/i);
-      setWorkflowRunError(
+      const visibleMessage =
         disconnectedProvider
           ? `Dry-run 还不能运行，因为 ${disconnectedProvider[1]} provider 还没有连好。先连接可用 provider，再回来运行当前 workflow draft。`
-          : rawMessage,
+          : rawMessage;
+      setWorkflowRunError(
+        visibleMessage,
       );
+      void message.error(visibleMessage);
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
         error: rawMessage,
         status: 'error',
       });
     } finally {
+      runPendingRef.current = false;
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
@@ -803,45 +1042,89 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   ]);
 
   const handleInsertStep = React.useCallback(async (stepType: string) => {
+    if (stepMutationPendingRef.current) {
+      return;
+    }
+
+    stepMutationPendingRef.current = true;
     setStepMutationPending('add');
     setStepMutationError('');
     try {
       await onInsertStep(stepType);
       setStepTypePickerOpen(false);
     } catch (error) {
-      setStepMutationError(describeError(error));
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
     } finally {
+      stepMutationPendingRef.current = false;
       setStepMutationPending('');
     }
   }, [onInsertStep]);
 
   const handleApplyStepChanges = React.useCallback(async () => {
-    if (!stepDraft) {
+    const currentStepDraft = stepDraftRef.current;
+    if (!currentStepDraft || stepMutationPendingRef.current) {
       return;
     }
 
+    stepMutationPendingRef.current = true;
     setStepMutationPending('apply');
     setStepMutationError('');
     try {
-      await onApplyStepDraft(stepDraft);
+      await onApplyStepDraft(currentStepDraft);
     } catch (error) {
-      setStepMutationError(describeError(error));
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
     } finally {
+      stepMutationPendingRef.current = false;
       setStepMutationPending('');
     }
-  }, [onApplyStepDraft, stepDraft]);
+  }, [onApplyStepDraft]);
 
   const handleRemoveStep = React.useCallback(async () => {
+    if (stepMutationPendingRef.current) {
+      return;
+    }
+
+    stepMutationPendingRef.current = true;
     setStepMutationPending('remove');
     setStepMutationError('');
     try {
       await onRemoveSelectedStep();
     } catch (error) {
-      setStepMutationError(describeError(error));
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
     } finally {
+      stepMutationPendingRef.current = false;
       setStepMutationPending('');
     }
   }, [onRemoveSelectedStep]);
+
+  const handleDeleteNodes = React.useCallback(async (nodeIds: string[]) => {
+    const normalizedNodeIds = nodeIds
+      .map((nodeId) => String(nodeId ?? '').trim())
+      .filter(Boolean);
+    if (normalizedNodeIds.length === 0 || stepMutationPendingRef.current) {
+      return;
+    }
+
+    stepMutationPendingRef.current = true;
+    setStepMutationPending('remove');
+    setStepMutationError('');
+    try {
+      await onDeleteWorkflowNodes(normalizedNodeIds);
+    } catch (error) {
+      const visibleMessage = describeError(error);
+      setStepMutationError(visibleMessage);
+      void message.error(visibleMessage);
+    } finally {
+      stepMutationPendingRef.current = false;
+      setStepMutationPending('');
+    }
+  }, [onDeleteWorkflowNodes]);
 
   const workflowCanvasAutoFitKey = React.useMemo(
     () =>
@@ -853,8 +1136,39 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     [workflowGraph.edges, workflowGraph.nodes, workflowName],
   );
 
+  React.useEffect(() => {
+    if (viewMode !== 'canvas' || typeof window === 'undefined') {
+      return;
+    }
+
+    const root = panelRef.current;
+    if (!root) {
+      return;
+    }
+
+    const scrollParent = root.parentElement;
+    if (!scrollParent) {
+      return;
+    }
+
+    const overflowY = window.getComputedStyle(scrollParent).overflowY;
+    if (!/(auto|scroll)/.test(overflowY)) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      scrollParent.scrollTop = 0;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [viewMode, workflowName]);
+
   return (
-    <div data-testid="studio-workflow-build-panel" style={buildWorkbenchGridStyle}>
+    <div
+      ref={panelRef}
+      data-testid="studio-workflow-build-panel"
+      style={workflowWorkbenchLayoutStyle}
+    >
       <div data-testid="workflow-stage-actions" style={workflowStageActionsStyle}>
         <div style={workflowStageActionsRowStyle}>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
@@ -865,13 +1179,18 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           </div>
           <Space wrap size={[8, 8]}>
             <Button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               disabled={!canSaveWorkflow}
               loading={savePending}
               onClick={onSaveDraft}
             >
               Save draft
             </Button>
-            <Button type="primary" onClick={onContinueToBind}>
+            <Button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+              type="primary"
+              onClick={onContinueToBind}
+            >
               Continue to Bind
             </Button>
           </Space>
@@ -885,11 +1204,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         ) : null}
       </div>
 
-      <div
-        data-testid="workflow-build-primary-column"
-        style={buildWorkbenchPrimaryColumnStyle}
-      >
-        <section style={buildSurfaceCardStyle}>
+      <div data-testid="workflow-editor-workspace" style={workflowWorkspaceRowStyle}>
+        <section
+          data-testid="workflow-build-primary-column"
+          style={workflowCanvasPanelStyle}
+        >
           <div style={workflowToolbarStyle}>
             <Space wrap size={[8, 8]}>
               <div style={sectionEyebrowStyle}>DAG Canvas</div>
@@ -901,6 +1220,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             <div style={workflowToolbarActionsStyle}>
               <div style={workflowViewSwitchStyle}>
                 <Button
+                  className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                   aria-pressed={viewMode === 'canvas'}
                   onClick={() => setViewMode('canvas')}
                   size="small"
@@ -909,6 +1229,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   Canvas
                 </Button>
                 <Button
+                  className={AEVATAR_INTERACTIVE_CHIP_CLASS}
                   aria-pressed={viewMode === 'yaml'}
                   onClick={() => setViewMode('yaml')}
                   size="small"
@@ -918,92 +1239,121 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 </Button>
               </div>
               <Button
-                disabled={viewMode !== 'canvas'}
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={viewMode !== 'canvas' || Boolean(stepMutationPending)}
                 loading={stepMutationPending === 'add'}
                 onClick={() => setStepTypePickerOpen((current) => !current)}
               >
                 Add step
               </Button>
-              <Button disabled={viewMode !== 'canvas'} onClick={onAutoLayout}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={viewMode !== 'canvas' || Boolean(stepMutationPending)}
+                onClick={onAutoLayout}
+              >
                 Auto-layout
               </Button>
             </div>
           </div>
-          {stepTypePickerOpen ? (
-            <div data-testid="workflow-step-type-picker" style={workflowTypePickerStyle}>
-              <div style={workflowSectionHeadingStyle}>Choose step type</div>
-              <div style={workflowInlineMetaStyle}>
-                先决定要插入哪种 step，再把它接到当前选中的节点后面。
+          <div style={workflowCanvasBodyStyle}>
+            {stepTypePickerOpen ? (
+              <div data-testid="workflow-step-type-picker" style={workflowTypePickerStyle}>
+                <div style={workflowSectionHeadingStyle}>Choose step type</div>
+                <div style={workflowInlineMetaStyle}>
+                  先决定要插入哪种 step，再把它接到当前选中的节点后面。
+                </div>
+                <div
+                  data-testid="workflow-step-type-picker-grid"
+                  style={workflowTypePickerGridStyle}
+                >
+                  {describedStepTypes.map((entry) => (
+                    <button
+                      aria-disabled={stepMutationPending ? 'true' : undefined}
+                      className={joinInteractiveClassNames(
+                        AEVATAR_INTERACTIVE_BUTTON_CLASS,
+                        AEVATAR_INTERACTIVE_CHIP_CLASS,
+                      )}
+                      disabled={Boolean(stepMutationPending)}
+                      key={entry.stepType}
+                      onClick={() => void handleInsertStep(entry.stepType)}
+                      style={workflowTypeOptionStyle}
+                      type="button"
+                    >
+                      <strong style={{ color: '#1f2937', fontSize: 13 }}>{entry.stepType}</strong>
+                      <span style={{ color: '#6b7280', fontSize: 12, lineHeight: '18px' }}>
+                        {entry.description}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div style={workflowTypePickerGridStyle}>
-                {describedStepTypes.map((entry) => (
-                  <button
-                    key={entry.stepType}
-                    type="button"
-                    style={workflowTypeOptionStyle}
-                    onClick={() => void handleInsertStep(entry.stepType)}
-                  >
-                    <strong style={{ color: '#1f2937', fontSize: 13 }}>{entry.stepType}</strong>
-                    <span style={{ color: '#6b7280', fontSize: 12, lineHeight: '18px' }}>
-                      {entry.description}
-                    </span>
-                  </button>
-                ))}
+            ) : null}
+            {viewMode === 'canvas' ? (
+              <div style={workflowCanvasSurfaceStyle}>
+                <GraphCanvas
+                  autoFitKey={workflowCanvasAutoFitKey}
+                  bottomInset={0}
+                  height="100%"
+                  variant="studio"
+                  nodes={[...workflowGraph.nodes]}
+                  edges={[...workflowGraph.edges]}
+                  selectedNodeId={selectedNodeId || undefined}
+                  onNodeSelect={onSelectGraphNode}
+                  onConnectNodes={onConnectNodes}
+                  onDeleteNodes={handleDeleteNodes}
+                  onNodeLayoutChange={onNodeLayoutChange}
+                />
               </div>
-            </div>
-          ) : null}
-          {viewMode === 'canvas' ? (
-            <div style={workflowCanvasSurfaceStyle}>
-              <GraphCanvas
-                autoFitKey={workflowCanvasAutoFitKey}
-                bottomInset={0}
-                height={500}
-                variant="studio"
-                nodes={[...workflowGraph.nodes]}
-                edges={[...workflowGraph.edges]}
-                selectedNodeId={selectedNodeId || undefined}
-                onNodeSelect={onSelectGraphNode}
-                onConnectNodes={onConnectNodes}
-                onNodeLayoutChange={onNodeLayoutChange}
-              />
-            </div>
-          ) : (
-            <section data-testid="workflow-yaml-panel" style={buildSurfaceCardStyle}>
-              <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-                <div style={sectionEyebrowStyle}>Workflow YAML</div>
-                <Tag color="blue">raw draft</Tag>
-              </div>
-              <Input.TextArea
-                aria-label="定义 YAML"
-                autoSize={{ minRows: 18, maxRows: 28 }}
-                value={draftYaml}
-                onChange={(event) => onSetDraftYaml(event.target.value)}
-              />
-            </section>
-          )}
+            ) : (
+              <section
+                data-testid="workflow-yaml-panel"
+                style={{ ...buildSurfaceCardStyle, flex: '1 1 auto', minHeight: 0 }}
+              >
+                <div
+                  style={{
+                    alignItems: 'center',
+                    display: 'flex',
+                    gap: 8,
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <div style={sectionEyebrowStyle}>Workflow YAML</div>
+                  <Tag color="blue">raw draft</Tag>
+                </div>
+                <Input.TextArea
+                  aria-label="定义 YAML"
+                  autoSize={{ minRows: 18, maxRows: 28 }}
+                  value={draftYaml}
+                  onChange={(event) => onSetDraftYaml(event.target.value)}
+                />
+              </section>
+            )}
+          </div>
         </section>
-      </div>
 
-      <aside style={workflowSideRailStyle}>
         <section
           data-testid="workflow-step-detail-panel"
-          style={buildSurfaceCardStyle}
+          style={workflowStepDetailCardStyle}
         >
-          <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+          <div
+            style={{
+              alignItems: 'center',
+              display: 'flex',
+              gap: 8,
+              justifyContent: 'space-between',
+            }}
+          >
             <div style={{ display: 'grid', gap: 4 }}>
               <div style={sectionEyebrowStyle}>Step Detail</div>
-              {selectedStep ? (
-                <Typography.Text strong>{selectedStep.id}</Typography.Text>
-              ) : null}
+              {selectedStep ? <Typography.Text strong>{selectedStep.id}</Typography.Text> : null}
             </div>
             {selectedStep ? <Tag>{selectedStep.type}</Tag> : null}
           </div>
-          {stepMutationError ? (
-            <Alert message={stepMutationError} showIcon type="error" />
-          ) : null}
-          {selectedStep && stepDraft ? (
-            <>
-              <div style={workflowDetailsGridStyle}>
+          {stepMutationError ? <Alert message={stepMutationError} showIcon type="error" /> : null}
+          <div style={workflowStepDetailBodyStyle}>
+            {selectedStep && stepDraft ? (
+              <>
+                <div style={workflowDetailsGridStyle}>
                 <div style={workflowFieldStyle}>
                   <div style={workflowSectionHeadingStyle}>Basics</div>
                   <label htmlFor="workflow-step-id" style={workflowFieldLabelStyle}>
@@ -1014,7 +1364,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     aria-label="Step ID"
                     value={stepDraft.id}
                     onChange={(event) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1036,7 +1386,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     }))}
                     value={stepDraft.type}
                     onChange={(value) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1063,7 +1413,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     placeholder={workflowRoleIds[0] || 'Select role'}
                     value={stepDraft.targetRole || undefined}
                     onChange={(value) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1087,7 +1437,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     placeholder="No next step"
                     value={stepDraft.next || undefined}
                     onChange={(value) =>
-                      setStepDraft((current) =>
+                      updateStepDraft((current) =>
                         current
                           ? {
                               ...current,
@@ -1132,7 +1482,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                                 placeholder={parameter.default || 'Select value'}
                                 value={currentValue || undefined}
                                 onChange={(value) =>
-                                  setStepDraft((current) =>
+                                  updateStepDraft((current) =>
                                     current
                                       ? updateStepDraftParameterValue(
                                           current,
@@ -1151,7 +1501,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                                 placeholder={parameter.default || parameter.type || 'Value'}
                                 value={currentValue}
                                 onChange={(event) =>
-                                  setStepDraft((current) =>
+                                  updateStepDraft((current) =>
                                     current
                                       ? updateStepDraftParameterValue(
                                           current,
@@ -1190,7 +1540,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                         autoSize={{ minRows: 8, maxRows: 14 }}
                         value={stepDraft.parametersText}
                         onChange={(event) =>
-                          setStepDraft((current) =>
+                          updateStepDraft((current) =>
                             current
                               ? {
                                   ...current,
@@ -1218,7 +1568,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                         autoSize={{ minRows: 5, maxRows: 10 }}
                         value={stepDraft.branchesText}
                         onChange={(event) =>
-                          setStepDraft((current) =>
+                          updateStepDraft((current) =>
                             current
                               ? {
                                   ...current,
@@ -1234,14 +1584,17 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               </div>
               <div style={workflowStageActionsRowStyle}>
                 <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   danger
-                  disabled={!selectedStepId}
+                  disabled={!selectedStepId || Boolean(stepMutationPending)}
                   loading={stepMutationPending === 'remove'}
                   onClick={() => void handleRemoveStep()}
                 >
                   Delete step
                 </Button>
                 <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  disabled={!selectedStepId || !stepDraft || Boolean(stepMutationPending)}
                   loading={stepMutationPending === 'apply'}
                   type="primary"
                   onClick={() => void handleApplyStepChanges()}
@@ -1253,84 +1606,99 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           ) : (
             <Empty description="Select a step from the DAG canvas first." />
           )}
+          </div>
         </section>
+      </div>
 
-        <section style={dryRunAsideStyle}>
-          <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-            <div style={{ display: 'grid', gap: 4 }}>
-              <div style={sectionEyebrowStyle}>Dry-run</div>
-              <Typography.Text strong>Workflow draft run</Typography.Text>
-            </div>
-            <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-              seeded fixture
-            </span>
+      <section data-testid="workflow-dry-run-panel" style={workflowDryRunSectionStyle}>
+        <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <div style={sectionEyebrowStyle}>Dry-run</div>
+            <Typography.Text strong>Workflow draft run</Typography.Text>
           </div>
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div style={workflowInlineMetaStyle}>
-              Route: {dryRunRouteLabel || 'Config default'}
-            </div>
-            <div style={workflowInlineMetaStyle}>
-              Model: {dryRunModelLabel || 'Use configured default'}
-            </div>
+          <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
+            seeded fixture
+          </span>
+        </div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div style={workflowInlineMetaStyle}>
+            Route: {dryRunRouteLabel || 'Config default'}
           </div>
-          {dryRunBlockedReason ? (
-            <Alert
-              action={
-                onOpenRunSetup ? (
-                  <Button size="small" type="link" onClick={onOpenRunSetup}>
-                    Connect provider
-                  </Button>
-                ) : undefined
-              }
-              message={dryRunBlockedReason}
-              showIcon
-              type="warning"
-            />
-          ) : null}
-          <Input.TextArea
-            aria-label="Workflow dry run input"
-            autoSize={{ minRows: 6, maxRows: 10 }}
-            placeholder="Describe the input you want this workflow member to handle."
-            value={runPrompt}
-            onChange={(event) => onRunPromptChange(event.target.value)}
+          <div style={workflowInlineMetaStyle}>
+            Model: {dryRunModelLabel || 'Use configured default'}
+          </div>
+        </div>
+        {dryRunBlockedReason ? (
+          <Alert
+            action={
+              onOpenRunSetup ? (
+                <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  size="small"
+                  type="link"
+                  onClick={onOpenRunSetup}
+                >
+                  Connect provider
+                </Button>
+              ) : undefined
+            }
+            message={dryRunBlockedReason}
+            showIcon
+            type="warning"
           />
-          <Space wrap size={[8, 8]}>
-            <Button
-              icon={<PlayCircleOutlined />}
-              loading={runState.status === 'running'}
-              type="primary"
-              disabled={Boolean(dryRunBlockedReason?.trim())}
-              onClick={() => void handleRun()}
-            >
-              Run
-            </Button>
-            <Button
-              onClick={() =>
-                onRunPromptChange(
-                  JSON.stringify(
-                    {
-                      channel: 'telegram',
-                      text: 'refund for order #92817 — 3rd time asking',
-                      user: 'alex',
-                    },
-                    null,
-                    2,
-                  ),
+        ) : null}
+        <Input.TextArea
+          aria-label="Workflow dry run input"
+          autoSize={{ minRows: 4, maxRows: 6 }}
+          placeholder="Describe the input you want this workflow member to handle."
+          value={runPrompt}
+          onChange={(event) => onRunPromptChange(event.target.value)}
+        />
+        <Space wrap size={[8, 8]}>
+          <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            icon={<PlayCircleOutlined />}
+            loading={runState.status === 'running'}
+            type="primary"
+            disabled={Boolean(dryRunBlockedReason?.trim()) || runState.status === 'running'}
+            onClick={() => void handleRun()}
+          >
+            Run
+          </Button>
+          <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            disabled={runState.status === 'running'}
+            onClick={() =>
+              onRunPromptChange(
+                JSON.stringify(
+                  {
+                    channel: 'telegram',
+                    text: 'refund for order #92817 — 3rd time asking',
+                    user: 'alex',
+                  },
+                  null,
+                  2,
                 )
-              }
-            >
-              Load fixture
-            </Button>
-          </Space>
-          {workflowRunError ? (
-            <Alert message={workflowRunError} showIcon type="error" />
-          ) : null}
-          <div>
-            <div style={sectionEyebrowStyle}>Output</div>
-            <pre style={dryRunOutputStyle}>{renderRunOutput(runState)}</pre>
-          </div>
-        </section>
-      </aside>
+              )
+            }
+          >
+            Load fixture
+          </Button>
+        </Space>
+        {workflowRunError ? (
+          <Alert message={workflowRunError} showIcon type="error" />
+        ) : null}
+        <div>
+          <div style={sectionEyebrowStyle}>Output</div>
+          <pre style={workflowDryRunOutputStyle}>{renderRunOutput(runState)}</pre>
+        </div>
+        {renderRunSummary(runState) ? (
+          <details style={dryRunDebugDetailsStyle}>
+            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
+          </details>
+        ) : null}
+      </section>
     </div>
   );
 };
@@ -1610,10 +1978,19 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               />
             </Space>
             <Space wrap size={[8, 8]}>
-              <Button loading={validationPending} onClick={() => void handleValidate()}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                loading={validationPending}
+                onClick={() => void handleValidate()}
+              >
                 Validate
               </Button>
-              <Button icon={<CheckCircleOutlined />} loading={savePending} onClick={() => void handleSave()}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                icon={<CheckCircleOutlined />}
+                loading={savePending}
+                onClick={() => void handleSave()}
+              >
                 Save draft
               </Button>
             </Space>
@@ -1657,6 +2034,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     </Tag>
                   ) : null}
                   <Button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                     icon={<PlayCircleOutlined />}
                     loading={runPending}
                     type="primary"
@@ -1721,7 +2099,11 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           <Typography.Text type="secondary">
             Script Build keeps code editing here. Service rollout still moves to Bind.
           </Typography.Text>
-          <Button type="primary" onClick={onContinueToBind}>
+          <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            type="primary"
+            onClick={onContinueToBind}
+          >
             Continue to Bind
           </Button>
         </div>
@@ -1754,6 +2136,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         />
         <Space wrap size={[8, 8]}>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             icon={<PlayCircleOutlined />}
             loading={runPending}
             type="primary"
@@ -1762,6 +2145,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             Run
           </Button>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={() =>
               setRunInput(
                 JSON.stringify(
@@ -2014,7 +2398,11 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <Typography.Text type="secondary">
             GAgent Build 只负责定义 actor 语义；真正发布 service / endpoint 还是下一步去 Bind。
           </Typography.Text>
-          <Button type="primary" onClick={onContinueToBind}>
+          <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            type="primary"
+            onClick={onContinueToBind}
+          >
             Continue to Bind
           </Button>
         </div>
@@ -2041,6 +2429,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         />
         <Space wrap size={[8, 8]}>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             icon={<PlayCircleOutlined />}
             loading={runState.status === 'running'}
             type="primary"
@@ -2049,6 +2438,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             Run
           </Button>
           <Button
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={() =>
               setRunPrompt('Classify this support ticket, keep the member state, and decide whether to escalate.')
             }
@@ -2060,6 +2450,12 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <div style={sectionEyebrowStyle}>Output</div>
           <pre style={dryRunOutputStyle}>{renderRunOutput(runState)}</pre>
         </div>
+        {renderRunSummary(runState) ? (
+          <details style={dryRunDebugDetailsStyle}>
+            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
+          </details>
+        ) : null}
       </aside>
     </div>
   );

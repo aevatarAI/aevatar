@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "aevatar.slnx",
+    "projects": [
+      "agents\\platforms\\Aevatar.GAgents.Platform.Lark\\Aevatar.GAgents.Platform.Lark.csproj",
+      "test\\Aevatar.GAgents.Channel.Testing\\Aevatar.GAgents.Channel.Testing.csproj",
+      "test\\Aevatar.GAgents.Platform.Lark.Tests\\Aevatar.GAgents.Platform.Lark.Tests.csproj"
+    ]
+  }
+}

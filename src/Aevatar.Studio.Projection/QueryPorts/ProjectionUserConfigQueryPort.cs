@@ -33,9 +33,12 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
     }
 
-    public async Task<UserConfig> GetAsync(CancellationToken ct = default)
+    public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
+        GetAsync(_scopeResolver.Resolve()?.ScopeId ?? "default", ct);
+
+    public async Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default)
     {
-        var actorId = WriteActorIdPrefix + (_scopeResolver.Resolve()?.ScopeId ?? "default");
+        var actorId = WriteActorIdPrefix + NormalizeScopeId(scopeId);
         var document = await _documentReader.GetAsync(actorId, ct);
 
         if (document is null)
@@ -55,6 +58,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             RemoteRuntimeBaseUrl: string.IsNullOrEmpty(document.RemoteRuntimeBaseUrl)
                 ? _defaultRemoteRuntimeBaseUrl
                 : document.RemoteRuntimeBaseUrl,
+            GithubUsername: NormalizeOptional(document.GithubUsername),
             MaxToolRounds: document.MaxToolRounds);
     }
 
@@ -64,5 +68,15 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
             RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
             LocalRuntimeBaseUrl: _defaultLocalRuntimeBaseUrl,
-            RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl);
+            RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl,
+            GithubUsername: null);
+
+    private static string NormalizeScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 }

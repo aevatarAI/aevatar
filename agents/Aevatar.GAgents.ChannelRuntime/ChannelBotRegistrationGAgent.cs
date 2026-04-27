@@ -23,6 +23,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         StateTransitionMatcher
             .Match(current, evt)
             .On<ChannelBotRegisteredEvent>(ApplyRegistered)
+            .On<ChannelBotProjectionRebuildRequestedEvent>(static (state, _) => state)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
             .On<ChannelBotTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .OrCurrent();
@@ -41,12 +42,22 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(cmd.ScopeId))
+        {
+            Logger.LogWarning(
+                "Ignoring channel bot registration without scope id: platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
+                cmd.Platform,
+                cmd.RequestedId,
+                cmd.NyxAgentApiKeyId);
+            return;
+        }
+
         var entry = new ChannelBotRegistrationEntry
         {
             Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
-            ScopeId = cmd.ScopeId,
+            ScopeId = cmd.ScopeId.Trim(),
             WebhookUrl = cmd.WebhookUrl,
             NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
@@ -75,6 +86,20 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             TombstoneStateVersion = NextCommittedVersion(),
         });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
+    }
+
+    [EventHandler]
+    public async Task HandleRebuildProjection(ChannelBotRebuildProjectionCommand cmd)
+    {
+        await PersistDomainEventAsync(new ChannelBotProjectionRebuildRequestedEvent
+        {
+            Reason = cmd.Reason ?? string.Empty,
+            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        Logger.LogInformation(
+            "Requested channel bot registration projection rebuild: actorId={ActorId}, reason={Reason}",
+            Id,
+            string.IsNullOrWhiteSpace(cmd.Reason) ? "unspecified" : cmd.Reason);
     }
 
     [EventHandler]

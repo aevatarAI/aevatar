@@ -87,7 +87,7 @@ export default [
     path: "/runtime/runs",
     name: "Event Stream",
     component: "./runs",
-    hideInMenu: true,
+    menuGroupKey: "platform",
   },
   {
     path: "/runtime/mission-control",
@@ -169,7 +169,7 @@ export default [
   {
     path: "/settings",
     name: "Settings",
-    component: "./settings/account",
+    component: "./settings",
     menuGroupKey: "settings",
   },
   {
