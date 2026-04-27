@@ -694,9 +694,19 @@ public sealed class AgentBuilderToolTests
         actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-pref-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IActor>(skillRunnerActor));
 
+        // Issue #436 PR #438 review: pin that the no-username `/daily` relay path reads the
+        // saved github_username from the per-end-user composite scope, not the bot's
+        // RegistrationScopeId. Without sender_id + platform set in the metadata this test
+        // would silently keep passing if the read accidentally drifted back to `configScopeId`.
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync("scope-1:lark:ou_alice", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: "saved-user")));
+        // Bot scope alone must NOT resolve a saved username: if the read regressed back to
+        // `configScopeId`, the prompt assertion below would still pass because both stubs
+        // would return "saved-user". Stub the bot-scope key with a sentinel so the assertion
+        // fails loudly on regression.
+        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: "WRONG-bot-scope-leak")));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -739,6 +749,8 @@ public sealed class AgentBuilderToolTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             [ChannelMetadataKeys.ChatType] = "p2p",
             [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.Platform] = "lark",
+            [ChannelMetadataKeys.SenderId] = "ou_alice",
             ["scope_id"] = "scope-1",
         };
         try
@@ -763,6 +775,12 @@ public sealed class AgentBuilderToolTests
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal) &&
                     e.Payload.Unpack<InitializeSkillRunnerCommand>().ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal)),
                 Arg.Any<CancellationToken>());
+
+            // Direct evidence the per-end-user scope is what reaches the query port.
+            await userConfigQueryPort.Received(1)
+                .GetAsync("scope-1:lark:ou_alice", Arg.Any<CancellationToken>());
+            await userConfigQueryPort.DidNotReceive()
+                .GetAsync("scope-1", Arg.Any<CancellationToken>());
 
             handler.Requests.Should().NotContain(x => x.Path == "/api/v1/proxy/s/api-github/user");
         }
@@ -1015,6 +1033,8 @@ public sealed class AgentBuilderToolTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             [ChannelMetadataKeys.ChatType] = "p2p",
             [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.Platform] = "lark",
+            [ChannelMetadataKeys.SenderId] = "ou_alice",
             ["scope_id"] = "scope-1",
         };
         try
@@ -1037,8 +1057,12 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeTrue();
             doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeFalse();
 
+            // Issue #436: the bot's RegistrationScopeId is shared across all Lark users using
+            // one bot, so the saved github_username must land in a per-end-user actor
+            // (`{bot}:{platform}:{sender}`), not the bot scope alone. SkillRunner.ScopeId
+            // (asserted elsewhere) keeps the bot scope for downstream NyxID-tenant tools.
             await userConfigCommandService.Received(1)
-                .SaveGithubUsernameAsync("scope-1", "alice", Arg.Any<CancellationToken>());
+                .SaveGithubUsernameAsync("scope-1:lark:ou_alice", "alice", Arg.Any<CancellationToken>());
         }
         finally
         {

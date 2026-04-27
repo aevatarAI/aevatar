@@ -188,11 +188,17 @@ public sealed class AgentBuilderTool : IAgentTool
     {
         var rawScopeId = NormalizeOptional(AgentToolRequestContext.TryGet("scope_id"));
         var configScopeId = NormalizeScopeId(rawScopeId);
+        // Bot's RegistrationScopeId is per-NyxID-account (one bot = one scope), so multiple
+        // Lark users sharing one bot would otherwise share a single UserConfigGAgent and
+        // overwrite each other's saved github_username (issue #436). Compose a per-end-user
+        // scope from the channel sender for personal-preference reads/writes only;
+        // SkillRunner.ScopeId stays bot-scoped for downstream NyxID-tenant tools.
+        var userConfigScopeId = ChannelUserConfigScope.FromMetadata(AgentToolRequestContext.CurrentMetadata);
         var githubUsernameResolution = await ResolveDailyReportGithubUsernameAsync(
             args,
             nyxClient,
             token,
-            configScopeId,
+            userConfigScopeId,
             ct);
         if (githubUsernameResolution.ErrorResponse is not null)
             return githubUsernameResolution.ErrorResponse;
@@ -321,7 +327,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var savePreferenceRequested = args.Bool("save_github_username_preference") == true;
         var preferenceSaved = await SaveGithubUsernamePreferenceIfRequestedAsync(
-            configScopeId,
+            userConfigScopeId,
             githubUsernameResolution.GithubUsername ?? string.Empty,
             savePreferenceRequested,
             ct);

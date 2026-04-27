@@ -23,7 +23,6 @@ import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
-  buildTeamCreateHref,
   buildTeamDetailHref,
 } from "@/shared/navigation/teamRoutes";
 import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
@@ -37,6 +36,7 @@ import {
   type StudioScopeBindingStatus,
 } from "@/shared/studio/models";
 import {
+  buildStudioRoute,
   buildStudioWorkflowMemberKey,
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
@@ -62,7 +62,6 @@ import {
   type WorkflowOperationalAttention,
 } from "./workflowOperationalUnits";
 
-const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
@@ -823,8 +822,12 @@ const ScopeBackedTeamRow: React.FC<{
 
 const TeamsHomePage: React.FC = () => {
   const { token } = theme.useToken();
-  const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
-  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [draft, setDraft] = React.useState<ScopeQueryDraft>(() =>
+    readScopeQueryDraft(),
+  );
+  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(() =>
+    readScopeQueryDraft(),
+  );
   const [manualRosterView, setManualRosterView] = React.useState<
     "cards" | "list" | null
   >(null);
@@ -1081,7 +1084,19 @@ const TeamsHomePage: React.FC = () => {
         <Space wrap>
           <Button
             icon={<PlusOutlined />}
-            onClick={() => history.push(buildTeamCreateHref())}
+            onClick={() =>
+              history.push(
+                buildStudioRoute({
+                  scopeId:
+                    scopeId ||
+                    readScopeQueryDraft().scopeId ||
+                    resolvedScope?.scopeId ||
+                    localScopeId,
+                  tab: "studio",
+                  intent: "create-member",
+                }),
+              )
+            }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >

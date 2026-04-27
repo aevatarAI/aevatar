@@ -21,6 +21,13 @@ internal static class ServiceBindingEndpoints
         group.MapGet("/{serviceId}/bindings", HandleGetAsync);
     }
 
+    // All four handlers share the same shape:
+    //   1. Resolve authenticated context once.
+    //   2. Validate body identity against claims (returns 400 OWNER_*_CONFLICT
+    //      / BOUND_SERVICE_IDENTITY_CONFLICT before the more generic 403).
+    //   3. TryResolveContext / TryResolveIdentity using the already-resolved auth context
+    //      (avoids the double-Resolve cost).
+    //   4. Dispatch the command / query.
     private static async Task<IResult> HandleCreateAsync(
         HttpContext http,
         string serviceId,
@@ -29,17 +36,6 @@ internal static class ServiceBindingEndpoints
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
-        if (ServiceIdentityEndpointAccess.TryResolveContext(
-                identityResolver,
-                request.TenantId,
-                request.AppId,
-                request.Namespace,
-                out var ownerContext,
-                out var denied) == false)
-        {
-            return denied;
-        }
-
         var authenticatedContext = identityResolver.Resolve();
         if (TryValidateOwnerIdentity(request.TenantId, request.AppId, request.Namespace, authenticatedContext) is { } ownerInvalid)
             return ownerInvalid;
@@ -47,6 +43,18 @@ internal static class ServiceBindingEndpoints
         var bindingKind = ParseBindingKind(request.BindingKind);
         if (TryValidateBoundServiceIdentity(bindingKind, request, authenticatedContext) is { } invalid)
             return invalid;
+
+        if (!ServiceIdentityEndpointAccess.TryResolveContext(
+                identityResolver,
+                authenticatedContext,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                out var ownerContext,
+                out var denied))
+        {
+            return denied;
+        }
 
         var receipt = await commandPort.CreateBindingAsync(new CreateServiceBindingCommand
         {
@@ -64,17 +72,6 @@ internal static class ServiceBindingEndpoints
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
-        if (ServiceIdentityEndpointAccess.TryResolveContext(
-                identityResolver,
-                request.TenantId,
-                request.AppId,
-                request.Namespace,
-                out var ownerContext,
-                out var denied) == false)
-        {
-            return denied;
-        }
-
         var authenticatedContext = identityResolver.Resolve();
         if (TryValidateOwnerIdentity(request.TenantId, request.AppId, request.Namespace, authenticatedContext) is { } ownerInvalid)
             return ownerInvalid;
@@ -82,6 +79,18 @@ internal static class ServiceBindingEndpoints
         var bindingKind = ParseBindingKind(request.BindingKind);
         if (TryValidateBoundServiceIdentity(bindingKind, request, authenticatedContext) is { } invalid)
             return invalid;
+
+        if (!ServiceIdentityEndpointAccess.TryResolveContext(
+                identityResolver,
+                authenticatedContext,
+                request.TenantId,
+                request.AppId,
+                request.Namespace,
+                out var ownerContext,
+                out var denied))
+        {
+            return denied;
+        }
 
         var receipt = await commandPort.UpdateBindingAsync(new UpdateServiceBindingCommand
         {
@@ -105,6 +114,7 @@ internal static class ServiceBindingEndpoints
 
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
                 identityResolver,
+                authenticatedContext,
                 request.TenantId,
                 request.AppId,
                 request.Namespace,
@@ -137,6 +147,7 @@ internal static class ServiceBindingEndpoints
 
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
                 identityResolver,
+                authenticatedContext,
                 query.TenantId,
                 query.AppId,
                 query.Namespace,

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -90,15 +91,67 @@ public sealed class GovernanceEndpointsTests
                 },
             }),
         };
-        request.Headers.Add("X-Test-Authenticated", "true");
-        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
-        request.Headers.Add("X-Test-App-Id", "app-claim");
-        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        AddAuthenticatedClaims(request);
 
         var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ReadCodeAsync(response)).Should().Be("OWNER_SERVICE_IDENTITY_CONFLICT");
         host.CommandPort.CreateBindingCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindingEndpoints_WhenAuthenticatedOwnerIdentityConflictsOnUpdate_ShouldReturnBadRequest()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Put, "/api/services/orders/bindings/binding-a")
+        {
+            Content = JsonContent.Create(new
+            {
+                tenantId = "spoof-tenant",
+                appId = "spoof-app",
+                @namespace = "spoof-ns",
+                bindingId = "binding-a",
+                displayName = "Dependency",
+                bindingKind = "service",
+                service = new
+                {
+                    serviceId = "dependency",
+                    endpointId = "run",
+                },
+            }),
+        };
+        AddAuthenticatedClaims(request);
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ReadCodeAsync(response)).Should().Be("OWNER_SERVICE_IDENTITY_CONFLICT");
+        host.CommandPort.UpdateBindingCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindingEndpoints_WhenAuthenticatedOwnerIdentityConflictsOnRetire_ShouldReturnBadRequest()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders/bindings/binding-a:retire")
+        {
+            Content = JsonContent.Create(new
+            {
+                tenantId = "spoof-tenant",
+                appId = "spoof-app",
+                @namespace = "spoof-ns",
+            }),
+        };
+        AddAuthenticatedClaims(request);
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ReadCodeAsync(response)).Should().Be("OWNER_SERVICE_IDENTITY_CONFLICT");
+        host.CommandPort.RetireBindingCommand.Should().BeNull();
     }
 
     [Fact]
@@ -109,14 +162,12 @@ public sealed class GovernanceEndpointsTests
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             "/api/services/orders/bindings?tenantId=spoof-tenant&appId=spoof-app&namespace=spoof-ns");
-        request.Headers.Add("X-Test-Authenticated", "true");
-        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
-        request.Headers.Add("X-Test-App-Id", "app-claim");
-        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        AddAuthenticatedClaims(request);
 
         var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ReadCodeAsync(response)).Should().Be("OWNER_SERVICE_IDENTITY_CONFLICT");
         host.QueryPort.LastBindingsIdentity.Should().BeNull();
     }
 
@@ -145,15 +196,27 @@ public sealed class GovernanceEndpointsTests
                 },
             }),
         };
-        request.Headers.Add("X-Test-Authenticated", "true");
-        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
-        request.Headers.Add("X-Test-App-Id", "app-claim");
-        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        AddAuthenticatedClaims(request);
 
         var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ReadCodeAsync(response)).Should().Be("BOUND_SERVICE_IDENTITY_CONFLICT");
         host.CommandPort.CreateBindingCommand.Should().BeNull();
+    }
+
+    private static void AddAuthenticatedClaims(HttpRequestMessage request)
+    {
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+    }
+
+    private static async Task<string?> ReadCodeAsync(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return body.TryGetProperty("code", out var code) ? code.GetString() : null;
     }
 
     [Fact]
