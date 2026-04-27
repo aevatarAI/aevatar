@@ -26,7 +26,10 @@ public static class DeviceServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        var useElasticsearch = ResolveElasticsearchEnabled(configuration);
+        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
+            configuration,
+            logger: null,
+            storeName: "DeviceRegistration");
 
         // ─── Device Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -53,7 +56,7 @@ public static class DeviceServiceCollectionExtensions
         if (useElasticsearch)
         {
             services.AddElasticsearchDocumentProjectionStore<DeviceRegistrationDocument, string>(
-                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
@@ -67,38 +70,4 @@ public static class DeviceServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>
-    /// Detects whether Elasticsearch is the projection store. Mirrors the same logic as
-    /// the channel runtime: explicit Enabled=true, or auto-detect from Endpoints presence.
-    /// When configuration is null (unit tests), falls back to InMemory.
-    /// </summary>
-    private static bool ResolveElasticsearchEnabled(IConfiguration? configuration)
-    {
-        if (configuration == null) return false;
-
-        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
-        var explicitEnabled = section["Enabled"];
-        if (!string.IsNullOrWhiteSpace(explicitEnabled))
-            return string.Equals(explicitEnabled.Trim(), "true", StringComparison.OrdinalIgnoreCase);
-
-        var hasEndpoints = section.GetSection("Endpoints").GetChildren()
-            .Any(x => !string.IsNullOrWhiteSpace(x.Value));
-
-        if (!hasEndpoints)
-        {
-            Console.Error.WriteLine(
-                "[WARN] DeviceRegistration: Elasticsearch not configured — using volatile InMemory projection store. " +
-                "Registration data will be lost on restart. Set Projection:Document:Providers:Elasticsearch:Enabled=true for production.");
-        }
-
-        return hasEndpoints;
-    }
-
-    private static Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration.ElasticsearchProjectionDocumentStoreOptions
-        BuildElasticsearchOptions(IConfiguration configuration)
-    {
-        var options = new Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration.ElasticsearchProjectionDocumentStoreOptions();
-        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
-        return options;
-    }
 }

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Configuration;
@@ -36,6 +37,13 @@ public static class ServiceCollectionExtensions
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+
+        // ─── LLM-call middleware that injects channel context into LLM requests ───
+        // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware
+        // (AI.Abstractions); keeping it in NyxidChat lets Channel.Runtime stay free of
+        // AI / Workflow dependencies. ChannelCardActionRouting (workflow resume binding)
+        // is in this package for the same reason.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, ChannelContextMiddleware>());
 
         return services;
     }

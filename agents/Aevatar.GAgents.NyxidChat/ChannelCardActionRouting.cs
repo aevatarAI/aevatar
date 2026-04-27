@@ -1,6 +1,7 @@
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
-namespace Aevatar.GAgents.Channel.Runtime;
+namespace Aevatar.GAgents.NyxidChat;
 
 public static class ChannelCardActionRouting
 {

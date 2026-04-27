@@ -1,9 +1,10 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Channel.Runtime;
+namespace Aevatar.GAgents.NyxidChat;
 
 internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 {
