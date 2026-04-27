@@ -28,12 +28,64 @@ public class BootstrapServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
-        provider.GetService<IAevatarSecretsStore>().Should().NotBeNull();
+        provider.GetService<IAevatarSecretsStore>().Should().BeOfType<AevatarSecretsStore>();
 
         var connectorBuilders = provider.GetServices<IConnectorBuilder>().ToList();
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HttpConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(CliConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(TelegramUserConnectorBuilder));
+    }
+
+    [Fact]
+    public void AddAevatarBootstrap_WhenLocalFileSecretsStoreDisabled_ShouldRegisterEnvironmentSecretsStore()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["LLMProviders:Default"] = "deepseek",
+        });
+        services.AddSingleton(configuration);
+
+        services.AddAevatarBootstrap(configuration, allowLocalFileSecretsStore: false);
+        using var provider = services.BuildServiceProvider();
+
+        var store = provider.GetRequiredService<IAevatarSecretsStore>();
+        store.Should().BeOfType<EnvironmentSecretsStore>();
+        store.GetDefaultProvider().Should().Be("deepseek");
+        store.Invoking(s => s.Set("k", "v")).Should().Throw<InvalidOperationException>();
+        store.Invoking(s => s.Remove("k")).Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void AddAevatarDefaultHost_WhenLocalFileSecretsStoreDisabled_ShouldSkipSecretsJsonAndUseEnvironmentStore()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        File.WriteAllText(
+            Path.Combine(home.Root, "secrets.json"),
+            """{"FromSecretsJson":"should-not-load"}""");
+        Environment.SetEnvironmentVariable("AEVATAR_LLMProviders__Default", "deepseek");
+        try
+        {
+            var builder = CreateBuilder();
+
+            builder.AddAevatarDefaultHost(options =>
+            {
+                options.AllowLocalFileSecretsStore = false;
+                options.EnableConnectorBootstrap = false;
+                options.EnableCors = false;
+            });
+
+            using var provider = builder.Services.BuildServiceProvider();
+            var store = provider.GetRequiredService<IAevatarSecretsStore>();
+            store.Should().BeOfType<EnvironmentSecretsStore>();
+            builder.Configuration["FromSecretsJson"].Should().BeNull();
+            builder.Configuration["LLMProviders:Default"].Should().Be("deepseek");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AEVATAR_LLMProviders__Default", null);
+        }
     }
 
     [Fact]
@@ -195,8 +247,11 @@ public class BootstrapServiceCollectionExtensionsTests
         {
             _previous = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
             _path = Path.Combine(Path.GetTempPath(), $"aevatar-bootstrap-tests-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(_path);
             Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, _path);
         }
+
+        public string Root => _path;
 
         public void Dispose()
         {

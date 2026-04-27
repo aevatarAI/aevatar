@@ -41,6 +41,11 @@ public static class MainnetHostBuilderExtensions
         {
             options.ServiceName = "Aevatar.Mainnet.Host.Api";
             options.EnableWebSockets = true;
+            // Mainnet must never persist secrets to ~/.aevatar/secrets.json.
+            // Secrets are injected via AEVATAR_-prefixed environment variables
+            // managed by the deploy platform; Set/Remove on the secrets store
+            // will throw at the call site instead of silently writing to disk.
+            options.AllowLocalFileSecretsStore = false;
             configureHost?.Invoke(options);
         });
         builder.AddMainnetDistributedOrleansHost();

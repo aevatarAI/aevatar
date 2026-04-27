@@ -11,9 +11,10 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddAevatarBootstrap(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        bool allowLocalFileSecretsStore = true)
     {
-        services.AddAevatarConfig();
+        services.AddAevatarConfig(allowLocalFileSecretsStore);
         services.AddHttpClient();
         services.AddAevatarActorRuntime(configuration);
         RegisterConnectorBuilders(services);
