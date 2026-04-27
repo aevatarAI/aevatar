@@ -494,6 +494,7 @@ docs/agents-working-space/*
 .tools/*
 .plan/
 .claude/ralph-loop.local.md
+.claude/scheduled_tasks.lock
 
 # Docs triage working directory
 docs/.triage/
