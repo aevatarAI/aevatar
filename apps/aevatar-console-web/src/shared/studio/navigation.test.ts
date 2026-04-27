@@ -1,8 +1,10 @@
 import {
-  buildStudioWorkflowMemberKey,
+  buildStudioInvokeWorkspaceRoute,
+  buildStudioObserveWorkspaceRoute,
   buildStudioRoute,
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
+  buildStudioWorkflowMemberKey,
   buildStudioWorkflowWorkspaceRoute,
 } from './navigation';
 
@@ -109,7 +111,9 @@ describe('buildStudioRoute', () => {
         memberKey: 'workflow:workflow-1',
         step: 'bind',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind&tab=bindings');
+    ).toBe(
+      '/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind&tab=bindings',
+    );
   });
 
   it('builds dedicated workflow and script workspace routes', () => {
@@ -188,6 +192,54 @@ describe('buildStudioRoute', () => {
       }),
     ).toBe(
       '/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=executions&execution=execution-1',
+    );
+  });
+
+  it('keeps Build -> Bind -> Invoke -> Observe deep links pinned to the same member', () => {
+    const memberKey = 'workflow:workflow-1';
+    expect(
+      buildStudioWorkflowEditorRoute({
+        scopeId: 'scope-1',
+        memberKey,
+        workflowId: 'workflow-1',
+      }),
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&tab=studio');
+    expect(
+      buildStudioRoute({
+        scopeId: 'scope-1',
+        memberKey,
+        step: 'bind',
+      }),
+    ).toBe(
+      '/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind&tab=bindings',
+    );
+    expect(
+      buildStudioInvokeWorkspaceRoute({
+        scopeId: 'scope-1',
+        memberKey,
+      }),
+    ).toBe(
+      '/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=invoke&tab=invoke',
+    );
+    expect(
+      buildStudioObserveWorkspaceRoute({
+        scopeId: 'scope-1',
+        memberKey,
+      }),
+    ).toBe(
+      '/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=observe&tab=executions',
+    );
+  });
+
+  it('carries an execution focus into the Observe deep link without dropping member context', () => {
+    expect(
+      buildStudioObserveWorkspaceRoute({
+        scopeId: 'scope-1',
+        memberKey: 'workflow:workflow-1',
+        executionId: 'execution-9',
+      }),
+    ).toBe(
+      '/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=observe&tab=executions&execution=execution-9',
     );
   });
 

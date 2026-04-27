@@ -94,6 +94,7 @@ const nodeTestFiles = [
   '<rootDir>/src/shared/datetime/dateTime.test.ts',
   '<rootDir>/src/shared/playground/stepSummary.test.ts',
   '<rootDir>/src/shared/studio/document.test.ts',
+  '<rootDir>/src/shared/studio/invokeHistoryStore.test.ts',
   '<rootDir>/src/shared/studio/navigation.test.ts',
   '<rootDir>/src/shared/ui/aevatarWorkbench.test.ts',
   '<rootDir>/src/shared/workflows/catalogVisibility.test.ts',

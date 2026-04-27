@@ -1,8 +1,17 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { history } from '@/shared/navigation/history';
+import type { ScopeConsoleServiceOption } from '@/shared/runs/scopeConsole';
+import { buildStudioInvokeHistoryStorageKey } from '@/shared/studio/invokeHistoryStore';
 import StudioMemberInvokePanel from './StudioMemberInvokePanel';
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
@@ -22,16 +31,23 @@ jest.mock('@/shared/studio/api', () => ({
   },
 }));
 
+jest.mock('@/shared/navigation/history', () => ({
+  history: { push: jest.fn() },
+}));
+
 describe('StudioMemberInvokePanel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.sessionStorage.clear();
     (runtimeRunsApi.invokeEndpoint as jest.Mock).mockResolvedValue({
       accepted: true,
       commandId: 'cmd-1',
       requestId: 'run-1',
       targetActorId: 'actor-1',
     });
-    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {});
+    (parseBackendSSEStream as jest.Mock).mockImplementation(
+      async function* () {},
+    );
   });
 
   it('renders the invoke workbench skeleton with a compact contract and a persistent console', async () => {
@@ -88,7 +104,9 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    expect(await screen.findByTestId('studio-member-invoke-panel')).toBeTruthy();
+    expect(
+      await screen.findByTestId('studio-member-invoke-panel'),
+    ).toBeTruthy();
     expect(screen.getByText('调用契约')).toBeTruthy();
     expect(screen.getByText('调试台')).toBeTruthy();
     expect(screen.getByText('当前结果')).toBeTruthy();
@@ -102,7 +120,9 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('原始')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     expect(
-      screen.getByText('还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。'),
+      screen.getByText(
+        '还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。',
+      ),
     ).toBeTruthy();
     expect(screen.queryByText('Runs（0）')).toBeNull();
     expect(screen.queryByText('运行详情')).toBeNull();
@@ -145,7 +165,9 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('缺少提示词')).toBeNull();
     expect(screen.getByText('当前结果')).toBeTruthy();
     expect(
-      screen.getByText('还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。'),
+      screen.getByText(
+        '还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。',
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/Runs（/)).toBeNull();
     expect(screen.queryByText('这次调用失败了。')).toBeNull();
@@ -248,13 +270,18 @@ describe('StudioMemberInvokePanel', () => {
         value: 'Route this escalation to billing review.',
       },
     });
-    fireEvent.change(screen.getByPlaceholderText('type.googleapis.com/example.Command'), {
-      target: {
-        value: 'type.googleapis.com/example.Submit',
-      },
-    });
     fireEvent.change(
-      screen.getByPlaceholderText('如需类型化调用，请粘贴预编码的 protobuf payload。'),
+      screen.getByPlaceholderText('type.googleapis.com/example.Command'),
+      {
+        target: {
+          value: 'type.googleapis.com/example.Submit',
+        },
+      },
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        '如需类型化调用，请粘贴预编码的 protobuf payload。',
+      ),
       {
         target: {
           value: 'ZXhhbXBsZS1wYXlsb2Fk',
@@ -281,12 +308,16 @@ describe('StudioMemberInvokePanel', () => {
 
     expect(await screen.findByText('Runs（1）')).toBeTruthy();
     expect(
-      screen.getByText('这次结构化调用已经返回结果。切到“原始”可以查看完整返回体。'),
+      screen.getByText(
+        '这次结构化调用已经返回结果。切到“原始”可以查看完整返回体。',
+      ),
     ).toBeTruthy();
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
 
-    const inlineDetail = await screen.findByTestId('studio-invoke-inline-detail');
+    const inlineDetail = await screen.findByTestId(
+      'studio-invoke-inline-detail',
+    );
     const inlineScope = within(inlineDetail);
     expect(inlineScope.getByText('Command ID')).toBeTruthy();
     expect(inlineScope.getByText('cmd-1')).toBeTruthy();
@@ -300,7 +331,202 @@ describe('StudioMemberInvokePanel', () => {
       },
     });
 
-    expect(screen.getByLabelText('调用请求输入')).toHaveValue('Overwrite prompt');
+    expect(screen.getByLabelText('调用请求输入')).toHaveValue(
+      'Overwrite prompt',
+    );
+  });
+
+  it('persists invoke history per scope+member so transcripts survive panel remounts', async () => {
+    const services: ScopeConsoleServiceOption[] = [
+      {
+        deploymentStatus: 'Active',
+        displayName: 'workspace-demo',
+        endpoints: [
+          {
+            description: 'Send a structured request into the member.',
+            displayName: 'Submit',
+            endpointId: 'submit',
+            kind: 'invoke',
+            requestTypeUrl: 'type.googleapis.com/example.Submit',
+            responseTypeUrl: 'type.googleapis.com/example.SubmitResult',
+          },
+        ],
+        kind: 'service',
+        namespace: 'default',
+        primaryActorId: 'actor-default',
+        serviceId: 'default',
+      },
+    ];
+
+    const props = {
+      memberKey: 'workflow:workflow-1',
+      scopeId: 'scope-1',
+      services,
+    };
+
+    const { unmount } = render(
+      React.createElement(StudioMemberInvokePanel, props),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: { value: 'Persisted prompt about billing' },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText('type.googleapis.com/example.Command'),
+      {
+        target: { value: 'type.googleapis.com/example.Submit' },
+      },
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        '如需类型化调用，请粘贴预编码的 protobuf payload。',
+      ),
+      { target: { value: 'cGVyc2lzdGVkLXBheWxvYWQ=' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: '执行调用' }));
+
+    expect(await screen.findByText('Runs（1）')).toBeTruthy();
+
+    const storageKey = buildStudioInvokeHistoryStorageKey({
+      scopeId: 'scope-1',
+      memberKey: 'workflow:workflow-1',
+    });
+    expect(window.sessionStorage.getItem(storageKey)).not.toBeNull();
+
+    unmount();
+
+    render(React.createElement(StudioMemberInvokePanel, props));
+
+    expect(await screen.findByText('Runs（1）')).toBeTruthy();
+  });
+
+  it('keeps invoke history scoped per member so switching members does not bleed transcripts', async () => {
+    const baseService: ScopeConsoleServiceOption = {
+      deploymentStatus: 'Active',
+      displayName: 'workspace-demo',
+      endpoints: [
+        {
+          description: 'Send a structured request into the member.',
+          displayName: 'Submit',
+          endpointId: 'submit',
+          kind: 'invoke',
+          requestTypeUrl: 'type.googleapis.com/example.Submit',
+          responseTypeUrl: 'type.googleapis.com/example.SubmitResult',
+        },
+      ],
+      kind: 'service',
+      namespace: 'default',
+      primaryActorId: 'actor-default',
+      serviceId: 'default',
+    };
+
+    const { rerender } = render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberKey: 'workflow:workflow-1',
+        scopeId: 'scope-1',
+        services: [baseService],
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: { value: 'workflow-1 prompt' },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText('type.googleapis.com/example.Command'),
+      {
+        target: { value: 'type.googleapis.com/example.Submit' },
+      },
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        '如需类型化调用，请粘贴预编码的 protobuf payload。',
+      ),
+      { target: { value: 'd29ya2Zsb3ctcGF5bG9hZA==' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: '执行调用' }));
+
+    expect(await screen.findByText('Runs（1）')).toBeTruthy();
+
+    rerender(
+      React.createElement(StudioMemberInvokePanel, {
+        memberKey: 'workflow:workflow-2',
+        scopeId: 'scope-1',
+        services: [baseService],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Runs（/)).toBeNull();
+    });
+  });
+
+  it('routes the in-Studio Observe handoff back into Studio with the current member key preserved', async () => {
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberKey: 'workflow:workflow-1',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-default',
+            serviceId: 'default',
+          },
+        ],
+      }),
+    );
+
+    fireEvent.click(await screen.findByTestId('studio-invoke-observe-button'));
+
+    expect(history.push).toHaveBeenCalledWith(
+      '/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=observe&tab=executions',
+    );
+  });
+
+  it('falls back to the selected service id for Observe handoff when no member key is provided', async () => {
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-fallback',
+            serviceId: 'service-fallback',
+          },
+        ],
+      }),
+    );
+
+    fireEvent.click(await screen.findByTestId('studio-invoke-observe-button'));
+
+    expect(history.push).toHaveBeenCalledWith(
+      '/studio?scopeId=scope-1&member=member%3Aservice-fallback&step=observe&tab=executions',
+    );
   });
 
   it('renders a clear empty state when no selected member is available for invoke', async () => {

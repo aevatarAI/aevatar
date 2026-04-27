@@ -28,14 +28,22 @@ import {
 } from '@/shared/runs/scopeConsole';
 import { studioApi } from '@/shared/studio/api';
 import {
+  buildStudioInvokeHistoryStorageKey,
+  loadStudioInvokeHistory,
+  saveStudioInvokeHistory,
+  STUDIO_INVOKE_HISTORY_LIMIT,
+} from '@/shared/studio/invokeHistoryStore';
+import {
   describeStudioScopeBindingRevisionContext,
   type StudioScopeBindingRevision,
 } from '@/shared/studio/models';
+import { buildStudioObserveWorkspaceRoute } from '@/shared/studio/navigation';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
+  readonly memberKey?: string;
   readonly memberRevision?: StudioScopeBindingRevision | null;
   readonly services: readonly ScopeConsoleServiceOption[];
   readonly selectedMemberLabel?: string;
@@ -518,6 +526,7 @@ const CompactCopyableValue: React.FC<{
 
 const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
+  memberKey,
   memberRevision,
   services,
   selectedMemberLabel,
@@ -549,7 +558,17 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     null,
   );
   const [chatMessages, setChatMessages] = useState<StudioInvokeChatMessage[]>([]);
-  const [requestHistory, setRequestHistory] = useState<InvokeHistoryEntry[]>([]);
+  const invokeHistoryStorageKey = useMemo(
+    () =>
+      buildStudioInvokeHistoryStorageKey({
+        scopeId,
+        memberKey,
+      }),
+    [memberKey, scopeId],
+  );
+  const [requestHistory, setRequestHistory] = useState<InvokeHistoryEntry[]>(
+    () => loadStudioInvokeHistory<InvokeHistoryEntry>(invokeHistoryStorageKey),
+  );
   const [expandedHistoryId, setExpandedHistoryId] = useState('');
   const [consoleTab, setConsoleTab] = useState<'result' | 'trace' | 'raw'>(
     'result',
@@ -774,6 +793,17 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
 
   useEffect(() => {
+    setRequestHistory(
+      loadStudioInvokeHistory<InvokeHistoryEntry>(invokeHistoryStorageKey),
+    );
+    setExpandedHistoryId('');
+  }, [invokeHistoryStorageKey]);
+
+  useEffect(() => {
+    saveStudioInvokeHistory(invokeHistoryStorageKey, requestHistory);
+  }, [invokeHistoryStorageKey, requestHistory]);
+
+  useEffect(() => {
     transcriptAnchorRef.current?.scrollIntoView?.({
       behavior: chatMessages.length > 1 ? 'smooth' : 'auto',
       block: 'end',
@@ -816,7 +846,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         id: createClientId('request'),
       };
       setExpandedHistoryId(nextEntry.id);
-      setRequestHistory((current) => [nextEntry, ...current].slice(0, 8));
+      setRequestHistory((current) =>
+        [nextEntry, ...current].slice(0, STUDIO_INVOKE_HISTORY_LIMIT),
+      );
     },
     [],
   );
@@ -1269,6 +1301,25 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     selectedService?.serviceId,
   ]);
 
+  const handleOpenStudioObserve = useCallback(() => {
+    if (!scopeId) {
+      return;
+    }
+
+    const observeMemberKey =
+      trimOptional(memberKey) ||
+      (selectedService?.serviceId
+        ? `member:${trimOptional(selectedService.serviceId)}`
+        : '');
+
+    history.push(
+      buildStudioObserveWorkspaceRoute({
+        scopeId,
+        memberKey: observeMemberKey || undefined,
+      }),
+    );
+  }, [memberKey, scopeId, selectedService?.serviceId]);
+
   const handleClear = useCallback(() => {
     setChatMessages([]);
     setConsoleTab('result');
@@ -1656,6 +1707,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   onClick={handleAbort}
                 >
                   中止
+                </Button>
+                <Button
+                  data-testid="studio-invoke-observe-button"
+                  disabled={!scopeId}
+                  icon={<LinkOutlined />}
+                  onClick={handleOpenStudioObserve}
+                >
+                  在 Studio 中查看 Observe
                 </Button>
                 <Button
                   disabled={!scopeId || !selectedEndpoint}

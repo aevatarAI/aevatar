@@ -5878,6 +5878,10 @@ const StudioPage: React.FC = () => {
     ) : isInvokeSurface ? (
       <StudioMemberInvokePanel
         emptyState={invokeEmptyState}
+        memberKey={
+          trimOptional(routeState.memberKey) ||
+          (invokeTargetServiceId ? `member:${invokeTargetServiceId}` : undefined)
+        }
         memberRevision={invokeTargetServiceId
           ? currentServiceRevisionByServiceId.get(invokeTargetServiceId) ?? null
           : null}

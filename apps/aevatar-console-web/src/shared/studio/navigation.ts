@@ -233,6 +233,19 @@ export function buildStudioInvokeWorkspaceRoute(options?: {
   });
 }
 
+export function buildStudioObserveWorkspaceRoute(options?: {
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+  executionId?: string;
+} & Record<string, unknown>): string {
+  return buildStudioRoute({
+    ...options,
+    step: 'observe',
+    tab: 'executions',
+  });
+}
+
 export function buildStudioScriptsWorkspaceRoute(options?: {
   scopeId?: string;
   memberId?: string;
