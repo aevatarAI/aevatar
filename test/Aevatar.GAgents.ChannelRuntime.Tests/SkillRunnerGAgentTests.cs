@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -23,15 +24,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _store = new InMemoryEventStore();
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IEventStore>(_store);
-        services.AddSingleton<EventSourcingRuntimeOptions>();
-        services.AddTransient(
-            typeof(IEventSourcingBehaviorFactory<>),
-            typeof(DefaultEventSourcingBehaviorFactory<>));
-
-        _serviceProvider = services.BuildServiceProvider();
+        _serviceProvider = BuildServiceProvider(_store);
         _agent = CreateAgent("skill-runner-test");
         await _agent.ActivateAsync();
     }
@@ -94,6 +87,44 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.HasMaxTokens.Should().BeTrue();
         _agent.State.MaxTokens.Should().Be(0);
         _agent.EffectiveConfig.MaxTokens.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var captured = new List<EventEnvelope>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = CreateAgent("skill-runner-dispatch-test", provider);
+        await agent.ActivateAsync();
+
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        captured.Should().HaveCount(2);
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        captured[1].Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor).Should().BeTrue();
+        captured.Should().OnlyContain(envelope =>
+            envelope.Route.PublisherActorId == "skill-runner-dispatch-test" &&
+            envelope.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId);
+        await catalogActor.DidNotReceive()
+            .HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -479,16 +510,31 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private SkillRunnerGAgent CreateAgent(string actorId)
+    private SkillRunnerGAgent CreateAgent(string actorId, ServiceProvider? serviceProvider = null)
     {
+        var resolvedServices = serviceProvider ?? _serviceProvider;
         var agent = new SkillRunnerGAgent
         {
-            Services = _serviceProvider,
+            Services = resolvedServices,
             EventSourcingBehaviorFactory =
-                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<SkillRunnerState>>(),
+                resolvedServices.GetRequiredService<IEventSourcingBehaviorFactory<SkillRunnerState>>(),
         };
         AssignActorId(agent, actorId);
         return agent;
+    }
+
+    private static ServiceProvider BuildServiceProvider(
+        IEventStore eventStore,
+        Action<IServiceCollection>? configure = null)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(eventStore);
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(
+            typeof(IEventSourcingBehaviorFactory<>),
+            typeof(DefaultEventSourcingBehaviorFactory<>));
+        configure?.Invoke(services);
+        return services.BuildServiceProvider();
     }
 
     private static InitializeSkillRunnerCommand CreateInitializeCommand() => new()

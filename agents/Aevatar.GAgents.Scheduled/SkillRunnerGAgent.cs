@@ -435,12 +435,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
     {
-        var runtime = Services.GetService<IActorRuntime>();
-        if (runtime is null) return;
-
-        var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-                    ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
-
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
@@ -462,7 +456,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
 
-        await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
+        await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
         await UpdateRegistryExecutionAsync(status, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, ct);
     }
 
@@ -470,28 +464,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         string status, Timestamp? lastRunAt, Timestamp? nextRunAt,
         int errorCount, string? lastError, CancellationToken ct)
     {
-        var runtime = Services.GetService<IActorRuntime>();
-        if (runtime is null) return;
-
-        var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-                    ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
-
         var command = new UserAgentCatalogExecutionUpdateCommand
         {
             AgentId = Id, Status = status,
             LastRunAt = lastRunAt, NextRunAt = nextRunAt,
             ErrorCount = errorCount, LastError = lastError ?? string.Empty,
         };
-        await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
+        await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, Id, command, ct);
     }
-
-    private static EventEnvelope BuildDirectEnvelope(string actorId, IMessage payload) => new()
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        Payload = Any.Pack(payload),
-        Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
-    };
 
     private static SkillRunnerState ApplyInitialized(SkillRunnerState current, SkillRunnerInitializedEvent evt)
     {
