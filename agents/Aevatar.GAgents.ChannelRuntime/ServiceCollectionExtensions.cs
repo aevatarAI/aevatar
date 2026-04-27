@@ -150,8 +150,23 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
             UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
-        services.TryAddSingleton<IUserAgentCatalogRuntimeQueryPort, UserAgentCatalogRuntimeQueryPort>();
+        // Internal-only credential-bearing reader for outbound delivery.
+        // Architecture rule: NEVER inject IUserAgentDeliveryTargetReader into an IAgentTool
+        // implementation; LLM tools see only the caller-scoped IUserAgentCatalogQueryPort
+        // (which excludes NyxApiKey by DTO shape). Issue #466 §D.
+        services.TryAddSingleton<IUserAgentDeliveryTargetReader, UserAgentDeliveryTargetReader>();
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
+        // Caller-scope resolver chain (issue #466 §B). Channel-surface resolver runs
+        // first so a request with channel metadata produces the per-sender scope rather
+        // than the looser nyxid-scoped tuple from the underlying NyxID session.
+        services.TryAddSingleton<INyxIdCurrentUserResolver, NyxIdCurrentUserResolver>();
+        services.TryAddSingleton<ChannelMetadataCallerScopeResolver>();
+        services.TryAddSingleton<NyxIdNativeCallerScopeResolver>();
+        services.TryAddSingleton<ICallerScopeResolver>(sp => new CompositeCallerScopeResolver(new ICallerScopeResolver[]
+        {
+            sp.GetRequiredService<ChannelMetadataCallerScopeResolver>(),
+            sp.GetRequiredService<NyxIdNativeCallerScopeResolver>(),
+        }));
         services.AddHostedService<UserAgentCatalogStartupService>();
 
         if (useElasticsearch)

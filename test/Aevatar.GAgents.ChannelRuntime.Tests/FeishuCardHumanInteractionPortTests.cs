@@ -16,17 +16,20 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldSendInteractiveCardThroughNyxProxy()
     {
-        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "agent-1",
-                Platform = "lark",
-                ConversationId = "oc_chat_1",
-                NyxProviderSlug = "api-lark-bot",
-                NyxApiKey = "nyx-api-key-1",
-                TemplateName = "social_media",
-            }));
+            .Returns(Task.FromResult<UserAgentDeliveryTarget?>(new UserAgentDeliveryTarget(
+                AgentId: "agent-1",
+                Platform: "lark",
+                ConversationId: "oc_chat_1",
+                NyxProviderSlug: "api-lark-bot",
+                NyxApiKey: "nyx-api-key-1",
+                LarkReceiveId: string.Empty,
+                LarkReceiveIdType: string.Empty,
+                LarkReceiveIdFallback: string.Empty,
+                LarkReceiveIdTypeFallback: string.Empty,
+                TemplateName: "social_media",
+                AgentType: string.Empty)));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_1"}}""");
         var nyxClient = new NyxIdApiClient(
@@ -81,21 +84,20 @@ public sealed class FeishuCardHumanInteractionPortTests
         // `NyxIdApiClient.SendAsync` produces for HTTP-non-2xx responses; the port retries once
         // with the fallback typed pair and the second POST carries `receive_id_type=union_id`
         // and `receive_id=on_*`.
-        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
         registry.GetAsync("agent-fb", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "agent-fb",
-                Platform = "lark",
-                ConversationId = "oc_dm_chat_1",
-                NyxProviderSlug = "api-lark-bot",
-                NyxApiKey = "nyx-api-key-fb",
-                TemplateName = "social_media",
-                LarkReceiveId = "oc_dm_chat_1",
-                LarkReceiveIdType = "chat_id",
-                LarkReceiveIdFallback = "on_user_1",
-                LarkReceiveIdTypeFallback = "union_id",
-            }));
+            .Returns(Task.FromResult<UserAgentDeliveryTarget?>(new UserAgentDeliveryTarget(
+                AgentId: "agent-fb",
+                Platform: "lark",
+                ConversationId: "oc_dm_chat_1",
+                NyxProviderSlug: "api-lark-bot",
+                NyxApiKey: "nyx-api-key-fb",
+                LarkReceiveId: "oc_dm_chat_1",
+                LarkReceiveIdType: "chat_id",
+                LarkReceiveIdFallback: "on_user_1",
+                LarkReceiveIdTypeFallback: "union_id",
+                TemplateName: "social_media",
+                AgentType: string.Empty)));
 
         var handler = new SequencedRecordingHandler(
             """{"error": true, "status": 400, "body": "{\"code\":230002,\"msg\":\"Bot is not in the chat\"}"}""",
@@ -122,9 +124,9 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrow_WhenTargetMissing()
     {
-        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
         registry.GetAsync("missing-agent", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(null));
+            .Returns(Task.FromResult<UserAgentDeliveryTarget?>(null));
 
         var port = new FeishuCardHumanInteractionPort(
             registry,
@@ -141,13 +143,20 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrow_WhenPlatformUnsupported()
     {
-        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
         registry.GetAsync("agent-2", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "agent-2",
-                Platform = "telegram",
-            }));
+            .Returns(Task.FromResult<UserAgentDeliveryTarget?>(new UserAgentDeliveryTarget(
+                AgentId: "agent-2",
+                Platform: "telegram",
+                ConversationId: string.Empty,
+                NyxProviderSlug: string.Empty,
+                NyxApiKey: string.Empty,
+                LarkReceiveId: string.Empty,
+                LarkReceiveIdType: string.Empty,
+                LarkReceiveIdFallback: string.Empty,
+                LarkReceiveIdTypeFallback: string.Empty,
+                TemplateName: string.Empty,
+                AgentType: string.Empty)));
 
         var port = new FeishuCardHumanInteractionPort(
             registry,
@@ -164,17 +173,20 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverApprovalResolutionAsync_ShouldSendResolutionTextThenApprovedContent()
     {
-        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "agent-1",
-                Platform = "lark",
-                ConversationId = "oc_chat_1",
-                NyxProviderSlug = "api-lark-bot",
-                NyxApiKey = "nyx-api-key-1",
-                TemplateName = "social_media",
-            }));
+            .Returns(Task.FromResult<UserAgentDeliveryTarget?>(new UserAgentDeliveryTarget(
+                AgentId: "agent-1",
+                Platform: "lark",
+                ConversationId: "oc_chat_1",
+                NyxProviderSlug: "api-lark-bot",
+                NyxApiKey: "nyx-api-key-1",
+                LarkReceiveId: string.Empty,
+                LarkReceiveIdType: string.Empty,
+                LarkReceiveIdFallback: string.Empty,
+                LarkReceiveIdTypeFallback: string.Empty,
+                TemplateName: "social_media",
+                AgentType: string.Empty)));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_2"}}""");
         var nyxClient = new NyxIdApiClient(
@@ -214,17 +226,20 @@ public sealed class FeishuCardHumanInteractionPortTests
     [Fact]
     public async Task DeliverApprovalResolutionAsync_ShouldIncludeTextRerunInstructions_ForRejectedSocialMedia()
     {
-        var registry = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
         registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
-            {
-                AgentId = "agent-1",
-                Platform = "lark",
-                ConversationId = "oc_chat_1",
-                NyxProviderSlug = "api-lark-bot",
-                NyxApiKey = "nyx-api-key-1",
-                TemplateName = "social_media",
-            }));
+            .Returns(Task.FromResult<UserAgentDeliveryTarget?>(new UserAgentDeliveryTarget(
+                AgentId: "agent-1",
+                Platform: "lark",
+                ConversationId: "oc_chat_1",
+                NyxProviderSlug: "api-lark-bot",
+                NyxApiKey: "nyx-api-key-1",
+                LarkReceiveId: string.Empty,
+                LarkReceiveIdType: string.Empty,
+                LarkReceiveIdFallback: string.Empty,
+                LarkReceiveIdTypeFallback: string.Empty,
+                TemplateName: "social_media",
+                AgentType: string.Empty)));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_3"}}""");
         var nyxClient = new NyxIdApiClient(

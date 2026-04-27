@@ -56,7 +56,8 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             return;
         }
 
-        await PersistDomainEventAsync(new WorkflowAgentInitializedEvent
+#pragma warning disable CS0612 // legacy fields populated for rollback compat during owner_scope migration
+        var initializedEvent = new WorkflowAgentInitializedEvent
         {
             WorkflowId = command.WorkflowId?.Trim() ?? string.Empty,
             WorkflowName = command.WorkflowName?.Trim() ?? string.Empty,
@@ -76,7 +77,13 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             LarkReceiveIdType = command.LarkReceiveIdType?.Trim() ?? string.Empty,
             LarkReceiveIdFallback = command.LarkReceiveIdFallback?.Trim() ?? string.Empty,
             LarkReceiveIdTypeFallback = command.LarkReceiveIdTypeFallback?.Trim() ?? string.Empty,
-        });
+        };
+#pragma warning restore CS0612
+
+        if (command.OwnerScope is not null)
+            initializedEvent.OwnerScope = command.OwnerScope.Clone();
+
+        await PersistDomainEventAsync(initializedEvent);
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpsertRegistryAsync(State.Enabled ? WorkflowAgentDefaults.StatusRunning : WorkflowAgentDefaults.StatusDisabled, CancellationToken.None);
@@ -218,14 +225,19 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         var actor = await runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await runtime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
 
+#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
+        var legacyOwnerNyxUserId = State.OwnerNyxUserId ?? string.Empty;
+        var legacyPlatform = ResolvePlatform(State.Platform);
+        var ownerScope = State.OwnerScope ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = ResolvePlatform(State.Platform),
+            Platform = legacyPlatform,
             ConversationId = State.ConversationId ?? string.Empty,
             NyxProviderSlug = State.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = State.OwnerNyxUserId ?? string.Empty,
+            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = WorkflowAgentDefaults.AgentType,
             TemplateName = WorkflowAgentDefaults.TemplateName,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -238,6 +250,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             LarkReceiveIdFallback = State.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.LarkReceiveIdTypeFallback ?? string.Empty,
         };
+#pragma warning restore CS0612
+
+        if (ownerScope is not null)
+            command.OwnerScope = ownerScope;
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, command), ct);
         await UpdateRegistryExecutionAsync(status, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, ct);
@@ -282,15 +298,20 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         next.ConversationId = evt.ConversationId ?? string.Empty;
         next.NyxProviderSlug = evt.NyxProviderSlug ?? string.Empty;
         next.NyxApiKey = evt.NyxApiKey ?? string.Empty;
+#pragma warning disable CS0612 // legacy fields preserved during owner_scope migration
         next.OwnerNyxUserId = evt.OwnerNyxUserId ?? string.Empty;
+        next.Platform = evt.Platform ?? string.Empty;
+#pragma warning restore CS0612
         next.ApiKeyId = evt.ApiKeyId ?? string.Empty;
         next.Enabled = evt.Enabled;
         next.ScopeId = evt.ScopeId ?? string.Empty;
-        next.Platform = evt.Platform ?? string.Empty;
         next.LarkReceiveId = evt.LarkReceiveId ?? string.Empty;
         next.LarkReceiveIdType = evt.LarkReceiveIdType ?? string.Empty;
         next.LarkReceiveIdFallback = evt.LarkReceiveIdFallback ?? string.Empty;
         next.LarkReceiveIdTypeFallback = evt.LarkReceiveIdTypeFallback ?? string.Empty;
+
+        if (evt.OwnerScope is not null)
+            next.OwnerScope = evt.OwnerScope.Clone();
         return next;
     }
 

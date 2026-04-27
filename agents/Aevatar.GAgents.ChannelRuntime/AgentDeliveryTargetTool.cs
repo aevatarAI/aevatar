@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,7 +8,14 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Tool for managing agent outbound delivery targets used by workflow human interaction cards.
+/// Tool for managing agent outbound delivery targets used by workflow human interaction
+/// cards. Caller-scoped per issue #466 — every operation operates on the calling
+/// NyxID/channel-sender's own delivery targets only. The LLM-overridable
+/// <c>owner_nyx_user_id</c> argument is removed (impersonation surface).
+///
+/// The LLM-facing return shape no longer carries <c>NyxApiKey</c> at all (not even
+/// masked) — credentials live behind the internal <see cref="IUserAgentDeliveryTargetReader"/>
+/// and are not surfaced through any LLM tool. Issue #466 §D.
 /// </summary>
 public sealed class AgentDeliveryTargetTool : IAgentTool
 {
@@ -35,8 +41,12 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     public string Description =>
         "Manage agent delivery targets for workflow human interaction cards and outbound channel delivery. " +
         "Actions: list, upsert, delete. " +
-        "Use this to bind an agent_id/delivery_target_id to a Lark conversation, Nyx provider slug, and Nyx API key.";
+        "Use this to bind an agent_id/delivery_target_id to a Lark conversation and Nyx provider slug. " +
+        "Operations are scoped to the caller's own delivery targets.";
 
+    // Note (issue #466): no `owner_nyx_user_id` and no `nyx_api_key` parameters. Owner
+    // is derived from the caller scope; credentials are minted+stored by the create
+    // flow, never accepted as a tool argument here.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -62,14 +72,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
               "type": "string",
               "description": "Nyx proxy service slug, e.g. api-lark-bot"
             },
-            "nyx_api_key": {
-              "type": "string",
-              "description": "Nyx API key used for outbound proxy requests"
-            },
-            "owner_nyx_user_id": {
-              "type": "string",
-              "description": "Optional owner Nyx user ID. If omitted, the current user will be resolved when possible."
-            },
             "confirm": {
               "type": "boolean",
               "description": "Must be true to execute delete"
@@ -84,10 +86,26 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        var queryPort = _serviceProvider.GetService<IUserAgentCatalogRuntimeQueryPort>();
+        var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
-        if (queryPort is null || actorRuntime is null)
-            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogRuntimeQueryPort or IActorRuntime not registered in DI."}""";
+        var callerScopeResolver = _serviceProvider.GetService<ICallerScopeResolver>();
+        if (queryPort is null || actorRuntime is null || callerScopeResolver is null)
+            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogQueryPort, IActorRuntime, or ICallerScopeResolver not registered in DI."}""";
+
+        OwnerScope caller;
+        try
+        {
+            caller = await ResolveCallerScopeAsync(callerScopeResolver, ct);
+        }
+        catch (CallerScopeUnavailableException ex)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "caller_scope_unavailable",
+                detail = ex.Message,
+                hint = "Re-authenticate (cli/web) or ensure the channel relay propagates platform/sender_id metadata.",
+            });
+        }
 
         using var doc = JsonDocument.Parse(argumentsJson);
         var root = doc.RootElement;
@@ -95,11 +113,24 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         return action switch
         {
-            "list" => await ListAsync(queryPort, token, ct),
-            "upsert" => await UpsertAsync(queryPort, actorRuntime, token, root, ct),
-            "delete" => await DeleteAsync(queryPort, actorRuntime, token, root, ct),
-            _ => await ListAsync(queryPort, token, ct),
+            "list" => await ListAsync(queryPort, caller, ct),
+            "upsert" => await UpsertAsync(queryPort, actorRuntime, caller, root, ct),
+            "delete" => await DeleteAsync(queryPort, actorRuntime, caller, root, ct),
+            _ => await ListAsync(queryPort, caller, ct),
         };
+    }
+
+    private static async Task<OwnerScope> ResolveCallerScopeAsync(ICallerScopeResolver resolver, CancellationToken ct)
+    {
+        if (resolver is CompositeCallerScopeResolver composite)
+            return await composite.RequireAsync(ct);
+
+        var scope = await resolver.TryResolveAsync(ct);
+        if (scope is null)
+            throw new CallerScopeUnavailableException("No caller scope resolver matched the current request context.");
+        if (!scope.TryValidate(out var error))
+            throw new CallerScopeUnavailableException($"Resolved caller scope is invalid: {error}");
+        return scope;
     }
 
     private static string? GetStr(JsonElement el, params string[] properties)
@@ -134,24 +165,17 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         return false;
     }
 
-    private async Task<string> ListAsync(IUserAgentCatalogRuntimeQueryPort queryPort, string token, CancellationToken ct)
+    private async Task<string> ListAsync(IUserAgentCatalogQueryPort queryPort, OwnerScope caller, CancellationToken ct)
     {
-        var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
-        if (currentOwner.error != null)
-            return currentOwner.error;
-
-        var entries = await queryPort.QueryAllAsync(ct);
+        var entries = await queryPort.QueryByCallerAsync(caller, ct);
         var result = entries
-            .Where(entry => string.Equals(entry.OwnerNyxUserId, currentOwner.value, StringComparison.Ordinal))
             .Select(static entry => new
             {
                 agent_id = entry.AgentId,
                 delivery_target_id = entry.AgentId,
-                platform = entry.Platform,
+                platform = entry.OwnerScope?.Platform ?? string.Empty,
                 conversation_id = entry.ConversationId,
                 nyx_provider_slug = entry.NyxProviderSlug,
-                nyx_api_key_hint = MaskSecret(entry.NyxApiKey),
-                owner_nyx_user_id = entry.OwnerNyxUserId,
                 created_at = entry.CreatedAt,
                 updated_at = entry.UpdatedAt,
             })
@@ -161,9 +185,9 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     }
 
     private async Task<string> UpsertAsync(
-        IUserAgentCatalogRuntimeQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
-        string token,
+        OwnerScope caller,
         JsonElement args,
         CancellationToken ct)
     {
@@ -179,38 +203,36 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (nyxProviderSlug.error != null)
             return nyxProviderSlug.error;
 
-        var nyxApiKey = GetRequired(args, "nyx_api_key", "nyxApiKey");
-        if (nyxApiKey.error != null)
-            return nyxApiKey.error;
-
-        var platform = (GetStr(args, "platform") ?? "lark").Trim().ToLowerInvariant();
-        var ownerNyxUserId = await ResolveOwnerNyxUserIdAsync(token, args, ct);
-        if (string.IsNullOrWhiteSpace(ownerNyxUserId))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "Could not resolve current NyxID user id for delivery target ownership.",
-            });
-        }
+        // Platform argument is informational only — the canonical platform on the
+        // upsert is the caller's platform from OwnerScope. The argument can be omitted.
+        // We disregard it to avoid the LLM steering an upsert into a different platform
+        // bucket than the surface the request actually came from.
+        var platform = caller.Platform;
 
         var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
         if (projectionPort != null)
             await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
 
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId.value!, ct) ?? -1;
+        var versionBefore = await queryPort.GetStateVersionForCallerAsync(agentId.value!, caller, ct) ?? -1;
 
         var actor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId);
 
+#pragma warning disable CS0612 // legacy fields written for rollback safety during owner_scope migration
         var cmd = new UserAgentCatalogUpsertCommand
         {
             AgentId = agentId.value!,
             Platform = platform,
             ConversationId = conversationId.value!,
             NyxProviderSlug = nyxProviderSlug.value!,
-            NyxApiKey = nyxApiKey.value!,
-            OwnerNyxUserId = ownerNyxUserId,
+            // NyxApiKey intentionally not accepted as a tool argument; the LLM should
+            // never see / pass plaintext credentials. Existing credentials on the entry
+            // are preserved through the actor's MergeNonEmpty upsert policy. Issue #466.
+            NyxApiKey = string.Empty,
+            OwnerNyxUserId = caller.NyxUserId,
+            OwnerScope = caller.Clone(),
         };
+#pragma warning restore CS0612
 
         var envelope = new EventEnvelope
         {
@@ -231,18 +253,17 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             if (attempt > 0)
                 await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId.value!, ct) ?? -1;
+            var versionAfter = await queryPort.GetStateVersionForCallerAsync(agentId.value!, caller, ct) ?? -1;
             if (versionAfter <= versionBefore)
                 continue;
 
-            var after = await queryPort.GetAsync(agentId.value!, ct);
+            var after = await queryPort.GetForCallerAsync(agentId.value!, caller, ct);
             if (after == null)
                 continue;
 
-            if (string.Equals(after.Platform, platform, StringComparison.OrdinalIgnoreCase) &&
+            if (string.Equals(after.OwnerScope?.Platform ?? string.Empty, platform, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(after.ConversationId, conversationId.value, StringComparison.Ordinal) &&
-                string.Equals(after.NyxProviderSlug, nyxProviderSlug.value, StringComparison.Ordinal) &&
-                string.Equals(after.NyxApiKey, nyxApiKey.value, StringComparison.Ordinal))
+                string.Equals(after.NyxProviderSlug, nyxProviderSlug.value, StringComparison.Ordinal))
             {
                 confirmed = true;
                 break;
@@ -257,16 +278,14 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             platform,
             conversation_id = conversationId.value,
             nyx_provider_slug = nyxProviderSlug.value,
-            nyx_api_key_hint = MaskSecret(nyxApiKey.value!),
-            owner_nyx_user_id = ownerNyxUserId,
             note = confirmed ? "" : "Delivery target submitted but projection not yet confirmed. Try 'list' after a few seconds.",
         });
     }
 
     private async Task<string> DeleteAsync(
-        IUserAgentCatalogRuntimeQueryPort queryPort,
+        IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
-        string token,
+        OwnerScope caller,
         JsonElement args,
         CancellationToken ct)
     {
@@ -274,15 +293,8 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"'agent_id' is required for delete"}""";
 
-        var exists = await queryPort.GetAsync(agentId, ct);
+        var exists = await queryPort.GetForCallerAsync(agentId, caller, ct);
         if (exists is null)
-            return JsonSerializer.Serialize(new { error = $"Delivery target '{agentId}' not found" });
-
-        var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
-        if (currentOwner.error != null)
-            return currentOwner.error;
-
-        if (!string.Equals(exists.OwnerNyxUserId, currentOwner.value, StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { error = $"Delivery target '{agentId}' not found" });
 
         if (!GetBool(args, "confirm"))
@@ -292,7 +304,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 status = "confirm_required",
                 agent_id = exists.AgentId,
                 delivery_target_id = exists.AgentId,
-                platform = exists.Platform,
+                platform = exists.OwnerScope?.Platform ?? string.Empty,
                 conversation_id = exists.ConversationId,
                 nyx_provider_slug = exists.NyxProviderSlug,
                 note = "Call again with confirm=true to delete this delivery target mapping.",
@@ -302,7 +314,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         // Capture version + ensure projection scope is alive (matches the Upsert path
         // above). Without priming, an idle-deactivated projection grain leaves the
         // tombstone enqueued with no consumer and the document persists indefinitely.
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        var versionBefore = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
 
         var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
         if (projectionPort != null)
@@ -338,7 +350,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             if (attempt > 0)
                 await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
+            var versionAfter = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct);
             if (versionAfter == null)
             {
                 confirmed = true;
@@ -348,7 +360,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             if (versionAfter.Value <= versionBefore)
                 continue;
 
-            if (await queryPort.GetAsync(agentId, ct) == null)
+            if (await queryPort.GetForCallerAsync(agentId, caller, ct) == null)
             {
                 confirmed = true;
                 break;
@@ -364,81 +376,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         });
     }
 
-    private async Task<string> ResolveOwnerNyxUserIdAsync(string token, JsonElement args, CancellationToken ct)
-    {
-        var explicitOwner = GetStr(args, "owner_nyx_user_id", "ownerNyxUserId");
-        if (!string.IsNullOrWhiteSpace(explicitOwner))
-            return explicitOwner.Trim();
-
-        var currentOwner = await ResolveCurrentOwnerNyxUserIdAsync(token, ct);
-        return currentOwner.value ?? string.Empty;
-    }
-
-    private async Task<(string? value, string? error)> ResolveCurrentOwnerNyxUserIdAsync(string token, CancellationToken ct)
-    {
-        var client = _serviceProvider.GetService<NyxIdApiClient>();
-        if (client == null)
-        {
-            return (null, JsonSerializer.Serialize(new
-            {
-                error = "Agent delivery target runtime not available. NyxIdApiClient not registered in DI.",
-            }));
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(await client.GetCurrentUserAsync(token, ct));
-            var ownerNyxUserId = TryReadOwnerNyxUserId(doc.RootElement);
-            if (!string.IsNullOrWhiteSpace(ownerNyxUserId))
-                return (ownerNyxUserId, null);
-
-            return (null, JsonSerializer.Serialize(new
-            {
-                error = "Could not resolve current NyxID user id.",
-            }));
-        }
-        catch
-        {
-            return (null, JsonSerializer.Serialize(new
-            {
-                error = "Could not resolve current NyxID user id.",
-            }));
-        }
-    }
-
-    private static string? TryReadOwnerNyxUserId(JsonElement root)
-    {
-        if (TryReadString(root, "id", "user_id", "sub") is { } direct)
-            return direct;
-
-        if (root.ValueKind == JsonValueKind.Object &&
-            root.TryGetProperty("user", out var user) &&
-            TryReadString(user, "id", "user_id", "sub") is { } nested)
-        {
-            return nested;
-        }
-
-        return null;
-    }
-
-    private static string? TryReadString(JsonElement element, params string[] properties)
-    {
-        if (element.ValueKind != JsonValueKind.Object)
-            return null;
-
-        foreach (var property in properties)
-        {
-            if (element.TryGetProperty(property, out var value) &&
-                value.ValueKind == JsonValueKind.String &&
-                !string.IsNullOrWhiteSpace(value.GetString()))
-            {
-                return value.GetString();
-            }
-        }
-
-        return null;
-    }
-
     private static (string? value, string? error) GetRequired(JsonElement args, params string[] keys)
     {
         var value = GetStr(args, keys)?.Trim();
@@ -446,16 +383,5 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             return (value, null);
 
         return (null, JsonSerializer.Serialize(new { error = $"'{keys[0]}' is required for upsert" }));
-    }
-
-    private static string MaskSecret(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return string.Empty;
-
-        if (value.Length <= 4)
-            return new string('*', value.Length);
-
-        return $"***{value[^4..]}";
     }
 }

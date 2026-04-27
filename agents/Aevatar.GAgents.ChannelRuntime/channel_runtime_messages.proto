@@ -161,20 +161,53 @@ message ChannelBotRegistrationDocument {
   reserved "credential_ref";
 }
 
+// ─── Owner scope (caller identity tuple) ───
+//
+// Carries the (NyxID user, surface platform, registration scope, channel
+// sender) tuple that uniquely identifies an agent's owner across cli/web/
+// lark/telegram. Replaces the scattered `owner_nyx_user_id` / `platform` /
+// `scope_id` fields scattered across catalog/state/event messages, so a
+// caller-scoped read is a single typed full-tuple equality.
+//
+// `platform` is a closed canonical string set: "nyxid" (native cli/web),
+// "lark", "telegram". Empty is invalid at the resolver output and at command
+// ingress.
+//
+// `registration_scope_id` and `sender_id` are required iff `platform != "nyxid"`
+// (non-native surfaces). For native NyxID surfaces both are empty strings.
+message OwnerScope {
+  string nyx_user_id = 1;
+  string platform = 2;
+  string registration_scope_id = 3;
+  string sender_id = 4;
+}
+
 // ─── User Agent Catalog (actor-backed delivery target store) ───
 
 message UserAgentCatalogEntry {
   string agent_id = 1;
-  string platform = 2;
+  // Deprecated: read-only legacy fallback; new writes leave empty and rely on
+  // owner_scope.platform. Kept on the wire so legacy state without owner_scope
+  // still loads (nyxid surface backfills lazily; lark surface deprecate-and-
+  // recreates per issue #466 migration plan).
+  string platform = 2 [deprecated = true];
   string conversation_id = 3;
   string nyx_provider_slug = 4;
-  string nyx_api_key = 5;
-  string owner_nyx_user_id = 6;
+  // Deprecated: secret-bearing field; the public DTO `UserAgentCatalogEntry`
+  // surfaced via `IUserAgentCatalogQueryPort` no longer carries this. The
+  // credential is read through the narrow internal `IUserAgentDeliveryTargetReader`
+  // contract by outbound delivery code only.
+  string nyx_api_key = 5 [deprecated = true];
+  // Deprecated: superseded by owner_scope.nyx_user_id. See platform field.
+  string owner_nyx_user_id = 6 [deprecated = true];
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
   bool tombstoned = 9;
   string agent_type = 10;
   string template_name = 11;
+  // Deprecated: workflow/skill execution scope (not registration scope). Kept
+  // for the existing semantic. owner_scope.registration_scope_id is a separate
+  // field for the bot/registration scope.
   string scope_id = 12;
   string api_key_id = 13;
   string schedule_cron = 14;
@@ -202,6 +235,10 @@ message UserAgentCatalogEntry {
   // without needing a fresh ingress event.
   string lark_receive_id_fallback = 24;
   string lark_receive_id_type_fallback = 25;
+  // Caller scope captured at create time. New writes always populate this;
+  // the deprecated platform/owner_nyx_user_id fields are kept readable for
+  // legacy state (issue #466 migration plan).
+  OwnerScope owner_scope = 26;
 }
 
 message UserAgentCatalogState {
@@ -210,11 +247,13 @@ message UserAgentCatalogState {
 
 message UserAgentCatalogUpsertCommand {
   string agent_id = 1;
-  string platform = 2;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 2 [deprecated = true];
   string conversation_id = 3;
   string nyx_provider_slug = 4;
   string nyx_api_key = 5;
-  string owner_nyx_user_id = 6;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 6 [deprecated = true];
   string agent_type = 7;
   string template_name = 8;
   string scope_id = 9;
@@ -229,6 +268,8 @@ message UserAgentCatalogUpsertCommand {
   // See UserAgentCatalogEntry.lark_receive_id_fallback for semantics.
   string lark_receive_id_fallback = 16;
   string lark_receive_id_type_fallback = 17;
+  // Caller scope captured at create time. Required for new writes.
+  OwnerScope owner_scope = 18;
 }
 
 message UserAgentCatalogTombstoneCommand {
@@ -273,12 +314,14 @@ message UserAgentCatalogTombstonesCompactedEvent {
 
 message UserAgentCatalogDocument {
   string id = 1;
-  string platform = 2;
+  // Deprecated: superseded by owner_scope.platform. Kept for legacy reads.
+  string platform = 2 [deprecated = true];
   string conversation_id = 3;
   string nyx_provider_slug = 4;
   reserved 5;
   reserved "nyx_api_key";
-  string owner_nyx_user_id = 6;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Kept for legacy reads.
+  string owner_nyx_user_id = 6 [deprecated = true];
   bool tombstoned = 7;
   int64 state_version = 8;
   string last_event_id = 9;
@@ -306,6 +349,11 @@ message UserAgentCatalogDocument {
   // pair as actor-state senders.
   string lark_receive_id_fallback = 26;
   string lark_receive_id_type_fallback = 27;
+  // Caller scope materialized from the upserted entry. New rows always carry
+  // this; legacy rows may have only owner_nyx_user_id+platform set, in which
+  // case the caller-scoped query port lazily synthesizes owner_scope on read
+  // for the nyxid surface (issue #466 migration plan).
+  OwnerScope owner_scope = 28;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.
@@ -324,11 +372,11 @@ message SkillRunnerOutboundConfig {
   string conversation_id = 1;
   string nyx_provider_slug = 2;
   string nyx_api_key = 3;
-  string owner_nyx_user_id = 4;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 4 [deprecated = true];
   string api_key_id = 5;
-  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
-  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
-  string platform = 6;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 6 [deprecated = true];
   // Authoritative Lark outbound delivery target captured at create time. When
   // both fields are present, SkillRunnerGAgent.SendOutputAsync uses them
   // verbatim; conversation_id stays for LLM metadata propagation only.
@@ -341,6 +389,9 @@ message SkillRunnerOutboundConfig {
   // UserAgentCatalogEntry.lark_receive_id_fallback for the recommended pinning.
   string lark_receive_id_fallback = 9;
   string lark_receive_id_type_fallback = 10;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
+  // for new agents; the deprecated scattered fields remain for legacy state.
+  OwnerScope owner_scope = 11;
 }
 
 message SkillRunnerState {
@@ -452,7 +503,8 @@ message WorkflowAgentState {
   string conversation_id = 7;
   string nyx_provider_slug = 8;
   string nyx_api_key = 9;
-  string owner_nyx_user_id = 10;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
   string api_key_id = 11;
   google.protobuf.Timestamp last_run_at = 12;
   google.protobuf.Timestamp next_run_at = 13;
@@ -460,9 +512,8 @@ message WorkflowAgentState {
   string last_error = 15;
   bool enabled = 16;
   string scope_id = 17;
-  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
-  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
-  string platform = 18;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 18 [deprecated = true];
   // See UserAgentCatalogEntry.lark_receive_id for semantics; copied verbatim
   // into the catalog entry on UpsertRegistryAsync so downstream Lark senders
   // (e.g. FeishuCardHumanInteractionPort) read the typed target.
@@ -472,6 +523,9 @@ message WorkflowAgentState {
   // .lark_receive_id_fallback for runtime fallback semantics.
   string lark_receive_id_fallback = 21;
   string lark_receive_id_type_fallback = 22;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
+  // for new agents; the deprecated scattered fields remain for legacy state.
+  OwnerScope owner_scope = 23;
 }
 
 message InitializeWorkflowAgentCommand {
@@ -484,18 +538,21 @@ message InitializeWorkflowAgentCommand {
   string conversation_id = 7;
   string nyx_provider_slug = 8;
   string nyx_api_key = 9;
-  string owner_nyx_user_id = 10;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
-  // Channel platform identifier; empty → default "lark" at upsert time.
-  string platform = 14;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 14 [deprecated = true];
   string lark_receive_id = 15;
   string lark_receive_id_type = 16;
   // Secondary outbound delivery target. See UserAgentCatalogEntry
   // .lark_receive_id_fallback for runtime fallback semantics.
   string lark_receive_id_fallback = 17;
   string lark_receive_id_type_fallback = 18;
+  // Caller scope captured at create time. Required for new commands.
+  OwnerScope owner_scope = 19;
 }
 
 message WorkflowAgentInitializedEvent {
@@ -508,18 +565,21 @@ message WorkflowAgentInitializedEvent {
   string conversation_id = 7;
   string nyx_provider_slug = 8;
   string nyx_api_key = 9;
-  string owner_nyx_user_id = 10;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
-  // Channel platform identifier; empty → default "lark" at upsert time.
-  string platform = 14;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 14 [deprecated = true];
   string lark_receive_id = 15;
   string lark_receive_id_type = 16;
   // Secondary outbound delivery target. See UserAgentCatalogEntry
   // .lark_receive_id_fallback for runtime fallback semantics.
   string lark_receive_id_fallback = 17;
   string lark_receive_id_type_fallback = 18;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform.
+  OwnerScope owner_scope = 19;
 }
 
 message TriggerWorkflowAgentExecutionCommand {

@@ -44,6 +44,11 @@ public sealed class AgentBuilderTool : IAgentTool
         "Create and manage persistent user-facing automation agents for the current channel context. " +
         "Actions: list_templates, create_agent, list_agents, agent_status, run_agent, disable_agent, enable_agent, delete_agent.";
 
+    // Note (issue #466): no `owner_nyx_user_id` parameter is exposed. The tool always
+    // operates on the caller's own agents; the resolver derives ownership from the
+    // request context (NyxID `/me` for native cli/web, channel sender_id+platform for
+    // lark/telegram). Allowing an LLM-overridable owner field would re-introduce the
+    // impersonation surface that #466 removes.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -133,22 +138,53 @@ public sealed class AgentBuilderTool : IAgentTool
         var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
         var nyxClient = _serviceProvider.GetService<NyxIdApiClient>();
-        if (queryPort is null || actorRuntime is null || nyxClient is null)
+        var callerScopeResolver = _serviceProvider.GetService<ICallerScopeResolver>();
+        if (queryPort is null || actorRuntime is null || nyxClient is null || callerScopeResolver is null)
         {
             return """{"error":"Agent builder runtime not available. Required services are not registered in DI."}""";
         }
 
+        // Resolve once per request and pass to every method below. Failure to resolve
+        // is fail-closed: never fall through to "all agents". (Issue #466 acceptance.)
+        OwnerScope caller;
+        try
+        {
+            caller = await ResolveCallerScopeAsync(callerScopeResolver, ct);
+        }
+        catch (CallerScopeUnavailableException ex)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "caller_scope_unavailable",
+                detail = ex.Message,
+                hint = "Re-authenticate (cli/web) or ensure the channel relay propagates platform/sender_id metadata.",
+            });
+        }
+
         return action switch
         {
-            "create_agent" => await CreateAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
-            "list_agents" => await ListAgentsAsync(args, queryPort, nyxClient, token, ct),
-            "agent_status" => await GetAgentStatusAsync(args, queryPort, ct),
-            "run_agent" => await RunAgentAsync(args, queryPort, actorRuntime, ct),
-            "disable_agent" => await DisableAgentAsync(args, queryPort, actorRuntime, ct),
-            "enable_agent" => await EnableAgentAsync(args, queryPort, actorRuntime, ct),
-            "delete_agent" => await DeleteAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
+            "create_agent" => await CreateAgentAsync(args, queryPort, actorRuntime, nyxClient, token, caller, ct),
+            "list_agents" => await ListAgentsAsync(queryPort, caller, ct),
+            "agent_status" => await GetAgentStatusAsync(args, queryPort, caller, ct),
+            "run_agent" => await RunAgentAsync(args, queryPort, actorRuntime, caller, ct),
+            "disable_agent" => await DisableAgentAsync(args, queryPort, actorRuntime, caller, ct),
+            "enable_agent" => await EnableAgentAsync(args, queryPort, actorRuntime, caller, ct),
+            "delete_agent" => await DeleteAgentAsync(args, queryPort, actorRuntime, nyxClient, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
+    }
+
+    private static async Task<OwnerScope> ResolveCallerScopeAsync(ICallerScopeResolver resolver, CancellationToken ct)
+    {
+        if (resolver is CompositeCallerScopeResolver composite)
+            return await composite.RequireAsync(ct);
+
+        var scope = await resolver.TryResolveAsync(ct);
+        if (scope is null)
+            throw new CallerScopeUnavailableException("No caller scope resolver matched the current request context.");
+        if (!scope.TryValidate(out var error))
+            throw new CallerScopeUnavailableException($"Resolved caller scope is invalid: {error}");
+        return scope;
     }
 
     private async Task<string> CreateAgentAsync(
@@ -157,6 +193,7 @@ public sealed class AgentBuilderTool : IAgentTool
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
+        OwnerScope caller,
         CancellationToken ct)
     {
         var chatType = AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType);
@@ -169,8 +206,8 @@ public sealed class AgentBuilderTool : IAgentTool
         var template = (args.Str("template") ?? string.Empty).Trim();
         return template.ToLowerInvariant() switch
         {
-            "daily_report" => await CreateDailyReportAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
-            "social_media" => await CreateSocialMediaAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
+            "daily_report" => await CreateDailyReportAgentAsync(args, queryPort, actorRuntime, nyxClient, token, caller, ct),
+            "social_media" => await CreateSocialMediaAgentAsync(args, queryPort, actorRuntime, nyxClient, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported template '{template}'. Supported templates: daily_report, social_media." }),
         };
     }
@@ -181,6 +218,7 @@ public sealed class AgentBuilderTool : IAgentTool
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
+        OwnerScope caller,
         CancellationToken ct)
     {
         var rawScopeId = NormalizeOptional(AgentToolRequestContext.TryGet("scope_id"));
@@ -222,9 +260,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(conversationId))
             return """{"error":"conversation_id is required when no current channel conversation is available"}""";
 
-        var ownerNyxUserId = await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-        if (string.IsNullOrWhiteSpace(ownerNyxUserId))
-            return """{"error":"Could not resolve current NyxID user id"}""";
+        var ownerNyxUserId = caller.NyxUserId;
 
         var gitHubAuthorizationResponse = await BuildGitHubAuthorizationResponseAsync(nyxClient, token, ct);
         if (!string.IsNullOrWhiteSpace(gitHubAuthorizationResponse))
@@ -270,7 +306,11 @@ public sealed class AgentBuilderTool : IAgentTool
         var actor = await actorRuntime.GetAsync(agentId)
                     ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
 
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        // Pre-create version baseline. Use a non-caller-scoped version probe semantically
+        // equivalent to the caller-scoped read for an agent the caller is about to own:
+        // the agent does not yet exist, so any caller's version probe returns null and the
+        // versionBefore stays at -1, which is what the create-confirmation wait expects.
+        var versionBefore = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
 
         // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
         // the rationale. A late prime can't recover an event the projector
@@ -278,6 +318,23 @@ public sealed class AgentBuilderTool : IAgentTool
         await EnsureUserAgentCatalogProjectionAsync(ct);
 
         var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
+#pragma warning disable CS0612 // legacy fields written for rollback safety during owner_scope migration
+        var outboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = conversationId.Trim(),
+            NyxProviderSlug = providerSlug,
+            NyxApiKey = apiKeyValue!,
+            OwnerNyxUserId = ownerNyxUserId!,
+            Platform = caller.Platform,
+            ApiKeyId = apiKeyId!,
+            LarkReceiveId = deliveryTarget.Primary.ReceiveId,
+            LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
+            LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
+            LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
+            OwnerScope = caller.Clone(),
+        };
+#pragma warning restore CS0612
+
         var initialize = new InitializeSkillRunnerCommand
         {
             SkillName = templateSpec.SkillName,
@@ -291,18 +348,7 @@ public sealed class AgentBuilderTool : IAgentTool
             ProviderName = SkillRunnerDefaults.DefaultProviderName,
             MaxToolRounds = SkillRunnerDefaults.DefaultMaxToolRounds,
             MaxHistoryMessages = SkillRunnerDefaults.DefaultMaxHistoryMessages,
-            OutboundConfig = new SkillRunnerOutboundConfig
-            {
-                ConversationId = conversationId.Trim(),
-                NyxProviderSlug = providerSlug,
-                NyxApiKey = apiKeyValue!,
-                OwnerNyxUserId = ownerNyxUserId!,
-                ApiKeyId = apiKeyId!,
-                LarkReceiveId = deliveryTarget.Primary.ReceiveId,
-                LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
-                LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
-                LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
-            },
+            OutboundConfig = outboundConfig,
         };
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
@@ -316,6 +362,7 @@ public sealed class AgentBuilderTool : IAgentTool
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
+            caller,
             versionBefore,
             entry => string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
                      string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
@@ -351,6 +398,7 @@ public sealed class AgentBuilderTool : IAgentTool
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
+        OwnerScope caller,
         CancellationToken ct)
     {
         var scopeId = AgentToolRequestContext.TryGet("scope_id");
@@ -374,9 +422,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(conversationId))
             return """{"error":"conversation_id is required when no current channel conversation is available"}""";
 
-        var ownerNyxUserId = await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-        if (string.IsNullOrWhiteSpace(ownerNyxUserId))
-            return """{"error":"Could not resolve current NyxID user id"}""";
+        var ownerNyxUserId = caller.NyxUserId;
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
         var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, [providerSlug], ct);
@@ -421,7 +467,7 @@ public sealed class AgentBuilderTool : IAgentTool
         var actor = await actorRuntime.GetAsync(agentId)
                     ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(agentId, ct);
 
-        var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        var versionBefore = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
 
         // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
         // the rationale. A late prime can't recover an event the projector
@@ -429,6 +475,7 @@ public sealed class AgentBuilderTool : IAgentTool
         await EnsureUserAgentCatalogProjectionAsync(ct);
 
         var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
+#pragma warning disable CS0612 // legacy fields written for rollback safety during owner_scope migration
         var initialize = new InitializeWorkflowAgentCommand
         {
             WorkflowId = workflowUpsert.Workflow.WorkflowId,
@@ -441,6 +488,7 @@ public sealed class AgentBuilderTool : IAgentTool
             NyxProviderSlug = providerSlug,
             NyxApiKey = apiKeyValue!,
             OwnerNyxUserId = ownerNyxUserId!,
+            Platform = caller.Platform,
             ApiKeyId = apiKeyId!,
             Enabled = true,
             ScopeId = scopeId.Trim(),
@@ -448,13 +496,16 @@ public sealed class AgentBuilderTool : IAgentTool
             LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
             LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
             LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
+            OwnerScope = caller.Clone(),
         };
+#pragma warning restore CS0612
 
         await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
 
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
             agentId,
+            caller,
             versionBefore,
             entry => string.Equals(entry.AgentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal) &&
                      string.Equals(entry.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.Ordinal),
@@ -488,14 +539,11 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     private async Task<string> ListAgentsAsync(
-        BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        NyxIdApiClient nyxClient,
-        string token,
+        OwnerScope caller,
         CancellationToken ct)
     {
-        var ownerFilter = args.Str("owner_nyx_user_id") ?? await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-        var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
+        var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
 
         return JsonSerializer.Serialize(new { agents, total = agents.Length });
     }
@@ -503,13 +551,14 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> GetAgentStatusAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
+        OwnerScope caller,
         CancellationToken ct)
     {
         var agentId = args.Str("agent_id");
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for agent_status"}""";
 
-        var entry = await queryPort.GetAsync(agentId.Trim(), ct);
+        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
@@ -522,13 +571,14 @@ public sealed class AgentBuilderTool : IAgentTool
         IActorRuntime actorRuntime,
         NyxIdApiClient nyxClient,
         string token,
+        OwnerScope caller,
         CancellationToken ct)
     {
         var agentId = args.Str("agent_id");
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for delete_agent"}""";
 
-        var entry = await queryPort.GetAsync(agentId.Trim(), ct);
+        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
@@ -545,7 +595,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         // Capture the read-model version before issuing tombstone so the wait can
         // distinguish "projection caught up" from "projector did not run yet".
-        var versionBefore = await queryPort.GetStateVersionAsync(entry.AgentId, ct) ?? -1;
+        var versionBefore = await queryPort.GetStateVersionForCallerAsync(entry.AgentId, caller, ct) ?? -1;
 
         // Prime the projection scope BEFORE any dispatch. If we primed after
         // HandleEventAsync, an idle-deactivated projection grain would have
@@ -571,15 +621,13 @@ public sealed class AgentBuilderTool : IAgentTool
         var deleted = await WaitForTombstoneReflectedAsync(
             queryPort,
             entry.AgentId,
+            caller,
             versionBefore,
             ct,
             _projectionWaitAttempts,
             _projectionWaitDelayMilliseconds);
 
-        var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
-            ? entry.OwnerNyxUserId
-            : await ResolveCurrentUserIdAsync(nyxClient, token, ct);
-        var agents = await QueryAgentsForOwnerAsync(queryPort, ownerFilter, ct);
+        var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
 
         if (deleted)
         {
@@ -610,13 +658,14 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
+        OwnerScope caller,
         CancellationToken ct)
     {
         var agentId = args.Str("agent_id");
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for run_agent"}""";
 
-        var entry = await queryPort.GetAsync(agentId.Trim(), ct);
+        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
@@ -647,9 +696,10 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
+        OwnerScope caller,
         CancellationToken ct)
     {
-        var entry = await RequireManagedAgentAsync(args, queryPort, "disable_agent", ct);
+        var entry = await RequireManagedAgentAsync(args, queryPort, caller, "disable_agent", ct);
         if (entry.error != null)
             return entry.error;
 
@@ -662,7 +712,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // happens to surface a historical disabled status". Capture must
         // precede dispatch — capturing inside the wait helper would race
         // against a fast projection that already advanced the version.
-        var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
+        var versionBefore = await queryPort.GetStateVersionForCallerAsync(entry.value.AgentId, caller, ct) ?? -1;
 
         // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
         // the rationale. A late prime can't recover an event the projector
@@ -673,7 +723,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusDisabled, ct);
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillRunnerDefaults.StatusDisabled, ct);
         if (observation.Confirmed)
             return SerializeAgentStatus(observation.Entry!, "Agent disabled. Scheduling paused.");
 
@@ -688,9 +738,10 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         IActorRuntime actorRuntime,
+        OwnerScope caller,
         CancellationToken ct)
     {
-        var entry = await RequireManagedAgentAsync(args, queryPort, "enable_agent", ct);
+        var entry = await RequireManagedAgentAsync(args, queryPort, caller, "enable_agent", ct);
         if (entry.error != null)
             return entry.error;
 
@@ -700,7 +751,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         // See DisableAgentAsync for why versionBefore is captured here (before
         // any dispatch) and not inside WaitForAgentStatusAsync.
-        var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
+        var versionBefore = await queryPort.GetStateVersionForCallerAsync(entry.value.AgentId, caller, ct) ?? -1;
 
         // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
         // the rationale. A late prime can't recover an event the projector
@@ -711,7 +762,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, versionBefore, SkillRunnerDefaults.StatusRunning, ct);
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillRunnerDefaults.StatusRunning, ct);
         if (observation.Confirmed)
             return SerializeAgentStatus(observation.Entry!, "Agent enabled. Scheduling resumed.");
 
@@ -797,14 +848,13 @@ public sealed class AgentBuilderTool : IAgentTool
         });
     }
 
-    private async Task<object[]> QueryAgentsForOwnerAsync(
+    private async Task<object[]> QueryAgentsForCallerAsync(
         IUserAgentCatalogQueryPort queryPort,
-        string? ownerFilter,
+        OwnerScope caller,
         CancellationToken ct)
     {
-        var entries = await queryPort.QueryAllAsync(ct);
+        var entries = await queryPort.QueryByCallerAsync(caller, ct);
         return entries
-            .Where(x => string.IsNullOrWhiteSpace(ownerFilter) || string.Equals(x.OwnerNyxUserId, ownerFilter, StringComparison.Ordinal))
             .Select(static x => new
             {
                 agent_id = x.AgentId,
@@ -824,6 +874,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<(UserAgentCatalogEntry? value, string? error)> RequireManagedAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
+        OwnerScope caller,
         string actionName,
         CancellationToken ct)
     {
@@ -831,7 +882,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return (null, $$"""{"error":"agent_id is required for {{actionName}}"}""");
 
-        var entry = await queryPort.GetAsync(agentId.Trim(), ct);
+        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
         if (entry is null)
             return (null, JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" }));
 
@@ -844,6 +895,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<bool> WaitForCreatedAgentAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
+        OwnerScope caller,
         long versionBefore,
         Func<UserAgentCatalogEntry, bool> predicate,
         CancellationToken ct,
@@ -855,11 +907,11 @@ public sealed class AgentBuilderTool : IAgentTool
             if (attempt > 0)
                 await Task.Delay(delayMilliseconds, ct);
 
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+            var versionAfter = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
             if (versionAfter <= versionBefore)
                 continue;
 
-            var entry = await queryPort.GetAsync(agentId, ct);
+            var entry = await queryPort.GetForCallerAsync(agentId, caller, ct);
             if (entry != null && predicate(entry))
                 return true;
         }
@@ -879,6 +931,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<(bool Confirmed, UserAgentCatalogEntry? Entry)> WaitForAgentStatusAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
+        OwnerScope caller,
         long versionBefore,
         string expectedStatus,
         CancellationToken ct)
@@ -904,11 +957,11 @@ public sealed class AgentBuilderTool : IAgentTool
             if (attempt > 0)
                 await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+            var versionAfter = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
             if (versionAfter <= versionBefore)
                 continue;
 
-            var entry = await queryPort.GetAsync(agentId, ct);
+            var entry = await queryPort.GetForCallerAsync(agentId, caller, ct);
             if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
                 return (Confirmed: true, Entry: entry);
         }
@@ -930,6 +983,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private static async Task<bool> WaitForTombstoneReflectedAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
+        OwnerScope caller,
         long versionBefore,
         CancellationToken ct,
         int maxAttempts = ProjectionWaitDefaults.Attempts,
@@ -940,9 +994,10 @@ public sealed class AgentBuilderTool : IAgentTool
             if (attempt > 0)
                 await Task.Delay(delayMilliseconds, ct);
 
-            // GetStateVersionAsync reads the same document; if it is null the
-            // document has been deleted by the projector.
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
+            // GetStateVersionForCallerAsync reads the same document under the caller's
+            // scope; null means either the document has been deleted by the projector
+            // (success), or this caller never owned it (already filtered upstream).
+            var versionAfter = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct);
             if (versionAfter == null)
                 return true;
 
@@ -953,7 +1008,7 @@ public sealed class AgentBuilderTool : IAgentTool
             // document still exists; if it is the tombstoned entry the projector
             // would have deleted it on the same advance, so a non-null entry means
             // either an interleaving upsert or a stale read replica - keep waiting.
-            if (await queryPort.GetAsync(agentId, ct) == null)
+            if (await queryPort.GetForCallerAsync(agentId, caller, ct) == null)
                 return true;
         }
 

@@ -17,18 +17,18 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 {
-    private readonly IUserAgentCatalogRuntimeQueryPort _agentRegistryQueryPort;
+    private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
     private readonly NyxIdApiClient _nyxIdApiClient;
     private readonly LarkMessageComposer _composer;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
 
     public FeishuCardHumanInteractionPort(
-        IUserAgentCatalogRuntimeQueryPort agentRegistryQueryPort,
+        IUserAgentDeliveryTargetReader deliveryTargetReader,
         NyxIdApiClient nyxIdApiClient,
         LarkMessageComposer composer,
         ILogger<FeishuCardHumanInteractionPort> logger)
     {
-        _agentRegistryQueryPort = agentRegistryQueryPort ?? throw new ArgumentNullException(nameof(agentRegistryQueryPort));
+        _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
         _nyxIdApiClient = nyxIdApiClient ?? throw new ArgumentNullException(nameof(nyxIdApiClient));
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -130,7 +130,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
     internal static string BuildApprovalResolutionText(
         HumanApprovalResolution resolution,
-        UserAgentCatalogEntry? target = null)
+        UserAgentDeliveryTarget? target = null)
     {
         var lines = new List<string>
         {
@@ -266,11 +266,11 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
     };
 
-    private async Task<UserAgentCatalogEntry> ResolveTargetAsync(
+    private async Task<UserAgentDeliveryTarget> ResolveTargetAsync(
         string deliveryTargetId,
         CancellationToken cancellationToken)
     {
-        var target = await _agentRegistryQueryPort.GetAsync(deliveryTargetId, cancellationToken);
+        var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, cancellationToken);
         if (target == null)
             throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
 
@@ -281,14 +281,14 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     }
 
     private static bool ShouldSendApprovedContent(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         HumanApprovalResolution resolution) =>
         resolution.Approved &&
         !string.IsNullOrWhiteSpace(resolution.ResolvedContent) &&
         string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
 
     private async Task SendTextMessageAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string text,
         string emptyResponseMessage,
         string failurePrefix,
@@ -302,7 +302,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             cancellationToken);
 
     private async Task SendInteractiveCardMessageAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string cardJson,
         string emptyResponseMessage,
         string failurePrefix,
@@ -316,7 +316,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             cancellationToken);
 
     private async Task SendMessageAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string messageType,
         string contentJson,
         string emptyResponseMessage,
@@ -365,7 +365,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     /// Returns success vs. failure (with Lark code+detail) so the caller can throw cleanly.
     /// </summary>
     private async Task<SendOutcome> TrySendWithFallbackAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string messageType,
         string contentJson,
         LarkReceiveTarget primary,
@@ -401,7 +401,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     }
 
     private async Task<string> SendOutboundAsync(
-        UserAgentCatalogEntry target,
+        UserAgentDeliveryTarget target,
         string messageType,
         string contentJson,
         LarkReceiveTarget receiveTarget,

@@ -120,7 +120,7 @@ public sealed class UserAgentCatalogProjectorTests
             LarkReceiveIdTypeFallback = "union_id",
         };
 
-        var entry = UserAgentCatalogQueryPort.ToEntry(document, nyxApiKey: "");
+        var entry = UserAgentCatalogQueryPort.ToEntry(document);
 
         entry.LarkReceiveId.Should().Be("oc_dm_chat_1");
         entry.LarkReceiveIdType.Should().Be("chat_id");
