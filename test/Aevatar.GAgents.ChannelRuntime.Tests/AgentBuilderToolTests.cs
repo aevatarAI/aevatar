@@ -73,9 +73,11 @@ public sealed class AgentBuilderToolTests
 
         var skillContent = spec!.SkillContent;
 
-        // Structural sections must all be named in order; downstream LLM instructions hinge on
-        // the section labels matching exactly so the "Format `- [owner/repo#NNN] title`"
-        // micro-instructions land.
+        // All eight section slots must be pinned in order — the section position itself is
+        // load-bearing for the LLM's emission order, even when section 7 (Trend) is optional
+        // (the schema slot still needs to exist so a model that fetches the prior window
+        // emits it in the right place). Skipping any number here would let copy edits
+        // silently drop or reorder a section.
         skillContent.Should().Contain("# Output sections");
         skillContent.Should().Contain("1. Title");
         skillContent.Should().Contain("2. Shipped");
@@ -83,6 +85,7 @@ public sealed class AgentBuilderToolTests
         skillContent.Should().Contain("4. Reviews");
         skillContent.Should().Contain("5. Issues");
         skillContent.Should().Contain("6. CI");
+        skillContent.Should().Contain("7. Trend");
         skillContent.Should().Contain("8. Blockers");
 
         // Empty-handling rules — the bug we're guarding against is the LLM padding sections
@@ -91,18 +94,37 @@ public sealed class AgentBuilderToolTests
         skillContent.Should().Contain("No measurable activity in the last 24h.");
         skillContent.Should().Contain("Do not invent activity.");
 
+        // Empty-day Blockers carve-out (codex review of PR #458): the §8 schema says
+        // "always last" but the empty-day fallback says "return ONLY the title line". This
+        // pin keeps both qualifiers present so a copy-edit can't reintroduce the
+        // contradiction by dropping either one.
+        skillContent.Should().Contain("always last unless the report is empty-day");
+        skillContent.Should().Contain("do not append a Blockers line in this case");
+
+        // Substitution-variable documentation must be present and tied to the actual
+        // username; otherwise the LLM may emit literal `{username}` placeholders in URLs.
+        skillContent.Should().Contain("`{username}` → `alice`");
+        skillContent.Should().Contain("`{iso_date}` → start of the 24h window");
+
         // Username substitution must remain intact (other tests check it under the saved-user
         // / derived-user paths; this assertion guards the no-args path).
         skillContent.Should().Contain("Primary GitHub username: alice");
+
+        // No-repo mode must include a commit query (Shipped section claims to cover commits)
+        // and must explicitly skip the CI section (no global Actions run endpoint exists).
+        skillContent.Should().Contain("/search/commits?q=author:{username}+author-date:>={iso_date}");
+        skillContent.Should().Contain("CI section is omitted in no-repo mode");
     }
 
     [Fact]
     public void TryBuildDailyReportSpec_RepoAllowlist_SwitchesToPerRepoQueryGuidance()
     {
         // Per issue #423: when `repositories=` is provided, the prompt must steer the LLM toward
-        // per-repo `/repos/{owner}/{repo}/...` calls and explicitly refuse the global-search
-        // path (those endpoints don't filter to a repo allowlist cleanly). A regression here
-        // would silently degrade multi-repo dailies back to noisy global-search behavior.
+        // per-repo searches and explicitly refuse the collapsed-allowlist global query. PR #458
+        // review further required: shipped PRs must filter by author + merge time (search-API
+        // form, not /pulls?state=closed which is keyed on update time and ignores author),
+        // commit shipping must have its own source, repo-scoped issues must include the
+        // commenter case, and the CI query must not embed a {default_branch} placeholder.
         var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
             githubUsername: "alice",
             repositories: "acme/api, acme/web",
@@ -116,9 +138,27 @@ public sealed class AgentBuilderToolTests
         var skillContent = spec!.SkillContent;
         skillContent.Should().Contain("Repository scope: acme/api, acme/web");
         skillContent.Should().Contain("Repository allowlist provided");
-        skillContent.Should().Contain("/repos/{owner}/{repo}/pulls");
-        skillContent.Should().Contain("/repos/{owner}/{repo}/actions/runs");
-        skillContent.Should().Contain("Do NOT collapse into one global query.");
+        skillContent.Should().Contain("do NOT collapse into one global query");
+
+        // Shipped PRs in repo mode: search-API form keyed on author + merge time. The previous
+        // /repos/{owner}/{repo}/pulls?state=closed shape (a) returned closed-but-unmerged PRs
+        // and (b) had no reliable pagination across active repos — codex P1 + eanzhao inline
+        // both flagged this. Guard against regression.
+        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+author:{username}+is:pr+is:merged+merged:>={iso_date}");
+        skillContent.Should().NotContain("/repos/{owner}/{repo}/pulls?state=closed");
+
+        // Shipped commits in repo mode (Shipped section schema includes commits).
+        skillContent.Should().Contain("/search/commits?q=repo:{owner}/{repo}+author:{username}+author-date:>={iso_date}");
+
+        // Issues commented on in repo mode (codex P2: schema says "opened, closed, or
+        // commented on" but author-only query drops the commenter case).
+        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+commenter:{username}+is:issue+updated:>={iso_date}");
+
+        // CI query must NOT embed a {default_branch} placeholder (the LLM has no way to fill
+        // it without an extra round-trip and a literal `{default_branch}` would land in the
+        // outbound URL). Filter conclusion + created_at client-side instead.
+        skillContent.Should().NotContain("{default_branch}");
+        skillContent.Should().Contain("/repos/{owner}/{repo}/actions/runs?per_page=10");
 
         // The execution prompt is what the runner sends per-trigger; it must echo the
         // per-repo constraint so the LLM sees it on every run, not only at agent-create time.

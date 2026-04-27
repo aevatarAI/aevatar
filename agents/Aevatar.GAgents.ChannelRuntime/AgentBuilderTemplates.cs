@@ -125,45 +125,53 @@ internal static class AgentBuilderTemplates
             .AppendLine("Each section has a hard line budget. If a section has zero data OR the source is unavailable, OMIT THE SECTION ENTIRELY (header and body) — do not pad with `no activity` or filler.")
             .AppendLine()
             .AppendLine("1. Title (1 line) — `Daily report — {username} — last 24h`.")
-            .AppendLine("2. Shipped (≤6 lines) — PRs merged in the last 24h and commits to the default branch. Format `- [owner/repo#NNN] title`.")
+            .AppendLine("2. Shipped (≤6 lines) — PRs merged AND commits authored by the user in the window. Format `- [owner/repo#NNN] title` for PRs, `- [owner/repo@sha7] subject` for commits.")
             .AppendLine("3. In flight (≤6 lines) — open PRs authored by the user. Append `(stale)` when the PR has had no activity for >24h.")
             .AppendLine("4. Reviews (≤4 lines) — PRs the user reviewed in the window. Include kind counts, e.g. `approved 2 / requested-changes 1 / commented 3`.")
             .AppendLine("5. Issues (≤4 lines) — issues opened, closed, or commented on by the user.")
-            .AppendLine("6. CI (≤3 lines) — failing builds on the default branch of the tracked repos (omit entirely when none are red).")
+            .AppendLine("6. CI (≤3 lines) — failing GitHub Actions runs on the tracked repos. Best-effort and only feasible in repo-allowlist mode; OMIT this section in no-repo mode (the global search endpoints do not expose Actions run conclusions).")
             .AppendLine("7. Trend (1 line, optional) — running totals vs the prior 24h, e.g. `Trend: shipped 3 (+1), reviews 5 (-2)`. Omit when the prior-window data could not be fetched.")
-            .AppendLine("8. Blockers (1 line, always last) — `Blockers: <short list>` or `No blockers.` Auto-detect from: PRs >24h waiting on a review, CI red >2h, issues with labels `blocked` or `needs-info`.")
+            .AppendLine("8. Blockers (1 line, always last unless the report is empty-day) — `Blockers: <short list>` or `No blockers.` Auto-detect from: PRs >24h waiting on a review, CI red >2h, issues with labels `blocked` or `needs-info`.")
             .AppendLine()
-            .AppendLine("If the entire 24h window has no measurable activity across all sources, return ONLY the title line followed by `No measurable activity in the last 24h.` and nothing else.")
+            .AppendLine("If the entire 24h window has no measurable activity across all sources, return ONLY the title line followed by `No measurable activity in the last 24h.` and nothing else (do not append a Blockers line in this case).")
             .AppendLine("Do not invent activity. Do not paraphrase issue or PR titles into different wording. Keep each line short — Feishu text messages have a body cap, prefer trimming trailing detail over exceeding it.")
             .AppendLine()
             .AppendLine("# Suggested GitHub proxy calls")
             .AppendLine();
 
+        prompt
+            .AppendLine($"Substitution variables in the URLs below: `{{username}}` → `{normalizedUser}`; `{{iso_date}}` → start of the 24h window in ISO 8601 UTC (e.g. `2026-04-26T09:00:00Z`); `{{owner}}/{{repo}}` → each entry from the repository allowlist. Always substitute these literally before sending.")
+            .AppendLine();
+
         if (repoList.Count == 0)
         {
             prompt
-                .AppendLine("Repository allowlist not provided — use the global search endpoints (substitute `{iso_date}` with the start of the 24h window in ISO 8601 UTC):")
+                .AppendLine("Repository allowlist not provided — use the global search endpoints:")
                 .AppendLine("- GET /search/issues?q=author:{username}+is:pr+is:merged+merged:>={iso_date}      // shipped PRs")
+                .AppendLine("- GET /search/commits?q=author:{username}+author-date:>={iso_date}                // shipped commits")
                 .AppendLine("- GET /search/issues?q=author:{username}+is:pr+is:open                            // in flight")
                 .AppendLine("- GET /search/issues?q=reviewed-by:{username}+updated:>={iso_date}                // reviews")
                 .AppendLine("- GET /search/issues?q=author:{username}+is:issue+created:>={iso_date}            // issues opened")
                 .AppendLine("- GET /search/issues?q=author:{username}+is:issue+is:closed+closed:>={iso_date}   // issues closed")
-                .AppendLine("- GET /search/issues?q=commenter:{username}+updated:>={iso_date}                  // issues commented");
+                .AppendLine("- GET /search/issues?q=commenter:{username}+updated:>={iso_date}                  // issues commented")
+                .AppendLine("// CI section is omitted in no-repo mode: the global /search/* endpoints do not expose Actions run conclusions, and per-repo /actions/runs requires a known repo. Skip section 6 entirely.");
         }
         else
         {
             prompt
-                .AppendLine("Repository allowlist provided — run these per-repo (replace `{owner}/{repo}` with each entry, substitute `{iso_date}` with the start of the 24h window in ISO 8601 UTC). Do NOT collapse into one global query.")
-                .AppendLine("- GET /repos/{owner}/{repo}/pulls?state=closed&per_page=20               // filter merged_at >= {iso_date} client-side for shipped")
-                .AppendLine("- GET /repos/{owner}/{repo}/pulls?state=open&per_page=20                 // filter author = {username} client-side for in flight")
-                .AppendLine("- GET /search/issues?q=reviewed-by:{username}+repo:{owner}/{repo}+updated:>={iso_date}")
-                .AppendLine("- GET /search/issues?q=author:{username}+repo:{owner}/{repo}+is:issue+updated:>={iso_date}")
-                .AppendLine("- GET /repos/{owner}/{repo}/actions/runs?branch={default_branch}&per_page=10  // filter conclusion=failure for CI section");
+                .AppendLine("Repository allowlist provided — run these per-repo (one search per allowlist entry; do NOT collapse into one global query):")
+                .AppendLine("- GET /search/issues?q=repo:{owner}/{repo}+author:{username}+is:pr+is:merged+merged:>={iso_date}    // shipped PRs (search keys on merge time + author, reliable across pagination)")
+                .AppendLine("- GET /search/commits?q=repo:{owner}/{repo}+author:{username}+author-date:>={iso_date}              // shipped commits")
+                .AppendLine("- GET /search/issues?q=repo:{owner}/{repo}+author:{username}+is:pr+is:open                          // in flight")
+                .AppendLine("- GET /search/issues?q=repo:{owner}/{repo}+reviewed-by:{username}+updated:>={iso_date}              // reviews")
+                .AppendLine("- GET /search/issues?q=repo:{owner}/{repo}+author:{username}+is:issue+updated:>={iso_date}          // issues authored (created/closed)")
+                .AppendLine("- GET /search/issues?q=repo:{owner}/{repo}+commenter:{username}+is:issue+updated:>={iso_date}       // issues commented")
+                .AppendLine("- GET /repos/{owner}/{repo}/actions/runs?per_page=10                                                // CI: filter `conclusion=failure` and `created_at >= {iso_date}` client-side; do NOT add a `branch=` filter (default branch varies; trim noise client-side instead)");
         }
 
         prompt
             .AppendLine()
-            .AppendLine("If a query returns 4xx, 5xx, or empty, treat that source as zero for the affected section and continue — do not retry, do not fall back to invented data.");
+            .AppendLine("If a query returns 4xx, 5xx, or empty, treat that source as zero for the affected section and continue — do not retry, do not fall back to invented data. Do not leave any literal `{username}` / `{iso_date}` / `{owner}/{repo}` placeholders in outbound URLs.");
 
         return prompt.ToString();
     }
