@@ -10,18 +10,17 @@ using Microsoft.AspNetCore.Mvc;
 namespace Aevatar.Tools.Cli.Tests;
 
 /// <summary>
-/// HTTP-boundary contract for the new ETag / If-Match flow.
-/// Covers PR #434 review concerns:
-///   1) Malformed If-Match must reject (400), not silently fall back to last-writer-wins.
-///   2) Successful guarded write returns a deterministic next ETag (expected_version + 1).
-/// And the GET surface that emits the ETag clients use as If-Match.
+/// Mirror of <see cref="RolesControllerETagTests"/> for the connector surface.
+/// Locks in identical ETag / If-Match semantics: GET emits ETag, PUT/DELETE accept
+/// If-Match with strict tristate parse, malformed → 400, valid → deterministic next
+/// ETag, optimistic conflict → 409.
 /// </summary>
-public sealed class RolesControllerETagTests
+public sealed class ConnectorsControllerETagTests
 {
     [Fact]
     public async Task Get_EmitsETagFromStoreVersion()
     {
-        var store = new RecordingRoleCatalogStore { CatalogVersion = 12 };
+        var store = new RecordingConnectorCatalogStore { CatalogVersion = 12 };
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.Get(CancellationToken.None);
@@ -33,7 +32,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task GetDraft_EmitsETagFromStoreVersion()
     {
-        var store = new RecordingRoleCatalogStore { DraftVersion = 7 };
+        var store = new RecordingConnectorCatalogStore { DraftVersion = 7 };
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.GetDraft(CancellationToken.None);
@@ -45,11 +44,11 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Save_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingConnectorCatalogStore();
         var controller = CreateController(store, ifMatch: "W/\"3\"");
 
         var result = await controller.Save(
-            new SaveRoleCatalogRequest(Roles: [SampleRole()]),
+            new SaveConnectorCatalogRequest(Connectors: [SampleHttpConnector()]),
             CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
@@ -59,11 +58,11 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Save_WithValidIfMatch_PassesExpectedVersion_AndEmitsDeterministicETag()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingConnectorCatalogStore();
         var controller = CreateController(store, ifMatch: "\"3\"");
 
         var result = await controller.Save(
-            new SaveRoleCatalogRequest(Roles: [SampleRole()]),
+            new SaveConnectorCatalogRequest(Connectors: [SampleHttpConnector()]),
             CancellationToken.None);
 
         result.Result.Should().BeOfType<OkObjectResult>();
@@ -74,14 +73,14 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Save_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingRoleCatalogStore
+        var store = new RecordingConnectorCatalogStore
         {
-            ThrowOnWrite = new EventStoreOptimisticConcurrencyException("role-catalog-test", 3, 5),
+            ThrowOnWrite = new EventStoreOptimisticConcurrencyException("connector-catalog-test", 3, 5),
         };
         var controller = CreateController(store, ifMatch: "\"3\"");
 
         var result = await controller.Save(
-            new SaveRoleCatalogRequest(Roles: [SampleRole()]),
+            new SaveConnectorCatalogRequest(Connectors: [SampleHttpConnector()]),
             CancellationToken.None);
 
         result.Result.Should().BeOfType<ConflictObjectResult>();
@@ -90,11 +89,11 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingRoleCatalogStore();
-        var controller = CreateController(store, ifMatch: "W/\"5\"");
+        var store = new RecordingConnectorCatalogStore();
+        var controller = CreateController(store, ifMatch: "*");
 
         var result = await controller.SaveDraft(
-            new SaveRoleDraftRequest(Draft: SampleRole()),
+            new SaveConnectorDraftRequest(Draft: SampleHttpConnector()),
             CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
@@ -105,11 +104,11 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WithValidIfMatch_PassesExpectedVersion_AndEmitsDeterministicETag()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingConnectorCatalogStore();
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
-            new SaveRoleDraftRequest(Draft: SampleRole()),
+            new SaveConnectorDraftRequest(Draft: SampleHttpConnector()),
             CancellationToken.None);
 
         result.Result.Should().BeOfType<OkObjectResult>();
@@ -120,11 +119,11 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WithoutIfMatch_DoesNotEmitETag()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingConnectorCatalogStore();
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.SaveDraft(
-            new SaveRoleDraftRequest(Draft: SampleRole()),
+            new SaveConnectorDraftRequest(Draft: SampleHttpConnector()),
             CancellationToken.None);
 
         result.Result.Should().BeOfType<OkObjectResult>();
@@ -135,14 +134,14 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingRoleCatalogStore
+        var store = new RecordingConnectorCatalogStore
         {
-            ThrowOnWrite = new EventStoreOptimisticConcurrencyException("role-catalog-test", 5, 7),
+            ThrowOnWrite = new EventStoreOptimisticConcurrencyException("connector-catalog-test", 5, 7),
         };
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
-            new SaveRoleDraftRequest(Draft: SampleRole()),
+            new SaveConnectorDraftRequest(Draft: SampleHttpConnector()),
             CancellationToken.None);
 
         result.Result.Should().BeOfType<ConflictObjectResult>();
@@ -151,8 +150,8 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task DeleteDraft_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingRoleCatalogStore();
-        var controller = CreateController(store, ifMatch: "*");
+        var store = new RecordingConnectorCatalogStore();
+        var controller = CreateController(store, ifMatch: "not-a-number");
 
         var result = await controller.DeleteDraft(CancellationToken.None);
 
@@ -163,7 +162,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task DeleteDraft_WithValidIfMatch_PassesExpectedVersionToStore()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingConnectorCatalogStore();
         var controller = CreateController(store, ifMatch: "\"9\"");
 
         var result = await controller.DeleteDraft(CancellationToken.None);
@@ -176,9 +175,9 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task DeleteDraft_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingRoleCatalogStore
+        var store = new RecordingConnectorCatalogStore
         {
-            ThrowOnDelete = new EventStoreOptimisticConcurrencyException("role-catalog-test", 9, 11),
+            ThrowOnDelete = new EventStoreOptimisticConcurrencyException("connector-catalog-test", 9, 11),
         };
         var controller = CreateController(store, ifMatch: "\"9\"");
 
@@ -187,10 +186,10 @@ public sealed class RolesControllerETagTests
         result.Should().BeOfType<ConflictObjectResult>();
     }
 
-    private static RolesController CreateController(IRoleCatalogStore store, string? ifMatch)
+    private static ConnectorsController CreateController(IConnectorCatalogStore store, string? ifMatch)
     {
-        var service = new RoleCatalogService(store, new StubRoleCatalogImportParser());
-        var controller = new RolesController(service);
+        var service = new ConnectorService(store, new StubConnectorCatalogImportParser());
+        var controller = new ConnectorsController(service);
         var httpContext = new DefaultHttpContext();
         if (ifMatch is not null)
             httpContext.Request.Headers["If-Match"] = ifMatch;
@@ -198,14 +197,53 @@ public sealed class RolesControllerETagTests
         return controller;
     }
 
-    private static RoleDefinitionDto SampleRole() =>
-        new(Id: "r1", Name: "Test", SystemPrompt: "p", Provider: "anthropic", Model: "claude", Connectors: []);
+    private static ConnectorDefinitionDto SampleHttpConnector() =>
+        new(
+            Name: "conn-1",
+            Type: "http",
+            Enabled: true,
+            TimeoutMs: 30_000,
+            Retry: 1,
+            Http: new HttpConnectorDefinitionDto(
+                BaseUrl: "https://example.com/api",
+                AllowedMethods: ["GET"],
+                AllowedPaths: [],
+                AllowedInputKeys: [],
+                DefaultHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Auth: EmptyAuth()),
+            Cli: EmptyCli(),
+            Mcp: EmptyMcp());
 
-    private sealed class RecordingRoleCatalogStore : IRoleCatalogStore
+    private static ConnectorAuthDefinitionDto EmptyAuth() =>
+        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+
+    private static CliConnectorDefinitionDto EmptyCli() =>
+        new(
+            Command: string.Empty,
+            FixedArguments: [],
+            AllowedOperations: [],
+            AllowedInputKeys: [],
+            WorkingDirectory: string.Empty,
+            Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+    private static McpConnectorDefinitionDto EmptyMcp() =>
+        new(
+            ServerName: string.Empty,
+            Command: string.Empty,
+            Url: string.Empty,
+            Arguments: [],
+            Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            AdditionalHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            Auth: EmptyAuth(),
+            DefaultTool: string.Empty,
+            AllowedTools: [],
+            AllowedInputKeys: []);
+
+    private sealed class RecordingConnectorCatalogStore : IConnectorCatalogStore
     {
-        public StoredRoleCatalog? SavedCatalog { get; private set; }
+        public StoredConnectorCatalog? SavedCatalog { get; private set; }
         public long? SavedCatalogExpectedVersion { get; private set; }
-        public StoredRoleDraft? SavedDraft { get; private set; }
+        public StoredConnectorDraft? SavedDraft { get; private set; }
         public long? SavedDraftExpectedVersion { get; private set; }
         public int DraftDeletes { get; private set; }
         public long? DraftDeleteExpectedVersion { get; private set; }
@@ -214,10 +252,10 @@ public sealed class RolesControllerETagTests
         public Exception? ThrowOnWrite { get; set; }
         public Exception? ThrowOnDelete { get; set; }
 
-        public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new StoredRoleCatalog(string.Empty, string.Empty, false, [], CatalogVersion));
+        public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new StoredConnectorCatalog(string.Empty, string.Empty, false, [], CatalogVersion));
 
-        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog catalog, long? expectedVersion = null, CancellationToken cancellationToken = default)
+        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, long? expectedVersion = null, CancellationToken cancellationToken = default)
         {
             if (ThrowOnWrite is not null)
                 throw ThrowOnWrite;
@@ -229,13 +267,13 @@ public sealed class RolesControllerETagTests
             });
         }
 
-        public Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default) =>
+        public Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new StoredRoleDraft(string.Empty, string.Empty, false, null, null, DraftVersion));
+        public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new StoredConnectorDraft(string.Empty, string.Empty, false, null, null, DraftVersion));
 
-        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft draft, long? expectedVersion = null, CancellationToken cancellationToken = default)
+        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft draft, long? expectedVersion = null, CancellationToken cancellationToken = default)
         {
             if (ThrowOnWrite is not null)
                 throw ThrowOnWrite;
@@ -247,7 +285,7 @@ public sealed class RolesControllerETagTests
             });
         }
 
-        public Task DeleteRoleDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default)
+        public Task DeleteConnectorDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default)
         {
             if (ThrowOnDelete is not null)
                 throw ThrowOnDelete;
@@ -257,9 +295,9 @@ public sealed class RolesControllerETagTests
         }
     }
 
-    private sealed class StubRoleCatalogImportParser : IRoleCatalogImportParser
+    private sealed class StubConnectorCatalogImportParser : IConnectorCatalogImportParser
     {
-        public Task<IReadOnlyList<StoredRoleDefinition>> ParseCatalogAsync(Stream stream, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredRoleDefinition>>([]);
+        public Task<IReadOnlyList<StoredConnectorDefinition>> ParseCatalogAsync(Stream stream, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StoredConnectorDefinition>>([]);
     }
 }
