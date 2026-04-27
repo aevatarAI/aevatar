@@ -197,7 +197,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         if (!string.IsNullOrWhiteSpace(State.LarkReceiveIdType))
             metadata[ChannelMetadataKeys.LarkReceiveIdType] = State.LarkReceiveIdType;
         if (!string.IsNullOrWhiteSpace(State.NyxProviderSlug))
-            metadata[ChannelMetadataKeys.LarkProxySlug] = State.NyxProviderSlug;
+            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = State.NyxProviderSlug;
         return metadata;
     }
 

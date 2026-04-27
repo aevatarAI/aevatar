@@ -37,6 +37,14 @@ public static class ChannelMetadataKeys
     public const string LarkReceiveId = "channel.lark.receive_id";
     /// <summary>Companion to <see cref="LarkReceiveId"/> — its <c>receive_id_type</c>.</summary>
     public const string LarkReceiveIdType = "channel.lark.receive_id_type";
-    /// <summary>NyxID outbound proxy slug used to deliver Lark messages (default <c>api-lark-bot</c>).</summary>
-    public const string LarkProxySlug = "channel.lark.proxy_slug";
+    /// <summary>
+    /// NyxID outbound proxy slug used to deliver Lark messages from inside a workflow run
+    /// (default <c>api-lark-bot</c>). The <c>outbound</c> qualifier is deliberate — this is
+    /// specifically the routing target for Lark <em>send</em> calls (e.g.
+    /// <c>open-apis/im/v1/messages</c>) initiated by the workflow runtime, not a generic Lark
+    /// API field. PR #461 review item #4 flagged the original name (<c>channel.lark.proxy_slug</c>)
+    /// as ambiguous between "Lark API surface" and "NyxID provider routing" — the
+    /// <c>outbound_proxy_slug</c> form makes the routing-side semantics explicit.
+    /// </summary>
+    public const string LarkOutboundProxySlug = "channel.lark.outbound_proxy_slug";
 }

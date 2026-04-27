@@ -102,12 +102,22 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
 
         // Twitter v2 endpoint requires `text` payload only for plain-text posts (#216 v1 scope:
         // no media, no thread, no poll). Body is JSON, content-type is set by NyxIdApiClient.
+        //
+        // Idempotency caveat (PR #461 review item #1): Twitter v2 `POST /2/tweets` has no
+        // server-side dedup. If this step is retried (e.g. via a `retry` policy on the YAML, or
+        // a workflow restart that replays an in-flight `StepRequestEvent`), the same content
+        // will be posted twice. The social_media template intentionally does NOT define a
+        // `retry` policy on this step, and the `on_error: skip` policy advances to `done`
+        // rather than retrying. Authors customizing the YAML should keep this invariant — do
+        // not add `retry: { max_attempts: > 1 }` here without first wiring a client-side dedup
+        // key (e.g. hashing run_id+step_id+content into a NyxID-side request idempotency
+        // header) or accepting duplicate posts as a known risk.
         var tweetBody = JsonSerializer.Serialize(new { text = content });
 
         string proxyResponse;
         try
         {
-            proxyResponse = await nyxClient!.ProxyRequestAsync(
+            proxyResponse = await nyxClient.ProxyRequestAsync(
                 apiKeyValue!,
                 publishSlug,
                 "/2/tweets",
@@ -222,6 +232,20 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
         return ctx.PublishAsync(failed, TopologyAudience.Self, ct);
     }
 
+    /// <summary>
+    /// Surfaces a status message back to the originating Lark conversation via the same NyxID
+    /// api-key used to publish the tweet. Best-effort: a Lark delivery failure must never abort
+    /// the workflow's own bookkeeping (which is what publishes <c>StepCompletedEvent</c>).
+    /// </summary>
+    /// <remarks>
+    /// PR #461 review item #5: this method depends on the api-key carrying both the
+    /// <c>api-twitter</c> AND the Lark proxy slug (e.g. <c>api-lark-bot</c>) entitlements at
+    /// mint time — see <c>CreateSocialMediaAgentAsync</c> in <c>AgentBuilderTool.cs</c>, which
+    /// resolves both slugs through <c>ResolveProxyServiceIdsAsync</c> before
+    /// <c>CreateApiKeyAsync</c>. If a future change narrows the api-key to only Twitter, the
+    /// Lark surfacing here will silently 403 — keep the dual-scope mint contract in lock-step
+    /// with this method, or pass a dedicated Lark api-key through metadata.
+    /// </remarks>
     private static async Task TrySendLarkAsync(
         NyxIdApiClient nyxClient,
         IReadOnlyDictionary<string, string> requestMetadata,
@@ -236,7 +260,7 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
 
         var receiveId = TryGet(requestMetadata, ChannelMetadataKeys.LarkReceiveId);
         var receiveIdType = TryGet(requestMetadata, ChannelMetadataKeys.LarkReceiveIdType);
-        var larkSlug = TryGet(requestMetadata, ChannelMetadataKeys.LarkProxySlug) ?? "api-lark-bot";
+        var larkSlug = TryGet(requestMetadata, ChannelMetadataKeys.LarkOutboundProxySlug) ?? "api-lark-bot";
 
         // Fallback: when the workflow agent's outbound metadata is unavailable, treat the
         // step's `delivery_target_id` (which is the agent_id, i.e. the Lark receive_id under
@@ -297,10 +321,17 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
 
     /// <summary>
     /// Classifies a NyxID proxy response from <c>POST /api/v1/proxy/s/api-twitter/2/tweets</c>
-    /// into a publish outcome. Twitter v2 returns 201 on success with <c>{ "data": { "id":
-    /// "&lt;tweet-id&gt;" } }</c>; NyxID forwards 4xx/5xx as
-    /// <c>{ "error": true, "status": &lt;http&gt;, "body": "&lt;raw downstream body&gt;" }</c>
-    /// (NyxIdApiClient.cs:680). Both shapes are recognized here.
+    /// into a publish outcome. Three shapes are recognized:
+    /// <list type="bullet">
+    /// <item>Twitter 2xx success: <c>{ "data": { "id": "&lt;tweet-id&gt;" } }</c> (NyxID forwards
+    /// the body verbatim).</item>
+    /// <item>NyxID-wrapped non-2xx: <c>{ "error": true, "status": &lt;http&gt;, "body":
+    /// "&lt;raw downstream body&gt;" }</c> (NyxIdApiClient.cs:680).</item>
+    /// <item>Twitter v2 native error: <c>{ "errors": [ { "message": "...", "code": ... } ],
+    /// "title": "...", "detail": "..." }</c> — Twitter sometimes returns 4xx with this shape
+    /// at the top level (PR #461 review item #2). NyxID forwards verbatim, so we parse it as
+    /// a fallback when neither <c>data.id</c> nor the NyxID-wrapped envelope is present.</item>
+    /// </list>
     /// </summary>
     internal static TwitterPublishOutcome ClassifyTwitterResponse(string? response)
     {
@@ -326,13 +357,13 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
                     larkMessage: "Twitter 发布失败：响应格式异常");
             }
 
-            // Success path: Twitter returns `{ "data": { "id": "...", "text": "..." } }`. NyxID
-            // forwards 2xx bodies verbatim, so the absence of an `error` field combined with a
-            // present `data.id` is the success signal.
             var hasErrorFlag = root.TryGetProperty("error", out var errorProp) &&
                                (errorProp.ValueKind == JsonValueKind.True ||
                                 errorProp.ValueKind == JsonValueKind.String);
 
+            // Success path: Twitter returns `{ "data": { "id": "...", "text": "..." } }`. NyxID
+            // forwards 2xx bodies verbatim, so the absence of an `error` field combined with a
+            // present `data.id` is the success signal.
             if (!hasErrorFlag &&
                 root.TryGetProperty("data", out var dataProp) &&
                 dataProp.ValueKind == JsonValueKind.Object &&
@@ -349,12 +380,29 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
                 return TwitterPublishOutcome.Successful($"https://x.com/i/web/status/{tweetId}");
             }
 
-            // Failure: NyxID wraps non-2xx as { error: true, status: <http>, body: <raw> }.
-            var status = TryReadInt32(root, "status") ?? TryReadInt32(root, "code") ?? 0;
-            var detail = TryReadString(root, "message") ?? TryReadString(root, "body") ?? "Twitter publish failed";
-            var rawBody = TryReadString(root, "body");
+            // Failure path A: NyxID wraps non-2xx as { error: true, status: <http>, body: <raw> }.
+            if (hasErrorFlag)
+            {
+                var nyxStatus = TryReadInt32(root, "status") ?? TryReadInt32(root, "code") ?? 0;
+                var nyxDetail = TryReadString(root, "message") ?? TryReadString(root, "body") ?? "Twitter publish failed";
+                var nyxBody = TryReadString(root, "body");
+                return ClassifyByStatus(nyxStatus, nyxDetail, nyxBody);
+            }
 
-            return ClassifyByStatus(status, detail, rawBody);
+            // Failure path B (PR #461 review item #2): Twitter v2 native error shape, forwarded
+            // by NyxID without a wrap envelope. Common for content-policy and duplicate-tweet
+            // rejections, e.g. `{"title":"Conflict","detail":"...","errors":[{"message":"...",
+            // "code":187}]}`. We don't have an HTTP status here (NyxID swallowed it), so the
+            // classification falls through to a generic `twitter_publish_rejected`, but we
+            // surface the rich Twitter error text so users can read the actual reason.
+            if (TryParseTwitterNativeError(root, out var nativeOutcome))
+                return nativeOutcome;
+
+            return TwitterPublishOutcome.Failure(
+                "twitter_publish_unexpected_shape",
+                "Response did not match success, NyxID-wrapped, or Twitter-native error shapes.",
+                httpStatus: 0,
+                larkMessage: "Twitter 发布失败：响应格式异常，请联系 ops 检查 NyxID 代理日志。");
         }
         catch (JsonException)
         {
@@ -364,6 +412,55 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
                 httpStatus: 0,
                 larkMessage: "Twitter 发布失败：响应不是合法 JSON");
         }
+    }
+
+    /// <summary>
+    /// Parses a Twitter v2 native error shape (no NyxID wrap envelope). Twitter returns these
+    /// at the top level for some 4xx rejections (content-policy violations, duplicate tweets,
+    /// permission issues): <c>{ "title": "...", "detail": "...", "errors": [ { "message":
+    /// "...", "code": 187 } ] }</c>. Returns false when the shape doesn't match so the caller
+    /// can fall through to the unexpected-shape branch.
+    /// </summary>
+    private static bool TryParseTwitterNativeError(JsonElement root, out TwitterPublishOutcome outcome)
+    {
+        outcome = default;
+        if (!root.TryGetProperty("errors", out var errorsProp) ||
+            errorsProp.ValueKind != JsonValueKind.Array ||
+            errorsProp.GetArrayLength() == 0)
+        {
+            // Sometimes Twitter omits the `errors` array but still returns `title`/`detail`
+            // directly (Problem Details RFC 7807 — what Twitter v2 calls `tweet_create_error`).
+            // Treat that as a native error too.
+            var detailText = TryReadString(root, "detail");
+            var titleText = TryReadString(root, "title");
+            if (string.IsNullOrEmpty(detailText) && string.IsNullOrEmpty(titleText))
+                return false;
+
+            var combined = string.IsNullOrEmpty(detailText) ? titleText! : detailText!;
+            outcome = TwitterPublishOutcome.Failure(
+                "twitter_publish_rejected",
+                combined,
+                httpStatus: 0,
+                larkMessage: $"Twitter 发布失败：{combined}");
+            return true;
+        }
+
+        var firstError = errorsProp[0];
+        var message = TryReadString(firstError, "message")
+                      ?? TryReadString(root, "detail")
+                      ?? TryReadString(root, "title")
+                      ?? "Twitter rejected the publish request.";
+        var twitterCode = TryReadInt32(firstError, "code");
+        var detailWithCode = twitterCode is { } c
+            ? $"{message} (twitter code={c})"
+            : message;
+
+        outcome = TwitterPublishOutcome.Failure(
+            "twitter_publish_rejected",
+            detailWithCode,
+            httpStatus: 0,
+            larkMessage: $"Twitter 发布失败：{detailWithCode}");
+        return true;
     }
 
     private static TwitterPublishOutcome ClassifyByStatus(int status, string detail, string? rawBody)

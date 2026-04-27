@@ -383,13 +383,6 @@ public sealed class AgentBuilderTool : IAgentTool
         // entitlements; without api-twitter here, NyxID's `allowed_service_ids` enforcement
         // (api_keys.rs / proxy.rs) would 403 every publish call regardless of OAuth scope.
         var publishProviderSlug = (args.Str("publish_provider_slug") ?? "api-twitter").Trim();
-        var requiredServiceIds = await ResolveProxyServiceIdsAsync(
-            nyxClient,
-            token,
-            [providerSlug, publishProviderSlug],
-            ct);
-        if (requiredServiceIds.errorJson != null)
-            return requiredServiceIds.errorJson;
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? WorkflowAgentDefaults.GenerateActorId()
@@ -400,12 +393,26 @@ public sealed class AgentBuilderTool : IAgentTool
                 args.Str("topic") ?? string.Empty,
                 args.Str("audience"),
                 args.Str("style"),
+                providerSlug,
                 publishProviderSlug,
                 out var templateSpec,
                 out var templateError))
         {
             return JsonSerializer.Serialize(new { error = templateError });
         }
+
+        // Resolve service IDs from the spec's authoritative slug list (parity with
+        // daily_report's TemplateSpec.RequiredServiceSlugs — PR #461 review item #6). Inlined
+        // hardcoded `[providerSlug, publishProviderSlug]` was fine for two slugs but would
+        // drift if a third slug were ever added; route through the spec so the source of
+        // truth lives next to the workflow YAML.
+        var requiredServiceIds = await ResolveProxyServiceIdsAsync(
+            nyxClient,
+            token,
+            templateSpec!.RequiredServiceSlugs,
+            ct);
+        if (requiredServiceIds.errorJson != null)
+            return requiredServiceIds.errorJson;
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
             token,

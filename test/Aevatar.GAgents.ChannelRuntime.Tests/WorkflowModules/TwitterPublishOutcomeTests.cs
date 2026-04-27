@@ -126,4 +126,61 @@ public sealed class TwitterPublishOutcomeTests
         outcome.Success.Should().BeFalse();
         outcome.ErrorCode.Should().Be("twitter_publish_unparseable_response");
     }
+
+    [Fact]
+    public void ClassifyTwitterResponse_RecognizesTwitterNativeErrorsArrayShape()
+    {
+        // PR #461 review item #2: Twitter v2 sometimes returns the native error shape with no
+        // NyxID-wrap envelope, e.g. duplicate-tweet (code 187) or content-policy violations.
+        // The classifier must surface the Twitter `message` text in the Lark surfacing so the
+        // user reads the actual rejection reason, not a generic "publish failed".
+        var response = """
+            {
+              "title": "Conflict",
+              "detail": "You attempted to create a Tweet with content that has already been posted recently.",
+              "errors": [
+                {"message": "duplicate content", "code": 187}
+              ]
+            }
+            """;
+
+        var outcome = TwitterPublishModule.ClassifyTwitterResponse(response);
+
+        outcome.Success.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("twitter_publish_rejected");
+        outcome.LarkMessage.Should().Contain("duplicate content");
+        outcome.LarkMessage.Should().Contain("187");
+    }
+
+    [Fact]
+    public void ClassifyTwitterResponse_RecognizesTwitterNativeRfc7807Shape_WithoutErrorsArray()
+    {
+        // RFC 7807 Problem Details — Twitter v2 occasionally omits the `errors` array but
+        // still provides `title` / `detail`. Don't fall through to "unexpected_shape" in this
+        // case; treat as a native rejection so the user sees Twitter's text.
+        var response = """
+            {
+              "title": "tweet_create_error",
+              "detail": "Your account is temporarily restricted from creating Tweets."
+            }
+            """;
+
+        var outcome = TwitterPublishModule.ClassifyTwitterResponse(response);
+
+        outcome.Success.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("twitter_publish_rejected");
+        outcome.LarkMessage.Should().Contain("temporarily restricted");
+    }
+
+    [Fact]
+    public void ClassifyTwitterResponse_FailsWithUnexpectedShape_When_NoSuccessNoErrorEnvelope()
+    {
+        // Empty object — neither success nor any of the recognized error shapes. Must not
+        // silently look like success; classify as `twitter_publish_unexpected_shape` so logs
+        // surface the anomaly.
+        var outcome = TwitterPublishModule.ClassifyTwitterResponse("{}");
+
+        outcome.Success.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("twitter_publish_unexpected_shape");
+    }
 }

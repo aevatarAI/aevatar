@@ -81,6 +81,7 @@ internal static class AgentBuilderTemplates
         string topic,
         string? audience,
         string? style,
+        string? deliveryProviderSlug,
         string? publishProviderSlug,
         out SocialMediaTemplateSpec? spec,
         out string? error)
@@ -104,6 +105,7 @@ internal static class AgentBuilderTemplates
 
         var normalizedAudience = NormalizeOptional(audience) ?? "general followers";
         var normalizedStyle = NormalizeOptional(style) ?? "clear, concise, and professional";
+        var normalizedDeliverySlug = NormalizeOptional(deliveryProviderSlug) ?? "api-lark-bot";
         var normalizedPublishSlug = NormalizeOptional(publishProviderSlug) ?? "api-twitter";
         var workflowId = BuildSocialMediaWorkflowId(normalizedAgentId);
         var workflowName = BuildSocialMediaWorkflowName(normalizedAgentId);
@@ -121,7 +123,8 @@ internal static class AgentBuilderTemplates
                 normalizedAudience,
                 normalizedStyle,
                 normalizedPublishSlug),
-            ExecutionPrompt: executionPrompt);
+            ExecutionPrompt: executionPrompt,
+            RequiredServiceSlugs: [normalizedDeliverySlug, normalizedPublishSlug]);
         return true;
     }
 
@@ -182,6 +185,9 @@ internal static class AgentBuilderTemplates
                 parameters:
                   publish_provider_slug: "{{EscapeDoubleQuoted(publishProviderSlug)}}"
                   delivery_target_id: "{{EscapeDoubleQuoted(deliveryTargetId)}}"
+                on_error:
+                  strategy: skip
+                  default_output: "twitter_publish_failed"
                 next: done
 
               - id: done
@@ -241,4 +247,5 @@ internal sealed record SocialMediaTemplateSpec(
     string WorkflowName,
     string DisplayName,
     string WorkflowYaml,
-    string ExecutionPrompt);
+    string ExecutionPrompt,
+    IReadOnlyList<string> RequiredServiceSlugs);

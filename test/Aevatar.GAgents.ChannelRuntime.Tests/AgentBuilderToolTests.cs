@@ -1774,12 +1774,16 @@ public sealed class AgentBuilderToolTests
 
             // Workflow YAML must now route the approval `true` branch to the new
             // `publish_to_twitter` step instead of straight to `done` — the publish step is
-            // what fulfills issue #216's "approve → publish to X" path.
+            // what fulfills issue #216's "approve → publish to X" path. PR #461 review fix:
+            // also pin `on_error: skip` so a Twitter-side rejection (401/403/429/5xx) advances
+            // the run to `done` instead of terminating the entire workflow as failed; the
+            // module already surfaces categorized errors to Lark independently.
             await workflowCommandPort.Received(1).UpsertAsync(
                 Arg.Is<ScopeWorkflowUpsertRequest>(request =>
                     request.WorkflowYaml.Contains("type: twitter_publish", StringComparison.Ordinal) &&
                     request.WorkflowYaml.Contains("publish_provider_slug: \"api-twitter\"", StringComparison.Ordinal) &&
-                    request.WorkflowYaml.Contains("\"true\": publish_to_twitter", StringComparison.Ordinal)),
+                    request.WorkflowYaml.Contains("\"true\": publish_to_twitter", StringComparison.Ordinal) &&
+                    request.WorkflowYaml.Contains("strategy: skip", StringComparison.Ordinal)),
                 Arg.Any<CancellationToken>());
 
             // Twitter preflight must fire with the freshly minted api-key against /users/me
