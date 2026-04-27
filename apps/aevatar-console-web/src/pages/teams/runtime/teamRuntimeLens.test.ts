@@ -74,7 +74,8 @@ describe("teamRuntimeLens", () => {
   it("derives a blocked health state and compare summary from runtime facts", () => {
     const lens = deriveTeamRuntimeLens({
       scopeId: "scope-team",
-      defaultRouteTargetStatus: {
+      focusedServiceId: "default",
+      serviceRevisionCatalog: {
         available: true,
         scopeId: "scope-team",
         serviceId: "default",
@@ -85,6 +86,8 @@ describe("teamRuntimeLens", () => {
         deploymentId: "dep-2",
         deploymentStatus: "Active",
         primaryActorId: "actor-intake",
+        catalogStateVersion: 2,
+        catalogLastEventId: "evt-catalog-2",
         updatedAt: "2026-04-09T09:00:00Z",
         revisions: [
           {
@@ -140,7 +143,7 @@ describe("teamRuntimeLens", () => {
             staticActorTypeName: "",
           },
         ],
-      },
+      } as any,
       services: [
         {
           serviceKey: "scope-team:default",
@@ -427,17 +430,19 @@ describe("teamRuntimeLens", () => {
   it("keeps health at attention when serving is active but no recent run exists", () => {
     const lens = deriveTeamRuntimeLens({
       scopeId: "scope-team",
-      defaultRouteTargetStatus: {
-        available: true,
+      focusedServiceId: "default",
+      serviceRevisionCatalog: {
         scopeId: "scope-team",
         serviceId: "default",
-        displayName: "Support Escalation Triage",
         serviceKey: "scope-team:default",
+        displayName: "Support Escalation Triage",
         defaultServingRevisionId: "rev-2",
         activeServingRevisionId: "rev-2",
         deploymentId: "dep-2",
         deploymentStatus: "Active",
         primaryActorId: "actor-intake",
+        catalogStateVersion: 2,
+        catalogLastEventId: "evt-catalog-2",
         updatedAt: "2026-04-09T09:00:00Z",
         revisions: [],
       } as any,
@@ -466,7 +471,7 @@ describe("teamRuntimeLens", () => {
 
     expect(lens.healthStatus).toBe("attention");
     expect(lens.healthSummary).toBe(
-      "The current team has an active serving deployment, but no recent run is available to prove runtime health.",
+      "The current team has a published member service, but no recent run is available to prove runtime health.",
     );
     expect(lens.partialSignals).toContain("No recent runs");
   });

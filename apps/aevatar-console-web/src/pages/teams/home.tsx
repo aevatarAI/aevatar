@@ -914,7 +914,6 @@ const TeamsHomePage: React.FC = () => {
   const matchedServiceIds = React.useMemo(
     () =>
       collectWorkflowOperationalServiceIds({
-        binding: bindingQuery.data ?? null,
         services: servicesQuery.data ?? [],
         workflows: workflowsQuery.data ?? [],
       }),
@@ -978,7 +977,6 @@ const TeamsHomePage: React.FC = () => {
   const units = React.useMemo(
     () =>
       buildWorkflowOperationalUnits({
-        binding: bindingQuery.data ?? null,
         runsByServiceId,
         services: servicesQuery.data ?? [],
         signals: {
