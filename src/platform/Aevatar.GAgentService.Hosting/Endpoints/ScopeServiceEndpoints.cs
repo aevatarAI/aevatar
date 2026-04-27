@@ -22,6 +22,7 @@ using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -613,7 +614,7 @@ public static class ScopeServiceEndpoints
         string scopeId,
         int take,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
@@ -623,7 +624,7 @@ public static class ScopeServiceEndpoints
             ResolveDefaultScopeServiceId(options.Value),
             take,
             lifecycleQueryPort,
-            workflowRunBindingReader,
+            serviceRunQueryPort,
             workflowExecutionQueryService,
             options,
             ct);
@@ -634,7 +635,7 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
@@ -645,7 +646,7 @@ public static class ScopeServiceEndpoints
             runId,
             actorId,
             lifecycleQueryPort,
-            workflowRunBindingReader,
+            serviceRunQueryPort,
             workflowExecutionQueryService,
             options,
             ct);
@@ -656,7 +657,7 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
@@ -667,7 +668,7 @@ public static class ScopeServiceEndpoints
             runId,
             actorId,
             lifecycleQueryPort,
-            workflowRunBindingReader,
+            serviceRunQueryPort,
             workflowExecutionQueryService,
             options,
             ct);
@@ -744,7 +745,7 @@ public static class ScopeServiceEndpoints
         string serviceId,
         int take,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -753,23 +754,17 @@ public static class ScopeServiceEndpoints
         if (resolution.Failure != null)
             return resolution.Failure;
 
-        var bindings = await ListScopeServiceRunsAsync(
-            scopeId,
-            resolution.Service!,
-            resolution.Deployments,
-            workflowRunBindingReader,
-            take,
+        var snapshots = await serviceRunQueryPort.ListAsync(
+            new ServiceRunQuery(scopeId, serviceId, Math.Clamp(take <= 0 ? 50 : take, 1, 200)),
             ct);
 
-        var summaries = new List<ScopeServiceRunSummaryHttpResponse>(bindings.Count);
-        foreach (var binding in bindings)
+        var summaries = new List<ScopeServiceRunSummaryHttpResponse>(snapshots.Count);
+        foreach (var snapshot in snapshots)
         {
-            summaries.Add(await BuildScopeRunSummaryAsync(
+            summaries.Add(await BuildScopeRunSummaryFromRegistryAsync(
                 scopeId,
                 serviceId,
-                binding,
-                resolution.Service!,
-                resolution.Deployments,
+                snapshot,
                 workflowExecutionQueryService,
                 ct));
         }
@@ -789,30 +784,29 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        var resolution = await ResolveScopeServiceRunAsync(
-            http,
-            options.Value,
-            scopeId,
-            serviceId,
-            runId,
-            actorId,
-            lifecycleQueryPort,
-            workflowRunBindingReader,
-            ct);
-        if (resolution.Failure != null)
-            return resolution.Failure;
+        var serviceResolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct);
+        if (serviceResolution.Failure != null)
+            return serviceResolution.Failure;
 
-        return Results.Ok(await BuildScopeRunSummaryAsync(
+        var snapshot = await ResolveServiceRunSnapshotAsync(scopeId, serviceId, runId, serviceRunQueryPort, ct);
+        if (snapshot == null)
+        {
+            return Results.NotFound(new
+            {
+                code = "SERVICE_RUN_NOT_FOUND",
+                message = BuildScopeServiceRunNotFoundMessage(scopeId, serviceId, runId?.Trim() ?? string.Empty),
+            });
+        }
+
+        return Results.Ok(await BuildScopeRunSummaryFromRegistryAsync(
             scopeId,
             serviceId,
-            resolution.Binding!,
-            resolution.Service!,
-            resolution.Deployments,
+            snapshot,
             workflowExecutionQueryService,
             ct));
     }
@@ -824,43 +818,71 @@ public static class ScopeServiceEndpoints
         string runId,
         string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
-        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        var resolution = await ResolveScopeServiceRunAsync(
-            http,
-            options.Value,
-            scopeId,
-            serviceId,
-            runId,
-            actorId,
-            lifecycleQueryPort,
-            workflowRunBindingReader,
-            ct);
-        if (resolution.Failure != null)
-            return resolution.Failure;
+        var serviceResolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct);
+        if (serviceResolution.Failure != null)
+            return serviceResolution.Failure;
 
-        var summary = await BuildScopeRunSummaryAsync(
+        var snapshot = await ResolveServiceRunSnapshotAsync(scopeId, serviceId, runId, serviceRunQueryPort, ct);
+        if (snapshot == null)
+        {
+            return Results.NotFound(new
+            {
+                code = "SERVICE_RUN_NOT_FOUND",
+                message = BuildScopeServiceRunNotFoundMessage(scopeId, serviceId, runId?.Trim() ?? string.Empty),
+            });
+        }
+
+        var summary = await BuildScopeRunSummaryFromRegistryAsync(
             scopeId,
             serviceId,
-            resolution.Binding!,
-            resolution.Service!,
-            resolution.Deployments,
+            snapshot,
             workflowExecutionQueryService,
             ct);
-        var report = await workflowExecutionQueryService.GetActorReportAsync(resolution.Binding!.ActorId, ct);
+
+        if (snapshot.ImplementationKind != ServiceImplementationKind.Workflow ||
+            string.IsNullOrWhiteSpace(snapshot.TargetActorId))
+        {
+            return Results.NotFound(new
+            {
+                code = "SERVICE_RUN_AUDIT_NOT_AVAILABLE",
+                message = $"Audit detail for run '{snapshot.RunId}' is not available for {snapshot.ImplementationKind} services.",
+            });
+        }
+
+        var report = await workflowExecutionQueryService.GetActorReportAsync(snapshot.TargetActorId, ct);
         if (report == null)
         {
             return Results.NotFound(new
             {
                 code = "SERVICE_RUN_AUDIT_NOT_FOUND",
-                message = $"Audit report for run '{resolution.Binding.RunId}' was not found on service '{serviceId}' in scope '{scopeId}'.",
+                message = $"Audit report for run '{snapshot.RunId}' was not found on service '{serviceId}' in scope '{scopeId}'.",
             });
         }
 
         return Results.Ok(new ScopeServiceRunAuditHttpResponse(summary, report));
+    }
+
+    private static async Task<ServiceRunSnapshot?> ResolveServiceRunSnapshotAsync(
+        string scopeId,
+        string serviceId,
+        string runId,
+        IServiceRunQueryPort serviceRunQueryPort,
+        CancellationToken ct)
+    {
+        var normalized = runId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        var byRun = await serviceRunQueryPort.GetByRunIdAsync(scopeId, serviceId, normalized, ct);
+        if (byRun != null)
+            return byRun;
+
+        return await serviceRunQueryPort.GetByCommandIdAsync(scopeId, serviceId, normalized, ct);
     }
 
     private static async Task HandleInvokeStreamAsync(
@@ -2025,7 +2047,56 @@ const response = await fetch("{{invokePath}}", {
             snapshot?.CompletedSteps ?? 0,
             snapshot?.RoleReplyCount ?? 0,
             snapshot?.LastOutput ?? string.Empty,
-            snapshot?.LastError ?? string.Empty);
+            snapshot?.LastError ?? string.Empty,
+            ServiceImplementationKind.Workflow.ToString(),
+            ServiceRunStatus.Accepted.ToString(),
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            binding.ActorId,
+            binding.CreatedAt);
+    }
+
+    private static async Task<ScopeServiceRunSummaryHttpResponse> BuildScopeRunSummaryFromRegistryAsync(
+        string scopeId,
+        string serviceId,
+        ServiceRunSnapshot snapshot,
+        IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
+        CancellationToken ct)
+    {
+        var workflowSnapshot = snapshot.ImplementationKind == ServiceImplementationKind.Workflow &&
+                               !string.IsNullOrWhiteSpace(snapshot.TargetActorId)
+            ? await workflowExecutionQueryService.GetActorSnapshotAsync(snapshot.TargetActorId, ct)
+            : null;
+
+        return new ScopeServiceRunSummaryHttpResponse(
+            scopeId,
+            serviceId,
+            snapshot.RunId,
+            snapshot.ActorId,
+            string.Empty,
+            snapshot.RevisionId,
+            snapshot.DeploymentId,
+            workflowSnapshot?.WorkflowName ?? string.Empty,
+            workflowSnapshot?.CompletionStatus ?? WorkflowRunCompletionStatus.Unknown,
+            workflowSnapshot?.StateVersion ?? snapshot.StateVersion,
+            workflowSnapshot?.LastEventId ?? snapshot.LastEventId,
+            workflowSnapshot?.LastUpdatedAt ?? snapshot.UpdatedAt,
+            snapshot.CreatedAt,
+            snapshot.UpdatedAt,
+            workflowSnapshot?.LastSuccess,
+            workflowSnapshot?.TotalSteps ?? 0,
+            workflowSnapshot?.CompletedSteps ?? 0,
+            workflowSnapshot?.RoleReplyCount ?? 0,
+            workflowSnapshot?.LastOutput ?? string.Empty,
+            workflowSnapshot?.LastError ?? string.Empty,
+            snapshot.ImplementationKind.ToString(),
+            snapshot.Status.ToString(),
+            snapshot.CommandId,
+            snapshot.CorrelationId,
+            snapshot.EndpointId,
+            snapshot.TargetActorId,
+            snapshot.CreatedAt);
     }
 
     private static ServiceDeploymentSnapshot? ResolveRunDeployment(
@@ -2700,7 +2771,14 @@ const response = await fetch("{{invokePath}}", {
         int CompletedSteps,
         int RoleReplyCount,
         string LastOutput,
-        string LastError);
+        string LastError,
+        string ImplementationKind,
+        string Status,
+        string CommandId,
+        string CorrelationId,
+        string EndpointId,
+        string TargetActorId,
+        DateTimeOffset? CreatedAt = null);
 
     public sealed record ScopeServiceRunAuditHttpResponse(
         ScopeServiceRunSummaryHttpResponse Summary,
