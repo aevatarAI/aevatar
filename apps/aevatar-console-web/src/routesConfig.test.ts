@@ -54,6 +54,7 @@ describe("console routes", () => {
     expect(findRoute(routes, "/teams").name).toBe("My Teams");
     expect(findRoute(routes, "/teams").component).toBe("./teams");
     expect(findRoute(routes, "/teams/new").name).toBe("Create Team");
+    expect(findRoute(routes, "/teams/new").hideInMenu).toBe(true);
     expect(findRoute(routes, "/teams/:scopeId").component).toBe("./teams/detail");
     expect(findRoute(routes, "/runtime/gagents").name).toBe("Members");
     expect(findRoute(routes, "/scopes/assets").name).toBeUndefined();

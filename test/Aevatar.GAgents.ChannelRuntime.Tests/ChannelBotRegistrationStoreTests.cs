@@ -68,13 +68,42 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRegister_IgnoresRetiredDirectCallbackPlatforms()
+    public async Task HandleRegister_PersistsTelegramRelayRegistration()
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand
         {
             Platform = "telegram",
             NyxProviderSlug = "api-telegram-bot",
+            ScopeId = "scope-1",
+            WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/telegram/bot-tg-1",
             RequestedId = "reg-telegram",
+            NyxChannelBotId = "bot-tg-1",
+            NyxAgentApiKeyId = "key-tg-1",
+            NyxConversationRouteId = "route-tg-1",
+        });
+
+        _agent.State.Registrations.Should().ContainSingle();
+        var entry = _agent.State.Registrations[0];
+        entry.Id.Should().Be("reg-telegram");
+        entry.Platform.Should().Be("telegram");
+        entry.NyxProviderSlug.Should().Be("api-telegram-bot");
+        entry.ScopeId.Should().Be("scope-1");
+        entry.WebhookUrl.Should().Contain("/api/v1/webhooks/channel/telegram/");
+        entry.NyxChannelBotId.Should().Be("bot-tg-1");
+        entry.NyxAgentApiKeyId.Should().Be("key-tg-1");
+        entry.NyxConversationRouteId.Should().Be("route-tg-1");
+        entry.Tombstoned.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleRegister_IgnoresUnsupportedPlatforms()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "discord",
+            NyxProviderSlug = "api-discord-bot",
+            ScopeId = "scope-1",
+            RequestedId = "reg-discord",
         });
 
         _agent.State.Registrations.Should().BeEmpty();

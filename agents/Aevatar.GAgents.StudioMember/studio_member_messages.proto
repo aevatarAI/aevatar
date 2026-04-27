@@ -1,0 +1,124 @@
+syntax = "proto3";
+package aevatar.gagents.studio_member;
+option csharp_namespace = "Aevatar.GAgents.StudioMember";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Canonical enums ───
+//
+// StudioMember is the Studio's only first-class subject. workflow / script /
+// gagent are implementation kinds for a member, not parallel member types.
+
+enum StudioMemberImplementationKind {
+  STUDIO_MEMBER_IMPLEMENTATION_KIND_UNSPECIFIED = 0;
+  STUDIO_MEMBER_IMPLEMENTATION_KIND_WORKFLOW = 1;
+  STUDIO_MEMBER_IMPLEMENTATION_KIND_SCRIPT = 2;
+  STUDIO_MEMBER_IMPLEMENTATION_KIND_GAGENT = 3;
+}
+
+// Lifecycle stages mirror the Build/Bind/Invoke/Observe spec:
+//   created      - member exists but has no implementation
+//   build_ready  - implementation revision available, can bind
+//   bind_ready   - bound to its publishedServiceId, can invoke
+enum StudioMemberLifecycleStage {
+  STUDIO_MEMBER_LIFECYCLE_STAGE_UNSPECIFIED = 0;
+  STUDIO_MEMBER_LIFECYCLE_STAGE_CREATED = 1;
+  STUDIO_MEMBER_LIFECYCLE_STAGE_BUILD_READY = 2;
+  STUDIO_MEMBER_LIFECYCLE_STAGE_BIND_READY = 3;
+}
+
+// ─── Implementation refs ───
+//
+// Each implementation kind carries a typed sub-message rather than a generic
+// metadata bag. Only one of these is populated at a time, matching
+// implementation_kind on the parent state.
+
+message StudioMemberWorkflowRef {
+  string workflow_id = 1;
+  string workflow_revision = 2;
+}
+
+message StudioMemberScriptRef {
+  string script_id = 1;
+  string script_revision = 2;
+}
+
+message StudioMemberGAgentRef {
+  string actor_type_name = 1;
+}
+
+message StudioMemberImplementationRef {
+  StudioMemberWorkflowRef workflow = 1;
+  StudioMemberScriptRef script = 2;
+  StudioMemberGAgentRef gagent = 3;
+}
+
+// ─── Last bound contract ───
+//
+// Record of the last successful Bind. publishedServiceId is the stable
+// per-member service identity; revisionId is the most recently published
+// implementation revision routed through that service.
+
+message StudioMemberBindingContract {
+  string published_service_id = 1;
+  string revision_id = 2;
+  StudioMemberImplementationKind implementation_kind = 3;
+  google.protobuf.Timestamp bound_at_utc = 4;
+}
+
+// ─── State ───
+//
+// State for a single StudioMember actor. Actor ID format:
+//   studio-member:{scopeId}:{memberId}
+//
+// publishedServiceId is generated once at creation from the immutable
+// memberId and never recomputed afterwards. Renaming the display name does
+// not change publishedServiceId.
+
+message StudioMemberState {
+  string member_id = 1;
+  string scope_id = 2;
+  string display_name = 3;
+  string description = 4;
+  StudioMemberImplementationKind implementation_kind = 5;
+  StudioMemberImplementationRef implementation_ref = 6;
+  string published_service_id = 7;
+  StudioMemberLifecycleStage lifecycle_stage = 8;
+  google.protobuf.Timestamp created_at_utc = 9;
+  google.protobuf.Timestamp updated_at_utc = 10;
+  StudioMemberBindingContract last_binding = 11;
+}
+
+// ─── Events ───
+//
+// One event per discrete transition. The actor materializes state from these
+// events; projectors materialize the read model from the same envelope.
+
+message StudioMemberCreatedEvent {
+  string member_id = 1;
+  string scope_id = 2;
+  string display_name = 3;
+  string description = 4;
+  StudioMemberImplementationKind implementation_kind = 5;
+  string published_service_id = 6;
+  google.protobuf.Timestamp created_at_utc = 7;
+}
+
+message StudioMemberRenamedEvent {
+  string display_name = 1;
+  string description = 2;
+  google.protobuf.Timestamp updated_at_utc = 3;
+}
+
+message StudioMemberImplementationUpdatedEvent {
+  StudioMemberImplementationKind implementation_kind = 1;
+  StudioMemberImplementationRef implementation_ref = 2;
+  google.protobuf.Timestamp updated_at_utc = 3;
+}
+
+message StudioMemberBoundEvent {
+  string published_service_id = 1;
+  string revision_id = 2;
+  StudioMemberImplementationKind implementation_kind = 3;
+  google.protobuf.Timestamp bound_at_utc = 4;
+}

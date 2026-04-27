@@ -113,6 +113,7 @@ describe('StudioMemberInvokePanel', () => {
   it('keeps prompt validation local and does not create a failed run for empty chat input', async () => {
     render(
       React.createElement(StudioMemberInvokePanel, {
+        memberId: 'joker',
         scopeId: 'scope-1',
         services: [
           {
@@ -166,6 +167,7 @@ describe('StudioMemberInvokePanel', () => {
 
     render(
       React.createElement(StudioMemberInvokePanel, {
+        memberId: 'joker',
         scopeId: 'scope-1',
         services: [
           {
@@ -206,6 +208,7 @@ describe('StudioMemberInvokePanel', () => {
         },
         expect.any(AbortSignal),
         {
+          memberId: 'joker',
           serviceId: 'joker',
         },
       );
@@ -221,6 +224,7 @@ describe('StudioMemberInvokePanel', () => {
 
     render(
       React.createElement(StudioMemberInvokePanel, {
+        memberId: 'default',
         onObserveSessionChange,
         scopeId: 'scope-1',
         services: [
@@ -268,18 +272,19 @@ describe('StudioMemberInvokePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '执行调用' }));
 
     await waitFor(() => {
-      expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
-        'scope-1',
-        expect.objectContaining({
-          endpointId: 'submit',
-          payloadBase64: 'ZXhhbXBsZS1wYXlsb2Fk',
-          payloadTypeUrl: 'type.googleapis.com/example.Submit',
-          prompt: 'Route this escalation to billing review.',
-        }),
-        {
-          serviceId: 'default',
-        },
-      );
+        expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
+          'scope-1',
+          expect.objectContaining({
+            endpointId: 'submit',
+            payloadBase64: 'ZXhhbXBsZS1wYXlsb2Fk',
+            payloadTypeUrl: 'type.googleapis.com/example.Submit',
+            prompt: 'Route this escalation to billing review.',
+          }),
+          {
+            memberId: 'default',
+            serviceId: 'default',
+          },
+        );
     });
     await waitFor(() => {
       expect(onObserveSessionChange).toHaveBeenLastCalledWith(

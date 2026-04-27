@@ -37,6 +37,7 @@ import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
+  readonly memberId?: string;
   readonly memberRevision?: StudioMemberBindingRevision | null;
   readonly services: readonly ScopeConsoleServiceOption[];
   readonly selectedMemberLabel?: string;
@@ -528,6 +529,7 @@ const CompactCopyableValue: React.FC<{
 
 const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
+  memberId,
   memberRevision,
   services,
   selectedMemberLabel,
@@ -586,6 +588,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentPublishedContext = describeStudioMemberBindingRevisionContext(
     currentMemberRevision,
   );
+  const normalizedMemberId = trimOptional(memberId);
   const currentMemberActorId = trimOptional(currentMemberRevision?.primaryActorId);
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
@@ -1010,6 +1013,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           },
           controller.signal,
           {
+            memberId: normalizedMemberId || undefined,
             serviceId: selectedService.serviceId,
           },
         );
@@ -1178,6 +1182,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           prompt: trimmedPrompt,
         },
         {
+          memberId: normalizedMemberId || undefined,
           serviceId: selectedService.serviceId,
         },
       );

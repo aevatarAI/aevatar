@@ -7,6 +7,7 @@
 Authoritative architecture and developer guides. Each covers one topic.
 
 - [[RFC] Aevatar Chat — Multi-Channel Adapter Architecture](canon/aevatar-channel-architecture.md)
+- [Architecture Vocabulary](canon/architecture-vocabulary.md)
 - [Aevatar Foundation](canon/architecture.md)
 - [Workflow Chat API 能力说明（框架层）](canon/chat-api.md)
 - [Connector 配置与执行逻辑](canon/connector.md)
@@ -26,15 +27,20 @@ Authoritative architecture and developer guides. Each covers one topic.
 
 Immutable records of architectural choices and their rationale.
 
-- [Aevatar 项目拆分策略（2026-02-21）](decisions/0001-project-split-strategy.md)
-- [Aevatar Mainnet 架构说明](decisions/0002-mainnet-architecture.md)
-- [Orleans Kafka Provider Backend Architecture](decisions/0003-kafka-transport.md)
-- [Workflow 调度 Actor 化 & 多智能体协作演进方案](decisions/0006-multi-agent-evolution.md)
-- [Aevatar Stream Forward 架构说明（2026-02-22）](decisions/0007-stream-forward.md)
-- [Channel Runtime Multi-Token Credential Routing](decisions/0008-channel-runtime-multi-token-routing.md)
-- [Channel Bot Callback Architecture — Lessons from Lark Integration](decisions/0009-channel-bot-callback-architecture.md)
-- [Channel Phase 0 Persistent Provider Validation Result](decisions/0010-channel-phase0-provider-validation.md)
-- [AGUI / SSE Projection Session Pipeline](decisions/0011-agui-sse-projection-session-pipeline.md)
+- [Aevatar 项目拆分策略（2026-02-21）](adr/0001-project-split-strategy.md)
+- [Aevatar Mainnet 架构说明](adr/0002-mainnet-architecture.md)
+- [Orleans Kafka Provider Backend Architecture](adr/0003-kafka-transport.md)
+- [Workflow 调度 Actor 化 & 多智能体协作演进方案](adr/0006-multi-agent-evolution.md)
+- [Aevatar Stream Forward 架构说明（2026-02-22）](adr/0007-stream-forward.md)
+- [Channel Runtime Multi-Token Credential Routing](adr/0008-channel-runtime-multi-token-routing.md)
+- [Channel Bot Callback Architecture — Lessons from Lark Integration](adr/0009-channel-bot-callback-architecture.md)
+- [Channel Phase 0 Persistent Provider Validation Result](adr/0010-channel-phase0-provider-validation.md)
+- [Lark Nyx Relay Webhook Topology](adr/0011-lark-nyx-relay-webhook.md)
+- [Channel Runtime Credential Boundary](adr/0012-channel-runtime-credential-boundary.md)
+- [Unified Channel Inbound Backbone](adr/0013-unified-channel-inbound-backbone.md)
+- [Channel Interactive Reply Abstraction](adr/0014-interactive-reply-abstraction.md)
+- [AGUI / SSE Projection Session Pipeline](adr/0015-agui-sse-projection-session-pipeline.md)
+- [Studio Member-First Published Service Identity](adr/0016-studio-member-first-published-service.md)
 
 ## History
 

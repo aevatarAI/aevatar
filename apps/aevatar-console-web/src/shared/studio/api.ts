@@ -715,7 +715,12 @@ function decodeStudioScopeBindingResult(
   const record = expectRecord(value, "StudioScopeBindingResult");
   const displayName =
     readOptionalString(record, ["displayName", "DisplayName"]) || "";
-  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  const serviceId = readOptionalString(record, [
+    "serviceId",
+    "ServiceId",
+    "publishedServiceId",
+    "PublishedServiceId",
+  ]);
   const workflowRecord =
     record.workflow && typeof record.workflow === "object"
       ? expectRecord(record.workflow, "StudioScopeBindingResult.workflow")
@@ -857,7 +862,12 @@ function decodeStudioScopeBindingStatus(
     ),
     serviceId: readString(
       record,
-      ["serviceId", "ServiceId"],
+      [
+        "serviceId",
+        "ServiceId",
+        "publishedServiceId",
+        "PublishedServiceId",
+      ],
       "StudioScopeBindingStatus.serviceId"
     ),
     displayName: readString(
@@ -867,7 +877,12 @@ function decodeStudioScopeBindingStatus(
     ),
     serviceKey: readString(
       record,
-      ["serviceKey", "ServiceKey"],
+      [
+        "serviceKey",
+        "ServiceKey",
+        "publishedServiceKey",
+        "PublishedServiceKey",
+      ],
       "StudioScopeBindingStatus.serviceKey"
     ),
     defaultServingRevisionId: readString(
@@ -1247,6 +1262,112 @@ export const studioApi = {
   getScopeBinding(scopeId: string): Promise<StudioScopeBindingStatus> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
+      decodeStudioScopeBindingStatus
+    );
+  },
+
+  bindMemberWorkflow(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    workflowYamls: readonly string[];
+    revisionId?: string | null;
+  }): Promise<StudioScopeBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "workflow",
+            displayName: trimOptional(input.displayName),
+            workflow: {
+              workflowYamls: input.workflowYamls,
+            },
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindMemberScript(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    scriptId: string;
+    scriptRevision: string;
+    revisionId?: string | null;
+  }): Promise<StudioScopeScriptBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "script",
+            displayName: trimOptional(input.displayName),
+            script: compactObject({
+              scriptId: input.scriptId.trim(),
+              scriptRevision: input.scriptRevision.trim(),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindMemberGAgent(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    actorTypeName: string;
+    endpoints: StudioScopeGAgentBindingInput["endpoints"];
+    revisionId?: string | null;
+  }): Promise<StudioScopeGAgentBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "gagent",
+            displayName: trimOptional(input.displayName),
+            gagent: compactObject({
+              actorTypeName: input.actorTypeName.trim(),
+              endpoints: input.endpoints.map((endpoint) =>
+                compactObject({
+                  endpointId: endpoint.endpointId.trim(),
+                  displayName:
+                    trimOptional(endpoint.displayName) ||
+                    endpoint.endpointId.trim(),
+                  kind: trimOptional(endpoint.kind)?.toLowerCase() || "command",
+                  requestTypeUrl: trimOptional(endpoint.requestTypeUrl),
+                  responseTypeUrl: trimOptional(endpoint.responseTypeUrl),
+                  description: trimOptional(endpoint.description),
+                })
+              ),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  getMemberBinding(
+    scopeId: string,
+    memberId: string
+  ): Promise<StudioScopeBindingStatus> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
       decodeStudioScopeBindingStatus
     );
   },
