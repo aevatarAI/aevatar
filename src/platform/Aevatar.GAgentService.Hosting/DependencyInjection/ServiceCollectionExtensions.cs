@@ -75,6 +75,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
+        services.TryAddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
         services.AddOptions<ScopeScriptCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeScriptCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeScriptQueryApplicationService>();
