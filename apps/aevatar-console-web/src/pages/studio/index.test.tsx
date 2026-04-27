@@ -2964,10 +2964,21 @@ describe("StudioPage", () => {
   });
 
   it("shows script and gagent as member kinds before their create APIs land", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      scriptStorageMode: "scope",
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+    });
+
     renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByLabelText("Create member"));
-    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
+    let createDialog = await screen.findByRole("dialog", { name: "Create member" });
 
     const scriptChip = within(createDialog).getByRole("button", {
       name: "Create Script member",
@@ -2975,12 +2986,25 @@ describe("StudioPage", () => {
     fireEvent.click(scriptChip);
 
     expect(scriptChip).toHaveAttribute("aria-pressed", "true");
+    expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
     expect(
       screen.getByText(
-        "Script member creation still relies on the upcoming member API. For now, continue in Build > Script to inspect or edit script implementations.",
+        "Script member creation still relies on the upcoming member API. Open Build > Script to inspect, edit, save, and prepare script implementations for binding.",
       ),
     ).toBeTruthy();
-    expect(within(createDialog).getByRole("button", { name: "Create member" })).toBeDisabled();
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Open Script builder" }),
+    );
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("scripts");
+      expect(searchParams.get("step")).toBe("build");
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
+    createDialog = await screen.findByRole("dialog", { name: "Create member" });
 
     const gagentChip = within(createDialog).getByRole("button", {
       name: "Create GAgent member",
@@ -2988,11 +3012,22 @@ describe("StudioPage", () => {
     fireEvent.click(gagentChip);
 
     expect(gagentChip).toHaveAttribute("aria-pressed", "true");
+    expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
     expect(
       screen.getByText(
-        "GAgent member creation still relies on the upcoming member API. For now, continue in Build > GAgent to inspect or edit GAgent implementations.",
+        "GAgent member creation still relies on the upcoming member API. Open Build > GAgent to select, inspect, and prepare GAgent implementations for binding.",
       ),
     ).toBeTruthy();
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Open GAgent builder" }),
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("gagents");
+      expect(searchParams.get("step")).toBe("build");
+    });
   });
 
   it("renames a workflow member from the inventory actions", async () => {

@@ -3085,13 +3085,41 @@ const StudioPage: React.FC = () => {
     setCreateMemberModalOpen(false);
   }, [inventoryBusyKey]);
 
-  const handleCreateMember = useCallback(async () => {
-    if (createMemberKind !== 'workflow') {
-      void message.info(
-        createMemberKind === 'script'
-          ? 'Script member creation will move into this modal after the member API lands. For now, continue in Build > Script.'
-          : 'GAgent member creation will move into this modal after the member API lands. For now, continue in Build > GAgent.',
+  const handleCreateMember = useCallback(async (selectedCreateMemberKind: BuildMode) => {
+    if (selectedCreateMemberKind !== 'workflow') {
+      if (selectedCreateMemberKind === 'script' && !appContextQuery.data?.features.scripts) {
+        void message.warning('Script builder is not enabled for this workspace.');
+        return;
+      }
+
+      if (!(await confirmScriptsStudioLeave())) {
+        return;
+      }
+
+      setCreateMemberModalOpen(false);
+      if (selectedCreateMemberKind === 'script') {
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId || undefined,
+            step: 'build',
+            tab: 'scripts',
+          }),
+        );
+        setBuildSurface('scripts');
+        setStudioSurface('build');
+        return;
+      }
+
+      history.push(
+        buildStudioRoute({
+          scopeId: resolvedStudioScopeId || undefined,
+          step: 'build',
+          tab: 'gagents',
+        }),
       );
+      setBuildSurface('gagent');
+      setStudioSurface('build');
+      void message.info('Opened GAgent builder.');
       return;
     }
 
@@ -3146,9 +3174,11 @@ const StudioPage: React.FC = () => {
     }
   }, [
     applySavedWorkflowSelection,
-    createMemberKind,
+    appContextQuery.data?.features.scripts,
+    confirmScriptsStudioLeave,
     createMemberDirectoryId,
     createMemberName,
+    history,
     inventoryDirectoryId,
     resolvedStudioScopeId,
     visibleWorkflowSummaries,
@@ -5984,16 +6014,22 @@ const StudioPage: React.FC = () => {
               open={createMemberModalOpen}
               title="Create member"
               onCancel={closeCreateMemberFlow}
-              onOk={() => void handleCreateMember()}
-              okText="Create member"
+              onOk={() => void handleCreateMember(createMemberKind)}
+              okText={
+                createMemberKind === 'workflow'
+                  ? 'Create member'
+                  : createMemberKind === 'script'
+                    ? 'Open Script builder'
+                    : 'Open GAgent builder'
+              }
               okButtonProps={{
                 disabled:
                   inventoryBusyAction === 'create' ||
-                  !trimOptional(createMemberName) ||
-                  createMemberKind !== 'workflow' ||
-                  !trimOptional(
-                    trimOptional(createMemberDirectoryId) || inventoryDirectoryId,
-                  ),
+                  (createMemberKind === 'workflow' &&
+                    (!trimOptional(createMemberName) ||
+                      !trimOptional(
+                        trimOptional(createMemberDirectoryId) || inventoryDirectoryId,
+                      ))),
                 loading: inventoryBusyAction === 'create',
               }}
               cancelButtonProps={{
@@ -6035,29 +6071,31 @@ const StudioPage: React.FC = () => {
                     ))}
                   </div>
                   <div style={inventoryCreateHintStyle}>
-                    Choose the implementation kind first. Workflow entry is
-                    available now; Script and GAgent member creation will move into
-                    this modal when the member API lands.
+                    Choose the implementation kind first. Workflow creates a blank
+                    draft here; Script and GAgent open their Build workspaces until
+                    their member creation APIs land.
                   </div>
                 </div>
-                <label style={inventoryCreateFieldStackStyle}>
-                  <span style={inventoryCreateFieldLabelStyle}>Member name</span>
-                  <input
-                    aria-label="Member name"
-                    autoFocus
-                    onChange={(event) => setCreateMemberName(event.target.value)}
-                    placeholder={suggestedCreateWorkflowName}
-                    style={inventoryCreateInputStyle}
-                    type="text"
-                    value={createMemberName}
-                  />
-                </label>
+                {createMemberKind === 'workflow' ? (
+                  <label style={inventoryCreateFieldStackStyle}>
+                    <span style={inventoryCreateFieldLabelStyle}>Member name</span>
+                    <input
+                      aria-label="Member name"
+                      autoFocus
+                      onChange={(event) => setCreateMemberName(event.target.value)}
+                      placeholder={suggestedCreateWorkflowName}
+                      style={inventoryCreateInputStyle}
+                      type="text"
+                      value={createMemberName}
+                    />
+                  </label>
+                ) : null}
                 <div style={inventoryCreateHintStyle}>
                   {createMemberKind === 'workflow'
                     ? 'Workflow members currently start from a blank workflow draft with an empty canvas, so you can name it first and then continue editing inside Build.'
                     : createMemberKind === 'script'
-                      ? 'Script member creation still relies on the upcoming member API. For now, continue in Build > Script to inspect or edit script implementations.'
-                      : 'GAgent member creation still relies on the upcoming member API. For now, continue in Build > GAgent to inspect or edit GAgent implementations.'}
+                      ? 'Script member creation still relies on the upcoming member API. Open Build > Script to inspect, edit, save, and prepare script implementations for binding.'
+                      : 'GAgent member creation still relies on the upcoming member API. Open Build > GAgent to select, inspect, and prepare GAgent implementations for binding.'}
                 </div>
                 {createMemberKind === 'workflow' ? (
                   <label style={inventoryCreateFieldStackStyle}>
