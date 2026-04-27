@@ -37,10 +37,10 @@ import type {
 } from "@/shared/models/scopes";
 import { studioApi } from "@/shared/studio/api";
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  formatStudioScopeBindingImplementationKind,
-  getStudioScopeBindingCurrentRevision,
+  describeStudioDefaultRouteTargetRevisionContext,
+  describeStudioDefaultRouteTargetRevisionTarget,
+  formatStudioMemberBindingImplementationKind,
+  getStudioDefaultRouteTargetCurrentRevision,
 } from "@/shared/studio/models";
 import {
   buildStudioScriptsWorkspaceRoute,
@@ -369,10 +369,10 @@ const TeamAssetsPage: React.FC = () => {
     queryFn: () => scopesApi.listScripts(activeDraft.scopeId),
     queryKey: ["scopes", "scripts", activeDraft.scopeId],
   });
-  const bindingQuery = useQuery({
+  const defaultRouteQuery = useQuery({
     enabled: activeDraft.scopeId.trim().length > 0,
-    queryFn: () => studioApi.getScopeBinding(activeDraft.scopeId),
-    queryKey: ["scopes", "binding", activeDraft.scopeId],
+    queryFn: () => studioApi.getDefaultRouteTarget(activeDraft.scopeId),
+    queryKey: ["scopes", "default-route", activeDraft.scopeId],
   });
   const workflowDetailQuery = useQuery({
     enabled:
@@ -423,27 +423,27 @@ const TeamAssetsPage: React.FC = () => {
     (item) => item.capabilityStatus === "active",
   ).length;
   const draftCapabilityCount = workflowCount + scriptCount - activeCapabilityCount;
-  const currentBindingRevision = getStudioScopeBindingCurrentRevision(
-    bindingQuery.data,
+  const currentDefaultRouteRevision = getStudioDefaultRouteTargetCurrentRevision(
+    defaultRouteQuery.data,
   );
-  const currentBindingLabel = bindingQuery.data?.available
-    ? currentBindingRevision
-      ? describeStudioScopeBindingRevisionTarget(currentBindingRevision)
-      : bindingQuery.data.displayName || bindingQuery.data.serviceId
+  const currentDefaultRouteLabel = defaultRouteQuery.data?.available
+    ? currentDefaultRouteRevision
+      ? describeStudioDefaultRouteTargetRevisionTarget(currentDefaultRouteRevision)
+      : defaultRouteQuery.data.displayName || defaultRouteQuery.data.serviceId
     : "Not bound";
-  const currentBindingKind = currentBindingRevision
-    ? formatStudioScopeBindingImplementationKind(
-        currentBindingRevision.implementationKind,
+  const currentDefaultRouteKind = currentDefaultRouteRevision
+    ? formatStudioMemberBindingImplementationKind(
+        currentDefaultRouteRevision.implementationKind,
       )
-    : bindingQuery.data?.available
+    : defaultRouteQuery.data?.available
       ? "Published"
       : "Unknown";
-  const currentBindingContext = describeStudioScopeBindingRevisionContext(
-    currentBindingRevision,
+  const currentDefaultRouteContext = describeStudioDefaultRouteTargetRevisionContext(
+    currentDefaultRouteRevision,
   );
-  const currentBindingActor =
-    currentBindingRevision?.primaryActorId ||
-    bindingQuery.data?.primaryActorId ||
+  const currentDefaultRouteActor =
+    currentDefaultRouteRevision?.primaryActorId ||
+    defaultRouteQuery.data?.primaryActorId ||
     "";
 
   const selectedWorkflow = useMemo(
@@ -740,8 +740,9 @@ const TeamAssetsPage: React.FC = () => {
             history.push(
               buildRuntimeGAgentsHref({
                 scopeId: activeDraft.scopeId.trim(),
-                actorId: currentBindingRevision?.primaryActorId || undefined,
-                actorTypeName: currentBindingRevision?.staticActorTypeName || undefined,
+                actorId: currentDefaultRouteRevision?.primaryActorId || undefined,
+                actorTypeName:
+                  currentDefaultRouteRevision?.staticActorTypeName || undefined,
               }),
             )
           }
@@ -830,8 +831,14 @@ const TeamAssetsPage: React.FC = () => {
                 }}
               >
                 <SummaryMetric label="Team" value={activeDraft.scopeId} />
-                <SummaryMetric label="Default binding" value={currentBindingLabel} />
-                <SummaryMetric label="Binding kind" value={currentBindingKind} />
+                <SummaryMetric
+                  label="Default route"
+                  value={currentDefaultRouteLabel}
+                />
+                <SummaryMetric
+                  label="Route kind"
+                  value={currentDefaultRouteKind}
+                />
                 <SummaryMetric
                   label="Live capabilities"
                   tone="success"
@@ -858,16 +865,16 @@ const TeamAssetsPage: React.FC = () => {
                     value="Stage capability posture first. Open the inspector only when you need source, schema, or catalog detail."
                   />
                   <SummaryField
-                    label="Binding detail"
+                    label="Route detail"
                     value={
-                      currentBindingContext ||
-                      bindingQuery.data?.serviceKey ||
-                      "No published default binding"
+                      currentDefaultRouteContext ||
+                      defaultRouteQuery.data?.serviceKey ||
+                      "No published default route"
                     }
                   />
                   <SummaryField
                     label="Serving actor"
-                    value={currentBindingActor || "n/a"}
+                    value={currentDefaultRouteActor || "n/a"}
                   />
                   <SummaryField
                     label="Workflows"

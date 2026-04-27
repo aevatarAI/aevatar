@@ -21,11 +21,13 @@ import {
   getScopeServiceCurrentRevision,
 } from '@/shared/models/runtime/scopeServices';
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  formatStudioScopeBindingImplementationKind,
+  describeStudioMemberBindingRevisionContext,
+  describeStudioMemberBindingRevisionTarget,
+  formatStudioMemberBindingImplementationKind,
+  getStudioMemberBindingCurrentRevision,
   type StudioAuthSession,
 } from '@/shared/studio/models';
+import { studioApi } from '@/shared/studio/api';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_INTERACTIVE_CHIP_CLASS } from '@/shared/ui/interactionStandards';
 import {
@@ -42,6 +44,7 @@ import {
 type StudioMemberBindPanelProps = {
   readonly buildWorkflowYamls?: (() => Promise<string[]>) | null;
   readonly initialEndpointId?: string;
+  readonly memberId?: string;
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
   readonly onBindPendingCandidate?: (() => Promise<void>) | null;
@@ -244,6 +247,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   buildWorkflowYamls,
   scopeId,
   services,
+  memberId,
   initialServiceId,
   initialEndpointId,
   preferredServiceId,
@@ -271,6 +275,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     readonly type: 'success' | 'error';
   } | null>(null);
   const runsCurrentWorkflowDraft = Boolean(buildWorkflowYamls);
+  const normalizedMemberId = trimOptional(memberId);
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -368,9 +373,20 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     queryFn: () =>
       scopeRuntimeApi.getServiceRevisions(scopeId, selectedService?.serviceId || ''),
   });
+  const memberBindingStatusQuery = useQuery({
+    enabled: Boolean(scopeId && normalizedMemberId && selectedService?.serviceId),
+    queryKey: ['studio-bind', 'member-binding', scopeId, normalizedMemberId],
+    queryFn: () => studioApi.getMemberBinding(scopeId, normalizedMemberId),
+  });
+  const revisionCatalogQuery = normalizedMemberId
+    ? memberBindingStatusQuery
+    : revisionsQuery;
   const currentPublishedRevision = useMemo(
-    () => getScopeServiceCurrentRevision(revisionsQuery.data),
-    [revisionsQuery.data],
+    () =>
+      normalizedMemberId
+        ? getStudioMemberBindingCurrentRevision(memberBindingStatusQuery.data)
+        : getScopeServiceCurrentRevision(revisionsQuery.data),
+    [memberBindingStatusQuery.data, normalizedMemberId, revisionsQuery.data],
   );
 
   const bindContract = useMemo<StudioBindContract | null>(
@@ -378,6 +394,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       buildStudioBindContract({
         authSession,
         endpoint: selectedEndpoint,
+        memberId: normalizedMemberId || undefined,
         revision: currentPublishedRevision,
         scopeId,
         service: selectedService,
@@ -455,6 +472,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           },
           new AbortController().signal,
           {
+            memberId: normalizedMemberId || undefined,
             serviceId: selectedService.serviceId,
           },
         );
@@ -485,6 +503,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           prompt: smokeInput.trim() || createDefaultBindSampleInput(bindContract),
         },
         {
+          memberId: normalizedMemberId || undefined,
           serviceId: selectedService.serviceId,
         },
       );
@@ -557,7 +576,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const bindingCatalog: ScopeServiceBindingCatalogSnapshot | undefined = bindingsQuery.data;
   const bindingList = bindingCatalog?.bindings ?? [];
   const hasMultiplePublishedServices = services.length > 1;
-  const revisionList = revisionsQuery.data?.revisions ?? [];
+  const revisionList = revisionCatalogQuery.data?.revisions ?? [];
   const bindSurfaceIdentity = useMemo(() => {
     const pendingCandidateIdentity = pendingBindingCandidate
       ? `candidate:${scopeId}:${pendingBindingCandidate.kind}:${pendingBindingCandidate.displayName}`
@@ -1192,15 +1211,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               {
                 key: 'revisions',
                 label: `Revisions (${revisionList.length})`,
-                children: revisionsQuery.isLoading ? (
+                children: revisionCatalogQuery.isLoading ? (
                   <Typography.Text type="secondary">Loading published revisions...</Typography.Text>
-                ) : revisionsQuery.error ? (
+                ) : revisionCatalogQuery.error ? (
                   <Alert
                     showIcon
                     message="Failed to load revisions"
                     description={
-                      revisionsQuery.error instanceof Error
-                        ? revisionsQuery.error.message
+                      revisionCatalogQuery.error instanceof Error
+                        ? revisionCatalogQuery.error.message
                         : 'Studio could not load the published revisions for this contract.'
                     }
                     type="error"
@@ -1224,7 +1243,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                             <Typography.Text strong>{revision.revisionId}</Typography.Text>
                             <AevatarStatusTag
                               domain="governance"
-                              label={formatStudioScopeBindingImplementationKind(
+                              label={formatStudioMemberBindingImplementationKind(
                                 revision.implementationKind,
                               )}
                               status={revision.status || 'draft'}
@@ -1239,8 +1258,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                             {isCurrent ? <Tag color="gold">current contract</Tag> : null}
                           </Space>
                           <Typography.Text type="secondary">
-                            {describeStudioScopeBindingRevisionTarget(revision)} ·{' '}
-                            {describeStudioScopeBindingRevisionContext(revision) || 'No detail'}
+                            {describeStudioMemberBindingRevisionTarget(revision)} ·{' '}
+                            {describeStudioMemberBindingRevisionContext(revision) || 'No detail'}
                           </Typography.Text>
                           <Typography.Text type="secondary">
                             Serving {revision.servingState || revision.status || 'unknown'} · Published{' '}

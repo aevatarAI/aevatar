@@ -155,16 +155,8 @@ const LegacyTeamsHome: React.FC<SharedTeamsHomeProps> = ({
                   {resolvedScopeId}
                 </Typography.Text>
                 <Typography.Paragraph style={{ margin: 0 }}>
-                  {lens.currentBindingTarget}
+                  {lens.subtitle}
                 </Typography.Paragraph>
-                {lens.currentBindingContext ? (
-                  <Alert
-                    description={lens.currentBindingContext}
-                    title="Serving context"
-                    showIcon
-                    type="info"
-                  />
-                ) : null}
               </Space>
             </AevatarPanel>
           </div>

@@ -8,6 +8,7 @@ using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -68,8 +69,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         };
         var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
-        await InvokePrivateTaskAsync(
-            HandleGAgentStreamMethod,
+        await InvokeStaticStreamAsync(
             http,
             CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
             "hello",
@@ -120,8 +120,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         };
         var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
-        await InvokePrivateTaskAsync(
-            HandleGAgentStreamMethod,
+        await InvokeStaticStreamAsync(
             http,
             CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
             "hello",
@@ -155,8 +154,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         };
         var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
-        await InvokePrivateTaskAsync(
-            HandleGAgentStreamMethod,
+        await InvokeStaticStreamAsync(
             http,
             CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
             "hello",
@@ -215,8 +213,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         };
         var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
 
-        await InvokePrivateTaskAsync(
-            HandleGAgentStreamMethod,
+        await InvokeStaticStreamAsync(
             http,
             CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
             "hello",
@@ -350,8 +347,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     [Fact]
     public async Task HandleGAgentServiceChatStreamAsync_ShouldThrow_WhenAgentTypeCannotBeResolved()
     {
-        var act = () => InvokePrivateTaskAsync(
-            HandleGAgentStreamMethod,
+        var act = () => InvokeStaticStreamAsync(
             CreateHttpContext(),
             CreateStaticTarget("Missing.Agent, Missing.Assembly", primaryActorId: "actor-1"),
             "hello",
@@ -370,8 +366,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     [Fact]
     public async Task HandleScriptingServiceChatStreamAsync_ShouldThrow_WhenPrimaryActorMissing()
     {
-        var act = () => InvokePrivateTaskAsync(
-            HandleScriptingStreamMethod,
+        var act = () => InvokeScriptingStreamAsync(
             CreateHttpContext(),
             CreateScriptingTarget(primaryActorId: string.Empty),
             "hello",
@@ -389,8 +384,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     [Fact]
     public async Task HandleScriptingServiceChatStreamAsync_ShouldThrow_WhenActorCannotBeResolved()
     {
-        var act = () => InvokePrivateTaskAsync(
-            HandleScriptingStreamMethod,
+        var act = () => InvokeScriptingStreamAsync(
             CreateHttpContext(),
             CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
@@ -421,8 +415,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             },
         };
 
-        await InvokePrivateTaskAsync(
-            HandleScriptingStreamMethod,
+        await InvokeScriptingStreamAsync(
             http,
             CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
@@ -469,8 +462,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             },
         };
 
-        await InvokePrivateTaskAsync(
-            HandleScriptingStreamMethod,
+        await InvokeScriptingStreamAsync(
             http,
             CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
@@ -509,8 +501,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             },
         };
 
-        await InvokePrivateTaskAsync(
-            HandleScriptingStreamMethod,
+        await InvokeScriptingStreamAsync(
             http,
             CreateScriptingTarget(primaryActorId: "actor-1"),
             "hello",
@@ -618,6 +609,67 @@ public sealed class ScopeServiceEndpointsStreamTests
                 []),
             artifact,
             artifact.Endpoints[0]);
+    }
+
+    private static Task InvokeStaticStreamAsync(
+        HttpContext http,
+        ServiceInvocationResolvedTarget target,
+        string prompt,
+        string? actorId,
+        string? sessionId,
+        string scopeId,
+        IReadOnlyDictionary<string, string>? headers,
+        IReadOnlyList<ScopeServiceEndpoints.StreamContentPartHttpRequest>? inputParts,
+        ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        CancellationToken ct) =>
+        InvokePrivateTaskAsync(
+            HandleGAgentStreamMethod,
+            http,
+            target,
+            prompt,
+            actorId,
+            sessionId,
+            scopeId,
+            "svc-default",
+            headers,
+            inputParts,
+            interactionService,
+            new ServiceInvocationRequest(),
+            new NoOpServiceRunRegistrationPort(),
+            ct);
+
+    private static Task InvokeScriptingStreamAsync(
+        HttpContext http,
+        ServiceInvocationResolvedTarget target,
+        string prompt,
+        string? sessionId,
+        string scopeId,
+        IReadOnlyDictionary<string, string>? headers,
+        IScriptRuntimeCommandPort scriptRuntimeCommandPort,
+        IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        CancellationToken ct) =>
+        InvokePrivateTaskAsync(
+            HandleScriptingStreamMethod,
+            http,
+            target,
+            prompt,
+            sessionId,
+            scopeId,
+            "svc-default",
+            headers,
+            scriptRuntimeCommandPort,
+            scriptExecutionProjectionPort,
+            new ServiceInvocationRequest(),
+            new NoOpServiceRunRegistrationPort(),
+            ct);
+
+    private sealed class NoOpServiceRunRegistrationPort : IServiceRunRegistrationPort
+    {
+        public Task<ServiceRunRegistrationResult> RegisterAsync(ServiceRunRecord record, CancellationToken ct = default) =>
+            Task.FromResult(new ServiceRunRegistrationResult($"service-run:{record.RunId}", record.RunId));
+
+        public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private static async Task InvokePrivateTaskAsync(MethodInfo method, params object?[] args)

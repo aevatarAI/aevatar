@@ -66,6 +66,24 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?focus=workflow%3Aworkflow-1&tab=studio');
   });
 
+  it('supports the typed create-member Studio intent', () => {
+    expect(
+      buildStudioRoute({
+        tab: 'studio',
+        intent: 'create-member',
+      }),
+    ).toBe('/studio?tab=studio&intent=create-member');
+  });
+
+  it('drops invalid Studio intent values', () => {
+    expect(
+      buildStudioRoute({
+        tab: 'studio',
+        intent: 'delete-team' as never,
+      }),
+    ).toBe('/studio?tab=studio');
+  });
+
   it('supports opening the scripts workspace for a specific script', () => {
     expect(
       buildStudioRoute({
@@ -109,7 +127,7 @@ describe('buildStudioRoute', () => {
         memberKey: 'workflow:workflow-1',
         step: 'bind',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind&tab=bindings');
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind');
   });
 
   it('builds dedicated workflow and script workspace routes', () => {

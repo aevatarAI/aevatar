@@ -7,11 +7,20 @@ import {
 describe('bindContract', () => {
   it('builds the streaming invoke path for chat endpoints', () => {
     expect(
-      buildStudioBindInvokePath('scope-1', 'chat', 'default', {
+      buildStudioBindInvokePath('scope-1', 'chat', undefined, 'default', {
         endpointId: 'chat',
         kind: 'chat',
       }),
     ).toBe('/api/scopes/scope-1/services/default/invoke/chat:stream');
+  });
+
+  it('prefers the member invoke path when the current member id is known', () => {
+    expect(
+      buildStudioBindInvokePath('scope-1', 'chat', 'joker', 'default', {
+        endpointId: 'chat',
+        kind: 'chat',
+      }),
+    ).toBe('/api/scopes/scope-1/members/joker/invoke/chat:stream');
   });
 
   it('builds a bind contract from the selected service and endpoint', () => {
@@ -101,6 +110,7 @@ describe('bindContract', () => {
       buildStudioBindInvokeUrl(
         'scope-1',
         'chat',
+        undefined,
         'default',
         { endpointId: 'chat', kind: 'chat' },
         'https://console.example.test',

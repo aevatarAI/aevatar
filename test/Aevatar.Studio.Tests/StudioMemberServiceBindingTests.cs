@@ -1,5 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
@@ -32,7 +34,7 @@ public sealed class StudioMemberServiceBindingTests
         var commandPort = new RecordingCommandPort();
         var bindingPort = new RecordingScopeBindingPort();
 
-        var service = new StudioMemberService(commandPort, queryPort, bindingPort);
+        var service = NewService(commandPort, queryPort, bindingPort);
 
         var response = await service.BindAsync(
             ScopeId,
@@ -77,7 +79,7 @@ public sealed class StudioMemberServiceBindingTests
         var commandPort = new RecordingCommandPort();
         var bindingPort = new RecordingScopeBindingPort();
 
-        var service = new StudioMemberService(commandPort, queryPort, bindingPort);
+        var service = NewService(commandPort, queryPort, bindingPort);
 
         await service.BindAsync(
             ScopeId,
@@ -105,7 +107,7 @@ public sealed class StudioMemberServiceBindingTests
         var commandPort = new RecordingCommandPort();
         var bindingPort = new RecordingScopeBindingPort();
 
-        var service = new StudioMemberService(commandPort, queryPort, bindingPort);
+        var service = NewService(commandPort, queryPort, bindingPort);
 
         await service.BindAsync(
             ScopeId,
@@ -139,7 +141,7 @@ public sealed class StudioMemberServiceBindingTests
     public async Task BindAsync_ShouldFail_WhenMemberDoesNotExist()
     {
         var queryPort = new InMemoryQueryPort(detail: null);
-        var service = new StudioMemberService(
+        var service = NewService(
             new RecordingCommandPort(),
             queryPort,
             new RecordingScopeBindingPort());
@@ -162,7 +164,7 @@ public sealed class StudioMemberServiceBindingTests
     public async Task BindAsync_ShouldFail_WhenWorkflowYamlsAreMissing()
     {
         var detail = NewDetail(MemberImplementationKindNames.Workflow);
-        var service = new StudioMemberService(
+        var service = NewService(
             new RecordingCommandPort(),
             new InMemoryQueryPort(detail),
             new RecordingScopeBindingPort());
@@ -190,7 +192,7 @@ public sealed class StudioMemberServiceBindingTests
                 BoundAt: DateTimeOffset.UtcNow),
         };
 
-        var service = new StudioMemberService(
+        var service = NewService(
             new RecordingCommandPort(),
             new InMemoryQueryPort(withBinding),
             new RecordingScopeBindingPort());
@@ -201,6 +203,22 @@ public sealed class StudioMemberServiceBindingTests
         binding!.PublishedServiceId.Should().Be(PublishedServiceId);
         binding.RevisionId.Should().Be("rev-9");
     }
+
+    // Bind / GetBinding don't touch the lifecycle/command ports. We pass
+    // throwing stubs so that any future regression which routes a bind
+    // through the platform service ports — instead of through the existing
+    // IScopeBindingCommandPort — fails loudly here rather than silently
+    // green.
+    private static StudioMemberService NewService(
+        IStudioMemberCommandPort memberCommandPort,
+        IStudioMemberQueryPort memberQueryPort,
+        IScopeBindingCommandPort scopeBindingCommandPort) =>
+        new(
+            memberCommandPort,
+            memberQueryPort,
+            scopeBindingCommandPort,
+            new ThrowingServiceLifecycleQueryPort(),
+            new ThrowingServiceCommandPort());
 
     private static StudioMemberDetailResponse NewDetail(string implementationKindWire)
     {
@@ -293,6 +311,62 @@ public sealed class StudioMemberServiceBindingTests
             string PublishedServiceId,
             string RevisionId,
             string ImplementationKindName);
+    }
+
+    private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort
+    {
+        public Task<ServiceCatalogSnapshot?> GetServiceAsync(
+            ServiceIdentity identity, CancellationToken ct = default) =>
+            throw new InvalidOperationException("bind orchestration must not query the platform lifecycle port.");
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
+            string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default) =>
+            throw new InvalidOperationException("bind orchestration must not list services on the platform lifecycle port.");
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(
+            ServiceIdentity identity, CancellationToken ct = default) =>
+            throw new InvalidOperationException("bind orchestration must not read revisions through the platform lifecycle port.");
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(
+            ServiceIdentity identity, CancellationToken ct = default) =>
+            throw new InvalidOperationException("bind orchestration must not read deployments through the platform lifecycle port.");
+    }
+
+    private sealed class ThrowingServiceCommandPort : IServiceCommandPort
+    {
+        private static InvalidOperationException Reject(string method) =>
+            new($"bind orchestration must not call IServiceCommandPort.{method} — that surface belongs to revision lifecycle, not bind.");
+
+        public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(
+            CreateServiceDefinitionCommand command, CancellationToken ct = default) => throw Reject(nameof(CreateServiceAsync));
+        public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(
+            UpdateServiceDefinitionCommand command, CancellationToken ct = default) => throw Reject(nameof(UpdateServiceAsync));
+        public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(
+            CreateServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(CreateRevisionAsync));
+        public Task<ServiceCommandAcceptedReceipt> PrepareRevisionAsync(
+            PrepareServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(PrepareRevisionAsync));
+        public Task<ServiceCommandAcceptedReceipt> PublishRevisionAsync(
+            PublishServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(PublishRevisionAsync));
+        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(
+            RetireServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(RetireRevisionAsync));
+        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
+            SetDefaultServingRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(SetDefaultServingRevisionAsync));
+        public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
+            ActivateServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(ActivateServiceRevisionAsync));
+        public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(
+            DeactivateServiceDeploymentCommand command, CancellationToken ct = default) => throw Reject(nameof(DeactivateServiceDeploymentAsync));
+        public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(
+            ReplaceServiceServingTargetsCommand command, CancellationToken ct = default) => throw Reject(nameof(ReplaceServiceServingTargetsAsync));
+        public Task<ServiceCommandAcceptedReceipt> StartServiceRolloutAsync(
+            StartServiceRolloutCommand command, CancellationToken ct = default) => throw Reject(nameof(StartServiceRolloutAsync));
+        public Task<ServiceCommandAcceptedReceipt> AdvanceServiceRolloutAsync(
+            AdvanceServiceRolloutCommand command, CancellationToken ct = default) => throw Reject(nameof(AdvanceServiceRolloutAsync));
+        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(
+            PauseServiceRolloutCommand command, CancellationToken ct = default) => throw Reject(nameof(PauseServiceRolloutAsync));
+        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(
+            ResumeServiceRolloutCommand command, CancellationToken ct = default) => throw Reject(nameof(ResumeServiceRolloutAsync));
+        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(
+            RollbackServiceRolloutCommand command, CancellationToken ct = default) => throw Reject(nameof(RollbackServiceRolloutAsync));
     }
 
     private sealed class RecordingScopeBindingPort : IScopeBindingCommandPort

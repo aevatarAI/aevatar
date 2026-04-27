@@ -1,4 +1,5 @@
 import { PageContainer } from '@ant-design/pro-components';
+import { AGUIEventType } from '@aevatar-react-sdk/types';
 import { DeleteOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Node } from '@xyflow/react';
@@ -14,6 +15,12 @@ import {
 import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
+import {
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+  extractRunFinishedOutput,
+  type RuntimeEvent,
+} from '@/shared/agui/runtimeEventSemantics';
 import {
   buildConversationHeaders,
   formatConversationProviderLabel,
@@ -78,6 +85,7 @@ import {
   buildStudioRoute,
   resolveStudioWorkflowMemberRouteValue,
   type StudioBuildFocus,
+  type StudioIntent,
   type StudioStep,
   type StudioTab,
 } from '@/shared/studio/navigation';
@@ -86,24 +94,39 @@ import type {
 } from '@/shared/models/runtime/catalog';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
+import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import {
   buildRuntimeGAgentAssemblyQualifiedName,
   matchesRuntimeGAgentTypeDescriptor,
 } from '@/shared/models/runtime/gagents';
-import { getScopeServiceCurrentRevision } from '@/shared/models/runtime/scopeServices';
+import {
+  getScopeServiceCurrentRevision,
+  type ScopeServiceRunAuditSnapshot,
+  type ScopeServiceRunAuditStep,
+  type ScopeServiceRunSummary,
+} from '@/shared/models/runtime/scopeServices';
 import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioMemberSummary,
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowDirectory,
 } from '@/shared/studio/models';
 import {
-  normalizeStudioScopeBindingImplementationKind,
+  formatStudioMemberLifecycleStage,
+  normalizeStudioMemberBindingImplementationKind,
 } from '@/shared/studio/models';
+import {
+  clearStudioObserveSessionSeed,
+  isStudioObserveSessionSeedFresh,
+  loadStudioObserveSessionSeed,
+  saveStudioObserveSessionSeed,
+  type StudioObserveSessionSeed,
+} from '@/shared/studio/observeSession';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -135,6 +158,7 @@ type StudioRouteState = {
   step: StudioStep;
   focusKey: string;
   tab: StudioTab;
+  intent: StudioIntent | '';
   prompt: string;
   executionId: string;
   logsMode: '' | 'popout';
@@ -152,6 +176,7 @@ type StudioRouteMemberState = {
   key: string;
   kind: StudioRouteMemberKind;
   value: string;
+  memberId: string;
   serviceId: string;
 };
 
@@ -704,9 +729,10 @@ function parseStudioRouteMember(
           key: `workflow:${workflowRouteValue}`,
           kind: 'workflow',
           value: workflowRouteValue,
+          memberId: '',
           serviceId: '',
         }
-      : { key: '', kind: 'none', value: '', serviceId: '' };
+      : { key: '', kind: 'none', value: '', memberId: '', serviceId: '' };
   }
 
   if (normalizedValue.startsWith('script:')) {
@@ -716,27 +742,30 @@ function parseStudioRouteMember(
           key: `script:${scriptId}`,
           kind: 'script',
           value: scriptId,
+          memberId: '',
           serviceId: '',
         }
-      : { key: '', kind: 'none', value: '', serviceId: '' };
+      : { key: '', kind: 'none', value: '', memberId: '', serviceId: '' };
   }
 
   if (normalizedValue.startsWith('member:')) {
-    const serviceId = readServiceIdFromMemberKey(normalizedValue);
-    return serviceId
+    const memberId = readMemberIdFromMemberKey(normalizedValue);
+    return memberId
       ? {
-          key: `member:${serviceId}`,
+          key: `member:${memberId}`,
           kind: 'member',
-          value: serviceId,
-          serviceId,
+          value: memberId,
+          memberId,
+          serviceId: '',
         }
-      : { key: '', kind: 'none', value: '', serviceId: '' };
+      : { key: '', kind: 'none', value: '', memberId: '', serviceId: '' };
   }
 
   return {
     key: '',
     kind: 'none',
     value: '',
+    memberId: '',
     serviceId: '',
   };
 }
@@ -758,7 +787,7 @@ function readStudioRouteMemberFromParams(
   const legacyMemberId = trimOptional(params.get('memberId'));
   return legacyMemberId
     ? parseStudioRouteMember(`member:${legacyMemberId}`)
-    : { key: '', kind: 'none', value: '', serviceId: '' };
+    : { key: '', kind: 'none', value: '', memberId: '', serviceId: '' };
 }
 
 function buildStudioBuildFocusKey(input: {
@@ -892,6 +921,10 @@ function buildWorkflowFileName(workflowName: string): string {
   return `${normalizedWorkflowName}.yaml`;
 }
 
+function parseStudioIntent(value: string | null | undefined): StudioIntent | '' {
+  return trimOptional(value) === 'create-member' ? 'create-member' : '';
+}
+
 function readWorkflowMemberRouteValueFromMemberKey(memberKey: string): string {
   const normalizedMemberKey = trimOptional(memberKey);
   if (!normalizedMemberKey.startsWith('workflow:')) {
@@ -901,7 +934,7 @@ function readWorkflowMemberRouteValueFromMemberKey(memberKey: string): string {
   return trimOptional(normalizedMemberKey.slice('workflow:'.length));
 }
 
-function readServiceIdFromMemberKey(memberKey: string): string {
+function readMemberIdFromMemberKey(memberKey: string): string {
   const normalizedMemberKey = trimOptional(memberKey);
   if (!normalizedMemberKey.startsWith('member:')) {
     return '';
@@ -952,6 +985,7 @@ function readStudioRouteState(search?: string): StudioRouteState {
       step: 'build',
       focusKey: '',
       tab: 'workflows',
+      intent: '',
       prompt: '',
       executionId: '',
       logsMode: '',
@@ -970,10 +1004,11 @@ function readStudioRouteState(search?: string): StudioRouteState {
   return {
     scopeId: trimOptional(params.get('scopeId')),
     memberKey: routeMember.key,
-    memberId: routeMember.serviceId,
+    memberId: routeMember.memberId,
     step: parseStudioStep(params.get('step')),
     focusKey: buildFocus.key,
     tab: parseStudioTab(params.get('tab')),
+    intent: parseStudioIntent(params.get('intent')),
     prompt: trimOptional(params.get('prompt')),
     executionId: trimOptional(params.get('execution')),
     logsMode: parseLogsMode(params.get('logs')),
@@ -1021,18 +1056,604 @@ function readInitialBuildSurface(state: StudioRouteState): BuildSurface {
   return 'editor';
 }
 
-function toExecutionSummary(
-  execution: StudioExecutionDetail,
-): StudioExecutionSummary {
+function normalizeObserveRunStatus(status: string | null | undefined): string {
+  const normalizedStatus = trimOptional(status).toLowerCase();
+  if (!normalizedStatus) {
+    return 'pending';
+  }
+
+  if (
+    normalizedStatus.includes('wait') ||
+    normalizedStatus.includes('running') ||
+    normalizedStatus.includes('approval') ||
+    normalizedStatus.includes('input') ||
+    normalizedStatus.includes('signal') ||
+    normalizedStatus.includes('progress')
+  ) {
+    return 'running';
+  }
+
+  if (
+    normalizedStatus.includes('complete') ||
+    normalizedStatus.includes('success')
+  ) {
+    return 'completed';
+  }
+
+  if (
+    normalizedStatus.includes('fail') ||
+    normalizedStatus.includes('error') ||
+    normalizedStatus.includes('timeout')
+  ) {
+    return 'failed';
+  }
+
+  if (
+    normalizedStatus.includes('stop') ||
+    normalizedStatus.includes('cancel')
+  ) {
+    return 'stopped';
+  }
+
+  return normalizedStatus;
+}
+
+function isObserveRunTerminal(status: string | null | undefined): boolean {
+  return ['completed', 'failed', 'stopped', 'cancelled', 'canceled'].includes(
+    normalizeObserveRunStatus(status),
+  );
+}
+
+function readObserveRunStartedAt(
+  run: Pick<
+    ScopeServiceRunSummary,
+    'lastUpdatedAt' | 'bindingUpdatedAt' | 'boundAt'
+  >,
+): string {
+  return (
+    trimOptional(run.boundAt) ||
+    trimOptional(run.bindingUpdatedAt) ||
+    trimOptional(run.lastUpdatedAt) ||
+    ''
+  );
+}
+
+function readObserveStepInputPreview(step: ScopeServiceRunAuditStep): string {
+  return (
+    trimOptional(step.suspensionPrompt) ||
+    trimOptional(step.requestParameters.prompt) ||
+    trimOptional(step.requestParameters.input) ||
+    trimOptional(step.requestParameters.signalName) ||
+    trimOptional(step.requestParameters.signal_name) ||
+    trimOptional(step.requestedVariableName) ||
+    trimOptional(step.assignedValue) ||
+    ''
+  );
+}
+
+function readObserveSignalName(step: ScopeServiceRunAuditStep): string {
+  return (
+    trimOptional(step.requestParameters.signalName) ||
+    trimOptional(step.requestParameters.signal_name) ||
+    trimOptional(step.requestedVariableName) ||
+    trimOptional(step.assignedVariable) ||
+    'continue'
+  );
+}
+
+function buildObserveFrame(
+  receivedAtUtc: string,
+  payload: Record<string, unknown>,
+): { receivedAtUtc: string; payload: string } {
   return {
-    executionId: execution.executionId,
-    workflowName: execution.workflowName,
-    prompt: execution.prompt,
-    status: execution.status,
-    startedAtUtc: execution.startedAtUtc,
-    completedAtUtc: execution.completedAtUtc,
-    actorId: execution.actorId,
-    error: execution.error,
+    receivedAtUtc,
+    payload: JSON.stringify(payload),
+  };
+}
+
+function buildObserveExecutionFrames(
+  snapshot: ScopeServiceRunAuditSnapshot,
+): StudioExecutionDetail['frames'] {
+  const startedAt =
+    trimOptional(snapshot.audit.startedAt) ||
+    readObserveRunStartedAt(snapshot.summary) ||
+    new Date().toISOString();
+  const runId = trimOptional(snapshot.summary.runId);
+  const frames: Array<{ receivedAtUtc: string; payload: string }> = [
+    buildObserveFrame(startedAt, {
+      custom: {
+        name: 'aevatar.run.context',
+        payload: {
+          workflowName:
+            trimOptional(snapshot.audit.workflowName) ||
+            trimOptional(snapshot.summary.workflowName),
+        },
+      },
+    }),
+  ];
+
+  const steps = [...snapshot.audit.steps].sort((left, right) => {
+    const leftTimestamp =
+      Date.parse(trimOptional(left.requestedAt) || trimOptional(left.completedAt) || '') || 0;
+    const rightTimestamp =
+      Date.parse(trimOptional(right.requestedAt) || trimOptional(right.completedAt) || '') || 0;
+    return leftTimestamp - rightTimestamp;
+  });
+
+  for (const step of steps) {
+    const requestedAt =
+      trimOptional(step.requestedAt) ||
+      trimOptional(step.completedAt) ||
+      startedAt;
+    frames.push(
+      buildObserveFrame(requestedAt, {
+        custom: {
+          name: 'aevatar.step.request',
+          payload: {
+            stepId: step.stepId,
+            stepType: step.stepType,
+            targetRole: step.targetRole,
+            input: readObserveStepInputPreview(step),
+          },
+        },
+      }),
+    );
+
+    const suspensionType = trimOptional(step.suspensionType).toLowerCase();
+    if (suspensionType) {
+      frames.push(
+        buildObserveFrame(requestedAt, {
+          custom: {
+            name:
+              suspensionType === 'wait_signal'
+                ? 'aevatar.wait_signal.request'
+                : 'aevatar.human_input.request',
+            payload: {
+              runId,
+              stepId: step.stepId,
+              suspensionType,
+              prompt: trimOptional(step.suspensionPrompt),
+              timeoutSeconds: step.suspensionTimeoutSeconds,
+              variableName: trimOptional(step.requestedVariableName),
+              signalName:
+                suspensionType === 'wait_signal'
+                  ? readObserveSignalName(step)
+                  : '',
+            },
+          },
+        }),
+      );
+    }
+
+    if (trimOptional(step.completedAt) || step.success !== null || trimOptional(step.error)) {
+      const completedAt = trimOptional(step.completedAt) || requestedAt;
+      if (suspensionType) {
+        frames.push(
+          buildObserveFrame(completedAt, {
+            custom: {
+              name: 'studio.human.resume',
+              payload: {
+                stepId: step.stepId,
+                suspensionType,
+                approved: suspensionType === 'human_approval' ? step.success !== false : true,
+                userInput:
+                  trimOptional(step.assignedValue) ||
+                  trimOptional(step.outputPreview) ||
+                  '',
+                signalName:
+                  suspensionType === 'wait_signal'
+                    ? readObserveSignalName(step)
+                    : '',
+              },
+            },
+          }),
+        );
+      }
+
+      frames.push(
+        buildObserveFrame(completedAt, {
+          custom: {
+            name: 'aevatar.step.completed',
+            payload: {
+              stepId: step.stepId,
+              success: step.success !== false,
+              error: trimOptional(step.error),
+              output: trimOptional(step.outputPreview),
+              nextStepId: trimOptional(step.nextStepId),
+              branchKey: trimOptional(step.branchKey),
+            },
+          },
+        }),
+      );
+    }
+  }
+
+  const terminalTimestamp =
+    trimOptional(snapshot.audit.endedAt) ||
+    trimOptional(snapshot.audit.updatedAt) ||
+    trimOptional(snapshot.summary.lastUpdatedAt) ||
+    startedAt;
+  if (trimOptional(snapshot.audit.finalError)) {
+    frames.push(
+      buildObserveFrame(terminalTimestamp, {
+        runError: {
+          code: trimOptional(snapshot.audit.completionStatus),
+          message: snapshot.audit.finalError,
+        },
+      }),
+    );
+  } else if (normalizeObserveRunStatus(snapshot.audit.completionStatus) === 'stopped') {
+    frames.push(
+      buildObserveFrame(terminalTimestamp, {
+        runStopped: {
+          reason:
+            trimOptional(snapshot.audit.finalError) ||
+            trimOptional(snapshot.summary.lastError) ||
+            '',
+        },
+      }),
+    );
+  } else if (isObserveRunTerminal(snapshot.audit.completionStatus)) {
+    frames.push(
+      buildObserveFrame(terminalTimestamp, {
+        runFinished: {
+          output: trimOptional(snapshot.audit.finalOutput),
+        },
+      }),
+    );
+  }
+
+  const timelineEvents = [...snapshot.audit.timeline]
+    .filter(
+      (event) =>
+        Boolean(trimOptional(event.message)) &&
+        !steps.some(
+          (step) =>
+            trimOptional(step.stepId) === trimOptional(event.stepId) &&
+            trimOptional(step.requestedAt) === trimOptional(event.timestamp),
+        ),
+    )
+    .sort((left, right) => {
+      const leftTimestamp = Date.parse(trimOptional(left.timestamp) || '') || 0;
+      const rightTimestamp = Date.parse(trimOptional(right.timestamp) || '') || 0;
+      return leftTimestamp - rightTimestamp;
+    });
+  for (const event of timelineEvents) {
+    frames.push(
+      buildObserveFrame(trimOptional(event.timestamp) || terminalTimestamp, {
+        custom: {
+          name: 'aevatar.step.completed',
+          payload: {
+            stepId: trimOptional(event.stepId) || trimOptional(event.stage),
+            success:
+              !trimOptional(event.stage).toLowerCase().includes('error') &&
+              !trimOptional(event.eventType).toLowerCase().includes('error'),
+            error:
+              trimOptional(event.stage).toLowerCase().includes('error') ||
+              trimOptional(event.eventType).toLowerCase().includes('error')
+                ? trimOptional(event.message)
+                : '',
+            output: trimOptional(event.message),
+            nextStepId: '',
+            branchKey: '',
+          },
+        },
+      }),
+    );
+  }
+
+  return frames.sort((left, right) => {
+    const leftTimestamp = Date.parse(left.receivedAtUtc) || 0;
+    const rightTimestamp = Date.parse(right.receivedAtUtc) || 0;
+    return leftTimestamp - rightTimestamp;
+  });
+}
+
+function formatObserveRuntimeEventTimestamp(
+  value: unknown,
+  fallbackTimestamp: string,
+): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : value;
+  }
+
+  return fallbackTimestamp;
+}
+
+function buildObserveExecutionFramesFromRuntimeEvents(input: {
+  events: readonly RuntimeEvent[];
+  fallbackTimestamp: string;
+}): StudioExecutionDetail['frames'] {
+  const frames = input.events.flatMap((event) => {
+    const receivedAtUtc = formatObserveRuntimeEventTimestamp(
+      (event as { readonly timestamp?: unknown }).timestamp,
+      input.fallbackTimestamp,
+    );
+
+    if (event.type === AGUIEventType.CUSTOM) {
+      const customName = trimOptional(
+        String((event as { readonly name?: unknown }).name || ''),
+      );
+      if (!customName) {
+        return [];
+      }
+
+      return [
+        buildObserveFrame(receivedAtUtc, {
+          custom: {
+            name: customName,
+            payload:
+              (event as { readonly payload?: unknown }).payload ??
+              (event as { readonly value?: unknown }).value ??
+              {},
+          },
+        }),
+      ];
+    }
+
+    if (event.type === AGUIEventType.RUN_FINISHED) {
+      return [
+        buildObserveFrame(receivedAtUtc, {
+          runFinished: {
+            output: extractRunFinishedOutput(event) || '',
+          },
+        }),
+      ];
+    }
+
+    if (event.type === AGUIEventType.RUN_ERROR) {
+      return [
+        buildObserveFrame(receivedAtUtc, {
+          runError: {
+            code: trimOptional(
+              String((event as { readonly code?: unknown }).code || ''),
+            ),
+            message: trimOptional(
+              String((event as { readonly message?: unknown }).message || ''),
+            ),
+          },
+        }),
+      ];
+    }
+
+    if ((event as { readonly type?: string }).type === 'RUN_STOPPED') {
+      return [
+        buildObserveFrame(receivedAtUtc, {
+          runStopped: {
+            reason: trimOptional(
+              String((event as { readonly reason?: unknown }).reason || ''),
+            ),
+          },
+        }),
+      ];
+    }
+
+    return [];
+  });
+
+  return frames.sort((left, right) => {
+    const leftTimestamp = Date.parse(left.receivedAtUtc) || 0;
+    const rightTimestamp = Date.parse(right.receivedAtUtc) || 0;
+    return leftTimestamp - rightTimestamp;
+  });
+}
+
+function normalizeObserveInvokeSessionStatus(value: string): string {
+  const normalizedValue = trimOptional(value).toLowerCase();
+  if (normalizedValue === 'success') {
+    return 'completed';
+  }
+
+  if (normalizedValue === 'error') {
+    return 'failed';
+  }
+
+  if (normalizedValue === 'idle') {
+    return 'pending';
+  }
+
+  return normalizedValue || 'running';
+}
+
+function toObserveExecutionFromSessionSeed(
+  seed: StudioObserveSessionSeed,
+  options?: {
+    workflowName?: string | null;
+  },
+): StudioExecutionDetail {
+  const fallbackTimestamp =
+    trimOptional(seed.startedAtUtc) ||
+    trimOptional(seed.completedAtUtc) ||
+    new Date().toISOString();
+  const runtimeAccumulator = createRuntimeEventAccumulator({
+    actorId: trimOptional(seed.actorId) || undefined,
+  });
+  seed.events.forEach((event) => {
+    applyRuntimeEvent(runtimeAccumulator, event);
+  });
+  const lastEventTimestamp = [...seed.events]
+    .reverse()
+    .map((event) =>
+      formatObserveRuntimeEventTimestamp(
+        (event as { readonly timestamp?: unknown }).timestamp,
+        fallbackTimestamp,
+      ),
+    )
+    .find(Boolean);
+  const status = normalizeObserveInvokeSessionStatus(seed.status);
+  const startedAtUtc = trimOptional(seed.startedAtUtc) || fallbackTimestamp;
+  const completedAtUtc =
+    status === 'running'
+      ? null
+      : trimOptional(seed.completedAtUtc) || lastEventTimestamp || startedAtUtc;
+  const updatedAtUtc =
+    trimOptional(seed.completedAtUtc) || lastEventTimestamp || startedAtUtc;
+  const workflowName =
+    trimOptional(options?.workflowName) ||
+    trimOptional(seed.serviceLabel) ||
+    trimOptional(seed.serviceId) ||
+    'member';
+  const completedSteps = runtimeAccumulator.steps.filter(
+    (step) => step.status === 'done',
+  ).length;
+
+  return {
+    executionId:
+      trimOptional(seed.runId) ||
+      `invoke-session:${trimOptional(seed.serviceId)}:${startedAtUtc}`,
+    workflowName,
+    prompt: trimOptional(seed.prompt),
+    status,
+    startedAtUtc,
+    completedAtUtc,
+    actorId:
+      trimOptional(seed.actorId) ||
+      trimOptional(runtimeAccumulator.actorId) ||
+      null,
+    error:
+      trimOptional(seed.error) ||
+      trimOptional(runtimeAccumulator.errorText) ||
+      null,
+    serviceId: trimOptional(seed.serviceId) || null,
+    revisionId: null,
+    definitionActorId: null,
+    stateVersion: null,
+    lastEventId: null,
+    updatedAtUtc,
+    totalSteps:
+      runtimeAccumulator.steps.length > 0
+        ? runtimeAccumulator.steps.length
+        : null,
+    completedSteps:
+      runtimeAccumulator.steps.length > 0 ? completedSteps : null,
+    roleReplyCount: null,
+    output:
+      trimOptional(seed.finalOutput) ||
+      trimOptional(runtimeAccumulator.finalOutput) ||
+      trimOptional(seed.assistantText) ||
+      null,
+    auditUpdatedAtUtc: updatedAtUtc,
+    auditSource: 'invoke-session',
+    frames: buildObserveExecutionFramesFromRuntimeEvents({
+      events: seed.events,
+      fallbackTimestamp: startedAtUtc,
+    }),
+  };
+}
+
+function toObserveExecutionSummary(
+  run: ScopeServiceRunSummary,
+): StudioExecutionSummary {
+  const startedAtUtc = readObserveRunStartedAt(run);
+  return {
+    executionId: run.runId,
+    workflowName: trimOptional(run.workflowName) || trimOptional(run.serviceId),
+    prompt: '',
+    status: normalizeObserveRunStatus(run.completionStatus),
+    startedAtUtc,
+    completedAtUtc: isObserveRunTerminal(run.completionStatus)
+      ? trimOptional(run.lastUpdatedAt) || startedAtUtc || null
+      : null,
+    actorId: trimOptional(run.actorId) || null,
+    error: trimOptional(run.lastError) || null,
+    serviceId: trimOptional(run.serviceId) || null,
+    revisionId: trimOptional(run.revisionId) || null,
+    definitionActorId: trimOptional(run.definitionActorId) || null,
+    stateVersion:
+      typeof run.stateVersion === 'number' ? run.stateVersion : null,
+    lastEventId: trimOptional(run.lastEventId) || null,
+    updatedAtUtc: trimOptional(run.lastUpdatedAt) || null,
+    totalSteps: typeof run.totalSteps === 'number' ? run.totalSteps : null,
+    completedSteps:
+      typeof run.completedSteps === 'number' ? run.completedSteps : null,
+    roleReplyCount:
+      typeof run.roleReplyCount === 'number' ? run.roleReplyCount : null,
+    output: trimOptional(run.lastOutput) || null,
+    auditUpdatedAtUtc: null,
+    auditSource: 'service-run-summary',
+  };
+}
+
+function toObserveExecutionDetail(
+  snapshot: ScopeServiceRunAuditSnapshot,
+): StudioExecutionDetail {
+  const startedAtUtc =
+    trimOptional(snapshot.audit.startedAt) ||
+    readObserveRunStartedAt(snapshot.summary);
+  const completedAtUtc = isObserveRunTerminal(snapshot.audit.completionStatus)
+    ? trimOptional(snapshot.audit.endedAt) ||
+      trimOptional(snapshot.audit.updatedAt) ||
+      trimOptional(snapshot.summary.lastUpdatedAt) ||
+      null
+    : null;
+  return {
+    executionId: snapshot.summary.runId,
+    workflowName:
+      trimOptional(snapshot.audit.workflowName) ||
+      trimOptional(snapshot.summary.workflowName),
+    prompt: trimOptional(snapshot.audit.input),
+    status: normalizeObserveRunStatus(snapshot.audit.completionStatus),
+    startedAtUtc,
+    completedAtUtc,
+    actorId:
+      trimOptional(snapshot.audit.rootActorId) ||
+      trimOptional(snapshot.summary.actorId) ||
+      null,
+    error:
+      trimOptional(snapshot.audit.finalError) ||
+      trimOptional(snapshot.summary.lastError) ||
+      null,
+    serviceId: trimOptional(snapshot.summary.serviceId) || null,
+    revisionId: trimOptional(snapshot.summary.revisionId) || null,
+    definitionActorId:
+      trimOptional(snapshot.summary.definitionActorId) || null,
+    stateVersion:
+      typeof snapshot.audit.stateVersion === 'number'
+        ? snapshot.audit.stateVersion
+        : typeof snapshot.summary.stateVersion === 'number'
+          ? snapshot.summary.stateVersion
+          : null,
+    lastEventId:
+      trimOptional(snapshot.audit.lastEventId) ||
+      trimOptional(snapshot.summary.lastEventId) ||
+      null,
+    updatedAtUtc:
+      trimOptional(snapshot.summary.lastUpdatedAt) ||
+      trimOptional(snapshot.audit.updatedAt) ||
+      null,
+    totalSteps:
+      typeof snapshot.audit.summary.totalSteps === 'number'
+        ? snapshot.audit.summary.totalSteps
+        : typeof snapshot.summary.totalSteps === 'number'
+          ? snapshot.summary.totalSteps
+          : null,
+    completedSteps:
+      typeof snapshot.audit.summary.completedSteps === 'number'
+        ? snapshot.audit.summary.completedSteps
+        : typeof snapshot.summary.completedSteps === 'number'
+          ? snapshot.summary.completedSteps
+          : null,
+    roleReplyCount:
+      typeof snapshot.audit.summary.roleReplyCount === 'number'
+        ? snapshot.audit.summary.roleReplyCount
+        : typeof snapshot.summary.roleReplyCount === 'number'
+          ? snapshot.summary.roleReplyCount
+          : null,
+    output:
+      trimOptional(snapshot.audit.finalOutput) ||
+      trimOptional(snapshot.summary.lastOutput) ||
+      null,
+    auditUpdatedAtUtc:
+      trimOptional(snapshot.audit.updatedAt) ||
+      trimOptional(snapshot.summary.lastUpdatedAt) ||
+      null,
+    auditSource: 'run-audit',
+    frames: buildObserveExecutionFrames(snapshot),
   };
 }
 
@@ -1057,6 +1678,106 @@ function buildStudioFocusKey(input: {
   }
 
   return '';
+}
+
+type PublishedStudioMemberRecord = {
+  readonly memberSummary?: StudioMemberSummary | null;
+  readonly service: {
+    readonly serviceId?: string | null;
+  };
+  readonly matchedWorkflow?: {
+    readonly workflowId?: string | null;
+  } | null;
+  readonly matchedScript?: {
+    readonly script?: {
+      readonly scriptId?: string | null;
+    } | null;
+  } | null;
+};
+
+function resolveStudioMemberSummaryFromMemberKey(
+  memberKey: string,
+  publishedMembers: readonly PublishedStudioMemberRecord[],
+  studioScopeMembers: readonly StudioMemberSummary[],
+): StudioMemberSummary | null {
+  const parsedMember = parseStudioRouteMember(memberKey);
+  if (parsedMember.kind === 'member') {
+    const directMemberMatch =
+      studioScopeMembers.find(
+        (member) => trimOptional(member.memberId) === parsedMember.memberId,
+      ) ?? null;
+    if (directMemberMatch) {
+      return directMemberMatch;
+    }
+
+    const legacyPublishedServiceMatch =
+      studioScopeMembers.find(
+        (member) =>
+          trimOptional(member.publishedServiceId) === parsedMember.memberId,
+      ) ?? null;
+    if (legacyPublishedServiceMatch) {
+      return legacyPublishedServiceMatch;
+    }
+
+    return (
+      publishedMembers.find(
+        ({ service, memberSummary }) =>
+          trimOptional(memberSummary?.memberId) === parsedMember.memberId ||
+          trimOptional(memberSummary?.publishedServiceId) === parsedMember.memberId ||
+          trimOptional(service.serviceId) === parsedMember.memberId,
+      )?.memberSummary ?? null
+    );
+  }
+
+  const workflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(memberKey);
+  if (workflowRouteValue) {
+    return (
+      publishedMembers.find(
+        ({ matchedWorkflow }) =>
+          buildWorkflowMemberKeyFromSummary(matchedWorkflow) ===
+          `workflow:${workflowRouteValue}`,
+      )?.memberSummary ?? null
+    );
+  }
+
+  const scriptId = readScriptIdFromMemberKey(memberKey);
+  if (scriptId) {
+    return (
+      publishedMembers.find(
+        ({ matchedScript }) =>
+          trimOptional(matchedScript?.script?.scriptId) === scriptId,
+      )?.memberSummary ?? null
+    );
+  }
+
+  return null;
+}
+
+function resolvePublishedMemberIdFromServiceId(
+  serviceId: string,
+  publishedMembers: readonly PublishedStudioMemberRecord[],
+  studioScopeMembers: readonly StudioMemberSummary[],
+): string {
+  const normalizedServiceId = trimOptional(serviceId);
+  if (!normalizedServiceId) {
+    return '';
+  }
+
+  const directRosterMatch =
+    studioScopeMembers.find(
+      (member) => trimOptional(member.publishedServiceId) === normalizedServiceId,
+    ) ?? null;
+  if (directRosterMatch) {
+    return trimOptional(directRosterMatch.memberId);
+  }
+
+  return trimOptional(
+    publishedMembers.find(
+      ({ memberSummary, service }) =>
+        trimOptional(memberSummary?.publishedServiceId) === normalizedServiceId ||
+        trimOptional(service.serviceId) === normalizedServiceId,
+    )?.memberSummary?.memberId,
+  );
 }
 
 function resolveStudioServiceDefaultEndpointId(
@@ -1085,23 +1806,28 @@ function resolveStudioServiceDefaultEndpointId(
 
 function resolvePublishedServiceIdFromMemberKey(
   memberKey: string,
-  publishedMembers: readonly {
-    readonly service: {
-      readonly serviceId?: string | null;
-    };
-    readonly matchedWorkflow?: {
-      readonly workflowId?: string | null;
-    } | null;
-    readonly matchedScript?: {
-      readonly script?: {
-        readonly scriptId?: string | null;
-      } | null;
-    } | null;
-  }[],
+  publishedMembers: readonly PublishedStudioMemberRecord[],
+  studioScopeMembers: readonly StudioMemberSummary[],
 ): string {
-  const serviceId = readServiceIdFromMemberKey(memberKey);
-  if (serviceId) {
-    return serviceId;
+  const memberSummary = resolveStudioMemberSummaryFromMemberKey(
+    memberKey,
+    publishedMembers,
+    studioScopeMembers,
+  );
+  const resolvedPublishedServiceId = trimOptional(memberSummary?.publishedServiceId);
+  if (resolvedPublishedServiceId) {
+    return resolvedPublishedServiceId;
+  }
+
+  const legacyMemberToken = readMemberIdFromMemberKey(memberKey);
+  if (legacyMemberToken) {
+    return (
+      trimOptional(
+        publishedMembers.find(
+          ({ service }) => trimOptional(service.serviceId) === legacyMemberToken,
+        )?.service.serviceId,
+      ) || legacyMemberToken
+    );
   }
 
   const workflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(memberKey);
@@ -1130,27 +1856,27 @@ function resolvePublishedServiceIdFromMemberKey(
 
 function resolveStudioMemberOwnerKey(
   memberKey: string,
-  publishedMembers: readonly {
-    readonly service: {
-      readonly serviceId?: string | null;
-    };
-    readonly matchedWorkflow?: {
-      readonly workflowId?: string | null;
-    } | null;
-    readonly matchedScript?: {
-      readonly script?: {
-        readonly scriptId?: string | null;
-      } | null;
-    } | null;
-  }[],
+  publishedMembers: readonly PublishedStudioMemberRecord[],
+  studioScopeMembers: readonly StudioMemberSummary[],
 ): string {
   const parsedMember = parseStudioRouteMember(memberKey);
   if (parsedMember.kind !== 'member') {
     return parsedMember.key;
   }
 
+  const matchedMemberSummary = resolveStudioMemberSummaryFromMemberKey(
+    memberKey,
+    publishedMembers,
+    studioScopeMembers,
+  );
+  if (matchedMemberSummary) {
+    return `member:${trimOptional(matchedMemberSummary.memberId)}`;
+  }
+
   const matchedPublishedMember = publishedMembers.find(
-    ({ service }) => trimOptional(service.serviceId) === parsedMember.serviceId,
+    ({ service }) =>
+      trimOptional(service.serviceId) === parsedMember.memberId ||
+      trimOptional(service.serviceId) === parsedMember.serviceId,
   );
   const matchedWorkflowId = trimOptional(
     buildWorkflowMemberKeyFromSummary(matchedPublishedMember?.matchedWorkflow),
@@ -1213,7 +1939,7 @@ function formatStudioAssetMeta(input: {
 function describeMemberImplementationLabel(
   kind: string | null | undefined,
 ): string {
-  switch (normalizeStudioScopeBindingImplementationKind(kind)) {
+  switch (normalizeStudioMemberBindingImplementationKind(kind)) {
     case 'workflow':
       return 'Workflow implementation';
     case 'script':
@@ -1223,30 +1949,6 @@ function describeMemberImplementationLabel(
     default:
       return 'Member implementation';
   }
-}
-
-function collectStudioWorkflowNames(
-  candidates: readonly (string | null | undefined)[],
-): string[] {
-  const seen = new Set<string>();
-  const values: string[] = [];
-
-  for (const candidate of candidates) {
-    const normalizedCandidate = trimOptional(candidate);
-    if (!normalizedCandidate) {
-      continue;
-    }
-
-    const key = normalizeComparableText(normalizedCandidate);
-    if (!key || seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    values.push(normalizedCandidate);
-  }
-
-  return values;
 }
 
 function isWorkflowNotFoundError(error: unknown): boolean {
@@ -1346,9 +2048,17 @@ const StudioPage: React.FC = () => {
   const [appliedRouteSnapshot, setAppliedRouteSnapshot] = useState(
     locationSnapshot,
   );
+  const [pendingCreateMemberIntentSnapshot, setPendingCreateMemberIntentSnapshot] =
+    useState(() =>
+      readStudioRouteState().intent === 'create-member'
+        ? getLocationSnapshot()
+        : '',
+    );
   const [promptHistory, setPromptHistory] = useState<
     PlaygroundPromptHistoryEntry[]
   >(() => loadPlaygroundPromptHistory());
+  const [observeSessionSeedsByServiceId, setObserveSessionSeedsByServiceId] =
+    useState<Record<string, StudioObserveSessionSeed>>({});
   const bindingSelectionRef = useRef<{
     serviceId: string;
     endpointId: string;
@@ -1365,6 +2075,7 @@ const StudioPage: React.FC = () => {
   });
   const scriptLeaveGuardRef = useRef<(() => Promise<boolean>) | null>(null);
   const handledLocationSnapshotRef = useRef(locationSnapshot);
+  const handledCreateMemberIntentSnapshotRef = useRef('');
   const executionLogsWindowRef = useRef<Window | null>(null);
   const [logsDetached, setLogsDetached] = useState(false);
   const [authRecoveryPending, setAuthRecoveryPending] = useState(false);
@@ -1393,6 +2104,9 @@ const StudioPage: React.FC = () => {
     setAppliedRouteSnapshot((currentSnapshot) =>
       currentSnapshot === locationSnapshot ? currentSnapshot : locationSnapshot,
     );
+    if (routeState.intent === 'create-member') {
+      setPendingCreateMemberIntentSnapshot(locationSnapshot);
+    }
     setStudioSurface((currentSurface) =>
       currentSurface === routeStudioSurface ? currentSurface : routeStudioSurface,
     );
@@ -1440,6 +2154,7 @@ const StudioPage: React.FC = () => {
   }, [
     locationSnapshot,
     routeState.executionId,
+    routeState.intent,
     routeSelectedMember.kind,
     routeSelectedMember.value,
     routeState.prompt,
@@ -1560,25 +2275,16 @@ const StudioPage: React.FC = () => {
         tenantId: resolvedStudioScopeId,
       }),
   });
-  const executionsQuery = useQuery({
-    queryKey: ['studio-executions'],
-    enabled: studioHostReady,
-    queryFn: () => studioApi.listExecutions(),
+  const studioMembersQuery = useQuery({
+    queryKey: ['studio-scope-members', resolvedStudioScopeId],
+    enabled: studioHostReady && Boolean(resolvedStudioScopeId),
+    retry: false,
+    queryFn: () => studioApi.listMembers(resolvedStudioScopeId),
   });
   const selectedWorkflowQuery = useQuery({
     queryKey: ['studio-workflow', workflowWorkspaceContextKey, selectedWorkflowId],
     enabled: studioHostReady && Boolean(selectedWorkflowId),
     queryFn: () => studioApi.getWorkflow(selectedWorkflowId, resolvedStudioScopeId),
-  });
-  const selectedExecutionQuery = useQuery({
-    queryKey: ['studio-execution', selectedExecutionId],
-    enabled: studioHostReady && Boolean(selectedExecutionId),
-    queryFn: () => studioApi.getExecution(selectedExecutionId),
-  });
-  const scopeBindingQuery = useQuery({
-    queryKey: ['studio-scope-binding', resolvedStudioScopeId],
-    enabled: studioHostReady && Boolean(resolvedStudioScopeId),
-    queryFn: () => studioApi.getScopeBinding(resolvedStudioScopeId),
   });
   const gAgentTypesQuery = useQuery({
     queryKey: ['studio-runtime-gagent-types'],
@@ -1629,6 +2335,23 @@ const StudioPage: React.FC = () => {
     () => scopeServicesQuery.data ?? [],
     [scopeServicesQuery.data],
   );
+  const studioScopeMembers = useMemo(
+    () => studioMembersQuery.data?.members ?? [],
+    [studioMembersQuery.data?.members],
+  );
+  const studioMemberByPublishedServiceId = useMemo(() => {
+    const members = new Map<string, (typeof studioScopeMembers)[number]>();
+    for (const member of studioScopeMembers) {
+      const publishedServiceId = trimOptional(member.publishedServiceId);
+      if (!publishedServiceId) {
+        continue;
+      }
+
+      members.set(publishedServiceId, member);
+    }
+
+    return members;
+  }, [studioScopeMembers]);
   const availableScopeScripts = useMemo(
     () =>
       (scopeScriptsQuery.data ?? []).filter(
@@ -1687,6 +2410,9 @@ const StudioPage: React.FC = () => {
   const publishedScopeMembers = useMemo(() => {
     return publishedScopeServices.map((service) => {
       const serviceId = trimOptional(service.serviceId);
+      const memberSummary = serviceId
+        ? studioMemberByPublishedServiceId.get(serviceId) ?? null
+        : null;
       const revision = serviceId
         ? currentServiceRevisionByServiceId.get(serviceId) ?? null
         : null;
@@ -1711,6 +2437,7 @@ const StudioPage: React.FC = () => {
           : null;
 
       return {
+        memberSummary,
         service,
         revision,
         matchedWorkflow,
@@ -1721,6 +2448,7 @@ const StudioPage: React.FC = () => {
     availableScopeScripts,
     currentServiceRevisionByServiceId,
     publishedScopeServices,
+    studioMemberByPublishedServiceId,
     visibleWorkflowSummaries,
   ]);
   const serviceBackedWorkflowIds = useMemo(
@@ -1749,9 +2477,7 @@ const StudioPage: React.FC = () => {
       resolvedStudioScopeId
         ? buildScopeConsoleServiceOptions(
             publishedScopeServices,
-            scopeBindingQuery.data?.available
-              ? scopeBindingQuery.data.serviceId
-              : undefined,
+            undefined,
             {
               sortBy: 'serviceId',
             },
@@ -1760,8 +2486,6 @@ const StudioPage: React.FC = () => {
     [
       publishedScopeServices,
       resolvedStudioScopeId,
-      scopeBindingQuery.data?.available,
-      scopeBindingQuery.data?.serviceId,
     ],
   );
   const readyUserProviders = useMemo(
@@ -2662,7 +3386,6 @@ const StudioPage: React.FC = () => {
     () => promptHistory.slice(0, 3),
     [promptHistory],
   );
-  const executionCanStop = isExecutionStopAllowed(selectedExecutionQuery.data?.status);
   const isBuildSurface = studioSurface === 'build';
   const isBuildEditorSurface =
     studioSurface === 'build' && buildSurface === 'editor';
@@ -2707,6 +3430,59 @@ const StudioPage: React.FC = () => {
     draftYaml,
     resolvedStudioScopeId,
   ]);
+  const buildPendingMemberSummary = useMemo(() => {
+    if (buildPendingBindCandidate?.kind !== 'workflow') {
+      return null;
+    }
+
+    const candidateWorkflowId = trimOptional(
+      selectedWorkflowId || activeWorkflowFile?.workflowId,
+    );
+    const normalizedCandidateName = normalizeComparableText(
+      buildPendingBindCandidate.displayName,
+    );
+
+    const publishedMatch = publishedScopeMembers.find(
+      ({ matchedWorkflow, memberSummary }) => {
+        if (
+          candidateWorkflowId &&
+          trimOptional(matchedWorkflow?.workflowId) === candidateWorkflowId
+        ) {
+          return true;
+        }
+
+        const workflowName = trimOptional(matchedWorkflow?.name);
+        if (
+          workflowName &&
+          normalizeComparableText(workflowName) === normalizedCandidateName
+        ) {
+          return true;
+        }
+
+        const memberDisplayName = trimOptional(memberSummary?.displayName);
+        return (
+          Boolean(memberDisplayName) &&
+          normalizeComparableText(memberDisplayName) === normalizedCandidateName
+        );
+      },
+    )?.memberSummary;
+    if (publishedMatch) {
+      return publishedMatch;
+    }
+
+    const rosterMatches = studioScopeMembers.filter(
+      (member) =>
+        member.implementationKind === 'workflow' &&
+        normalizeComparableText(member.displayName) === normalizedCandidateName,
+    );
+    return rosterMatches.length === 1 ? rosterMatches[0] : null;
+  }, [
+    activeWorkflowFile?.workflowId,
+    buildPendingBindCandidate,
+    publishedScopeMembers,
+    selectedWorkflowId,
+    studioScopeMembers,
+  ]);
   const handleBindPendingCandidate = useCallback(async () => {
     if (!buildPendingBindCandidate || !resolvedStudioScopeId) {
       throw new Error('Resolve the current scope before binding this member.');
@@ -2718,14 +3494,25 @@ const StudioPage: React.FC = () => {
       );
     }
 
-    const result = await studioApi.bindScopeWorkflow({
-      scopeId: resolvedStudioScopeId,
-      displayName: buildPendingBindCandidate.displayName,
-      workflowYamls: await buildWorkflowYamlBundle(),
+    const resolvedBuildMemberId = trimOptional(buildPendingMemberSummary?.memberId);
+    const result = resolvedBuildMemberId
+      ? await studioApi.bindMemberWorkflow({
+          scopeId: resolvedStudioScopeId,
+          memberId: resolvedBuildMemberId,
+          displayName: buildPendingBindCandidate.displayName,
+          workflowYamls: await buildWorkflowYamlBundle(),
+        })
+      : await studioApi.bindScopeWorkflow({
+          scopeId: resolvedStudioScopeId,
+          displayName: buildPendingBindCandidate.displayName,
+          workflowYamls: await buildWorkflowYamlBundle(),
+        });
+    await queryClient.invalidateQueries({
+      queryKey: ['studio-scope-members', resolvedStudioScopeId],
     });
     const servicesResult = await scopeServicesQuery.refetch();
-    void scopeBindingQuery.refetch();
     const optimisticBoundServiceId =
+      trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
       trimOptional(buildPendingBindCandidate.displayName) ||
       trimOptional(result.displayName) ||
       trimOptional(result.targetName) ||
@@ -2745,6 +3532,7 @@ const StudioPage: React.FC = () => {
 
     if (boundServiceId) {
       const boundMemberKey =
+        (resolvedBuildMemberId ? `member:${resolvedBuildMemberId}` : '') ||
         trimOptional(selectedWorkflowMemberKey) ||
         (trimOptional(selectedScriptId)
           ? `script:${trimOptional(selectedScriptId)}`
@@ -2754,7 +3542,16 @@ const StudioPage: React.FC = () => {
           ? `member:${trimOptional(routeState.memberId)}`
           : '') ||
         activeBuildFocusKey ||
-        `member:${boundServiceId}`;
+        (() => {
+          const resolvedBoundMemberId = resolvePublishedMemberIdFromServiceId(
+            boundServiceId,
+            publishedScopeMembers,
+            studioScopeMembers,
+          );
+          return resolvedBoundMemberId
+            ? `member:${resolvedBoundMemberId}`
+            : `member:${boundServiceId}`;
+        })();
       setRecentlyBoundMemberKey(boundMemberKey);
       setRecentlyBoundServiceId(boundServiceId);
       const selectedService = (servicesResult.data ?? []).find(
@@ -2778,20 +3575,23 @@ const StudioPage: React.FC = () => {
           scopeId: resolvedStudioScopeId || undefined,
           memberKey: boundMemberKey,
           step: 'bind',
-          tab: 'bindings',
         }),
       );
     }
   }, [
     activeBuildFocusKey,
+    buildPendingMemberSummary,
     buildWorkflowYamlBundle,
     buildPendingBindCandidate,
+    queryClient,
+    publishedScopeMembers,
     resolvedStudioScopeId,
     routeState.memberId,
     routeState.memberKey,
     selectedScriptId,
     selectedWorkflowMemberKey,
     scopeServicesQuery,
+    studioScopeMembers,
   ]);
 
   const openWorkspaceWorkflow = (workflowId: string) => {
@@ -3031,6 +3831,33 @@ const StudioPage: React.FC = () => {
     suggestedCreateWorkflowName,
   ]);
 
+  useEffect(() => {
+    if (!isStudioLocation || !pendingCreateMemberIntentSnapshot) {
+      return;
+    }
+
+    if (!studioHostReady || createMemberModalOpen) {
+      return;
+    }
+
+    if (
+      handledCreateMemberIntentSnapshotRef.current ===
+      pendingCreateMemberIntentSnapshot
+    ) {
+      return;
+    }
+
+    handledCreateMemberIntentSnapshotRef.current = pendingCreateMemberIntentSnapshot;
+    setPendingCreateMemberIntentSnapshot('');
+    void openCreateMemberFlow();
+  }, [
+    createMemberModalOpen,
+    isStudioLocation,
+    openCreateMemberFlow,
+    pendingCreateMemberIntentSnapshot,
+    studioHostReady,
+  ]);
+
   const closeCreateMemberFlow = useCallback(() => {
     if (inventoryBusyKey === 'create') {
       return;
@@ -3043,8 +3870,8 @@ const StudioPage: React.FC = () => {
     if (createMemberKind !== 'workflow') {
       void message.info(
         createMemberKind === 'script'
-          ? 'Script member creation will move into this modal after the member API lands. For now, continue in Build > Script.'
-          : 'GAgent member creation will move into this modal after the member API lands. For now, continue in Build > GAgent.',
+          ? 'Script member authority exists on the backend now, but this modal still continues through Build > Script.'
+          : 'GAgent member authority exists on the backend now, but this modal still continues through Build > GAgent.',
       );
       return;
     }
@@ -3072,6 +3899,16 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    if (
+      studioScopeMembers.some(
+        (member) =>
+          normalizeComparableText(member.displayName) === workflowName.toLowerCase(),
+      )
+    ) {
+      void message.warning('A team member with the same name already exists.');
+      return;
+    }
+
     setInventoryBusyKey('create');
     setInventoryBusyAction('create');
 
@@ -3087,7 +3924,33 @@ const StudioPage: React.FC = () => {
 
       await applySavedWorkflowSelection(savedWorkflow);
       setCreateMemberModalOpen(false);
-      void message.success(`Created workflow draft for member ${workflowName}.`);
+
+      if (!resolvedStudioScopeId) {
+        void message.success(
+          `Created workflow draft for member ${workflowName}. Connect a scope to register the backend member authority.`,
+        );
+        return;
+      }
+
+      try {
+        await studioApi.createMember({
+          scopeId: resolvedStudioScopeId,
+          displayName: workflowName,
+          implementationKind: 'workflow',
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ['studio-scope-members', resolvedStudioScopeId],
+        });
+        void message.success(
+          `Created member ${workflowName} and opened its workflow draft.`,
+        );
+      } catch (memberError) {
+        void message.error(
+          memberError instanceof Error
+            ? `Workflow draft created, but Studio could not register the member authority: ${memberError.message}`
+            : 'Workflow draft created, but Studio could not register the member authority.',
+        );
+      }
     } catch (error) {
       void message.error(
         error instanceof Error
@@ -3104,7 +3967,9 @@ const StudioPage: React.FC = () => {
     createMemberDirectoryId,
     createMemberName,
     inventoryDirectoryId,
+    queryClient,
     resolvedStudioScopeId,
+    studioScopeMembers,
     visibleWorkflowSummaries,
   ]);
 
@@ -3589,29 +4454,41 @@ const StudioPage: React.FC = () => {
   };
 
   const handleStopExecution = async () => {
-    if (!selectedExecutionId || !executionCanStop) {
+    if (
+      !selectedExecutionId ||
+      !executionCanStop ||
+      !resolvedStudioScopeId ||
+      !workbenchPublishedServiceId
+    ) {
       return;
     }
 
     setExecutionStopPending(true);
     setExecutionNotice(null);
     try {
-      const detail = await studioApi.stopExecution(selectedExecutionId, {
-        reason: 'user requested stop',
-      });
-      queryClient.setQueryData(['studio-execution', selectedExecutionId], detail);
-      queryClient.setQueryData(
-        ['studio-executions'],
-        (current: StudioExecutionSummary[] | undefined) =>
-          (current ?? []).map((item) =>
-            item.executionId === detail.executionId
-              ? toExecutionSummary(detail)
-              : item,
-          ),
+      await runtimeRunsApi.stop(
+        resolvedStudioScopeId,
+        {
+          actorId: trimOptional(selectedObserveRunSummary?.actorId) || undefined,
+          runId: selectedExecutionId,
+          reason: 'user requested stop',
+        },
+        {
+          memberId: workbenchStudioMemberId || undefined,
+          serviceId: workbenchPublishedServiceId,
+        },
       );
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['studio-observe-runs', resolvedStudioScopeId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['studio-observe-run-audit', resolvedStudioScopeId],
+        }),
+      ]);
       setExecutionNotice({
         type: 'info',
-        message: 'Stop requested for the active Studio execution.',
+        message: 'Stop requested for the active member run.',
       });
     } catch (error) {
       setExecutionNotice({
@@ -3619,7 +4496,7 @@ const StudioPage: React.FC = () => {
         message:
           error instanceof Error
             ? error.message
-            : 'Failed to stop the Studio execution.',
+            : 'Failed to stop the active member run.',
       });
     } finally {
       setExecutionStopPending(false);
@@ -3628,44 +4505,83 @@ const StudioPage: React.FC = () => {
 
   const handleResumeExecution = async (
     interaction: {
-      readonly kind: 'human_input' | 'human_approval';
+      readonly kind: 'human_input' | 'human_approval' | 'wait_signal';
       readonly runId: string;
       readonly stepId: string;
+      readonly signalName?: string;
     },
-    action: 'submit' | 'approve' | 'reject',
+    action: 'submit' | 'approve' | 'reject' | 'signal',
     userInput: string,
   ) => {
-    if (!selectedExecutionId) {
+    if (
+      !selectedExecutionId ||
+      !resolvedStudioScopeId ||
+      !workbenchPublishedServiceId
+    ) {
       return;
     }
 
     setExecutionNotice(null);
     try {
-      const detail = await studioApi.resumeExecution(selectedExecutionId, {
-        runId: interaction.runId,
-        stepId: interaction.stepId,
-        approved: interaction.kind === 'human_input' ? true : action === 'approve',
-        userInput: userInput.trim() || null,
-        suspensionType: interaction.kind,
-      });
-      queryClient.setQueryData(['studio-execution', selectedExecutionId], detail);
-      queryClient.setQueryData(
-        ['studio-executions'],
-        (current: StudioExecutionSummary[] | undefined) =>
-          (current ?? []).map((item) =>
-            item.executionId === detail.executionId
-              ? toExecutionSummary(detail)
-              : item,
-          ),
-      );
+      const actorId = trimOptional(selectedObserveRunSummary?.actorId);
+      if (!actorId) {
+        throw new Error(
+          'Studio could not resolve the actor id for the active member run.',
+        );
+      }
+
+      if (interaction.kind === 'wait_signal' || action === 'signal') {
+        await runtimeRunsApi.signal(
+          resolvedStudioScopeId,
+          {
+            actorId,
+            runId: interaction.runId,
+            signalName: trimOptional(interaction.signalName) || 'continue',
+            stepId: interaction.stepId,
+            payload: userInput.trim() || undefined,
+          },
+          {
+            memberId: workbenchStudioMemberId || undefined,
+            serviceId: workbenchPublishedServiceId,
+          },
+        );
+      } else {
+        await runtimeRunsApi.resume(
+          resolvedStudioScopeId,
+          {
+            actorId,
+            runId: interaction.runId,
+            stepId: interaction.stepId,
+            approved:
+              interaction.kind === 'human_input'
+                ? true
+                : action === 'approve',
+            userInput: userInput.trim() || undefined,
+          },
+          {
+            memberId: workbenchStudioMemberId || undefined,
+            serviceId: workbenchPublishedServiceId,
+          },
+        );
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['studio-observe-runs', resolvedStudioScopeId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['studio-observe-run-audit', resolvedStudioScopeId],
+        }),
+      ]);
       setExecutionNotice({
         type: 'success',
         message:
-          interaction.kind === 'human_approval'
-            ? action === 'approve'
-              ? 'Approval submitted for the active execution.'
-              : 'Rejection submitted for the active execution.'
-            : 'Input submitted for the active execution.',
+          interaction.kind === 'wait_signal' || action === 'signal'
+            ? 'Signal submitted for the active member run.'
+            : interaction.kind === 'human_approval'
+              ? action === 'approve'
+                ? 'Approval submitted for the active member run.'
+                : 'Rejection submitted for the active member run.'
+              : 'Input submitted for the active member run.',
       });
     } catch (error) {
       setExecutionNotice({
@@ -3673,7 +4589,7 @@ const StudioPage: React.FC = () => {
         message:
           error instanceof Error
             ? error.message
-            : 'Failed to resume the Studio execution.',
+            : 'Failed to continue the active member run.',
       });
       throw error;
     }
@@ -3941,8 +4857,49 @@ const StudioPage: React.FC = () => {
     },
     [],
   );
+  const handleObserveSessionChange = useCallback(
+    (session: StudioObserveSessionSeed | null) => {
+      const serviceId = trimOptional(session?.serviceId);
+      if (!session || !serviceId) {
+        return;
+      }
+
+      setObserveSessionSeedsByServiceId((current) => {
+        const existing = current[serviceId];
+        if (
+          existing &&
+          existing.runId === session.runId &&
+          existing.status === session.status &&
+          existing.events.length === session.events.length &&
+          existing.completedAtUtc === session.completedAtUtc &&
+          existing.startedAtUtc === session.startedAtUtc
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [serviceId]: session,
+        };
+      });
+      if (resolvedStudioScopeId) {
+        saveStudioObserveSessionSeed({
+          scopeId: resolvedStudioScopeId,
+          session,
+        });
+      }
+    },
+    [resolvedStudioScopeId],
+  );
   const handleUseBindingEndpoint = useCallback(
     (serviceId: string, endpointId: string) => {
+      const resolvedMemberId =
+        trimOptional(routeState.memberId) ||
+        resolvePublishedMemberIdFromServiceId(
+          serviceId,
+          publishedScopeMembers,
+          studioScopeMembers,
+        );
       bindingSelectionRef.current = {
         serviceId,
         endpointId,
@@ -3956,8 +4913,8 @@ const StudioPage: React.FC = () => {
           scopeId: resolvedStudioScopeId || undefined,
           memberKey:
             trimOptional(routeState.memberKey) ||
-            (trimOptional(routeState.memberId)
-              ? `member:${trimOptional(routeState.memberId)}`
+            (resolvedMemberId
+              ? `member:${resolvedMemberId}`
               : '') ||
             activeBuildFocusKey ||
             (serviceId ? `member:${serviceId}` : undefined),
@@ -3971,9 +4928,11 @@ const StudioPage: React.FC = () => {
       activeBuildFocusKey,
       applyStudioTarget,
       history,
+      publishedScopeMembers,
       resolvedStudioScopeId,
       routeState.memberId,
       routeState.memberKey,
+      studioScopeMembers,
     ],
   );
   const handleSelectLifecycleStep = useCallback(
@@ -4134,6 +5093,18 @@ const StudioPage: React.FC = () => {
     );
     return trimOptional(matchedMember?.service.serviceId);
   }, [publishedScopeMembers, selectedWorkflowId]);
+  const activeWorkflowPublishedMemberId = useMemo(() => {
+    const workflowId = trimOptional(selectedWorkflowId);
+    if (!workflowId) {
+      return '';
+    }
+
+    const matchedMember = publishedScopeMembers.find(
+      ({ matchedWorkflow }) =>
+        trimOptional(matchedWorkflow?.workflowId) === workflowId,
+    );
+    return trimOptional(matchedMember?.memberSummary?.memberId);
+  }, [publishedScopeMembers, selectedWorkflowId]);
   const activeScriptPublishedServiceId = useMemo(() => {
     const scriptId = trimOptional(selectedScriptId);
     if (!scriptId) {
@@ -4145,6 +5116,18 @@ const StudioPage: React.FC = () => {
         trimOptional(matchedScript?.script?.scriptId) === scriptId,
     );
     return trimOptional(matchedMember?.service.serviceId);
+  }, [publishedScopeMembers, selectedScriptId]);
+  const activeScriptPublishedMemberId = useMemo(() => {
+    const scriptId = trimOptional(selectedScriptId);
+    if (!scriptId) {
+      return '';
+    }
+
+    const matchedMember = publishedScopeMembers.find(
+      ({ matchedScript }) =>
+        trimOptional(matchedScript?.script?.scriptId) === scriptId,
+    );
+    return trimOptional(matchedMember?.memberSummary?.memberId);
   }, [publishedScopeMembers, selectedScriptId]);
   const activeGAgentPublishedServiceId = useMemo(() => {
     const actorTypeName = trimOptional(selectedGAgentTypeName);
@@ -4159,10 +5142,27 @@ const StudioPage: React.FC = () => {
     );
     return trimOptional(matchedMember?.service.serviceId);
   }, [publishedScopeMembers, selectedGAgentTypeName]);
+  const activeGAgentPublishedMemberId = useMemo(() => {
+    const actorTypeName = trimOptional(selectedGAgentTypeName);
+    if (!actorTypeName) {
+      return '';
+    }
+
+    const matchedMember = publishedScopeMembers.find(
+      ({ revision }) =>
+        revision?.implementationKind === 'gagent' &&
+        trimOptional(revision.staticActorTypeName) === actorTypeName,
+    );
+    return trimOptional(matchedMember?.memberSummary?.memberId);
+  }, [publishedScopeMembers, selectedGAgentTypeName]);
   const activeBuildPublishedServiceId =
     activeWorkflowPublishedServiceId ||
     activeScriptPublishedServiceId ||
     activeGAgentPublishedServiceId;
+  const activeBuildPublishedMemberId =
+    activeWorkflowPublishedMemberId ||
+    activeScriptPublishedMemberId ||
+    activeGAgentPublishedMemberId;
   const selectedWorkflowRepresentsPublishedMember =
     Boolean(activeWorkflowPublishedServiceId);
   const selectedScriptRepresentsPublishedMember = Boolean(
@@ -4178,34 +5178,11 @@ const StudioPage: React.FC = () => {
   const lifecycleSurfaceMemberKey =
     routeSelectedMemberKey ||
     buildSurfaceMemberKey ||
-    (activeBuildPublishedServiceId
-      ? `member:${activeBuildPublishedServiceId}`
+    (activeBuildPublishedMemberId
+      ? `member:${activeBuildPublishedMemberId}`
       : '');
   const currentFocusMemberKey =
     studioSurface === 'build' ? buildSurfaceMemberKey : lifecycleSurfaceMemberKey;
-  const focusedPublishedServiceId = useMemo(
-    () =>
-      resolvePublishedServiceIdFromMemberKey(
-        currentFocusMemberKey,
-        publishedScopeMembers,
-      ),
-    [currentFocusMemberKey, publishedScopeMembers],
-  );
-  const focusedPublishedService = useMemo(
-    () =>
-      focusedPublishedServiceId
-        ? publishedScopeServices.find(
-            (service) => service.serviceId === focusedPublishedServiceId,
-          ) ?? null
-        : null,
-    [focusedPublishedServiceId, publishedScopeServices],
-  );
-  const focusedPublishedServiceRevision = useMemo(() => {
-    const serviceId = trimOptional(focusedPublishedService?.serviceId);
-    return serviceId
-      ? currentServiceRevisionByServiceId.get(serviceId) ?? null
-      : null;
-  }, [currentServiceRevisionByServiceId, focusedPublishedService?.serviceId]);
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -4244,18 +5221,18 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const tab: StudioTab =
+    const tab: StudioTab | undefined =
       studioSurface === 'bind'
-        ? 'bindings'
+        ? undefined
         : studioSurface === 'invoke'
           ? 'invoke'
           : studioSurface === 'observe'
             ? 'executions'
             : buildSurface === 'gagent'
               ? 'gagents'
-            : buildSurface === 'scripts'
-              ? 'scripts'
-              : 'studio';
+              : buildSurface === 'scripts'
+                ? 'scripts'
+                : 'studio';
     const step: StudioStep =
       studioSurface === 'bind'
         ? 'bind'
@@ -4321,8 +5298,8 @@ const StudioPage: React.FC = () => {
     studioSurface === 'build' &&
     (currentFocusMemberKey.startsWith('workflow:') ||
       currentFocusMemberKey.startsWith('script:'))
-      ? activeBuildPublishedServiceId
-        ? `member:${activeBuildPublishedServiceId}`
+      ? activeBuildPublishedMemberId
+        ? `member:${activeBuildPublishedMemberId}`
         : currentFocusMemberKey
       : '';
   const workbenchPublishedServiceId = useMemo(
@@ -4330,8 +5307,39 @@ const StudioPage: React.FC = () => {
       resolvePublishedServiceIdFromMemberKey(
         workbenchMemberKey,
         publishedScopeMembers,
+        studioScopeMembers,
       ),
-    [publishedScopeMembers, workbenchMemberKey],
+    [publishedScopeMembers, studioScopeMembers, workbenchMemberKey],
+  );
+  const workbenchStudioMemberSummary = useMemo(
+    () =>
+      resolveStudioMemberSummaryFromMemberKey(
+        workbenchMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      ),
+    [publishedScopeMembers, studioScopeMembers, workbenchMemberKey],
+  );
+  const workbenchStudioMemberId = useMemo(
+    () => trimOptional(workbenchStudioMemberSummary?.memberId),
+    [workbenchStudioMemberSummary?.memberId],
+  );
+  const workbenchStudioMemberDetailQuery = useQuery({
+    queryKey: ['studio-scope-member', resolvedStudioScopeId, workbenchStudioMemberId],
+    enabled:
+      studioHostReady &&
+      Boolean(resolvedStudioScopeId) &&
+      Boolean(workbenchStudioMemberId),
+    retry: false,
+    queryFn: () => studioApi.getMember(resolvedStudioScopeId, workbenchStudioMemberId),
+  });
+  const workbenchStudioMember = useMemo(
+    () => workbenchStudioMemberDetailQuery.data?.summary ?? workbenchStudioMemberSummary,
+    [workbenchStudioMemberDetailQuery.data?.summary, workbenchStudioMemberSummary],
+  );
+  const workbenchStudioMemberBinding = useMemo(
+    () => workbenchStudioMemberDetailQuery.data?.lastBinding ?? null,
+    [workbenchStudioMemberDetailQuery.data?.lastBinding],
   );
   const workbenchPublishedService = useMemo(
     () =>
@@ -4348,12 +5356,266 @@ const StudioPage: React.FC = () => {
       ? currentServiceRevisionByServiceId.get(serviceId) ?? null
       : null;
   }, [currentServiceRevisionByServiceId, workbenchPublishedService?.serviceId]);
+  useEffect(() => {
+    if (!resolvedStudioScopeId || !workbenchPublishedServiceId) {
+      return;
+    }
+
+    const persistedSession = loadStudioObserveSessionSeed({
+      scopeId: resolvedStudioScopeId,
+      serviceId: workbenchPublishedServiceId,
+    });
+    if (!persistedSession) {
+      return;
+    }
+
+    if (!isStudioObserveSessionSeedFresh(persistedSession)) {
+      clearStudioObserveSessionSeed({
+        scopeId: resolvedStudioScopeId,
+        serviceId: workbenchPublishedServiceId,
+      });
+      return;
+    }
+
+    setObserveSessionSeedsByServiceId((current) => {
+      const existing = current[workbenchPublishedServiceId];
+      if (
+        existing &&
+        trimOptional(existing.runId) === trimOptional(persistedSession.runId) &&
+        trimOptional(existing.completedAtUtc) ===
+          trimOptional(persistedSession.completedAtUtc) &&
+        trimOptional(existing.startedAtUtc) ===
+          trimOptional(persistedSession.startedAtUtc)
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [workbenchPublishedServiceId]: persistedSession,
+      };
+    });
+  }, [resolvedStudioScopeId, workbenchPublishedServiceId]);
+  const observeCurrentSessionSeed = useMemo(
+    () => {
+      if (!workbenchPublishedServiceId) {
+        return null;
+      }
+
+      const session = observeSessionSeedsByServiceId[workbenchPublishedServiceId] ?? null;
+      return isStudioObserveSessionSeedFresh(session) ? session : null;
+    },
+    [observeSessionSeedsByServiceId, workbenchPublishedServiceId],
+  );
+  const observeFallbackExecution = useMemo(
+    () =>
+      observeCurrentSessionSeed
+        ? toObserveExecutionFromSessionSeed(observeCurrentSessionSeed, {
+            workflowName:
+              trimOptional(workbenchPublishedServiceRevision?.workflowName) ||
+              trimOptional(workbenchPublishedService?.displayName) ||
+              trimOptional(observeCurrentSessionSeed.serviceLabel),
+          })
+        : null,
+    [
+      observeCurrentSessionSeed,
+      workbenchPublishedService?.displayName,
+      workbenchPublishedServiceRevision?.workflowName,
+    ],
+  );
+  const observeServiceRunsQuery = useQuery({
+    queryKey: [
+      'studio-observe-runs',
+      resolvedStudioScopeId,
+      workbenchStudioMemberId,
+      workbenchPublishedServiceId,
+    ],
+    enabled:
+      studioSurface === 'observe' &&
+      studioHostReady &&
+      Boolean(resolvedStudioScopeId) &&
+      Boolean(workbenchStudioMemberId || workbenchPublishedServiceId),
+    queryFn: () =>
+      workbenchStudioMemberId
+        ? scopeRuntimeApi.listMemberRuns(
+            resolvedStudioScopeId,
+            workbenchStudioMemberId,
+            {
+              take: 12,
+            },
+          )
+        : scopeRuntimeApi.listServiceRuns(
+            resolvedStudioScopeId,
+            workbenchPublishedServiceId,
+            {
+              take: 12,
+            },
+          ),
+    retry: false,
+  });
+  const observeServiceRuns = useMemo(() => {
+    const runs = [...(observeServiceRunsQuery.data?.runs ?? [])];
+    return runs.sort((left, right) => {
+      const leftTimestamp =
+        Date.parse(
+          trimOptional(left.lastUpdatedAt) || readObserveRunStartedAt(left) || '',
+        ) || 0;
+      const rightTimestamp =
+        Date.parse(
+          trimOptional(right.lastUpdatedAt) || readObserveRunStartedAt(right) || '',
+        ) || 0;
+      return rightTimestamp - leftTimestamp;
+    });
+  }, [observeServiceRunsQuery.data?.runs]);
+  const selectedObserveBackendRunSummary = useMemo(
+    () =>
+      selectedExecutionId
+        ? observeServiceRuns.find(
+            (run) => trimOptional(run.runId) === trimOptional(selectedExecutionId),
+          ) ?? null
+        : null,
+    [observeServiceRuns, selectedExecutionId],
+  );
+  const selectedObserveFallbackExecution = useMemo(() => {
+    if (!selectedExecutionId || !observeFallbackExecution) {
+      return null;
+    }
+
+    return trimOptional(observeFallbackExecution.executionId) ===
+      trimOptional(selectedExecutionId)
+      ? observeFallbackExecution
+      : null;
+  }, [observeFallbackExecution, selectedExecutionId]);
+  const selectedObserveRunSummary =
+    selectedObserveBackendRunSummary || selectedObserveFallbackExecution;
+  const selectedObserveRunAuditQuery = useQuery({
+    queryKey: [
+      'studio-observe-run-audit',
+      resolvedStudioScopeId,
+      workbenchStudioMemberId,
+      workbenchPublishedServiceId,
+      selectedExecutionId,
+      trimOptional(selectedObserveRunSummary?.actorId),
+    ],
+    enabled:
+      studioSurface === 'observe' &&
+      studioHostReady &&
+      Boolean(resolvedStudioScopeId) &&
+      Boolean(workbenchStudioMemberId || workbenchPublishedServiceId) &&
+      Boolean(selectedExecutionId) &&
+      Boolean(selectedObserveBackendRunSummary),
+    queryFn: () =>
+      workbenchStudioMemberId
+        ? scopeRuntimeApi.getMemberRunAudit(
+            resolvedStudioScopeId,
+            workbenchStudioMemberId,
+            selectedExecutionId,
+            {
+              actorId:
+                trimOptional(selectedObserveBackendRunSummary?.actorId) || undefined,
+            },
+          )
+        : scopeRuntimeApi.getServiceRunAudit(
+            resolvedStudioScopeId,
+            workbenchPublishedServiceId,
+            selectedExecutionId,
+            {
+              actorId:
+                trimOptional(selectedObserveBackendRunSummary?.actorId) || undefined,
+            },
+          ),
+    retry: false,
+  });
+  useEffect(() => {
+    if (
+      studioSurface !== 'observe' ||
+      observeServiceRunsQuery.isLoading ||
+      observeServiceRunsQuery.isFetching ||
+      !observeCurrentSessionSeed ||
+      !workbenchPublishedServiceId
+    ) {
+      return;
+    }
+
+    const sessionRunId = trimOptional(observeCurrentSessionSeed.runId);
+    if (!sessionRunId) {
+      return;
+    }
+
+    if (
+      observeServiceRuns.some(
+        (run) => trimOptional(run.runId) === sessionRunId,
+      )
+    ) {
+      return;
+    }
+
+    const freshnessSource =
+      trimOptional(observeCurrentSessionSeed.completedAtUtc) ||
+      trimOptional(observeCurrentSessionSeed.startedAtUtc);
+    const freshnessTimestamp = Date.parse(freshnessSource);
+    if (
+      !Number.isFinite(freshnessTimestamp) ||
+      Date.now() - freshnessTimestamp > 30_000
+    ) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void observeServiceRunsQuery.refetch();
+    }, 1500);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    observeCurrentSessionSeed,
+    observeServiceRuns,
+    observeServiceRunsQuery,
+    studioSurface,
+    workbenchPublishedServiceId,
+  ]);
+  useEffect(() => {
+    if (
+      !resolvedStudioScopeId ||
+      !workbenchPublishedServiceId ||
+      !observeCurrentSessionSeed
+    ) {
+      return;
+    }
+
+    const sessionRunId = trimOptional(observeCurrentSessionSeed.runId);
+    if (
+      !sessionRunId ||
+      !observeServiceRuns.some(
+        (run) => trimOptional(run.runId) === sessionRunId,
+      )
+    ) {
+      return;
+    }
+
+    clearStudioObserveSessionSeed({
+      scopeId: resolvedStudioScopeId,
+      serviceId: workbenchPublishedServiceId,
+    });
+    setObserveSessionSeedsByServiceId((current) => {
+      if (!current[workbenchPublishedServiceId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[workbenchPublishedServiceId];
+      return next;
+    });
+  }, [
+    observeCurrentSessionSeed,
+    observeServiceRuns,
+    resolvedStudioScopeId,
+    workbenchPublishedServiceId,
+  ]);
   const lifecycleSurfaceSelectedMemberKey =
     studioSurface !== 'build' &&
     (workbenchMemberKey.startsWith('workflow:') ||
       workbenchMemberKey.startsWith('script:'))
-      ? workbenchPublishedServiceId
-        ? `member:${workbenchPublishedServiceId}`
+      ? workbenchStudioMemberId
+        ? `member:${workbenchStudioMemberId}`
         : workbenchMemberKey
       : '';
   const selectedRailMemberKey =
@@ -4368,10 +5630,14 @@ const StudioPage: React.FC = () => {
     ? 'Select a member'
     : workbenchMemberKey.startsWith('workflow:')
         ? trimOptional(activeWorkflowName) || 'Workflow member'
-        : workbenchMemberKey.startsWith('script:')
-          ? trimOptional(selectedScriptId) || 'Script member'
+    : workbenchMemberKey.startsWith('script:')
+        ? trimOptional(selectedScriptId) || 'Script member'
         : workbenchMemberKey.startsWith('member:')
-            ? trimOptional(workbenchPublishedService?.displayName) ||
+            ? trimOptional(workbenchPublishedServiceRevision?.workflowName) ||
+              trimOptional(workbenchPublishedServiceRevision?.scriptId) ||
+              trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName) ||
+              trimOptional(workbenchPublishedService?.displayName) ||
+              trimOptional(workbenchStudioMember?.displayName) ||
               trimOptional(workbenchPublishedService?.serviceId) ||
               trimOptional(routeState.memberId) ||
               'Current member'
@@ -4408,12 +5674,20 @@ const StudioPage: React.FC = () => {
               primary: currentMemberImplementationLabel,
               secondary: trimOptional(selectedScriptId) || 'Current script member',
             }) || 'Studio is tracking the current script-backed member.'
-          : workbenchMemberKey.startsWith('member:')
+        : workbenchMemberKey.startsWith('member:')
             ? formatStudioAssetMeta({
                 primary: currentMemberImplementationLabel,
                 secondary:
+                  trimOptional(workbenchStudioMemberBinding?.publishedServiceId) ||
+                  trimOptional(workbenchStudioMember?.publishedServiceId) ||
                   trimOptional(workbenchPublishedService?.serviceId) ||
                   trimOptional(routeState.memberId) ||
+                  (workbenchStudioMember
+                    ? formatStudioMemberLifecycleStage(
+                        workbenchStudioMember.lifecycleStage,
+                      )
+                    : '') ||
+                  trimOptional(workbenchStudioMemberBinding?.revisionId) ||
                   trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
                   trimOptional(workbenchPublishedService?.deploymentStatus) ||
                   'Published member',
@@ -4439,7 +5713,9 @@ const StudioPage: React.FC = () => {
       ? currentMemberImplementationLabel || 'Member focus'
       : '',
     secondary: hasSelectedMemberFocus
-      ? trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
+      ? trimOptional(workbenchStudioMemberBinding?.revisionId) ||
+        trimOptional(workbenchStudioMember?.lastBoundRevisionId) ||
+        trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
         trimOptional(workbenchPublishedService?.serviceId) ||
         trimOptional(routeState.memberId) ||
         activeBuildFocusKey
@@ -4460,13 +5736,22 @@ const StudioPage: React.FC = () => {
   const currentSelectedMemberServiceId =
     workbenchPublishedServiceId;
   const comparableWorkbenchMemberKey = useMemo(
-    () => resolveStudioMemberOwnerKey(workbenchMemberKey, publishedScopeMembers),
-    [publishedScopeMembers, workbenchMemberKey],
+    () =>
+      resolveStudioMemberOwnerKey(
+        workbenchMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      ),
+    [publishedScopeMembers, studioScopeMembers, workbenchMemberKey],
   );
   const comparableRecentlyBoundMemberKey = useMemo(
     () =>
-      resolveStudioMemberOwnerKey(recentlyBoundMemberKey, publishedScopeMembers),
-    [publishedScopeMembers, recentlyBoundMemberKey],
+      resolveStudioMemberOwnerKey(
+        recentlyBoundMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      ),
+    [publishedScopeMembers, recentlyBoundMemberKey, studioScopeMembers],
   );
   const recentBindSelectedMemberServiceId =
     trimOptional(comparableRecentlyBoundMemberKey) ===
@@ -4832,14 +6117,28 @@ const StudioPage: React.FC = () => {
       }
 
       if (normalizedMemberKey.startsWith('member:')) {
-        const serviceId = readServiceIdFromMemberKey(normalizedMemberKey);
+        const selectedMemberSummary = resolveStudioMemberSummaryFromMemberKey(
+          normalizedMemberKey,
+          publishedScopeMembers,
+          studioScopeMembers,
+        );
+        const selectedMemberId = trimOptional(selectedMemberSummary?.memberId);
+        const selectedMemberServiceId =
+          trimOptional(selectedMemberSummary?.publishedServiceId) ||
+          resolvePublishedServiceIdFromMemberKey(
+            normalizedMemberKey,
+            publishedScopeMembers,
+            studioScopeMembers,
+          );
         const selectedService = publishedScopeServices.find(
-          (service) => service.serviceId === serviceId,
+          (service) => service.serviceId === selectedMemberServiceId,
         );
         const selectedPublishedMember = publishedScopeMembers.find(
-          ({ service }) => service.serviceId === serviceId,
+          ({ memberSummary, service }) =>
+            trimOptional(memberSummary?.memberId) === selectedMemberId ||
+            trimOptional(service.serviceId) === selectedMemberServiceId,
         );
-        if (!serviceId || !selectedService) {
+        if (!selectedMemberServiceId || !selectedService) {
           return;
         }
 
@@ -4862,11 +6161,11 @@ const StudioPage: React.FC = () => {
           selectedService.endpoints[0]?.endpointId ||
           '';
         bindingSelectionRef.current = {
-          serviceId,
+          serviceId: selectedMemberServiceId,
           endpointId: defaultEndpointId,
         };
         invokeSelectionRef.current = {
-          serviceId,
+          serviceId: selectedMemberServiceId,
           endpointId: defaultEndpointId,
         };
 
@@ -4878,7 +6177,8 @@ const StudioPage: React.FC = () => {
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
-              memberKey: selectedMemberOwnerKey,
+              memberKey:
+                selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey,
               step: currentLifecycleStep,
             }),
           );
@@ -4914,7 +6214,6 @@ const StudioPage: React.FC = () => {
             scopeId: resolvedStudioScopeId || undefined,
             memberKey: selectedMemberOwnerKey,
             step: 'bind',
-            tab: 'bindings',
           }),
         );
         return;
@@ -4978,24 +6277,31 @@ const StudioPage: React.FC = () => {
     };
 
     for (const {
+      memberSummary,
       service,
       revision: serviceRevision,
       matchedWorkflow,
       matchedScript,
     } of publishedScopeMembers) {
+      const memberLifecycleLabel = memberSummary
+        ? formatStudioMemberLifecycleStage(memberSummary.lifecycleStage)
+        : '';
       addItem({
-        key: `member:${service.serviceId}`,
+        key:
+          `member:${trimOptional(memberSummary?.memberId) || trimOptional(memberSummary?.publishedServiceId) || service.serviceId}`,
         label:
           trimOptional(matchedWorkflow?.name) ||
           trimOptional(matchedScript?.script?.scriptId) ||
+          trimOptional(memberSummary?.displayName) ||
           trimOptional(service.displayName) ||
           trimOptional(service.serviceId) ||
           'Member',
         description: formatStudioAssetMeta({
           primary: describeMemberImplementationLabel(
-            serviceRevision?.implementationKind,
+            memberSummary?.implementationKind || serviceRevision?.implementationKind,
           ),
           secondary:
+            trimOptional(memberSummary?.description) ||
             trimOptional(matchedWorkflow?.description) ||
             trimOptional(matchedWorkflow?.fileName) ||
             trimOptional(matchedScript?.script?.definitionActorId) ||
@@ -5016,7 +6322,9 @@ const StudioPage: React.FC = () => {
         meta: formatStudioAssetMeta({
           primary: trimOptional(service.serviceId) || 'Published service',
           secondary:
+            trimOptional(memberSummary?.lastBoundRevisionId) ||
             trimOptional(serviceRevision?.revisionId) ||
+            trimOptional(memberLifecycleLabel) ||
             trimOptional(service.activeServingRevisionId) ||
             trimOptional(service.defaultServingRevisionId) ||
             trimOptional(service.deploymentStatus),
@@ -5292,62 +6600,40 @@ const StudioPage: React.FC = () => {
     </div>
   ) : null;
 
-  const currentMemberObserveWorkflowNames = useMemo(
-    () =>
-      collectStudioWorkflowNames([
-        currentFocusMemberKey.startsWith('workflow:')
-          ? activeWorkflowName || selectedWorkflowSummary?.name
-          : '',
-        focusedPublishedServiceRevision?.implementationKind === 'workflow'
-          ? focusedPublishedServiceRevision.workflowName
-          : '',
-        selectedBuildRepresentsPublishedMember &&
-        workbenchPublishedServiceRevision?.implementationKind === 'workflow'
-          ? workbenchPublishedServiceRevision.workflowName
-          : '',
-      ]),
-    [
-      activeWorkflowName,
-      currentFocusMemberKey,
-      focusedPublishedServiceRevision?.implementationKind,
-      focusedPublishedServiceRevision?.workflowName,
-      selectedWorkflowSummary?.name,
-      selectedBuildRepresentsPublishedMember,
-      workbenchPublishedServiceRevision?.implementationKind,
-      workbenchPublishedServiceRevision?.workflowName,
-    ],
-  );
-  const currentMemberExecutionWorkflowKeys = useMemo(
-    () =>
-      new Set(
-        currentMemberObserveWorkflowNames.map((workflowName) =>
-          normalizeComparableText(workflowName),
-        ),
-      ),
-    [currentMemberObserveWorkflowNames],
-  );
-  const currentMemberExecutions = useMemo(() => {
-    const items = executionsQuery.data ?? [];
-    if (currentMemberExecutionWorkflowKeys.size === 0) {
-      return [] as StudioExecutionSummary[];
-    }
+  const currentMemberExecutions = useMemo(
+    () => {
+      const executions = observeServiceRuns.map((run) => toObserveExecutionSummary(run));
+      if (!observeFallbackExecution) {
+        return executions;
+      }
 
-    return items.filter((item) =>
-      currentMemberExecutionWorkflowKeys.has(
-        normalizeComparableText(item.workflowName),
-      ),
-    );
-  }, [currentMemberExecutionWorkflowKeys, executionsQuery.data]);
+      return executions.some(
+        (execution) =>
+          trimOptional(execution.executionId) ===
+          trimOptional(observeFallbackExecution.executionId),
+      )
+        ? executions
+        : [observeFallbackExecution, ...executions];
+    },
+    [observeFallbackExecution, observeServiceRuns],
+  );
   const currentMemberExecutionIds = useMemo(
     () => new Set(currentMemberExecutions.map((item) => item.executionId)),
     [currentMemberExecutions],
   );
   useEffect(() => {
-    if (executionsQuery.isLoading) {
+    if (studioSurface !== 'observe') {
       return;
     }
 
-    if (currentMemberObserveWorkflowNames.length === 0) {
+    if (observeServiceRunsQuery.isLoading) {
+      return;
+    }
+
+    if (!workbenchPublishedServiceId) {
+      if (selectedExecutionId) {
+        setSelectedExecutionId('');
+      }
       return;
     }
 
@@ -5365,15 +6651,27 @@ const StudioPage: React.FC = () => {
       setSelectedExecutionId(currentMemberExecutions[0]?.executionId ?? '');
     }
   }, [
-    currentMemberObserveWorkflowNames.length,
     currentMemberExecutionIds,
     currentMemberExecutions,
-    executionsQuery.isLoading,
+    observeServiceRunsQuery.isLoading,
     selectedExecutionId,
+    studioSurface,
+    workbenchPublishedServiceId,
   ]);
   const selectedExecutionInCurrentMember =
     Boolean(selectedExecutionId) &&
     currentMemberExecutionIds.has(selectedExecutionId);
+  const selectedExecutionQuery = {
+    data:
+      selectedExecutionInCurrentMember && selectedObserveRunAuditQuery.data
+        ? toObserveExecutionDetail(selectedObserveRunAuditQuery.data)
+        : selectedExecutionInCurrentMember && selectedObserveFallbackExecution
+          ? selectedObserveFallbackExecution
+        : undefined,
+    error: selectedObserveRunAuditQuery.error,
+    isError: selectedObserveRunAuditQuery.isError,
+    isLoading: selectedObserveRunAuditQuery.isLoading,
+  };
   const observeSelectedExecution = selectedExecutionInCurrentMember
     ? selectedExecutionQuery
     : {
@@ -5384,10 +6682,25 @@ const StudioPage: React.FC = () => {
       };
   const observeExecutionList = {
     data: currentMemberExecutions,
-    error: executionsQuery.error,
-    isError: executionsQuery.isError,
-    isLoading: executionsQuery.isLoading,
+    error: observeServiceRunsQuery.error,
+    isError: observeServiceRunsQuery.isError,
+    isLoading: observeServiceRunsQuery.isLoading,
   };
+  const observeImplementationKind = normalizeStudioMemberBindingImplementationKind(
+    workbenchPublishedServiceRevision?.implementationKind,
+  );
+  const observeCurrentImplementationLabel =
+    trimOptional(observeSelectedExecution.data?.workflowName) ||
+    (observeImplementationKind === 'workflow'
+      ? trimOptional(workbenchPublishedServiceRevision?.workflowName)
+      : '') ||
+    currentMemberImplementationLabel;
+  const executionCanStop = isExecutionStopAllowed(
+    selectedExecutionQuery.data?.status ||
+      (selectedObserveBackendRunSummary
+        ? normalizeObserveRunStatus(selectedObserveBackendRunSummary.completionStatus)
+        : selectedObserveFallbackExecution?.status),
+  );
   const observeEmptyState = useMemo(() => {
     if (!hasSelectedMemberFocus) {
       return {
@@ -5397,19 +6710,24 @@ const StudioPage: React.FC = () => {
       };
     }
 
-    if (currentMemberObserveWorkflowNames.length === 0) {
+    if (!workbenchPublishedServiceId) {
       return {
-        title: `${currentMemberLabel || 'Current member'} does not expose Studio runs yet.`,
+        title: `${currentMemberLabel || 'Current member'} is not bound yet.`,
         description:
-          'Observe currently closes out workflow-backed member runs only. Bind and Invoke remain pinned to this member.',
+          'Publish or bind this member first, then Studio can load its runtime runs and audit trail here.',
       };
     }
 
-    if (!executionsQuery.isLoading && currentMemberExecutions.length === 0) {
+    if (
+      !observeServiceRunsQuery.isLoading &&
+      currentMemberExecutions.length === 0
+    ) {
       return {
-        title: `No Studio runs for ${currentMemberLabel || 'this member'} yet.`,
+        title: `No runs for ${currentMemberLabel || 'this member'} yet.`,
         description:
-          'Start a run from Build or Invoke this member, then return here to inspect the current member history.',
+          observeImplementationKind === 'workflow'
+            ? 'Invoke this member, or start a workflow draft run, then return here to inspect the current member history.'
+            : 'Invoke this member first, then return here to inspect the current member history.',
       };
     }
 
@@ -5417,9 +6735,10 @@ const StudioPage: React.FC = () => {
   }, [
     currentMemberExecutions.length,
     currentMemberLabel,
-    currentMemberObserveWorkflowNames.length,
-    executionsQuery.isLoading,
     hasSelectedMemberFocus,
+    observeImplementationKind,
+    observeServiceRunsQuery.isLoading,
+    workbenchPublishedServiceId,
   ]);
   const showWorkflowEntryEmptyState =
     isBuildEditorSurface &&
@@ -5577,8 +6896,8 @@ const StudioPage: React.FC = () => {
         </div>
       ) : (
         <div style={inventoryActionsHintStyle}>
-          Create a member here. Workflow entry is available now, and Script / GAgent
-          creation will move into the same flow next.
+          Create a member here. Workflow now registers backend member authority;
+          Script / GAgent will move into the same flow next.
         </div>
       )}
     </div>
@@ -5826,9 +7145,8 @@ const StudioPage: React.FC = () => {
         activeWorkflowDescription={activeWorkflowDescription}
         activeDirectoryLabel={activeDirectoryLabel}
         selectedMemberLabel={currentMemberLabel}
-        currentImplementationLabel={
-          currentMemberObserveWorkflowNames[0] || currentMemberImplementationLabel
-        }
+        currentImplementationLabel={observeCurrentImplementationLabel}
+        currentImplementationKind={observeImplementationKind}
         emptyState={observeEmptyState}
         savePending={savePending}
         canSaveWorkflow={canSaveWorkflow}
@@ -5865,6 +7183,7 @@ const StudioPage: React.FC = () => {
             : null
         }
         initialEndpointId={bindInitialEndpointId}
+        memberId={workbenchStudioMemberId || undefined}
         initialServiceId={bindSelectedMemberServiceId}
         onBindPendingCandidate={handleBindPendingCandidate}
         onContinueToInvoke={handleUseBindingEndpoint}
@@ -5878,9 +7197,11 @@ const StudioPage: React.FC = () => {
     ) : isInvokeSurface ? (
       <StudioMemberInvokePanel
         emptyState={invokeEmptyState}
+        memberId={workbenchStudioMemberId || undefined}
         memberRevision={invokeTargetServiceId
           ? currentServiceRevisionByServiceId.get(invokeTargetServiceId) ?? null
           : null}
+        onObserveSessionChange={handleObserveSessionChange}
         onSelectionChange={handleInvokeSelectionChange}
         returnTo={currentStudioReturnTo || undefined}
         selectedMemberLabel={invokeTargetLabel || undefined}
@@ -5989,9 +7310,9 @@ const StudioPage: React.FC = () => {
                     ))}
                   </div>
                   <div style={inventoryCreateHintStyle}>
-                    Choose the implementation kind first. Workflow entry is
-                    available now; Script and GAgent member creation will move into
-                    this modal when the member API lands.
+                    Choose the implementation kind first. Workflow entry now
+                    registers a backend member authority; Script and GAgent will
+                    move into this modal once their Build handoff is ready.
                   </div>
                 </div>
                 <label style={inventoryCreateFieldStackStyle}>
@@ -6008,10 +7329,10 @@ const StudioPage: React.FC = () => {
                 </label>
                 <div style={inventoryCreateHintStyle}>
                   {createMemberKind === 'workflow'
-                    ? 'Workflow members currently start from a blank workflow draft with an empty canvas, so you can name it first and then continue editing inside Build.'
+                    ? 'Workflow members currently start from a blank workflow draft with an empty canvas, and Studio also registers the member authority in backend once the draft is created.'
                     : createMemberKind === 'script'
-                      ? 'Script member creation still relies on the upcoming member API. For now, continue in Build > Script to inspect or edit script implementations.'
-                      : 'GAgent member creation still relies on the upcoming member API. For now, continue in Build > GAgent to inspect or edit GAgent implementations.'}
+                      ? 'Script member authority exists on backend, but this modal still hands off through Build > Script for implementation editing.'
+                      : 'GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing.'}
                 </div>
                 {createMemberKind === 'workflow' ? (
                   <label style={inventoryCreateFieldStackStyle}>

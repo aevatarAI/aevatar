@@ -121,6 +121,20 @@ jest.mock('@/shared/studio/api', () => ({
       updatedAt: '2026-03-26T08:00:00Z',
       revisions: [],
     })),
+    getDefaultRouteTarget: jest.fn(async () => ({
+      available: true,
+      scopeId: 'scope-a',
+      serviceId: 'default',
+      displayName: 'Workspace Demo',
+      serviceKey: 'scope-a:default:default:default',
+      defaultServingRevisionId: 'rev-2',
+      activeServingRevisionId: 'rev-2',
+      deploymentId: 'deploy-2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor://scope-a/default',
+      updatedAt: '2026-03-26T08:00:00Z',
+      revisions: [],
+    })),
   },
 }));
 

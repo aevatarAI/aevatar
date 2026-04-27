@@ -283,6 +283,10 @@ export const runtimeGAgentApi = {
     );
   },
 
+  getDefaultRouteTarget(scopeId: string): Promise<RuntimeGAgentBindingStatus> {
+    return this.getScopeBinding(scopeId);
+  },
+
   bindScopeGAgent(
     input: RuntimeScopeGAgentBindingRequest
   ): Promise<RuntimeGAgentBindingResult> {
@@ -335,6 +339,13 @@ export const runtimeGAgentApi = {
     );
   },
 
+  activateMemberBindingRevision(
+    scopeId: string,
+    revisionId: string
+  ): Promise<RuntimeGAgentBindingActivationResult> {
+    return this.activateScopeBindingRevision(scopeId, revisionId);
+  },
+
   retireScopeBindingRevision(
     scopeId: string,
     revisionId: string
@@ -351,6 +362,13 @@ export const runtimeGAgentApi = {
         body: JSON.stringify({}),
       }
     );
+  },
+
+  retireMemberBindingRevision(
+    scopeId: string,
+    revisionId: string
+  ): Promise<RuntimeGAgentBindingRetirementResult> {
+    return this.retireScopeBindingRevision(scopeId, revisionId);
   },
 
   async addActor(

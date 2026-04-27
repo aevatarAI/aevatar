@@ -45,6 +45,7 @@ public sealed class RoleCatalogService
                     .Where(role => !string.IsNullOrWhiteSpace(role.Id))
                     .Select(ToStoredRole)
                     .ToList()),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToResponse(saved);
@@ -96,7 +97,7 @@ public sealed class RoleCatalogService
     {
         if (request.Draft is null)
         {
-            await _store.DeleteRoleDraftAsync(cancellationToken);
+            await _store.DeleteRoleDraftAsync(request.ExpectedVersion, cancellationToken);
             return await GetDraftAsync(cancellationToken);
         }
 
@@ -107,13 +108,14 @@ public sealed class RoleCatalogService
                 FileExists: false,
                 UpdatedAtUtc: DateTimeOffset.UtcNow,
                 Draft: ToStoredRoleDraft(request.Draft)),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToDraftResponse(saved);
     }
 
-    public Task DeleteDraftAsync(CancellationToken cancellationToken = default) =>
-        _store.DeleteRoleDraftAsync(cancellationToken);
+    public Task DeleteDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default) =>
+        _store.DeleteRoleDraftAsync(expectedVersion, cancellationToken);
 
     private static void EnsureUniqueIds(IEnumerable<RoleDefinitionDto> roles)
     {
@@ -164,7 +166,8 @@ public sealed class RoleCatalogService
             catalog.HomeDirectory,
             catalog.FilePath,
             catalog.FileExists,
-            catalog.Roles.Select(ToDto).ToList());
+            catalog.Roles.Select(ToDto).ToList(),
+            catalog.Version);
 
     private static RoleDraftResponse ToDraftResponse(StoredRoleDraft draft) =>
         new(
@@ -172,7 +175,8 @@ public sealed class RoleCatalogService
             draft.FilePath,
             draft.FileExists,
             draft.UpdatedAtUtc,
-            draft.Draft is null ? null : ToDto(draft.Draft));
+            draft.Draft is null ? null : ToDto(draft.Draft),
+            draft.Version);
 
     private static RoleDefinitionDto ToDto(StoredRoleDefinition role) =>
         new(
