@@ -93,15 +93,25 @@ public sealed class DefaultServiceIdentityContextResolver : IServiceIdentityCont
 
 public static class ServiceIdentityEndpointAccess
 {
+    /// <summary>
+    /// Resolves the owner identity context. When <paramref name="authenticatedContext"/> is
+    /// supplied (the caller already invoked <c>resolver.Resolve()</c>), claim resolution is
+    /// reused — avoiding the double-Resolve cost when the handler also needs the authenticated
+    /// context for validation (e.g., <c>TryValidateOwnerIdentity</c>). Pass <c>null</c> to fall
+    /// through to the original behaviour: when authenticated but claims are missing/ambiguous,
+    /// returns <c>403 SERVICE_IDENTITY_ACCESS_DENIED</c>; when unauthenticated, falls back to
+    /// the request's tenant/app/namespace fields.
+    /// </summary>
     public static bool TryResolveContext(
         IServiceIdentityContextResolver resolver,
+        ServiceIdentityContext? authenticatedContext,
         string? fallbackTenantId,
         string? fallbackAppId,
         string? fallbackNamespace,
         out ServiceIdentityContext context,
         out IResult denied)
     {
-        if (resolver.Resolve() is { } resolved)
+        if (authenticatedContext is { } resolved)
         {
             context = resolved;
             denied = Results.Empty;
@@ -130,8 +140,25 @@ public static class ServiceIdentityEndpointAccess
         return true;
     }
 
+    public static bool TryResolveContext(
+        IServiceIdentityContextResolver resolver,
+        string? fallbackTenantId,
+        string? fallbackAppId,
+        string? fallbackNamespace,
+        out ServiceIdentityContext context,
+        out IResult denied)
+        => TryResolveContext(
+            resolver,
+            resolver.Resolve(),
+            fallbackTenantId,
+            fallbackAppId,
+            fallbackNamespace,
+            out context,
+            out denied);
+
     public static bool TryResolveIdentity(
         IServiceIdentityContextResolver resolver,
+        ServiceIdentityContext? authenticatedContext,
         string? fallbackTenantId,
         string? fallbackAppId,
         string? fallbackNamespace,
@@ -141,6 +168,7 @@ public static class ServiceIdentityEndpointAccess
     {
         if (!TryResolveContext(
                 resolver,
+                authenticatedContext,
                 fallbackTenantId,
                 fallbackAppId,
                 fallbackNamespace,
@@ -160,4 +188,22 @@ public static class ServiceIdentityEndpointAccess
         };
         return true;
     }
+
+    public static bool TryResolveIdentity(
+        IServiceIdentityContextResolver resolver,
+        string? fallbackTenantId,
+        string? fallbackAppId,
+        string? fallbackNamespace,
+        string serviceId,
+        out ServiceIdentity identity,
+        out IResult denied)
+        => TryResolveIdentity(
+            resolver,
+            resolver.Resolve(),
+            fallbackTenantId,
+            fallbackAppId,
+            fallbackNamespace,
+            serviceId,
+            out identity,
+            out denied);
 }
