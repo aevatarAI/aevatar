@@ -46,6 +46,14 @@ public sealed class StudioMemberService : IStudioMemberService
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // Validation lives at this Application boundary (CLAUDE.md
+        // `严格分层 / 上层依赖抽象`). The Projection-layer command port is
+        // an interchangeable transport; if it ever swaps, the bounds must
+        // not silently disappear with it. Callers receive a single typed
+        // error path here regardless of which command port is wired in.
+        StudioMemberCreateRequestValidator.Validate(request);
+
         return _memberCommandPort.CreateAsync(scopeId, request, ct);
     }
 
@@ -55,11 +63,20 @@ public sealed class StudioMemberService : IStudioMemberService
         CancellationToken ct = default) =>
         _memberQueryPort.ListAsync(scopeId, page, ct);
 
-    public Task<StudioMemberDetailResponse?> GetAsync(
+    public async Task<StudioMemberDetailResponse> GetAsync(
         string scopeId,
         string memberId,
-        CancellationToken ct = default) =>
-        _memberQueryPort.GetAsync(scopeId, memberId, ct);
+        CancellationToken ct = default)
+    {
+        // Mirrors GetBindingAsync semantics: a missing member is
+        // unambiguous "404 STUDIO_MEMBER_NOT_FOUND", not a 200-with-null
+        // body that the frontend would have to pattern-match. Endpoints
+        // catch the typed exception and return the same body shape from
+        // every member-centric endpoint.
+        var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+        return detail;
+    }
 
     public async Task<StudioMemberBindingResponse> BindAsync(
         string scopeId,

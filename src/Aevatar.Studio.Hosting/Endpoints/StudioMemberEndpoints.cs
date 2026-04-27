@@ -94,8 +94,11 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            var detail = await memberService.GetAsync(scopeId, memberId, ct);
-            return detail == null ? Results.NotFound() : Results.Ok(detail);
+            return Results.Ok(await memberService.GetAsync(scopeId, memberId, ct));
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -140,8 +143,15 @@ internal static class StudioMemberEndpoints
 
         try
         {
+            // Three semantically distinct outcomes, three distinct HTTP shapes:
+            //   - member missing                    → 404 STUDIO_MEMBER_NOT_FOUND
+            //   - member exists, has been bound     → 200 { lastBinding: <contract> }
+            //   - member exists, never bound        → 200 { lastBinding: null }
+            // Bare `404 NotFound` for the "exists but never bound" case used
+            // to overload 404 with two different meanings; the wrapper keeps
+            // the response always a JSON object with a single nullable field.
             var binding = await memberService.GetBindingAsync(scopeId, memberId, ct);
-            return binding == null ? Results.NotFound() : Results.Ok(binding);
+            return Results.Ok(new StudioMemberBindingViewResponse(binding));
         }
         catch (StudioMemberNotFoundException ex)
         {

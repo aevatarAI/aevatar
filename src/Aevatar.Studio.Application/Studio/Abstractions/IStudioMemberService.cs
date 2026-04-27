@@ -22,7 +22,14 @@ public interface IStudioMemberService
         StudioMemberRosterPageRequest? page = null,
         CancellationToken ct = default);
 
-    Task<StudioMemberDetailResponse?> GetAsync(
+    /// <summary>
+    /// Returns the member detail. Throws
+    /// <see cref="StudioMemberNotFoundException"/> when no member with
+    /// the given id exists in the scope — endpoints map this to 404
+    /// <c>STUDIO_MEMBER_NOT_FOUND</c>, the same body every member-centric
+    /// endpoint returns for missing-member.
+    /// </summary>
+    Task<StudioMemberDetailResponse> GetAsync(
         string scopeId,
         string memberId,
         CancellationToken ct = default);
@@ -40,6 +47,13 @@ public interface IStudioMemberService
         UpdateStudioMemberBindingRequest request,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Returns the last successful binding contract for the member, or
+    /// <c>null</c> when the member exists but has never been bound.
+    /// Throws <see cref="StudioMemberNotFoundException"/> when the member
+    /// itself does not exist — endpoints distinguish "missing member" (404)
+    /// from "exists, never bound" (200 with null binding).
+    /// </summary>
     Task<StudioMemberBindingContractResponse?> GetBindingAsync(
         string scopeId,
         string memberId,

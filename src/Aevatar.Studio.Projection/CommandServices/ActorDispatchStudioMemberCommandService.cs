@@ -37,28 +37,19 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Length caps + slug pattern are enforced at the Application
+        // boundary (StudioMemberCreateRequestValidator). The transport-
+        // level guards here only ensure the actor-id remains derivable —
+        // scope normalization rejects ':', and an empty memberId is
+        // replaced by a generated one. Anything else is the caller's
+        // already-validated input.
         var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
         var memberId = string.IsNullOrWhiteSpace(request.MemberId)
             ? GenerateMemberId()
-            : ValidateUserSuppliedMemberId(request.MemberId!);
+            : StudioMemberConventions.NormalizeMemberId(request.MemberId);
 
-        var displayName = request.DisplayName?.Trim();
-        if (string.IsNullOrEmpty(displayName))
-        {
-            throw new InvalidOperationException("displayName is required when creating a member.");
-        }
-        if (displayName.Length > StudioMemberInputLimits.MaxDisplayNameLength)
-        {
-            throw new InvalidOperationException(
-                $"displayName must be at most {StudioMemberInputLimits.MaxDisplayNameLength} characters.");
-        }
-
-        var description = request.Description?.Trim() ?? string.Empty;
-        if (description.Length > StudioMemberInputLimits.MaxDescriptionLength)
-        {
-            throw new InvalidOperationException(
-                $"description must be at most {StudioMemberInputLimits.MaxDescriptionLength} characters.");
-        }
+        var displayName = (request.DisplayName ?? string.Empty).Trim();
+        var description = (request.Description ?? string.Empty).Trim();
 
         var implementationKind = MemberImplementationKindMapper.Parse(request.ImplementationKind);
         var publishedServiceId = StudioMemberConventions.BuildPublishedServiceId(memberId);
@@ -202,22 +193,5 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         // derived directly from this value, so keep the format URL-safe and
         // free of separators that StudioMemberConventions builds with (':').
         return $"m-{Guid.NewGuid():N}";
-    }
-
-    private static string ValidateUserSuppliedMemberId(string raw)
-    {
-        var normalized = StudioMemberConventions.NormalizeMemberId(raw);
-        if (normalized.Length > StudioMemberInputLimits.MaxMemberIdLength)
-        {
-            throw new InvalidOperationException(
-                $"memberId must be at most {StudioMemberInputLimits.MaxMemberIdLength} characters.");
-        }
-        if (!StudioMemberInputLimits.MemberIdPattern.IsMatch(normalized))
-        {
-            throw new InvalidOperationException(
-                "memberId must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ (alphanumeric, dash, underscore; starts with alphanumeric).");
-        }
-
-        return normalized;
     }
 }

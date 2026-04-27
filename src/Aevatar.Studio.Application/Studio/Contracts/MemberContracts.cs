@@ -61,6 +61,15 @@ public sealed record StudioMemberBindingContractResponse(
     string ImplementationKind,
     DateTimeOffset BoundAt);
 
+/// <summary>
+/// Wrapper returned from <c>GET /members/{memberId}/binding</c> so the
+/// response is always a JSON object — distinguishes "exists but never
+/// bound" (<see cref="LastBinding"/> is <c>null</c>, status 200) from
+/// "member missing" (typed 404 STUDIO_MEMBER_NOT_FOUND).
+/// </summary>
+public sealed record StudioMemberBindingViewResponse(
+    StudioMemberBindingContractResponse? LastBinding);
+
 public sealed record StudioMemberRosterResponse(
     string ScopeId,
     IReadOnlyList<StudioMemberSummaryResponse> Members,

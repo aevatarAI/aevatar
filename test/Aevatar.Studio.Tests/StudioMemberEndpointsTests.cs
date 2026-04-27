@@ -114,22 +114,26 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetAsync_ShouldReturnNotFound_WhenServiceReturnsNull()
+    public async Task HandleGetAsync_ShouldReturnTyped404_WhenMemberMissing()
     {
+        // GetAsync now throws StudioMemberNotFoundException for missing
+        // members; the endpoint returns the same typed 404 body that
+        // bind / get-binding do — three endpoints, one 404 shape.
         var service = new RecordingMemberService
         {
-            GetResponse = null,
+            GetException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
         };
 
         var result = await InvokeHandle<IResult>(
             "HandleGetAsync",
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
-            "m-1",
+            "m-missing",
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<NotFound>();
+        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
+        statusCode.Should().Be(StatusCodes.Status404NotFound);
     }
 
     [Fact]
@@ -205,8 +209,12 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetBindingAsync_ShouldReturnNotFound_WhenServiceReturnsNull()
+    public async Task HandleGetBindingAsync_ShouldReturnOk_WithNullBinding_WhenMemberExistsButNeverBound()
     {
+        // Disambiguates the prior 404 shape: a member that exists but has
+        // never been bound is NOT missing (which has its own typed 404).
+        // It's a member with a null binding — surface as 200 with the
+        // wrapper and let the frontend dispatch on `lastBinding === null`.
         var service = new RecordingMemberService
         {
             GetBindingResponse = null,
@@ -220,7 +228,8 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<NotFound>();
+        result.Should().BeOfType<Ok<StudioMemberBindingViewResponse>>()
+            .Which.Value!.LastBinding.Should().BeNull();
     }
 
     [Fact]
@@ -241,8 +250,8 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<StudioMemberBindingContractResponse>>()
-            .Which.Value.Should().BeSameAs(contract);
+        result.Should().BeOfType<Ok<StudioMemberBindingViewResponse>>()
+            .Which.Value!.LastBinding.Should().BeSameAs(contract);
     }
 
     private static StudioMemberSummaryResponse NewSummary() => new(
@@ -306,6 +315,7 @@ public sealed class StudioMemberEndpointsTests
 
         public StudioMemberRosterResponse? ListResponse { get; set; }
         public StudioMemberDetailResponse? GetResponse { get; set; }
+        public Exception? GetException { get; set; }
         public StudioMemberBindingResponse? BindResponse { get; set; }
         public Exception? BindException { get; set; }
         public StudioMemberBindingContractResponse? GetBindingResponse { get; set; }
@@ -324,9 +334,13 @@ public sealed class StudioMemberEndpointsTests
             CancellationToken ct = default)
             => Task.FromResult(ListResponse ?? new StudioMemberRosterResponse(scopeId, []));
 
-        public Task<StudioMemberDetailResponse?> GetAsync(
+        public Task<StudioMemberDetailResponse> GetAsync(
             string scopeId, string memberId, CancellationToken ct = default)
-            => Task.FromResult(GetResponse);
+        {
+            if (GetException != null) throw GetException;
+            return Task.FromResult(
+                GetResponse ?? throw new StudioMemberNotFoundException(scopeId, memberId));
+        }
 
         public Task<StudioMemberBindingResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default)

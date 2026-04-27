@@ -81,23 +81,11 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         summary.MemberId.Should().NotContain(":");
     }
 
-    [Fact]
-    public async Task CreateAsync_ShouldRejectEmptyDisplayName()
-    {
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(),
-            new RecordingDispatchPort());
-
-        var act = () => service.CreateAsync(
-            ScopeId,
-            new CreateStudioMemberRequest(
-                DisplayName: "   ",
-                ImplementationKind: MemberImplementationKindNames.Workflow),
-            CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*displayName is required*");
-    }
+    // Note: input validation (length caps, slug pattern, empty display
+    // name) is now enforced at the Application boundary in
+    // StudioMemberCreateRequestValidator. The Projection-layer command
+    // service is intentionally lenient and trusts already-validated input.
+    // Validator-level coverage lives in StudioMemberCreateRequestValidatorTests.
 
     [Fact]
     public async Task CreateAsync_ShouldRejectUnknownImplementationKind()
