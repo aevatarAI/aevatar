@@ -9,7 +9,10 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// </summary>
 public interface IStudioMemberQueryPort
 {
-    Task<StudioMemberRosterResponse> ListAsync(string scopeId, CancellationToken ct = default);
+    Task<StudioMemberRosterResponse> ListAsync(
+        string scopeId,
+        StudioMemberRosterPageRequest? page = null,
+        CancellationToken ct = default);
 
     Task<StudioMemberDetailResponse?> GetAsync(
         string scopeId,

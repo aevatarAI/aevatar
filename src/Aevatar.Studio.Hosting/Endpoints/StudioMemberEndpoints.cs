@@ -14,6 +14,10 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// scope binding port directly. ServiceId is never accepted as a user-facing
 /// input — Studio binds to the member's own stable
 /// <c>publishedServiceId</c>.
+///
+/// Error mapping:
+///   - <see cref="StudioMemberNotFoundException"/> → 404
+///   - other <see cref="InvalidOperationException"/> (validation) → 400
 /// </summary>
 internal static class StudioMemberEndpoints
 {
@@ -48,13 +52,13 @@ internal static class StudioMemberEndpoints
             var summary = await memberService.CreateAsync(scopeId, request, ct);
             return Results.Created($"/api/scopes/{scopeId}/members/{summary.MemberId}", summary);
         }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_STUDIO_MEMBER_REQUEST",
-                message = ex.Message,
-            });
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
 
@@ -62,6 +66,8 @@ internal static class StudioMemberEndpoints
         HttpContext http,
         string scopeId,
         IStudioMemberService memberService,
+        int? pageSize,
+        string? pageToken,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -69,15 +75,14 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            return Results.Ok(await memberService.ListAsync(scopeId, ct));
+            var page = (pageSize.HasValue || !string.IsNullOrWhiteSpace(pageToken))
+                ? new StudioMemberRosterPageRequest(pageSize, pageToken)
+                : null;
+            return Results.Ok(await memberService.ListAsync(scopeId, page, ct));
         }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_STUDIO_MEMBER_REQUEST",
-                message = ex.Message,
-            });
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
 
@@ -98,11 +103,7 @@ internal static class StudioMemberEndpoints
         }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_STUDIO_MEMBER_REQUEST",
-                message = ex.Message,
-            });
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
 
@@ -121,13 +122,13 @@ internal static class StudioMemberEndpoints
         {
             return Results.Ok(await memberService.BindAsync(scopeId, memberId, request, ct));
         }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_STUDIO_MEMBER_BINDING",
-                message = ex.Message,
-            });
+            return BadRequest("INVALID_STUDIO_MEMBER_BINDING", ex.Message);
         }
     }
 
@@ -146,13 +147,27 @@ internal static class StudioMemberEndpoints
             var binding = await memberService.GetBindingAsync(scopeId, memberId, ct);
             return binding == null ? Results.NotFound() : Results.Ok(binding);
         }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_STUDIO_MEMBER_REQUEST",
-                message = ex.Message,
-            });
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
+
+    private static IResult BadRequest(string code, string message) =>
+        Results.BadRequest(new { code, message });
+
+    private static IResult NotFound(StudioMemberNotFoundException ex) =>
+        Results.Json(
+            new
+            {
+                code = "STUDIO_MEMBER_NOT_FOUND",
+                message = ex.Message,
+                scopeId = ex.ScopeId,
+                memberId = ex.MemberId,
+            },
+            statusCode: StatusCodes.Status404NotFound);
 }

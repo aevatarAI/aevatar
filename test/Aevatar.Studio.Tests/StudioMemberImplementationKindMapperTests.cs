@@ -1,5 +1,6 @@
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Projection.Mapping;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;

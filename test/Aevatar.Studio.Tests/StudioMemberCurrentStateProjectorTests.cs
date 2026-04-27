@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.ReadModels;
@@ -37,9 +38,17 @@ public sealed class StudioMemberCurrentStateProjectorTests
             Description = "desc",
             ImplementationKind = StudioMemberImplementationKind.Workflow,
             PublishedServiceId = "member-m-1",
-            LifecycleStage = StudioMemberLifecycleStage.BuildReady,
+            LifecycleStage = StudioMemberLifecycleStage.BindReady,
             CreatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef
+                {
+                    WorkflowId = "wf-1",
+                    WorkflowRevision = "rev-9",
+                },
+            },
             LastBinding = new StudioMemberBindingContract
             {
                 PublishedServiceId = "member-m-1",
@@ -50,7 +59,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         };
 
         var envelope = WrapCommitted(
-            payload: new StudioMemberCreatedEvent { MemberId = "m-1" },
+            payload: new StudioMemberBoundEvent { RevisionId = "rev-9" },
             state: state,
             version: 5,
             eventId: "evt-9");
@@ -72,13 +81,55 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.ScopeId.Should().Be("scope-1");
         written.DisplayName.Should().Be("Test Member");
         written.PublishedServiceId.Should().Be("member-m-1");
-        written.ImplementationKind.Should().Be((int)StudioMemberImplementationKind.Workflow);
-        written.LifecycleStage.Should().Be((int)StudioMemberLifecycleStage.BuildReady);
-        written.LastBoundRevisionId.Should().Be("rev-9");
+        written.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        written.LifecycleStage.Should().Be(MemberLifecycleStageNames.BindReady);
 
-        // state_root is preserved so detail reads can surface implementation_ref + last_binding.
-        written.StateRoot.Should().NotBeNull();
-        written.StateRoot.Is(StudioMemberState.Descriptor).Should().BeTrue();
+        // implementation_ref denormalized — no Any-pack of internal state.
+        written.ImplementationWorkflowId.Should().Be("wf-1");
+        written.ImplementationWorkflowRevision.Should().Be("rev-9");
+        written.ImplementationScriptId.Should().BeEmpty();
+        written.ImplementationActorTypeName.Should().BeEmpty();
+
+        // last_binding denormalized.
+        written.LastBoundPublishedServiceId.Should().Be("member-m-1");
+        written.LastBoundRevisionId.Should().Be("rev-9");
+        written.LastBoundImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        written.LastBoundAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldDenormalizeScriptImplementation()
+    {
+        var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
+        var projector = new StudioMemberCurrentStateProjector(
+            dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+
+        var state = new StudioMemberState
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Script Member",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            LifecycleStage = StudioMemberLifecycleStage.BuildReady,
+            CreatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Script = new StudioMemberScriptRef { ScriptId = "s-1", ScriptRevision = "v3" },
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(new StudioMemberImplementationUpdatedEvent(), state, 1, "evt-1"));
+
+        var written = dispatcher.Upserts[0];
+        written.ImplementationKind.Should().Be(MemberImplementationKindNames.Script);
+        written.ImplementationScriptId.Should().Be("s-1");
+        written.ImplementationScriptRevision.Should().Be("v3");
+        written.ImplementationWorkflowId.Should().BeEmpty();
+        written.LastBoundPublishedServiceId.Should().BeEmpty();
     }
 
     [Fact]

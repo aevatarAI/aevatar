@@ -182,60 +182,38 @@ public sealed class ProjectionStudioMemberQueryPortTests
         var publishedServiceId = StudioMemberConventions.BuildPublishedServiceId(memberId);
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
 
-        var state = new StudioMemberState
-        {
-            MemberId = memberId,
-            ScopeId = scopeId,
-            DisplayName = $"Member {memberId}",
-            Description = string.Empty,
-            ImplementationKind = implementationKind,
-            PublishedServiceId = publishedServiceId,
-            LifecycleStage = lifecycle,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-
-        if (includeImplementationRef)
-        {
-            state.ImplementationRef = new StudioMemberImplementationRef
-            {
-                Workflow = new StudioMemberWorkflowRef
-                {
-                    WorkflowId = "wf-1",
-                    WorkflowRevision = "v2",
-                },
-            };
-        }
-
-        if (includeLastBinding)
-        {
-            state.LastBinding = new StudioMemberBindingContract
-            {
-                PublishedServiceId = publishedServiceId,
-                RevisionId = "rev-bind",
-                ImplementationKind = implementationKind,
-                BoundAtUtc = now,
-            };
-        }
-
-        return new StudioMemberCurrentStateDocument
+        var doc = new StudioMemberCurrentStateDocument
         {
             Id = actorId,
             ActorId = actorId,
             StateVersion = 1,
             LastEventId = "evt-1",
             UpdatedAt = now,
-            StateRoot = Any.Pack(state),
             MemberId = memberId,
             ScopeId = scopeId,
-            DisplayName = state.DisplayName,
-            Description = state.Description,
-            ImplementationKind = (int)implementationKind,
-            LifecycleStage = (int)lifecycle,
+            DisplayName = $"Member {memberId}",
+            Description = string.Empty,
+            ImplementationKind = ToWireKind(implementationKind),
+            LifecycleStage = ToWireStage(lifecycle),
             PublishedServiceId = publishedServiceId,
-            LastBoundRevisionId = state.LastBinding?.RevisionId ?? string.Empty,
             CreatedAt = now,
         };
+
+        if (includeImplementationRef)
+        {
+            doc.ImplementationWorkflowId = "wf-1";
+            doc.ImplementationWorkflowRevision = "v2";
+        }
+
+        if (includeLastBinding)
+        {
+            doc.LastBoundPublishedServiceId = publishedServiceId;
+            doc.LastBoundRevisionId = "rev-bind";
+            doc.LastBoundImplementationKind = ToWireKind(implementationKind);
+            doc.LastBoundAt = now;
+        }
+
+        return doc;
     }
 
     private static StudioMemberCurrentStateDocument NewDocumentWithImplementation(
@@ -243,11 +221,44 @@ public sealed class ProjectionStudioMemberQueryPortTests
         StudioMemberImplementationRef implementationRef)
     {
         var doc = NewDocument(ScopeId, "m-1", implementationKind);
-        var state = doc.StateRoot.Unpack<StudioMemberState>();
-        state.ImplementationRef = implementationRef;
-        doc.StateRoot = Any.Pack(state);
+        // Reset implementation_ref fields and apply the supplied one.
+        doc.ImplementationWorkflowId = string.Empty;
+        doc.ImplementationWorkflowRevision = string.Empty;
+        doc.ImplementationScriptId = string.Empty;
+        doc.ImplementationScriptRevision = string.Empty;
+        doc.ImplementationActorTypeName = string.Empty;
+        if (implementationRef.Workflow != null)
+        {
+            doc.ImplementationWorkflowId = implementationRef.Workflow.WorkflowId;
+            doc.ImplementationWorkflowRevision = implementationRef.Workflow.WorkflowRevision;
+        }
+        if (implementationRef.Script != null)
+        {
+            doc.ImplementationScriptId = implementationRef.Script.ScriptId;
+            doc.ImplementationScriptRevision = implementationRef.Script.ScriptRevision;
+        }
+        if (implementationRef.Gagent != null)
+        {
+            doc.ImplementationActorTypeName = implementationRef.Gagent.ActorTypeName;
+        }
         return doc;
     }
+
+    private static string ToWireKind(StudioMemberImplementationKind kind) => kind switch
+    {
+        StudioMemberImplementationKind.Workflow => MemberImplementationKindNames.Workflow,
+        StudioMemberImplementationKind.Script => MemberImplementationKindNames.Script,
+        StudioMemberImplementationKind.Gagent => MemberImplementationKindNames.GAgent,
+        _ => string.Empty,
+    };
+
+    private static string ToWireStage(StudioMemberLifecycleStage stage) => stage switch
+    {
+        StudioMemberLifecycleStage.Created => MemberLifecycleStageNames.Created,
+        StudioMemberLifecycleStage.BuildReady => MemberLifecycleStageNames.BuildReady,
+        StudioMemberLifecycleStage.BindReady => MemberLifecycleStageNames.BindReady,
+        _ => string.Empty,
+    };
 
     private sealed class StubDocumentReader
         : IProjectionDocumentReader<StudioMemberCurrentStateDocument, string>

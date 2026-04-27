@@ -1,6 +1,5 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 
@@ -14,11 +13,15 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///   2. build a <see cref="ScopeBindingUpsertRequest"/> with
 ///      <c>ServiceId = publishedServiceId</c> — never the scope default
 ///   3. delegate to <see cref="IScopeBindingCommandPort"/>
-///   4. record the resulting revision back on the member actor
+///   4. derive the resolved <c>implementation_ref</c> from the binding
+///      result and persist it on the member authority
+///   5. record the resulting revision back on the member actor
 ///
-/// Endpoints depend on this facade and never reach for the platform
-/// binding port directly, which is what kept Studio's old surface in
-/// scope-default fallback mode.
+/// Steps 4 + 5 are what populate <c>StudioMemberState.ImplementationRef</c>
+/// and traverse the lifecycle <c>Created → BuildReady → BindReady</c> the
+/// issue specifies. Endpoints depend on this facade and never reach for the
+/// platform binding port directly, which is what kept Studio's old surface
+/// in scope-default fallback mode.
 /// </summary>
 public sealed class StudioMemberService : IStudioMemberService
 {
@@ -46,8 +49,11 @@ public sealed class StudioMemberService : IStudioMemberService
         return _memberCommandPort.CreateAsync(scopeId, request, ct);
     }
 
-    public Task<StudioMemberRosterResponse> ListAsync(string scopeId, CancellationToken ct = default) =>
-        _memberQueryPort.ListAsync(scopeId, ct);
+    public Task<StudioMemberRosterResponse> ListAsync(
+        string scopeId,
+        StudioMemberRosterPageRequest? page = null,
+        CancellationToken ct = default) =>
+        _memberQueryPort.ListAsync(scopeId, page, ct);
 
     public Task<StudioMemberDetailResponse?> GetAsync(
         string scopeId,
@@ -64,8 +70,7 @@ public sealed class StudioMemberService : IStudioMemberService
         ArgumentNullException.ThrowIfNull(request);
 
         var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
-            ?? throw new InvalidOperationException(
-                $"member '{memberId}' not found in scope '{scopeId}'.");
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
 
         var publishedServiceId = detail.Summary.PublishedServiceId;
         if (string.IsNullOrWhiteSpace(publishedServiceId))
@@ -83,7 +88,23 @@ public sealed class StudioMemberService : IStudioMemberService
             detail.Summary.DisplayName,
             request);
 
+        // Two-phase write: scope binding first, then update the member
+        // authority. This is intentionally last-write-wins — if step 2 or
+        // step 3 fails, the platform side has a fresh revision but the
+        // member doesn't yet observe it; the next bind will create another
+        // upstream revision and only that one will be recorded. We accept
+        // this drift over a distributed transaction because the member's
+        // last_binding is a query convenience, not the source of truth —
+        // the platform read model is.
         var bindingResult = await _scopeBindingCommandPort.UpsertAsync(bindingRequest, ct);
+
+        var resolvedImplementationRef = BuildResolvedImplementationRef(
+            implementationKindWire, bindingResult, request);
+        if (resolvedImplementationRef != null)
+        {
+            await _memberCommandPort.UpdateImplementationAsync(
+                scopeId, memberId, resolvedImplementationRef, ct);
+        }
 
         await _memberCommandPort.RecordBindingAsync(
             scopeId,
@@ -107,8 +128,9 @@ public sealed class StudioMemberService : IStudioMemberService
         string memberId,
         CancellationToken ct = default)
     {
-        var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct);
-        return detail?.LastBinding;
+        var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+        return detail.LastBinding;
     }
 
     private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
@@ -148,6 +170,51 @@ public sealed class StudioMemberService : IStudioMemberService
             _ => throw new InvalidOperationException(
                 $"member '{memberId}' has unsupported implementationKind '{implementationKindWire}'."),
         };
+    }
+
+    private static StudioMemberImplementationRefResponse? BuildResolvedImplementationRef(
+        string implementationKindWire,
+        ScopeBindingUpsertResult bindingResult,
+        UpdateStudioMemberBindingRequest request)
+    {
+        switch (implementationKindWire)
+        {
+            case MemberImplementationKindNames.Workflow:
+                if (bindingResult.Workflow == null
+                    || string.IsNullOrEmpty(bindingResult.Workflow.WorkflowName))
+                {
+                    return null;
+                }
+                return new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    WorkflowId: bindingResult.Workflow.WorkflowName,
+                    WorkflowRevision: bindingResult.RevisionId);
+
+            case MemberImplementationKindNames.Script:
+                var scriptId = bindingResult.Script?.ScriptId
+                    ?? request.Script?.ScriptId
+                    ?? string.Empty;
+                if (string.IsNullOrEmpty(scriptId))
+                    return null;
+                return new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.Script,
+                    ScriptId: scriptId,
+                    ScriptRevision: bindingResult.Script?.ScriptRevision
+                        ?? request.Script?.ScriptRevision);
+
+            case MemberImplementationKindNames.GAgent:
+                var actorTypeName = bindingResult.GAgent?.ActorTypeName
+                    ?? request.GAgent?.ActorTypeName
+                    ?? string.Empty;
+                if (string.IsNullOrEmpty(actorTypeName))
+                    return null;
+                return new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.GAgent,
+                    ActorTypeName: actorTypeName);
+
+            default:
+                return null;
+        }
     }
 
     private static ScopeBindingWorkflowSpec BuildWorkflowSpec(

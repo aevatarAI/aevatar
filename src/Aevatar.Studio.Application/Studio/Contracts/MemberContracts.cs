@@ -63,13 +63,35 @@ public sealed record StudioMemberBindingContractResponse(
 
 public sealed record StudioMemberRosterResponse(
     string ScopeId,
-    IReadOnlyList<StudioMemberSummaryResponse> Members);
+    IReadOnlyList<StudioMemberSummaryResponse> Members,
+    string? NextPageToken = null);
+
+public sealed record StudioMemberRosterPageRequest(
+    int? PageSize = null,
+    string? Cursor = null);
 
 public sealed record CreateStudioMemberRequest(
     string DisplayName,
     string ImplementationKind,
     string? Description = null,
     string? MemberId = null);
+
+/// <summary>
+/// Centralized input bounds applied at the create boundary so a single
+/// request cannot push 10MB of displayName / description / memberId all the
+/// way through to the actor state and read model. Slug pattern on
+/// memberId keeps caller-supplied ids URL-safe and free of separators that
+/// the actor-id convention reserves.
+/// </summary>
+public static class StudioMemberInputLimits
+{
+    public const int MaxDisplayNameLength = 256;
+    public const int MaxDescriptionLength = 2048;
+    public const int MaxMemberIdLength = 64;
+
+    public static readonly System.Text.RegularExpressions.Regex MemberIdPattern =
+        new(@"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+}
 
 public sealed record UpdateStudioMemberBindingRequest(
     string? RevisionId = null,

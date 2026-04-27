@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Projection.Mapping;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -39,12 +40,24 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
         var memberId = string.IsNullOrWhiteSpace(request.MemberId)
             ? GenerateMemberId()
-            : StudioMemberConventions.NormalizeMemberId(request.MemberId);
+            : ValidateUserSuppliedMemberId(request.MemberId!);
 
         var displayName = request.DisplayName?.Trim();
         if (string.IsNullOrEmpty(displayName))
         {
             throw new InvalidOperationException("displayName is required when creating a member.");
+        }
+        if (displayName.Length > StudioMemberInputLimits.MaxDisplayNameLength)
+        {
+            throw new InvalidOperationException(
+                $"displayName must be at most {StudioMemberInputLimits.MaxDisplayNameLength} characters.");
+        }
+
+        var description = request.Description?.Trim() ?? string.Empty;
+        if (description.Length > StudioMemberInputLimits.MaxDescriptionLength)
+        {
+            throw new InvalidOperationException(
+                $"description must be at most {StudioMemberInputLimits.MaxDescriptionLength} characters.");
         }
 
         var implementationKind = MemberImplementationKindMapper.Parse(request.ImplementationKind);
@@ -56,7 +69,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             MemberId = memberId,
             ScopeId = normalizedScopeId,
             DisplayName = displayName,
-            Description = request.Description?.Trim() ?? string.Empty,
+            Description = description,
             ImplementationKind = implementationKind,
             PublishedServiceId = publishedServiceId,
             CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
@@ -189,5 +202,22 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         // derived directly from this value, so keep the format URL-safe and
         // free of separators that StudioMemberConventions builds with (':').
         return $"m-{Guid.NewGuid():N}";
+    }
+
+    private static string ValidateUserSuppliedMemberId(string raw)
+    {
+        var normalized = StudioMemberConventions.NormalizeMemberId(raw);
+        if (normalized.Length > StudioMemberInputLimits.MaxMemberIdLength)
+        {
+            throw new InvalidOperationException(
+                $"memberId must be at most {StudioMemberInputLimits.MaxMemberIdLength} characters.");
+        }
+        if (!StudioMemberInputLimits.MemberIdPattern.IsMatch(normalized))
+        {
+            throw new InvalidOperationException(
+                "memberId must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ (alphanumeric, dash, underscore; starts with alphanumeric).");
+        }
+
+        return normalized;
     }
 }

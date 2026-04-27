@@ -19,6 +19,7 @@ public interface IStudioMemberService
 
     Task<StudioMemberRosterResponse> ListAsync(
         string scopeId,
+        StudioMemberRosterPageRequest? page = null,
         CancellationToken ct = default);
 
     Task<StudioMemberDetailResponse?> GetAsync(

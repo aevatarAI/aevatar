@@ -12,10 +12,15 @@ namespace Aevatar.Studio.Projection.QueryPorts;
 /// runtime, never falls back to the scope binding read model. Roster scans
 /// are constrained to the requested <c>scope_id</c> using the denormalized
 /// projector field, so members from other scopes are not visible.
+///
+/// All fields read from the document are wire-stable strings. The query
+/// port does not unpack any <see cref="Google.Protobuf.WellKnownTypes.Any"/>
+/// payload — see CLAUDE.md `状态镜像契约面向查询` and the proto comment
+/// on <see cref="StudioMemberCurrentStateDocument"/>.
 /// </summary>
 public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
 {
-    private const int DefaultRosterPageSize = 200;
+    public const int MaxRosterPageSize = 200;
 
     private readonly IProjectionDocumentReader<StudioMemberCurrentStateDocument, string> _documentReader;
 
@@ -27,9 +32,13 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
 
     public async Task<StudioMemberRosterResponse> ListAsync(
         string scopeId,
+        StudioMemberRosterPageRequest? page = null,
         CancellationToken ct = default)
     {
         var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var requestedPageSize = page?.PageSize ?? MaxRosterPageSize;
+        if (requestedPageSize <= 0 || requestedPageSize > MaxRosterPageSize)
+            requestedPageSize = MaxRosterPageSize;
 
         var query = new ProjectionDocumentQuery
         {
@@ -42,7 +51,8 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
                     Value = ProjectionDocumentValue.FromString(normalizedScopeId),
                 },
             ],
-            Take = DefaultRosterPageSize,
+            Take = requestedPageSize,
+            Cursor = string.IsNullOrWhiteSpace(page?.Cursor) ? null : page!.Cursor,
         };
 
         var result = await _documentReader.QueryAsync(query, ct);
@@ -53,7 +63,8 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
 
         return new StudioMemberRosterResponse(
             ScopeId: normalizedScopeId,
-            Members: summaries);
+            Members: summaries,
+            NextPageToken: string.IsNullOrWhiteSpace(result.NextCursor) ? null : result.NextCursor);
     }
 
     public async Task<StudioMemberDetailResponse?> GetAsync(
@@ -77,15 +88,13 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
 
     private static StudioMemberSummaryResponse ToSummary(StudioMemberCurrentStateDocument document)
     {
-        var implementationKind = (StudioMemberImplementationKind)document.ImplementationKind;
-        var lifecycleStage = (StudioMemberLifecycleStage)document.LifecycleStage;
         return new StudioMemberSummaryResponse(
             MemberId: document.MemberId,
             ScopeId: document.ScopeId,
             DisplayName: document.DisplayName,
             Description: document.Description,
-            ImplementationKind: MemberImplementationKindMapper.ToWireName(implementationKind),
-            LifecycleStage: MemberImplementationKindMapper.ToWireName(lifecycleStage),
+            ImplementationKind: NormalizeImplementationKindWire(document.ImplementationKind),
+            LifecycleStage: NormalizeLifecycleStageWire(document.LifecycleStage),
             PublishedServiceId: document.PublishedServiceId,
             LastBoundRevisionId: string.IsNullOrEmpty(document.LastBoundRevisionId)
                 ? null
@@ -97,61 +106,71 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
     private static StudioMemberDetailResponse ToDetail(StudioMemberCurrentStateDocument document)
     {
         var summary = ToSummary(document);
-        StudioMemberImplementationRefResponse? implementationRef = null;
-        StudioMemberBindingContractResponse? lastBinding = null;
-
-        if (document.StateRoot != null && document.StateRoot.Is(StudioMemberState.Descriptor))
-        {
-            var state = document.StateRoot.Unpack<StudioMemberState>();
-            implementationRef = ToImplementationRefResponse(state.ImplementationRef, summary.ImplementationKind);
-            if (state.LastBinding != null && !string.IsNullOrEmpty(state.LastBinding.PublishedServiceId))
-            {
-                lastBinding = new StudioMemberBindingContractResponse(
-                    PublishedServiceId: state.LastBinding.PublishedServiceId,
-                    RevisionId: state.LastBinding.RevisionId,
-                    ImplementationKind: MemberImplementationKindMapper.ToWireName(
-                        state.LastBinding.ImplementationKind),
-                    BoundAt: state.LastBinding.BoundAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
-            }
-        }
-
+        var implementationRef = ToImplementationRefResponse(document, summary.ImplementationKind);
+        var lastBinding = ToLastBindingResponse(document);
         return new StudioMemberDetailResponse(summary, implementationRef, lastBinding);
     }
 
     private static StudioMemberImplementationRefResponse? ToImplementationRefResponse(
-        StudioMemberImplementationRef? implementationRef,
+        StudioMemberCurrentStateDocument document,
         string implementationKindWire)
     {
-        if (implementationRef == null)
-            return null;
-
-        if (implementationRef.Workflow != null && !string.IsNullOrEmpty(implementationRef.Workflow.WorkflowId))
+        if (!string.IsNullOrEmpty(document.ImplementationWorkflowId))
         {
             return new StudioMemberImplementationRefResponse(
                 ImplementationKind: implementationKindWire,
-                WorkflowId: implementationRef.Workflow.WorkflowId,
-                WorkflowRevision: string.IsNullOrEmpty(implementationRef.Workflow.WorkflowRevision)
+                WorkflowId: document.ImplementationWorkflowId,
+                WorkflowRevision: string.IsNullOrEmpty(document.ImplementationWorkflowRevision)
                     ? null
-                    : implementationRef.Workflow.WorkflowRevision);
+                    : document.ImplementationWorkflowRevision);
         }
 
-        if (implementationRef.Script != null && !string.IsNullOrEmpty(implementationRef.Script.ScriptId))
+        if (!string.IsNullOrEmpty(document.ImplementationScriptId))
         {
             return new StudioMemberImplementationRefResponse(
                 ImplementationKind: implementationKindWire,
-                ScriptId: implementationRef.Script.ScriptId,
-                ScriptRevision: string.IsNullOrEmpty(implementationRef.Script.ScriptRevision)
+                ScriptId: document.ImplementationScriptId,
+                ScriptRevision: string.IsNullOrEmpty(document.ImplementationScriptRevision)
                     ? null
-                    : implementationRef.Script.ScriptRevision);
+                    : document.ImplementationScriptRevision);
         }
 
-        if (implementationRef.Gagent != null && !string.IsNullOrEmpty(implementationRef.Gagent.ActorTypeName))
+        if (!string.IsNullOrEmpty(document.ImplementationActorTypeName))
         {
             return new StudioMemberImplementationRefResponse(
                 ImplementationKind: implementationKindWire,
-                ActorTypeName: implementationRef.Gagent.ActorTypeName);
+                ActorTypeName: document.ImplementationActorTypeName);
         }
 
         return null;
     }
+
+    private static StudioMemberBindingContractResponse? ToLastBindingResponse(
+        StudioMemberCurrentStateDocument document)
+    {
+        if (string.IsNullOrEmpty(document.LastBoundPublishedServiceId))
+            return null;
+
+        return new StudioMemberBindingContractResponse(
+            PublishedServiceId: document.LastBoundPublishedServiceId,
+            RevisionId: document.LastBoundRevisionId,
+            ImplementationKind: NormalizeImplementationKindWire(document.LastBoundImplementationKind),
+            BoundAt: document.LastBoundAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
+    }
+
+    private static string NormalizeImplementationKindWire(string? wire) => wire switch
+    {
+        MemberImplementationKindNames.Workflow => MemberImplementationKindNames.Workflow,
+        MemberImplementationKindNames.Script => MemberImplementationKindNames.Script,
+        MemberImplementationKindNames.GAgent => MemberImplementationKindNames.GAgent,
+        _ => string.Empty,
+    };
+
+    private static string NormalizeLifecycleStageWire(string? wire) => wire switch
+    {
+        MemberLifecycleStageNames.Created => MemberLifecycleStageNames.Created,
+        MemberLifecycleStageNames.BuildReady => MemberLifecycleStageNames.BuildReady,
+        MemberLifecycleStageNames.BindReady => MemberLifecycleStageNames.BindReady,
+        _ => string.Empty,
+    };
 }

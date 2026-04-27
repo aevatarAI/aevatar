@@ -208,7 +208,10 @@ public sealed class StudioMemberServiceBindingTests
             _detail = detail;
         }
 
-        public Task<StudioMemberRosterResponse> ListAsync(string scopeId, CancellationToken ct = default)
+        public Task<StudioMemberRosterResponse> ListAsync(
+            string scopeId,
+            StudioMemberRosterPageRequest? page = null,
+            CancellationToken ct = default)
         {
             return Task.FromResult(new StudioMemberRosterResponse(
                 ScopeId: scopeId,
@@ -226,6 +229,8 @@ public sealed class StudioMemberServiceBindingTests
     {
         public List<RecordedBinding> RecordedBindings { get; } = [];
 
+        public List<StudioMemberImplementationRefResponse> RecordedImplementationUpdates { get; } = [];
+
         public Task<StudioMemberSummaryResponse> CreateAsync(
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default)
         {
@@ -238,7 +243,8 @@ public sealed class StudioMemberServiceBindingTests
             StudioMemberImplementationRefResponse implementation,
             CancellationToken ct = default)
         {
-            throw new NotImplementedException("Not exercised in this test.");
+            RecordedImplementationUpdates.Add(implementation);
+            return Task.CompletedTask;
         }
 
         public Task RecordBindingAsync(

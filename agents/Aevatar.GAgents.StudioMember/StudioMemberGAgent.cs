@@ -13,7 +13,9 @@ namespace Aevatar.GAgents.StudioMember;
 /// Actor ID convention: <c>studio-member:{scopeId}:{memberId}</c>.
 /// The actor is the only writer of <c>published_service_id</c>, which is
 /// generated once at creation from the immutable <c>member_id</c> and never
-/// recomputed on rename.
+/// recomputed on rename. The convention is re-derived inside the actor in
+/// <see cref="ApplyCreated"/> so a stale or hand-crafted event payload
+/// cannot break the rename-safe invariant.
 /// </summary>
 public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProjectedActor
 {
@@ -24,15 +26,29 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     {
         if (!string.IsNullOrEmpty(State.MemberId))
         {
-            // Idempotent re-create with same identity is a no-op; otherwise reject
-            // so a stray duplicate cannot overwrite an existing member's
-            // publishedServiceId or scope binding.
+            // First-write-wins on identity: a re-create with a different
+            // memberId is a hard conflict (someone is reusing an existing
+            // actor id for a different member). A re-create with the same
+            // memberId but mismatched non-identity fields is also rejected
+            // so a stray duplicate cannot silently overwrite the persisted
+            // displayName / kind / description and leave callers confused
+            // about which version persisted.
             if (!string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
                     $"member already initialized with id '{State.MemberId}'.");
             }
 
+            if (!string.Equals(State.DisplayName, evt.DisplayName, StringComparison.Ordinal)
+                || !string.Equals(State.Description, evt.Description, StringComparison.Ordinal)
+                || State.ImplementationKind != evt.ImplementationKind)
+            {
+                throw new InvalidOperationException(
+                    $"member '{State.MemberId}' already exists with different displayName / description / implementationKind. " +
+                    "First-write-wins on member identity; use rename / updateImplementation to change later.");
+            }
+
+            // Same memberId + same identity-stable fields = idempotent no-op.
             return;
         }
 
@@ -87,6 +103,13 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     private static StudioMemberState ApplyCreated(
         StudioMemberState state, StudioMemberCreatedEvent evt)
     {
+        // Re-derive publishedServiceId from the immutable memberId rather
+        // than trusting evt.PublishedServiceId. The dispatcher today already
+        // builds it via the same convention; deriving here keeps the
+        // single-source-of-truth on the actor and protects against a
+        // historical or hand-rolled event whose derivation rule drifted.
+        var derivedPublishedServiceId = StudioMemberConventions.BuildPublishedServiceId(evt.MemberId);
+
         return new StudioMemberState
         {
             MemberId = evt.MemberId,
@@ -95,7 +118,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             Description = evt.Description,
             ImplementationKind = evt.ImplementationKind,
             ImplementationRef = null,
-            PublishedServiceId = evt.PublishedServiceId,
+            PublishedServiceId = derivedPublishedServiceId,
             LifecycleStage = StudioMemberLifecycleStage.Created,
             CreatedAtUtc = evt.CreatedAtUtc,
             UpdatedAtUtc = evt.CreatedAtUtc,
@@ -120,9 +143,26 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         next.ImplementationKind = evt.ImplementationKind;
         next.ImplementationRef = evt.ImplementationRef?.Clone();
         next.UpdatedAtUtc = evt.UpdatedAtUtc;
-        if (next.LifecycleStage == StudioMemberLifecycleStage.Created
-            && HasResolvedImplementationRef(evt.ImplementationRef))
+
+        // Lifecycle:
+        //   Created       + resolved impl ref → BuildReady
+        //   BindReady     + new impl event    → downgrade to BuildReady
+        //                  (the published revision is now stale until next bind)
+        //   BuildReady    + new impl event    → stays BuildReady
+        //
+        // The bind orchestration explicitly does (impl_updated → bound),
+        // so the temporary downgrade is upgraded again by ApplyBound on
+        // the same bind; only out-of-band impl updates leave the member
+        // visibly non-bind-ready until rebind.
+        var hasResolvedRef = HasResolvedImplementationRef(evt.ImplementationRef);
+        if (hasResolvedRef)
         {
+            next.LifecycleStage = StudioMemberLifecycleStage.BuildReady;
+        }
+        else if (next.LifecycleStage == StudioMemberLifecycleStage.BindReady)
+        {
+            // Cleared impl ref on a previously-bound member: still need to
+            // surface that the bound revision is stale.
             next.LifecycleStage = StudioMemberLifecycleStage.BuildReady;
         }
 

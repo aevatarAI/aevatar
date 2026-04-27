@@ -105,6 +105,8 @@ public sealed class StudioMemberEndpointsTests
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
             service,
+            (int?)null,
+            (string?)null,
             CancellationToken.None);
 
         result.Should().BeOfType<Ok<StudioMemberRosterResponse>>()
@@ -316,7 +318,10 @@ public sealed class StudioMemberEndpointsTests
             return Task.FromResult(CreateResponse!);
         }
 
-        public Task<StudioMemberRosterResponse> ListAsync(string scopeId, CancellationToken ct = default)
+        public Task<StudioMemberRosterResponse> ListAsync(
+            string scopeId,
+            StudioMemberRosterPageRequest? page = null,
+            CancellationToken ct = default)
             => Task.FromResult(ListResponse ?? new StudioMemberRosterResponse(scopeId, []));
 
         public Task<StudioMemberDetailResponse?> GetAsync(

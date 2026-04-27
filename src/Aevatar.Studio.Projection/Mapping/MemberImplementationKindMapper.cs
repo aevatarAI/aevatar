@@ -1,11 +1,14 @@
 using Aevatar.GAgents.StudioMember;
+using Aevatar.Studio.Application.Studio.Contracts;
 
-namespace Aevatar.Studio.Application.Studio.Contracts;
+namespace Aevatar.Studio.Projection.Mapping;
 
 /// <summary>
 /// Boundary mapping between the lowercase wire string used by Studio's HTTP
 /// surface and the strongly-typed proto enum used by the StudioMember actor.
-/// Keeps the rest of the codebase from string-matching kind values inline.
+/// Lives in the Projection layer (alongside other StudioMember adapters)
+/// because the Application layer does not depend on the agent proto package
+/// — see CLAUDE.md `严格分层 / 上层依赖抽象`.
 /// </summary>
 public static class MemberImplementationKindMapper
 {
