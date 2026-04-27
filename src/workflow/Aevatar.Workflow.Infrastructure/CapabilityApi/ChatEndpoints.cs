@@ -38,7 +38,8 @@ public static class WorkflowCapabilityEndpoints
         HttpContext http,
         ChatInput input,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var writer = new ChatSseResponseWriter(http.Response);
@@ -73,6 +74,8 @@ public static class WorkflowCapabilityEndpoints
                 onAcceptedAsync: async (receipt, token) =>
                 {
                     CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.CorrelationId);
+                    if (onAcceptedHook != null)
+                        await onAcceptedHook(receipt, token);
                     await writer.StartAsync(token);
                     await writer.WriteAsync(BuildRunContextFrame(receipt), token);
                     scope.RecordFirstResponse();

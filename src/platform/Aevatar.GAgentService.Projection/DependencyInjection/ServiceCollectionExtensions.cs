@@ -73,6 +73,13 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<ServiceRunCurrentStateProjectionContext, ProjectionMaterializationScopeGAgent<ServiceRunCurrentStateProjectionContext>>(
+            static scopeKey => new ServiceRunCurrentStateProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ServiceProjectionRuntimeLease<ServiceRunCurrentStateProjectionContext>(context.RootActorId, context));
         services.AddEventSinkProjectionRuntimeCore<
             GAgentDraftRunProjectionContext,
             GAgentDraftRunRuntimeLease,
@@ -92,6 +99,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRolloutProjectionPort, ServiceRolloutProjectionPort>();
         services.TryAddSingleton<IServiceTrafficViewProjectionPort, ServiceTrafficViewProjectionPort>();
         services.TryAddSingleton<IServiceRevisionCatalogProjectionPort, ServiceRevisionCatalogProjectionPort>();
+        services.TryAddSingleton<IServiceRunCurrentStateProjectionPort, ServiceRunCurrentStateProjectionPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
         services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();
@@ -102,6 +110,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceRolloutCommandObservationReadModel>, ServiceRolloutCommandObservationReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>, ServiceTrafficViewReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceRevisionCatalogReadModel>, ServiceRevisionCatalogReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceRunCurrentStateReadModel>, ServiceRunCurrentStateReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceCatalogQueryReader, ServiceCatalogQueryReader>();
         services.TryAddSingleton<IServiceDeploymentCatalogQueryReader, ServiceDeploymentCatalogQueryReader>();
         services.TryAddSingleton<IServiceServingSetQueryReader, ServiceServingSetQueryReader>();
@@ -109,6 +118,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRolloutCommandObservationQueryReader, ServiceRolloutCommandObservationQueryReader>();
         services.TryAddSingleton<IServiceTrafficViewQueryReader, ServiceTrafficViewQueryReader>();
         services.TryAddSingleton<IServiceRevisionCatalogQueryReader, ServiceRevisionCatalogQueryReader>();
+        services.TryAddSingleton<IServiceRunQueryPort, ServiceRunQueryReader>();
         services.AddProjectionArtifactMaterializer<
             ServiceCatalogProjectionContext,
             ServiceCatalogProjector>();
@@ -130,6 +140,9 @@ public static class ServiceCollectionExtensions
         services.AddProjectionArtifactMaterializer<
             ServiceRevisionCatalogProjectionContext,
             ServiceRevisionCatalogProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ServiceRunCurrentStateProjectionContext,
+            ServiceRunCurrentStateProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<GAgentDraftRunProjectionContext>,
             GAgentDraftRunSessionEventProjector>());
