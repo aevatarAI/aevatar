@@ -45,8 +45,10 @@ public class BootstrapServiceCollectionExtensionsTests
         {
             ["LLMProviders:Default"] = "deepseek",
         });
-        services.AddSingleton(configuration);
 
+        // No services.AddSingleton(configuration) — AddAevatarBootstrap
+        // must register the IConfiguration it received so the env-only
+        // EnvironmentSecretsStore can resolve without caller workaround.
         services.AddAevatarBootstrap(configuration, allowLocalFileSecretsStore: false);
         using var provider = services.BuildServiceProvider();
 

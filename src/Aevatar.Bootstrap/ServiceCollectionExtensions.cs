@@ -14,6 +14,12 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         bool allowLocalFileSecretsStore = true)
     {
+        // EnvironmentSecretsStore (registered by AddAevatarConfig when
+        // allowLocalFileSecretsStore=false) ctor-injects IConfiguration. The
+        // overload here already receives the instance, so register it into DI
+        // up front instead of forcing every caller to add it themselves.
+        // TryAdd preserves any existing registration from a host builder.
+        services.TryAddSingleton(configuration);
         services.AddAevatarConfig(allowLocalFileSecretsStore);
         services.AddHttpClient();
         services.AddAevatarActorRuntime(configuration);
