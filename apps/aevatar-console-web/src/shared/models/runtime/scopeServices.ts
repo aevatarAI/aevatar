@@ -1,5 +1,5 @@
 import type { ServiceBindingSnapshot } from "@/shared/models/governance";
-import type { StudioScopeBindingRevision } from "@/shared/studio/models";
+import type { StudioMemberBindingRevision } from "@/shared/studio/models";
 
 export interface ScopeServiceBindingInput {
   readonly bindingId: string;
@@ -32,7 +32,7 @@ export interface ScopeServiceRevisionCatalogSnapshot {
   readonly catalogStateVersion: number;
   readonly catalogLastEventId: string;
   readonly updatedAt: string | null;
-  readonly revisions: readonly StudioScopeBindingRevision[];
+  readonly revisions: readonly StudioMemberBindingRevision[];
 }
 
 export interface ScopeServiceRevisionActionResult {
@@ -189,7 +189,7 @@ export type ScopeServiceBindingCatalogSnapshot = {
 
 export function getScopeServiceCurrentRevision(
   catalog: ScopeServiceRevisionCatalogSnapshot | null | undefined,
-): StudioScopeBindingRevision | null {
+): StudioMemberBindingRevision | null {
   if (!catalog?.revisions.length) {
     return null;
   }

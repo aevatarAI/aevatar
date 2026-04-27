@@ -13,6 +13,13 @@ import type {
   StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioMemberBindingContract,
+  StudioMemberDetail,
+  StudioMemberImplementationKind,
+  StudioMemberImplementationRef,
+  StudioMemberLifecycleStage,
+  StudioMemberRoster,
+  StudioMemberSummary,
   StudioParseYamlResult,
   StudioRoleCatalogImportResult,
   StudioRoleCatalog,
@@ -40,7 +47,10 @@ import type {
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
 } from "./models";
-import { normalizeStudioScopeBindingImplementationKind } from "./models";
+import {
+  normalizeStudioMemberLifecycleStage,
+  normalizeStudioScopeBindingImplementationKind,
+} from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
 import { scopesApi } from "@/shared/api/scopesApi";
 import {
@@ -715,7 +725,12 @@ function decodeStudioScopeBindingResult(
   const record = expectRecord(value, "StudioScopeBindingResult");
   const displayName =
     readOptionalString(record, ["displayName", "DisplayName"]) || "";
-  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  const serviceId = readOptionalString(record, [
+    "serviceId",
+    "ServiceId",
+    "publishedServiceId",
+    "PublishedServiceId",
+  ]);
   const workflowRecord =
     record.workflow && typeof record.workflow === "object"
       ? expectRecord(record.workflow, "StudioScopeBindingResult.workflow")
@@ -857,7 +872,12 @@ function decodeStudioScopeBindingStatus(
     ),
     serviceId: readString(
       record,
-      ["serviceId", "ServiceId"],
+      [
+        "serviceId",
+        "ServiceId",
+        "publishedServiceId",
+        "PublishedServiceId",
+      ],
       "StudioScopeBindingStatus.serviceId"
     ),
     displayName: readString(
@@ -867,7 +887,12 @@ function decodeStudioScopeBindingStatus(
     ),
     serviceKey: readString(
       record,
-      ["serviceKey", "ServiceKey"],
+      [
+        "serviceKey",
+        "ServiceKey",
+        "publishedServiceKey",
+        "PublishedServiceKey",
+      ],
       "StudioScopeBindingStatus.serviceKey"
     ),
     defaultServingRevisionId: readString(
@@ -908,6 +933,192 @@ function decodeStudioScopeBindingStatus(
   };
 }
 
+function readStudioMemberImplementationKind(
+  record: Record<string, unknown>,
+  keys: string | string[]
+): StudioMemberImplementationKind {
+  return normalizeStudioScopeBindingImplementationKind(
+    readNullableString(record, keys, "StudioMemberSummary.implementationKind")
+  );
+}
+
+function readStudioMemberLifecycle(
+  record: Record<string, unknown>,
+  keys: string | string[]
+): StudioMemberLifecycleStage {
+  return normalizeStudioMemberLifecycleStage(
+    readNullableString(record, keys, "StudioMemberSummary.lifecycleStage")
+  );
+}
+
+function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
+  const record = expectRecord(value, "StudioMemberSummary");
+  return {
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberSummary.memberId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberSummary.scopeId"
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      "StudioMemberSummary.displayName"
+    ),
+    description:
+      readNullableString(
+        record,
+        ["description", "Description"],
+        "StudioMemberSummary.description"
+      ) ?? "",
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    lifecycleStage: readStudioMemberLifecycle(record, [
+      "lifecycleStage",
+      "LifecycleStage",
+    ]),
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      "StudioMemberSummary.publishedServiceId"
+    ),
+    lastBoundRevisionId:
+      readNullableString(
+        record,
+        ["lastBoundRevisionId", "LastBoundRevisionId"],
+        "StudioMemberSummary.lastBoundRevisionId"
+      ) ?? null,
+    createdAt: readString(
+      record,
+      ["createdAt", "CreatedAt"],
+      "StudioMemberSummary.createdAt"
+    ),
+    updatedAt: readString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      "StudioMemberSummary.updatedAt"
+    ),
+  };
+}
+
+function decodeStudioMemberRoster(value: unknown): StudioMemberRoster {
+  const record = expectRecord(value, "StudioMemberRoster");
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberRoster.scopeId"
+    ),
+    members: expectArray(
+      record.members ?? record.Members,
+      "StudioMemberRoster.members",
+      decodeStudioMemberSummary
+    ),
+    nextPageToken:
+      readNullableString(
+        record,
+        ["nextPageToken", "NextPageToken"],
+        "StudioMemberRoster.nextPageToken"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberImplementationRef(
+  value: unknown
+): StudioMemberImplementationRef {
+  const record = expectRecord(value, "StudioMemberImplementationRef");
+  return {
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    workflowId:
+      readNullableString(
+        record,
+        ["workflowId", "WorkflowId"],
+        "StudioMemberImplementationRef.workflowId"
+      ) ?? null,
+    workflowRevision:
+      readNullableString(
+        record,
+        ["workflowRevision", "WorkflowRevision"],
+        "StudioMemberImplementationRef.workflowRevision"
+      ) ?? null,
+    scriptId:
+      readNullableString(
+        record,
+        ["scriptId", "ScriptId"],
+        "StudioMemberImplementationRef.scriptId"
+      ) ?? null,
+    scriptRevision:
+      readNullableString(
+        record,
+        ["scriptRevision", "ScriptRevision"],
+        "StudioMemberImplementationRef.scriptRevision"
+      ) ?? null,
+    actorTypeName:
+      readNullableString(
+        record,
+        ["actorTypeName", "ActorTypeName"],
+        "StudioMemberImplementationRef.actorTypeName"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingContract(
+  value: unknown
+): StudioMemberBindingContract {
+  const record = expectRecord(value, "StudioMemberBindingContract");
+  return {
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      "StudioMemberBindingContract.publishedServiceId"
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioMemberBindingContract.revisionId"
+    ),
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    boundAt: readString(
+      record,
+      ["boundAt", "BoundAt"],
+      "StudioMemberBindingContract.boundAt"
+    ),
+  };
+}
+
+function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
+  const record = expectRecord(value, "StudioMemberDetail");
+  return {
+    summary: decodeStudioMemberSummary(
+      expectRecord(record.summary ?? record.Summary, "StudioMemberDetail.summary")
+    ),
+    implementationRef:
+      record.implementationRef == null && record.ImplementationRef == null
+        ? null
+        : decodeStudioMemberImplementationRef(
+            record.implementationRef ?? record.ImplementationRef
+          ),
+    lastBinding:
+      record.lastBinding == null && record.LastBinding == null
+        ? null
+        : decodeStudioMemberBindingContract(
+            record.lastBinding ?? record.LastBinding
+          ),
+  };
+}
+
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
     return requestJson("/api/studio/context");
@@ -919,6 +1130,45 @@ export const studioApi = {
 
   getWorkspaceSettings(scopeId?: string | null): Promise<StudioWorkspaceSettings> {
     return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
+  },
+
+  listMembers(scopeId: string): Promise<StudioMemberRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members`,
+      decodeStudioMemberRoster
+    );
+  },
+
+  getMember(scopeId: string, memberId: string): Promise<StudioMemberDetail> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}`,
+      decodeStudioMemberDetail
+    );
+  },
+
+  createMember(input: {
+    scopeId: string;
+    displayName: string;
+    implementationKind: StudioMemberImplementationKind;
+    description?: string | null;
+    memberId?: string | null;
+  }): Promise<StudioMemberSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
+      decodeStudioMemberSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            implementationKind: input.implementationKind,
+            description: trimOptional(input.description),
+            memberId: trimOptional(input.memberId),
+          })
+        ),
+      }
+    );
   },
 
   listWorkflowDrafts(scopeId?: string | null): Promise<StudioWorkflowDraftSummary[]> {
@@ -1249,6 +1499,116 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
       decodeStudioScopeBindingStatus
     );
+  },
+
+  bindMemberWorkflow(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    workflowYamls: readonly string[];
+    revisionId?: string | null;
+  }): Promise<StudioScopeBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "workflow",
+            displayName: trimOptional(input.displayName),
+            workflow: {
+              workflowYamls: input.workflowYamls,
+            },
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindMemberScript(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    scriptId: string;
+    scriptRevision: string;
+    revisionId?: string | null;
+  }): Promise<StudioScopeScriptBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "script",
+            displayName: trimOptional(input.displayName),
+            script: compactObject({
+              scriptId: input.scriptId.trim(),
+              scriptRevision: input.scriptRevision.trim(),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindMemberGAgent(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    actorTypeName: string;
+    endpoints: StudioScopeGAgentBindingInput["endpoints"];
+    revisionId?: string | null;
+  }): Promise<StudioScopeGAgentBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "gagent",
+            displayName: trimOptional(input.displayName),
+            gagent: compactObject({
+              actorTypeName: input.actorTypeName.trim(),
+              endpoints: input.endpoints.map((endpoint) =>
+                compactObject({
+                  endpointId: endpoint.endpointId.trim(),
+                  displayName:
+                    trimOptional(endpoint.displayName) ||
+                    endpoint.endpointId.trim(),
+                  kind: trimOptional(endpoint.kind)?.toLowerCase() || "command",
+                  requestTypeUrl: trimOptional(endpoint.requestTypeUrl),
+                  responseTypeUrl: trimOptional(endpoint.responseTypeUrl),
+                  description: trimOptional(endpoint.description),
+                })
+              ),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  getMemberBinding(
+    scopeId: string,
+    memberId: string
+  ): Promise<StudioScopeBindingStatus> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
+      decodeStudioScopeBindingStatus
+    );
+  },
+
+  getDefaultRouteTarget(scopeId: string): Promise<StudioScopeBindingStatus> {
+    return this.getScopeBinding(scopeId);
   },
 
   getScopeScriptBinding(

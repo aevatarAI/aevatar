@@ -625,7 +625,9 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(headerScope.getByText('Scope 1626c177…b0d6')).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'New draft' })).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'Save' })).toBeTruthy();
-    expect(headerScope.getByRole('button', { name: 'Bind scope' })).toBeTruthy();
+    expect(
+      headerScope.getByRole('button', { name: 'Update default route' }),
+    ).toBeTruthy();
     fireEvent.click(
       headerScope.getByRole('button', { name: 'More script actions' }),
     );
@@ -731,7 +733,9 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedScriptsApi.saveScript).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Bind scope' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Update default route' }),
+    );
 
     await waitFor(() => {
       expect(screen.getByText('Bind saved script')).toBeTruthy();

@@ -272,7 +272,7 @@ const TeamBindingsTab: React.FC<TeamBindingsTabProps> = ({
               <SignalCard
                 label="治理摘要"
                 value="等待服务入口"
-                caption="一旦 scope binding、策略或 endpoint 暴露可见，这里会自动展开。"
+                caption="一旦当前成员服务、策略或 endpoint 暴露可见，这里会自动展开。"
               />
             </div>
             <Typography.Text style={{ fontSize: 13 }} type="secondary">

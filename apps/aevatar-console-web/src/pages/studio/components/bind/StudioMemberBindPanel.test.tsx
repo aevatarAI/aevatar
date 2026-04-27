@@ -3,6 +3,7 @@ import React from 'react';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { studioApi } from '@/shared/studio/api';
 import { renderWithQueryClient } from '../../../../../tests/reactQueryTestUtils';
 import StudioMemberBindPanel from './StudioMemberBindPanel';
 
@@ -23,6 +24,12 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
 
 jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
   parseBackendSSEStream: jest.fn(),
+}));
+
+jest.mock('@/shared/studio/api', () => ({
+  studioApi: {
+    getMemberBinding: jest.fn(),
+  },
 }));
 
 describe('StudioMemberBindPanel', () => {
@@ -115,6 +122,47 @@ describe('StudioMemberBindPanel', () => {
         },
       ],
     });
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValue({
+      available: true,
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      displayName: 'workspace-demo',
+      serviceKey: 'scope-1:default:workspace-demo',
+      defaultServingRevisionId: 'rev-2',
+      activeServingRevisionId: 'rev-2',
+      deploymentId: 'dep-2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-default',
+      updatedAt: '2026-03-26T08:00:00Z',
+      revisions: [
+        {
+          revisionId: 'rev-2',
+          implementationKind: 'workflow',
+          status: 'active',
+          artifactHash: 'hash-2',
+          failureReason: '',
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: 'active',
+          deploymentId: 'dep-2',
+          primaryActorId: 'actor-default',
+          createdAt: '2026-03-26T07:50:00Z',
+          preparedAt: '2026-03-26T07:55:00Z',
+          publishedAt: '2026-03-26T08:00:00Z',
+          retiredAt: null,
+          workflowName: 'workspace-demo',
+          workflowDefinitionActorId: 'workflow-def-1',
+          inlineWorkflowCount: 0,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+        },
+      ],
+    });
     (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue({ ok: true });
     (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({ ok: true });
     (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
@@ -164,6 +212,7 @@ describe('StudioMemberBindPanel', () => {
           scopeId: 'scope-1',
           scopeSource: 'nyxid',
         },
+        memberId: 'default',
         scopeId: 'scope-1',
         preferredServiceId: 'default',
         onSelectionChange: handleSelectionChange,
@@ -253,12 +302,18 @@ describe('StudioMemberBindPanel', () => {
         'default',
       );
     });
+    await waitFor(() => {
+      expect(studioApi.getMemberBinding).toHaveBeenCalledWith(
+        'scope-1',
+        'default',
+      );
+    });
     expect(screen.queryByText('Environment')).toBeNull();
     expect(screen.queryByText('Rate limit')).toBeNull();
     expect(screen.queryByText('Allowed origins')).toBeNull();
     await waitFor(() => {
       expect(screen.getByTestId('studio-bind-contract-card').textContent).toContain(
-        '/api/scopes/scope-1/services/default/invoke/chat:stream',
+        '/api/scopes/scope-1/members/default/invoke/chat:stream',
       );
     });
     await waitFor(() => {

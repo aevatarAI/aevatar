@@ -453,7 +453,7 @@ const GAgentsPage: React.FC = () => {
   const bindingQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
     queryKey: ['runtime-gagents', 'binding', normalizedScopeId],
-    queryFn: () => runtimeGAgentApi.getScopeBinding(normalizedScopeId),
+    queryFn: () => runtimeGAgentApi.getDefaultRouteTarget(normalizedScopeId),
     retry: false,
   });
 
@@ -1119,7 +1119,7 @@ const GAgentsPage: React.FC = () => {
     setBindingPendingKey(`activate:${revisionId}`);
     setBindingNotice(null);
     try {
-      const result = await runtimeGAgentApi.activateScopeBindingRevision(
+      const result = await runtimeGAgentApi.activateMemberBindingRevision(
         normalizedScopeId,
         revisionId,
       );
@@ -1149,7 +1149,7 @@ const GAgentsPage: React.FC = () => {
     setBindingPendingKey(`retire:${revisionId}`);
     setBindingNotice(null);
     try {
-      const result = await runtimeGAgentApi.retireScopeBindingRevision(
+      const result = await runtimeGAgentApi.retireMemberBindingRevision(
         normalizedScopeId,
         revisionId,
       );

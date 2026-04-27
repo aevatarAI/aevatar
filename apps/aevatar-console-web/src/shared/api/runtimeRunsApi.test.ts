@@ -155,6 +155,30 @@ describe("runtimeRunsApi", () => {
     });
   });
 
+  it("routes streamChat through the member stream endpoint when memberId is provided", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamChat(
+      "scope-1",
+      {
+        prompt: "Run it",
+      },
+      new AbortController().signal,
+      { memberId: "joker", serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/members/joker/invoke/chat:stream",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+  });
+
   it("routes scoped streamChat through the scope default service endpoint", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -293,6 +317,30 @@ describe("runtimeRunsApi", () => {
     );
   });
 
+  it("routes getRunSummary through the member run endpoint when memberId is provided", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        actorId: "actor-1",
+        runId: "run-1",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.getRunSummary("scope-1", "run-1", {
+      memberId: "joker",
+      serviceId: "service-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/members/joker/runs/run-1?",
+      expect.objectContaining({
+        method: "GET",
+      })
+    );
+  });
+
   it("forwards actor filters when resolving run summaries", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -378,6 +426,36 @@ describe("runtimeRunsApi", () => {
           payloadTypeUrl: getStringValueTypeUrl(),
           payloadBase64: encodeStringValueBase64("Launch the endpoint"),
         }),
+      })
+    );
+  });
+
+  it("routes generic endpoint invokes through the member endpoint path when memberId is provided", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        requestId: "cmd-2",
+        targetActorId: "actor-2",
+        endpointId: "run",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.invokeEndpoint(
+      "scope-1",
+      {
+        endpointId: "run",
+        prompt: "Launch the endpoint",
+        commandId: "cmd-2",
+      },
+      { memberId: "joker", serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/members/joker/invoke/run",
+      expect.objectContaining({
+        method: "POST",
       })
     );
   });

@@ -774,6 +774,68 @@ describe('studioApi host-session requests', () => {
     });
   });
 
+  it('binds a workflow to a member-owned published service using the member binding endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        publishedServiceId: 'joker',
+        displayName: 'joker',
+        revisionId: 'rev-1',
+        implementationKind: 'workflow',
+        workflow: {
+          workflowName: 'joker',
+          definitionActorIdPrefix: 'scope-workflow:scope-1:joker',
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await studioApi.bindMemberWorkflow({
+      scopeId: 'scope-1',
+      memberId: 'joker',
+      displayName: 'joker',
+      workflowYamls: ['name: joker\nsteps: []\n'],
+      revisionId: 'rev-1',
+    });
+
+    expect(result.serviceId).toBe('joker');
+    expect(result.implementationKind).toBe('workflow');
+    expect(result.targetKind).toBe('workflow');
+    expect(result.workflow).toEqual({
+      workflowName: 'joker',
+      definitionActorIdPrefix: 'scope-workflow:scope-1:joker',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-1/members/joker/binding');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      implementationKind: 'workflow',
+      displayName: 'joker',
+      workflow: {
+        workflowYamls: ['name: joker\nsteps: []\n'],
+      },
+      revisionId: 'rev-1',
+    });
+  });
+
   it('binds a GAgent to the default service using the scope binding endpoint', async () => {
     persistAuthSession({
       tokens: {
@@ -912,6 +974,263 @@ describe('studioApi host-session requests', () => {
 
     expect(status.revisions[0]?.implementationKind).toBe('script');
     expect(status.revisions[0]?.scriptId).toBe('script-alpha');
+  });
+
+  it('loads member binding status from member-first response fields', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        available: true,
+        scopeId: 'scope-1',
+        publishedServiceId: 'joker',
+        displayName: 'joker',
+        publishedServiceKey: 'scope-1:default:joker',
+        defaultServingRevisionId: 'rev-2',
+        activeServingRevisionId: 'rev-2',
+        deploymentId: 'deploy-2',
+        deploymentStatus: 'Active',
+        primaryActorId: 'actor://scope/joker',
+        updatedAt: '2026-03-26T08:00:00Z',
+        revisions: [],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getMemberBinding('scope-1', 'joker')).resolves.toEqual(
+      expect.objectContaining({
+        serviceId: 'joker',
+        serviceKey: 'scope-1:default:joker',
+        displayName: 'joker',
+      }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/joker/binding',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('lists studio members from the member roster endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        members: [
+          {
+            memberId: 'joker',
+            scopeId: 'scope-1',
+            displayName: 'joker',
+            description: 'Support workflow member',
+            implementationKind: 'workflow',
+            lifecycleStage: 'bind_ready',
+            publishedServiceId: 'member-joker',
+            lastBoundRevisionId: 'rev-2',
+            createdAt: '2026-04-27T08:00:00Z',
+            updatedAt: '2026-04-27T08:05:00Z',
+          },
+        ],
+        nextPageToken: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.listMembers('scope-1')).resolves.toEqual({
+      scopeId: 'scope-1',
+      members: [
+        {
+          memberId: 'joker',
+          scopeId: 'scope-1',
+          displayName: 'joker',
+          description: 'Support workflow member',
+          implementationKind: 'workflow',
+          lifecycleStage: 'bind_ready',
+          publishedServiceId: 'member-joker',
+          lastBoundRevisionId: 'rev-2',
+          createdAt: '2026-04-27T08:00:00Z',
+          updatedAt: '2026-04-27T08:05:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('gets a studio member detail from the member authority endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        summary: {
+          memberId: 'joker',
+          scopeId: 'scope-1',
+          displayName: 'joker',
+          description: 'Support workflow member',
+          implementationKind: 'workflow',
+          lifecycleStage: 'bind_ready',
+          publishedServiceId: 'member-joker',
+          lastBoundRevisionId: 'rev-2',
+          createdAt: '2026-04-27T08:00:00Z',
+          updatedAt: '2026-04-27T08:05:00Z',
+        },
+        implementationRef: {
+          implementationKind: 'workflow',
+          workflowId: 'joker',
+          workflowRevision: 'rev-2',
+        },
+        lastBinding: {
+          publishedServiceId: 'member-joker',
+          revisionId: 'rev-2',
+          implementationKind: 'workflow',
+          boundAt: '2026-04-27T08:05:00Z',
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getMember('scope-1', 'joker')).resolves.toEqual({
+      summary: {
+        memberId: 'joker',
+        scopeId: 'scope-1',
+        displayName: 'joker',
+        description: 'Support workflow member',
+        implementationKind: 'workflow',
+        lifecycleStage: 'bind_ready',
+        publishedServiceId: 'member-joker',
+        lastBoundRevisionId: 'rev-2',
+        createdAt: '2026-04-27T08:00:00Z',
+        updatedAt: '2026-04-27T08:05:00Z',
+      },
+      implementationRef: {
+        implementationKind: 'workflow',
+        workflowId: 'joker',
+        workflowRevision: 'rev-2',
+        scriptId: null,
+        scriptRevision: null,
+        actorTypeName: null,
+      },
+      lastBinding: {
+        publishedServiceId: 'member-joker',
+        revisionId: 'rev-2',
+        implementationKind: 'workflow',
+        boundAt: '2026-04-27T08:05:00Z',
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/joker',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('creates a workflow member through the member-first create endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        memberId: 'orders-draft',
+        scopeId: 'scope-1',
+        displayName: 'orders-draft',
+        description: '',
+        implementationKind: 'workflow',
+        lifecycleStage: 'created',
+        publishedServiceId: 'member-orders-draft',
+        lastBoundRevisionId: null,
+        createdAt: '2026-04-27T08:10:00Z',
+        updatedAt: '2026-04-27T08:10:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.createMember({
+        scopeId: 'scope-1',
+        displayName: 'orders-draft',
+        implementationKind: 'workflow',
+      }),
+    ).resolves.toEqual({
+      memberId: 'orders-draft',
+      scopeId: 'scope-1',
+      displayName: 'orders-draft',
+      description: '',
+      implementationKind: 'workflow',
+      lifecycleStage: 'created',
+      publishedServiceId: 'member-orders-draft',
+      lastBoundRevisionId: null,
+      createdAt: '2026-04-27T08:10:00Z',
+      updatedAt: '2026-04-27T08:10:00Z',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'POST',
+        body: JSON.stringify({
+          displayName: 'orders-draft',
+          implementationKind: 'workflow',
+        }),
+      }),
+    );
   });
 
   it('retires a scope binding revision through the studio binding API', async () => {
