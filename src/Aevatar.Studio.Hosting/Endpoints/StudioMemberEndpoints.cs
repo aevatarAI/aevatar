@@ -3,6 +3,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
@@ -18,6 +19,17 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// Error mapping:
 ///   - <see cref="StudioMemberNotFoundException"/> → 404
 ///   - other <see cref="InvalidOperationException"/> (validation) → 400
+///
+/// IMPORTANT: every <see cref="IStudioMemberService"/> parameter must carry
+/// the <see cref="FromServicesAttribute"/>. Minimal API's
+/// <c>RequestDelegateFactory</c> probes parameter types for a
+/// <c>BindAsync</c> custom-binder hook; the interface itself defines an
+/// instance method named <c>BindAsync</c>, which the binder then rejects
+/// with <c>"BindAsync method found on IStudioMemberService with incorrect
+/// format"</c> at host startup — before any request is served. The
+/// attribute short-circuits that probe and resolves the dependency from DI
+/// instead. Removing it will pass unit tests (which call the handlers
+/// directly) but break the entire mainnet host composition.
 /// </summary>
 internal static class StudioMemberEndpoints
 {
@@ -53,7 +65,7 @@ internal static class StudioMemberEndpoints
         HttpContext http,
         string scopeId,
         CreateStudioMemberRequest request,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -73,7 +85,7 @@ internal static class StudioMemberEndpoints
     internal static async Task<IResult> HandleListAsync(
         HttpContext http,
         string scopeId,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         int? pageSize,
         string? pageToken,
         CancellationToken ct)
@@ -98,7 +110,7 @@ internal static class StudioMemberEndpoints
         HttpContext http,
         string scopeId,
         string memberId,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -123,7 +135,7 @@ internal static class StudioMemberEndpoints
         string scopeId,
         string memberId,
         UpdateStudioMemberBindingRequest request,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -147,7 +159,7 @@ internal static class StudioMemberEndpoints
         HttpContext http,
         string scopeId,
         string memberId,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -180,7 +192,7 @@ internal static class StudioMemberEndpoints
         string scopeId,
         string memberId,
         string endpointId,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -215,7 +227,7 @@ internal static class StudioMemberEndpoints
         string scopeId,
         string memberId,
         string revisionId,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -240,7 +252,7 @@ internal static class StudioMemberEndpoints
         string scopeId,
         string memberId,
         string revisionId,
-        IStudioMemberService memberService,
+        [FromServices] IStudioMemberService memberService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))

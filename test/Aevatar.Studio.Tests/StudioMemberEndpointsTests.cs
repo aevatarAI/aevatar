@@ -291,8 +291,7 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
-        statusCode.Should().Be(StatusCodes.Status404NotFound);
+        AssertNotFoundResult(result, "STUDIO_MEMBER_ENDPOINT_CONTRACT_NOT_FOUND");
     }
 
     [Fact]
@@ -333,7 +332,26 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.GetType().Name.Should().StartWith("BadRequest");
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_ENDPOINT_CONTRACT_REQUEST");
+    }
+
+    [Fact]
+    public async Task HandleGetEndpointContractAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetEndpointContractAsync",
+            CreateAuthenticatedContext("other-scope"),
+            ScopeId,
+            "m-1",
+            "chat",
+            service,
+            CancellationToken.None);
+
+        // EndpointContractException being null without a guard would NRE; the
+        // guard must short-circuit before the service is touched.
+        AssertIsJsonStatus(result, expectedStatus: StatusCodes.Status403Forbidden);
     }
 
     [Fact]
@@ -395,7 +413,7 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.GetType().Name.Should().StartWith("BadRequest");
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_BINDING_ACTIVATION_REQUEST");
     }
 
     [Fact]
@@ -475,7 +493,26 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.GetType().Name.Should().StartWith("BadRequest");
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_BINDING_REVISION_REQUEST");
+    }
+
+    [Fact]
+    public async Task HandleRetireBindingRevisionAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleRetireBindingRevisionAsync",
+            CreateAuthenticatedContext("other-scope"),
+            ScopeId,
+            "m-1",
+            "rev-1",
+            service,
+            CancellationToken.None);
+
+        // RetireException being null without a guard would NRE; the guard
+        // must short-circuit before the service is touched.
+        AssertIsJsonStatus(result, expectedStatus: StatusCodes.Status403Forbidden);
     }
 
     private static StudioMemberEndpointContractResponse NewContract() => new(
@@ -542,6 +579,38 @@ public sealed class StudioMemberEndpointsTests
         var statusCode = statusCodeProperty?.GetValue(result) as int?;
         statusCode.Should().Be(expectedStatus,
             because: $"expected JSON result with status {expectedStatus} but got {result.GetType().Name}");
+    }
+
+    private static void AssertBadRequestResult(IResult result, string expectedCode)
+    {
+        result.GetType().Name.Should().StartWith("BadRequest");
+
+        var statusCodeProp = result.GetType().GetProperty("StatusCode");
+        var statusCode = statusCodeProp?.GetValue(result) as int?;
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+
+        var valueProp = result.GetType().GetProperty("Value");
+        var value = valueProp?.GetValue(result);
+        value.Should().NotBeNull();
+
+        var codeProp = value!.GetType().GetProperty("code");
+        var code = codeProp?.GetValue(value) as string;
+        code.Should().Be(expectedCode);
+    }
+
+    private static void AssertNotFoundResult(IResult result, string expectedCode)
+    {
+        var statusCodeProp = result.GetType().GetProperty("StatusCode");
+        var statusCode = statusCodeProp?.GetValue(result) as int?;
+        statusCode.Should().Be(StatusCodes.Status404NotFound);
+
+        var valueProp = result.GetType().GetProperty("Value");
+        var value = valueProp?.GetValue(result);
+        value.Should().NotBeNull();
+
+        var codeProp = value!.GetType().GetProperty("code");
+        var code = codeProp?.GetValue(value) as string;
+        code.Should().Be(expectedCode);
     }
 
     private static async Task<TResult> InvokeHandle<TResult>(string methodName, params object?[] args)
