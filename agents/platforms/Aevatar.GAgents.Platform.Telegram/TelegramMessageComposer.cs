@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 
-namespace Aevatar.GAgents.Channel.Telegram;
+namespace Aevatar.GAgents.Platform.Telegram;
 
 public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundMessage>
 {
@@ -18,7 +18,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         SupportsDelete = true,
         SupportsThread = false,
         Streaming = StreamingSupport.EditLoopRateLimited,
-        SupportsFiles = true,
+        SupportsFiles = false,
         MaxMessageLength = TelegramTextLimit,
         SupportsActionButtons = true,
         SupportsConfirmDialog = false,
@@ -37,17 +37,44 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(context);
 
-        var capability = Evaluate(intent, context);
-        var attachment = intent.Attachments.Count > 0 ? intent.Attachments[0].Clone() : null;
-        var textLimit = attachment is null
-            ? ResolveTextLimit(context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength, TelegramTextLimit)
-            : ResolveTextLimit(Math.Min(context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength, TelegramCaptionLimit), TelegramCaptionLimit);
-        var text = BuildRenderedText(intent, textLimit);
-        var replyMarkupJson = intent.Actions.Count == 0
-            ? null
-            : BuildInlineKeyboardJson(intent.Actions, context.Capabilities?.SupportsActionButtons ?? DefaultCapabilities.SupportsActionButtons);
+        var capabilities = context.Capabilities ?? DefaultCapabilities;
+        var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
+        var effectiveText = BuildRenderedText(intent, maxLength);
 
-        return new TelegramOutboundMessage(text, replyMarkupJson, attachment, capability);
+        if (intent.Actions.Count == 0)
+        {
+            return new TelegramOutboundMessage(
+                MessageType: "text",
+                ContentJson: JsonSerializer.Serialize(new { text = effectiveText }),
+                PlainText: effectiveText,
+                IsInteractive: false);
+        }
+
+        var supportsButtons = capabilities.SupportsActionButtons;
+        var keyboard = supportsButtons ? BuildInlineKeyboard(intent.Actions) : null;
+        if (keyboard is null)
+        {
+            return new TelegramOutboundMessage(
+                MessageType: "text",
+                ContentJson: JsonSerializer.Serialize(new { text = effectiveText }),
+                PlainText: effectiveText,
+                IsInteractive: false);
+        }
+
+        var contentJson = JsonSerializer.Serialize(new
+        {
+            text = effectiveText,
+            reply_markup = new
+            {
+                inline_keyboard = keyboard,
+            },
+        });
+
+        return new TelegramOutboundMessage(
+            MessageType: "interactive",
+            ContentJson: contentJson,
+            PlainText: effectiveText,
+            IsInteractive: true);
     }
 
     object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
@@ -58,35 +85,27 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         ArgumentNullException.ThrowIfNull(context);
 
         var degraded = false;
-
         var capabilities = context.Capabilities ?? DefaultCapabilities;
+
         if (intent.Disposition == MessageDisposition.Ephemeral && !capabilities.SupportsEphemeral)
             degraded = true;
-        if (intent.Cards.Count > 0)
-            degraded = true;
+        if (intent.Attachments.Count > 0 && !capabilities.SupportsFiles)
+            return ComposeCapability.Unsupported;
         if (intent.Actions.Count > 0 && !capabilities.SupportsActionButtons)
             degraded = true;
-        if (intent.Attachments.Count > 1)
-            degraded = true;
 
-        var attachmentLimit = intent.Attachments.Count > 0 ? TelegramCaptionLimit : TelegramTextLimit;
-        var maxLength = ResolveTextLimit(Math.Min(capabilities.MaxMessageLength, attachmentLimit), attachmentLimit);
+        var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
         if (BuildRenderedText(intent, int.MaxValue).Length > maxLength)
             degraded = true;
 
         return degraded ? ComposeCapability.Degraded : ComposeCapability.Exact;
     }
 
-    private static string? BuildInlineKeyboardJson(
-        IEnumerable<ActionElement> actions,
-        bool supportsActionButtons)
+    private static object[][]? BuildInlineKeyboard(IEnumerable<ActionElement> actions)
     {
-        if (!supportsActionButtons)
-            return null;
-
         var rows = actions
             .Where(static action => action.Kind == ActionElementKind.Button && !string.IsNullOrWhiteSpace(action.Label))
-            .Select(static action => new[]
+            .Select(static action => new object[]
             {
                 new
                 {
@@ -96,12 +115,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
             })
             .ToArray();
 
-        return rows.Length == 0
-            ? null
-            : JsonSerializer.Serialize(new
-            {
-                inline_keyboard = rows,
-            });
+        return rows.Length == 0 ? null : rows;
     }
 
     private static string BuildCallbackData(ActionElement action)

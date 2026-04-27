@@ -13,8 +13,8 @@
     <Project Path="agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <Project Path="agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
+    <Project Path="agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
-    <Project Path="agents\channels\Aevatar.GAgents.Channel.Telegram\Aevatar.GAgents.Channel.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
   </Folder>
@@ -176,7 +176,7 @@
     <Project Path="test\Aevatar.Architecture.Tests\Aevatar.Architecture.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Platform.Lark.Tests\Aevatar.GAgents.Platform.Lark.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Channel.Protocol.Tests\Aevatar.GAgents.Channel.Protocol.Tests.csproj" />
-    <Project Path="test\Aevatar.GAgents.Channel.Telegram.Tests\Aevatar.GAgents.Channel.Telegram.Tests.csproj" />
+    <Project Path="test\Aevatar.GAgents.Platform.Telegram.Tests\Aevatar.GAgents.Platform.Telegram.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Channel.Testing\Aevatar.GAgents.Channel.Testing.csproj" />
     <Project Path="test\Aevatar.GAgents.ChannelRuntime.Tests\Aevatar.GAgents.ChannelRuntime.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Household.Tests\Aevatar.GAgents.Household.Tests.csproj" />

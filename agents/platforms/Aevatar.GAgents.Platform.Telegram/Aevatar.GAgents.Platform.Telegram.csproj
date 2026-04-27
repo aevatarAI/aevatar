@@ -3,11 +3,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.GAgents.Channel.Telegram</AssemblyName>
-    <RootNamespace>Aevatar.GAgents.Channel.Telegram</RootNamespace>
+    <AssemblyName>Aevatar.GAgents.Platform.Telegram</AssemblyName>
+    <RootNamespace>Aevatar.GAgents.Platform.Telegram</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="Aevatar.GAgents.Channel.Telegram.Tests" />
+    <InternalsVisibleTo Include="Aevatar.GAgents.Platform.Telegram.Tests" />
     <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
   </ItemGroup>
   <ItemGroup>

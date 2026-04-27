@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.GAgents.Channel.Abstractions;
 
-namespace Aevatar.GAgents.Channel.Telegram;
+namespace Aevatar.GAgents.Platform.Telegram;
 
 public sealed class TelegramPayloadRedactor : IPayloadRedactor
 {
