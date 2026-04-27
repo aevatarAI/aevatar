@@ -41,6 +41,9 @@ internal static class ServiceBindingEndpoints
         }
 
         var authenticatedContext = identityResolver.Resolve();
+        if (TryValidateOwnerIdentity(request.TenantId, request.AppId, request.Namespace, authenticatedContext) is { } ownerInvalid)
+            return ownerInvalid;
+
         var bindingKind = ParseBindingKind(request.BindingKind);
         if (TryValidateBoundServiceIdentity(bindingKind, request, authenticatedContext) is { } invalid)
             return invalid;
@@ -73,6 +76,9 @@ internal static class ServiceBindingEndpoints
         }
 
         var authenticatedContext = identityResolver.Resolve();
+        if (TryValidateOwnerIdentity(request.TenantId, request.AppId, request.Namespace, authenticatedContext) is { } ownerInvalid)
+            return ownerInvalid;
+
         var bindingKind = ParseBindingKind(request.BindingKind);
         if (TryValidateBoundServiceIdentity(bindingKind, request, authenticatedContext) is { } invalid)
             return invalid;
@@ -93,6 +99,10 @@ internal static class ServiceBindingEndpoints
         [FromServices] IServiceGovernanceCommandPort commandPort,
         CancellationToken ct)
     {
+        var authenticatedContext = identityResolver.Resolve();
+        if (TryValidateOwnerIdentity(request.TenantId, request.AppId, request.Namespace, authenticatedContext) is { } ownerInvalid)
+            return ownerInvalid;
+
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
                 identityResolver,
                 request.TenantId,
@@ -121,6 +131,10 @@ internal static class ServiceBindingEndpoints
         [FromServices] IServiceGovernanceQueryPort queryPort,
         CancellationToken ct)
     {
+        var authenticatedContext = identityResolver.Resolve();
+        if (TryValidateOwnerIdentity(query.TenantId, query.AppId, query.Namespace, authenticatedContext) is { } ownerInvalid)
+            return ownerInvalid;
+
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
                 identityResolver,
                 query.TenantId,
@@ -188,6 +202,29 @@ internal static class ServiceBindingEndpoints
         }
 
         return spec;
+    }
+
+    private static IResult? TryValidateOwnerIdentity(
+        string? requestedTenantId,
+        string? requestedAppId,
+        string? requestedNamespace,
+        ServiceIdentityContext? authenticatedContext)
+    {
+        if (authenticatedContext is null)
+            return null;
+
+        if (!MatchesAuthenticatedValue(requestedTenantId, authenticatedContext.TenantId) ||
+            !MatchesAuthenticatedValue(requestedAppId, authenticatedContext.AppId) ||
+            !MatchesAuthenticatedValue(requestedNamespace, authenticatedContext.Namespace))
+        {
+            return Results.BadRequest(new
+            {
+                code = "OWNER_SERVICE_IDENTITY_CONFLICT",
+                message = "Authenticated service identity does not allow overriding owner tenantId, appId, or namespace.",
+            });
+        }
+
+        return null;
     }
 
     private static IResult? TryValidateBoundServiceIdentity(
