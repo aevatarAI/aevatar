@@ -31,6 +31,8 @@
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
   </ItemGroup>

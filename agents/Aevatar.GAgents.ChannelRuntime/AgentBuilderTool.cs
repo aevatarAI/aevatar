@@ -100,6 +100,10 @@ public sealed class AgentBuilderTool : IAgentTool
               "type": "string",
               "description": "Outbound Nyx proxy slug (default: api-lark-bot)"
             },
+            "publish_provider_slug": {
+              "type": "string",
+              "description": "Optional Nyx proxy slug used to publish approved content (default: api-twitter for the social_media template)"
+            },
             "run_immediately": {
               "type": "boolean",
               "description": "When true, trigger one execution right after creation"
@@ -373,7 +377,17 @@ public sealed class AgentBuilderTool : IAgentTool
             return """{"error":"Could not resolve current NyxID user id"}""";
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
-        var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, [providerSlug], ct);
+        // The social_media template now publishes the approved post to Twitter (X) via the
+        // api-twitter NyxID proxy in addition to delivering the approval card via api-lark-bot
+        // (issue #216). Mint the agent api-key with both slugs so a single key carries both
+        // entitlements; without api-twitter here, NyxID's `allowed_service_ids` enforcement
+        // (api_keys.rs / proxy.rs) would 403 every publish call regardless of OAuth scope.
+        var publishProviderSlug = (args.Str("publish_provider_slug") ?? "api-twitter").Trim();
+        var requiredServiceIds = await ResolveProxyServiceIdsAsync(
+            nyxClient,
+            token,
+            [providerSlug, publishProviderSlug],
+            ct);
         if (requiredServiceIds.errorJson != null)
             return requiredServiceIds.errorJson;
 
@@ -386,6 +400,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 args.Str("topic") ?? string.Empty,
                 args.Str("audience"),
                 args.Str("style"),
+                publishProviderSlug,
                 out var templateSpec,
                 out var templateError))
         {
@@ -402,6 +417,18 @@ public sealed class AgentBuilderTool : IAgentTool
 
         if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
             return JsonSerializer.Serialize(new { error = apiKeyError });
+
+        // Mirror the daily_report preflight (#411 / #418) for Twitter: the user may not have
+        // connected Twitter at NyxID yet, or may have revoked the OAuth grant at x.com between
+        // connect-time and create-time. Surfacing 401/403 here keeps us from persisting a
+        // social_media agent whose every approved post would fail at publish time. Best-effort
+        // revoke the freshly minted key on failure so retries don't accumulate orphan keys.
+        var preflight = await PreflightTwitterProxyAsync(nyxClient, apiKeyValue!, publishProviderSlug, ct);
+        if (preflight is not null)
+        {
+            await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "twitter_preflight_failed", ct);
+            return preflight;
+        }
 
         var workflowUpsert = await workflowCommandPort.UpsertAsync(
             new ScopeWorkflowUpsertRequest(
@@ -1808,6 +1835,103 @@ public sealed class AgentBuilderTool : IAgentTool
         {
             // Non-JSON probe response: don't pretend we know what's going on; let creation
             // proceed so the agent can at least be created (operator can debug from logs).
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Preflights Twitter (X) proxy access using the newly created agent API key against
+    /// Twitter's <c>/users/me</c> — a cheap read-only endpoint that returns 401 when NyxID has
+    /// no OAuth grant for the user (or the grant was revoked) and 403 when the bound token
+    /// lacks <c>tweet.write</c> scope. Returns a structured error JSON suitable for returning
+    /// verbatim from the tool when access is denied; returns <c>null</c> on success or on
+    /// probe shapes we don't classify as "fundamentally broken" (rate limits, 5xx).
+    /// </summary>
+    /// <remarks>
+    /// Mirrors <see cref="PreflightGitHubProxyAsync"/> (issue aevatarAI/aevatar#216 / #418).
+    /// Two error codes instead of one because 401 and 403 lead to different user actions:
+    /// 401 means "go connect Twitter at NyxID" (or re-authorize a revoked grant); 403 means
+    /// "the bound token is missing <c>tweet.write</c> — operator/seed bug, not user fixable".
+    /// The freshly minted api-key is best-effort revoked at the call site so retries don't
+    /// accumulate orphan proxy-scoped keys.
+    /// </remarks>
+    private async Task<string?> PreflightTwitterProxyAsync(
+        NyxIdApiClient nyxClient,
+        string apiKey,
+        string nyxProviderSlug,
+        CancellationToken ct)
+    {
+        // Cheap read-only endpoint; succeeds with the default `users.read` scope, fails with
+        // 401 when no OAuth grant is bound to the user behind the api-key, and 403 when the
+        // bound token's scope set is too narrow.
+        var probe = await nyxClient.ProxyRequestAsync(
+            apiKey,
+            "api-twitter",
+            "/users/me",
+            "GET",
+            body: null,
+            extraHeaders: null,
+            ct);
+
+        if (string.IsNullOrWhiteSpace(probe))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(probe);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (!root.TryGetProperty("error", out var errorProp))
+                return null;
+            if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
+                return null;
+
+            var status = TryReadInt32Property(root, "status")
+                         ?? TryReadInt32Property(root, "code")
+                         ?? 0;
+            if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
+                return null;
+
+            var detail = root.TryGetProperty("message", out var msgProp) && msgProp.ValueKind == JsonValueKind.String
+                ? msgProp.GetString()
+                : null;
+            var body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
+                ? bodyProp.GetString()
+                : null;
+
+            // 401 vs 403 distinction is the actionable difference for the user. NyxID seeds
+            // `tweet.write` into the default scope set (provider_service.rs:405-450), so the
+            // realistic 401 path is "user has not connected Twitter yet at NyxID" or "the
+            // user revoked the grant at x.com/settings". A 403 here would mean either the
+            // seed regressed (ops escalation) or x.com itself denied the request body — keep
+            // both paths separate so the hint copy steers the right person.
+            if (status == (int)HttpStatusCode.Unauthorized)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    error = "twitter_oauth_required",
+                    detail = string.IsNullOrWhiteSpace(detail) ? "Twitter proxy returned 401 for the new agent API key." : detail,
+                    http_status = status,
+                    proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
+                    hint = "Twitter (X) returned 401 through the NyxID proxy. The user has not connected Twitter at NyxID, or the OAuth grant was revoked at x.com/settings/connected_apps. Re-authorize the Twitter provider at NyxID before retrying agent creation.",
+                    nyx_provider_slug = nyxProviderSlug,
+                });
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                error = "twitter_proxy_access_denied",
+                detail = string.IsNullOrWhiteSpace(detail) ? "Twitter proxy returned 403 for the new agent API key." : detail,
+                http_status = status,
+                proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
+                hint = "Twitter (X) returned 403 through the NyxID proxy. Default provider scope includes `tweet.write`; a 403 here usually means the seeded provider scope was downgraded or the bound token was issued before the scope was widened. Re-authorize at NyxID; if it still fails, ask ops to verify the Twitter provider seed includes `tweet.write`.",
+                nyx_provider_slug = nyxProviderSlug,
+            });
+        }
+        catch (JsonException)
+        {
             return null;
         }
     }

@@ -14,6 +14,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.ChannelRuntime.Outbound;
+using Aevatar.GAgents.ChannelRuntime.WorkflowModules;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -233,6 +234,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<LarkConversationInboxRuntime>();
         services.TryAddSingleton<ILarkConversationInbox>(sp => sp.GetRequiredService<LarkConversationInboxRuntime>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, LarkConversationInboxHostedService>());
+
+        // Register the channel-runtime-owned workflow module pack so the social_media template's
+        // `twitter_publish` step type resolves at workflow run time. AddWorkflowModulePack uses
+        // TryAddEnumerable, so calling this alongside AddAevatarWorkflow is safe and idempotent.
+        services.AddChannelRuntimeWorkflowExtensions();
 
         return services;
     }
