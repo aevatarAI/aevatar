@@ -5,7 +5,7 @@ import type {
 import { isChatServiceEndpoint } from '@/shared/runs/scopeConsole';
 import type {
   StudioAuthSession,
-  StudioScopeBindingRevision,
+  StudioMemberBindingRevision,
 } from '@/shared/studio/models';
 
 export type StudioBindStreaming = {
@@ -41,8 +41,9 @@ export type StudioBindContract = {
 type BuildStudioBindContractInput = {
   readonly authSession?: StudioAuthSession | null;
   readonly endpoint: ServiceEndpointSnapshot | null;
+  readonly memberId?: string | null;
   readonly origin?: string;
-  readonly revision?: StudioScopeBindingRevision | null;
+  readonly revision?: StudioMemberBindingRevision | null;
   readonly scopeId: string;
   readonly service: ServiceCatalogSnapshot | null;
 };
@@ -106,19 +107,33 @@ function buildAuthDescriptor(authSession?: StudioAuthSession | null): Pick<
 export function buildStudioBindInvokePath(
   scopeId: string,
   endpointId: string,
+  memberId?: string,
   serviceId?: string,
   endpoint?: Pick<ServiceEndpointSnapshot, 'endpointId' | 'kind'> | null,
 ): string {
   const encodedScopeId = encodeSegment(scopeId);
   const encodedEndpointId = encodeSegment(endpointId);
+  const normalizedMemberId = trimOptional(memberId);
   const normalizedServiceId = trimOptional(serviceId);
 
   if (isChatServiceEndpoint(endpoint)) {
+    if (normalizedMemberId) {
+      return `/api/scopes/${encodedScopeId}/members/${encodeSegment(
+        normalizedMemberId,
+      )}/invoke/chat:stream`;
+    }
+
     return normalizedServiceId
       ? `/api/scopes/${encodedScopeId}/services/${encodeSegment(
           normalizedServiceId,
         )}/invoke/chat:stream`
       : `/api/scopes/${encodedScopeId}/invoke/chat:stream`;
+  }
+
+  if (normalizedMemberId) {
+    return `/api/scopes/${encodedScopeId}/members/${encodeSegment(
+      normalizedMemberId,
+    )}/invoke/${encodedEndpointId}`;
   }
 
   return normalizedServiceId
@@ -131,11 +146,18 @@ export function buildStudioBindInvokePath(
 export function buildStudioBindInvokeUrl(
   scopeId: string,
   endpointId: string,
+  memberId?: string,
   serviceId?: string,
   endpoint?: Pick<ServiceEndpointSnapshot, 'endpointId' | 'kind'> | null,
   origin?: string,
 ): string {
-  const path = buildStudioBindInvokePath(scopeId, endpointId, serviceId, endpoint);
+  const path = buildStudioBindInvokePath(
+    scopeId,
+    endpointId,
+    memberId,
+    serviceId,
+    endpoint,
+  );
   const resolvedOrigin = resolveOrigin(origin);
   return resolvedOrigin ? `${resolvedOrigin}${path}` : path;
 }
@@ -150,12 +172,14 @@ export function buildStudioBindContract(
   const invokePath = buildStudioBindInvokePath(
     input.scopeId,
     input.endpoint.endpointId,
+    trimOptional(input.memberId) || undefined,
     input.service.serviceId,
     input.endpoint,
   );
   const invokeUrl = buildStudioBindInvokeUrl(
     input.scopeId,
     input.endpoint.endpointId,
+    trimOptional(input.memberId) || undefined,
     input.service.serviceId,
     input.endpoint,
     input.origin,

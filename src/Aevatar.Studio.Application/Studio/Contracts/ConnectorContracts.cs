@@ -4,20 +4,24 @@ public sealed record ConnectorCatalogResponse(
     string HomeDirectory,
     string FilePath,
     bool FileExists,
-    IReadOnlyList<ConnectorDefinitionDto> Connectors);
+    IReadOnlyList<ConnectorDefinitionDto> Connectors,
+    long Version = 0);
 
 public sealed record ConnectorDraftResponse(
     string HomeDirectory,
     string FilePath,
     bool FileExists,
     DateTimeOffset? UpdatedAtUtc,
-    ConnectorDefinitionDto? Draft);
+    ConnectorDefinitionDto? Draft,
+    long Version = 0);
 
 public sealed record SaveConnectorCatalogRequest(
-    IReadOnlyList<ConnectorDefinitionDto> Connectors);
+    IReadOnlyList<ConnectorDefinitionDto> Connectors,
+    long? ExpectedVersion = null);
 
 public sealed record SaveConnectorDraftRequest(
-    ConnectorDefinitionDto? Draft);
+    ConnectorDefinitionDto? Draft,
+    long? ExpectedVersion = null);
 
 public sealed record ImportConnectorCatalogResponse(
     string SourceFilePath,

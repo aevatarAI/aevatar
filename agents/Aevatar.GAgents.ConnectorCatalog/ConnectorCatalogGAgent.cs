@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -21,19 +22,22 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>, 
     [EventHandler(EndpointName = "saveCatalog")]
     public async Task HandleCatalogSaved(ConnectorCatalogSavedEvent evt)
     {
+        EnsureExpectedVersionMatches(evt.HasExpectedVersion, evt.ExpectedVersion);
         await PersistDomainEventAsync(evt);
     }
 
     [EventHandler(EndpointName = "saveDraft")]
     public async Task HandleDraftSaved(ConnectorDraftSavedEvent evt)
     {
+        EnsureExpectedVersionMatches(evt.HasExpectedVersion, evt.ExpectedVersion);
         await PersistDomainEventAsync(evt);
     }
 
     [EventHandler(EndpointName = "deleteDraft")]
     public async Task HandleDraftDeleted(ConnectorDraftDeletedEvent evt)
     {
-        // Idempotent: skip if no draft exists
+        EnsureExpectedVersionMatches(evt.HasExpectedVersion, evt.ExpectedVersion);
+
         if (State.Draft is null)
             return;
 
@@ -56,12 +60,27 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>, 
             .OrCurrent();
     }
 
+    private void EnsureExpectedVersionMatches(bool hasExpectedVersion, long expectedVersion)
+    {
+        if (!hasExpectedVersion)
+            return;
+
+        if (expectedVersion != State.LastAppliedEventVersion)
+        {
+            throw new EventStoreOptimisticConcurrencyException(
+                Id,
+                expectedVersion,
+                State.LastAppliedEventVersion);
+        }
+    }
+
     private static ConnectorCatalogState ApplyCatalogSaved(
         ConnectorCatalogState state, ConnectorCatalogSavedEvent evt)
     {
         var next = state.Clone();
         next.Connectors.Clear();
         next.Connectors.AddRange(evt.Connectors);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -74,6 +93,7 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>, 
             Draft = evt.Draft?.Clone(),
             UpdatedAtUtc = evt.UpdatedAtUtc,
         };
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -82,6 +102,7 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>, 
     {
         var next = state.Clone();
         next.Draft = null;
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 

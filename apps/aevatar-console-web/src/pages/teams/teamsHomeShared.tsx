@@ -120,7 +120,6 @@ export function formatFreshnessAge(timestamp: string | null): string {
 }
 
 export function deriveRosterReason(lens: TeamRuntimeLens): RosterReason {
-  const bindingContext = lens.currentBindingContext.trim();
   const compareSummary = lens.compare.summary.trim();
   const missingSignals =
     lens.partialSignals.length > 0
@@ -134,7 +133,7 @@ export function deriveRosterReason(lens: TeamRuntimeLens): RosterReason {
     return {
       detail: lens.playback.prompt || lens.healthSummary,
       label: "A recent run is waiting on human input",
-      support: [bindingContext, compareSummary].filter(Boolean).slice(0, 2),
+      support: [compareSummary].filter(Boolean).slice(0, 2),
     };
   }
 
@@ -142,7 +141,7 @@ export function deriveRosterReason(lens: TeamRuntimeLens): RosterReason {
     return {
       detail: lens.healthSummary,
       label: "Current runtime health still needs attention",
-      support: [bindingContext, compareSummary].filter(Boolean).slice(0, 2),
+      support: [compareSummary].filter(Boolean).slice(0, 2),
     };
   }
 
@@ -150,14 +149,6 @@ export function deriveRosterReason(lens: TeamRuntimeLens): RosterReason {
     return {
       detail: missingSignals,
       label: "Some runtime signals are incomplete",
-      support: [bindingContext, compareSummary].filter(Boolean).slice(0, 2),
-    };
-  }
-
-  if (bindingContext) {
-    return {
-      detail: bindingContext,
-      label: "Serving context changed recently",
       support: [compareSummary].filter(Boolean).slice(0, 2),
     };
   }

@@ -28,15 +28,17 @@ import {
 } from '@/shared/runs/scopeConsole';
 import { studioApi } from '@/shared/studio/api';
 import {
-  describeStudioScopeBindingRevisionContext,
-  type StudioScopeBindingRevision,
+  describeStudioMemberBindingRevisionContext,
+  type StudioMemberBindingRevision,
 } from '@/shared/studio/models';
+import type { StudioObserveSessionSeed } from '@/shared/studio/observeSession';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
-  readonly memberRevision?: StudioScopeBindingRevision | null;
+  readonly memberId?: string;
+  readonly memberRevision?: StudioMemberBindingRevision | null;
   readonly services: readonly ScopeConsoleServiceOption[];
   readonly selectedMemberLabel?: string;
   readonly emptyState?: {
@@ -51,6 +53,9 @@ type StudioMemberInvokePanelProps = {
     serviceId: string;
     endpointId: string;
   }) => void;
+  readonly onObserveSessionChange?: (
+    session: StudioObserveSessionSeed | null,
+  ) => void;
 };
 
 type InvokeResultState = {
@@ -136,6 +141,12 @@ function trimPreview(value: string, limit = 180): string {
   }
 
   return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
+}
+
+function toIsoTimestamp(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? new Date(value).toISOString()
+    : '';
 }
 
 function truncateMiddle(value: string, head = 18, tail = 12): string {
@@ -518,6 +529,7 @@ const CompactCopyableValue: React.FC<{
 
 const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
+  memberId,
   memberRevision,
   services,
   selectedMemberLabel,
@@ -526,6 +538,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   initialServiceId,
   initialEndpointId,
   onSelectionChange,
+  onObserveSessionChange,
 }) => {
   const screens = Grid.useBreakpoint();
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -554,6 +567,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [consoleTab, setConsoleTab] = useState<'result' | 'trace' | 'raw'>(
     'result',
   );
+  const [activeRunCompletedAt, setActiveRunCompletedAt] = useState<number | null>(
+    null,
+  );
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -569,9 +585,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     [services],
   );
   const currentMemberRevision = memberRevision ?? null;
-  const currentPublishedContext = describeStudioScopeBindingRevisionContext(
+  const currentPublishedContext = describeStudioMemberBindingRevisionContext(
     currentMemberRevision,
   );
+  const normalizedMemberId = trimOptional(memberId);
   const currentMemberActorId = trimOptional(currentMemberRevision?.primaryActorId);
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
@@ -604,6 +621,64 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     Boolean(invokeResult.assistantText) ||
     chatMessages.length > 0 ||
     invokeResult.events.length > 0;
+  const currentObserveSessionSeed = useMemo<StudioObserveSessionSeed | null>(() => {
+    const serviceId = trimOptional(selectedServiceId);
+    const endpointId = trimOptional(selectedEndpointId);
+    if (!serviceId || !endpointId || !currentRunHasData) {
+      return null;
+    }
+
+    return {
+      actorId: trimOptional(invokeResult.actorId),
+      assistantText: invokeResult.assistantText,
+      commandId: trimOptional(invokeResult.commandId),
+      completedAtUtc: toIsoTimestamp(activeRunCompletedAt) || null,
+      endpointId,
+      error: invokeResult.error,
+      events: [...invokeResult.events],
+      finalOutput: invokeResult.finalOutput,
+      mode: invokeResult.mode,
+      payloadBase64:
+        currentRunRequest?.payloadBase64 ||
+        (!isChatEndpoint ? payloadBase64.trim() : '') ||
+        '',
+      payloadTypeUrl:
+        currentRunRequest?.payloadTypeUrl ||
+        (!isChatEndpoint ? payloadTypeUrl.trim() : '') ||
+        '',
+      prompt: currentRunRequest?.prompt || '',
+      runId: trimOptional(invokeResult.runId),
+      serviceId,
+      serviceLabel:
+        trimOptional(selectedService?.displayName) ||
+        currentMemberLabel,
+      startedAtUtc: toIsoTimestamp(currentRunRequest?.startedAt) || '',
+      status: invokeResult.status === 'error' ? 'error' : invokeResult.status === 'success' ? 'success' : 'running',
+    };
+  }, [
+    activeRunCompletedAt,
+    currentMemberLabel,
+    currentRunHasData,
+    currentRunRequest?.payloadBase64,
+    currentRunRequest?.payloadTypeUrl,
+    currentRunRequest?.prompt,
+    currentRunRequest?.startedAt,
+    invokeResult.actorId,
+    invokeResult.assistantText,
+    invokeResult.commandId,
+    invokeResult.error,
+    invokeResult.events,
+    invokeResult.finalOutput,
+    invokeResult.mode,
+    invokeResult.runId,
+    invokeResult.status,
+    isChatEndpoint,
+    payloadBase64,
+    payloadTypeUrl,
+    selectedEndpointId,
+    selectedService?.displayName,
+    selectedServiceId,
+  ]);
   const currentResultStatusLabel = getCurrentResultStatusLabel(invokeResult.status);
   const currentContractStatusLabel = getContractStatusLabel({
     hasEndpoint: Boolean(selectedEndpoint),
@@ -733,6 +808,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [onSelectionChange, selectedEndpointId, selectedServiceId]);
 
   useEffect(() => {
+    if (!onObserveSessionChange || !currentObserveSessionSeed) {
+      return;
+    }
+
+    onObserveSessionChange(currentObserveSessionSeed);
+  }, [currentObserveSessionSeed, onObserveSessionChange]);
+
+  useEffect(() => {
     nyxIdChatBoundRef.current = false;
   }, [scopeId]);
 
@@ -763,6 +846,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setExpandedHistoryId('');
     setFormError('');
     setInvokeResult(createIdleResult());
+    setActiveRunCompletedAt(null);
     setConsoleTab('result');
   }, [scopeId, selectedEndpointId, selectedServiceId]);
 
@@ -834,6 +918,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       error: '调用已中止。',
       status: 'error',
     }));
+    setActiveRunCompletedAt(Date.now());
   }, []);
 
   const handleInvoke = useCallback(async () => {
@@ -871,6 +956,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       prompt: trimmedPrompt,
       startedAt,
     });
+    setActiveRunCompletedAt(null);
 
     if (isChatServiceEndpoint(selectedEndpoint)) {
       const userMessageId = createClientId('user');
@@ -927,6 +1013,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           },
           controller.signal,
           {
+            memberId: normalizedMemberId || undefined,
             serviceId: selectedService.serviceId,
           },
         );
@@ -987,6 +1074,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           };
           setChatMessages(finalChatMessages);
           setInvokeResult(finalResult);
+          setActiveRunCompletedAt(completedAt);
           appendRequestHistory({
             completedAt,
             createdAt: completedAt,
@@ -1039,6 +1127,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           };
           setChatMessages(finalChatMessages);
           setInvokeResult(finalResult);
+          setActiveRunCompletedAt(completedAt);
           appendRequestHistory({
             completedAt,
             createdAt: completedAt,
@@ -1093,6 +1182,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           prompt: trimmedPrompt,
         },
         {
+          memberId: normalizedMemberId || undefined,
           serviceId: selectedService.serviceId,
         },
       );
@@ -1139,6 +1229,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         status: 'success',
       };
       setInvokeResult(finalResult);
+      setActiveRunCompletedAt(completedAt);
       appendRequestHistory({
         completedAt,
         createdAt: completedAt,
@@ -1176,6 +1267,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         status: 'error',
       };
       setInvokeResult(finalResult);
+      setActiveRunCompletedAt(completedAt);
       appendRequestHistory({
         completedAt,
         createdAt: completedAt,
@@ -1275,6 +1367,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setCurrentRunRequest(null);
     setFormError('');
     setInvokeResult(createIdleResult());
+    setActiveRunCompletedAt(null);
   }, []);
 
   const endpointOptions = (selectedService?.endpoints ?? []).map((endpoint) => ({

@@ -52,6 +52,7 @@ public sealed class ConnectorService
                     .Where(connector => !string.IsNullOrWhiteSpace(connector.Name))
                     .Select(ToStoredConnector)
                     .ToList()),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToResponse(saved);
@@ -103,7 +104,7 @@ public sealed class ConnectorService
     {
         if (request.Draft is null)
         {
-            await _store.DeleteConnectorDraftAsync(cancellationToken);
+            await _store.DeleteConnectorDraftAsync(request.ExpectedVersion, cancellationToken);
             return await GetDraftAsync(cancellationToken);
         }
 
@@ -114,13 +115,14 @@ public sealed class ConnectorService
                 FileExists: false,
                 UpdatedAtUtc: DateTimeOffset.UtcNow,
                 Draft: ToStoredConnectorDraft(request.Draft)),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToDraftResponse(saved);
     }
 
-    public Task DeleteDraftAsync(CancellationToken cancellationToken = default) =>
-        _store.DeleteConnectorDraftAsync(cancellationToken);
+    public Task DeleteDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default) =>
+        _store.DeleteConnectorDraftAsync(expectedVersion, cancellationToken);
 
     private static void EnsureUniqueNames(IEnumerable<ConnectorDefinitionDto> connectors)
     {
@@ -279,7 +281,8 @@ public sealed class ConnectorService
             catalog.HomeDirectory,
             catalog.FilePath,
             catalog.FileExists,
-            catalog.Connectors.Select(ToDto).ToList());
+            catalog.Connectors.Select(ToDto).ToList(),
+            catalog.Version);
 
     private static ImportConnectorCatalogResponse ToImportResponse(ImportedConnectorCatalog imported) =>
         new(
@@ -297,7 +300,8 @@ public sealed class ConnectorService
             draft.FilePath,
             draft.FileExists,
             draft.UpdatedAtUtc,
-            draft.Draft is null ? null : ToDto(draft.Draft));
+            draft.Draft is null ? null : ToDto(draft.Draft),
+            draft.Version);
 
     private static ConnectorDefinitionDto ToDto(StoredConnectorDefinition connector) =>
         new(

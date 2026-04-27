@@ -38,9 +38,9 @@ import {
   type ScopeServiceRunSummary,
 } from "@/shared/models/runtime/scopeServices";
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  formatStudioScopeBindingImplementationKind,
+  describeStudioMemberBindingRevisionContext,
+  describeStudioMemberBindingRevisionTarget,
+  formatStudioMemberBindingImplementationKind,
 } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
@@ -600,7 +600,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               <AevatarStatusTag
                 domain="governance"
                 status={revision.status || "draft"}
-                label={formatStudioScopeBindingImplementationKind(
+                label={formatStudioMemberBindingImplementationKind(
                   revision.implementationKind,
                 )}
               />
@@ -609,8 +609,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               {revision.retiredAt ? <AevatarStatusTag domain="governance" status="retired" /> : null}
             </Space>
             <Typography.Text type="secondary">
-              {describeStudioScopeBindingRevisionTarget(revision)} ·{" "}
-              {describeStudioScopeBindingRevisionContext(revision) || "No detail"}
+              {describeStudioMemberBindingRevisionTarget(revision)} ·{" "}
+              {describeStudioMemberBindingRevisionContext(revision) || "No detail"}
             </Typography.Text>
             <Typography.Text type="secondary">
               Serving {revision.servingState || revision.status} · Published{" "}
@@ -856,12 +856,12 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 title={
                   bindingsQuery.error instanceof Error
                     ? bindingsQuery.error.message
-                    : "Failed to load scope bindings."
+                    : "Failed to load default route revisions."
                 }
                 type="error"
               />
             ) : bindingsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="Loading scope bindings." />
+              <AevatarInspectorEmpty description="Loading default route revisions." />
             ) : (
               bindingCards
             )}
@@ -915,22 +915,22 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 />
                 <RuntimeMetricCard
                   label="Implementation"
-                  value={formatStudioScopeBindingImplementationKind(
+                  value={formatStudioMemberBindingImplementationKind(
                     currentRevision.implementationKind,
                   )}
                 />
                 <RuntimeMetricCard
                   label="Target"
-                  value={describeStudioScopeBindingRevisionTarget(currentRevision)}
+                  value={describeStudioMemberBindingRevisionTarget(currentRevision)}
                 />
                 <RuntimeMetricCard
                   label="Actor"
                   value={currentRevision.primaryActorId || "n/a"}
                 />
               </div>
-              {describeStudioScopeBindingRevisionContext(currentRevision) ? (
+              {describeStudioMemberBindingRevisionContext(currentRevision) ? (
                 <Alert
-                  description={describeStudioScopeBindingRevisionContext(
+                  description={describeStudioMemberBindingRevisionContext(
                     currentRevision,
                   )}
                   showIcon
@@ -1296,7 +1296,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
         title={
           bindingEditorState?.mode === "edit"
             ? `Edit binding ${bindingEditorState.bindingId || ""}`
-            : "Create scope binding"
+            : "Create default route"
         }
       >
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>

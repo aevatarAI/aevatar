@@ -1,10 +1,6 @@
 import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
-import {
-  getStudioScopeBindingCurrentRevision,
-  type StudioScopeBindingStatus,
-} from "@/shared/studio/models";
 
 export const WORKFLOW_RUNTIME_GUARDRAIL = 12;
 
@@ -40,7 +36,6 @@ type WorkflowOperationalSignals = {
 };
 
 type ResolveWorkflowOperationalUnitInput = {
-  readonly binding?: StudioScopeBindingStatus | null;
   readonly preferredRunId?: string;
   readonly preferredServiceId?: string;
   readonly runs?: readonly ScopeServiceRunSummary[];
@@ -50,7 +45,6 @@ type ResolveWorkflowOperationalUnitInput = {
 };
 
 type BuildWorkflowOperationalUnitsInput = {
-  readonly binding?: StudioScopeBindingStatus | null;
   readonly runsByServiceId?: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
   readonly services?: readonly ServiceCatalogSnapshot[];
   readonly signals?: WorkflowOperationalSignals;
@@ -159,29 +153,9 @@ function isFailedRun(run: ScopeServiceRunSummary | null | undefined): boolean {
   );
 }
 
-function workflowMatchesBindingRevision(
-  workflow: ScopeWorkflowSummary,
-  binding: StudioScopeBindingStatus | null | undefined,
-): boolean {
-  const activeRevision = getStudioScopeBindingCurrentRevision(binding);
-  if (!activeRevision) {
-    return false;
-  }
-
-  const workflowName = trimOptional(workflow.workflowName);
-  const revisionId = trimOptional(workflow.activeRevisionId);
-  return (
-    (workflowName.length > 0 &&
-      trimOptional(activeRevision.workflowName) === workflowName) ||
-    (revisionId.length > 0 &&
-      trimOptional(activeRevision.revisionId) === revisionId)
-  );
-}
-
 function workflowMatchesService(
   workflow: ScopeWorkflowSummary,
   service: ServiceCatalogSnapshot,
-  binding: StudioScopeBindingStatus | null | undefined,
 ): boolean {
   const workflowServiceKey = trimOptional(workflow.serviceKey);
   const workflowRevisionId = trimOptional(workflow.activeRevisionId);
@@ -200,20 +174,15 @@ function workflowMatchesService(
   ) {
     return true;
   }
-
-  return (
-    trimOptional(binding?.serviceId) === trimOptional(service.serviceId) &&
-    workflowMatchesBindingRevision(workflow, binding ?? null)
-  );
+  return false;
 }
 
 function matchWorkflowOperationalService(input: {
-  readonly binding: StudioScopeBindingStatus | null | undefined;
   readonly preferredServiceId?: string;
   readonly services: readonly ServiceCatalogSnapshot[];
   readonly workflow: ScopeWorkflowSummary;
 }): ServiceMatchResult {
-  const { binding, services, workflow } = input;
+  const { services, workflow } = input;
   const preferredServiceId = trimOptional(input.preferredServiceId);
   const preferredService =
     preferredServiceId.length > 0
@@ -223,7 +192,7 @@ function matchWorkflowOperationalService(input: {
       : null;
   if (
     preferredService &&
-    workflowMatchesService(workflow, preferredService, binding ?? null)
+    workflowMatchesService(workflow, preferredService)
   ) {
     return {
       matchedService: preferredService,
@@ -233,9 +202,7 @@ function matchWorkflowOperationalService(input: {
 
   const matchedService =
     services
-      .filter((service) =>
-        workflowMatchesService(workflow, service, binding ?? null),
-      )
+      .filter((service) => workflowMatchesService(workflow, service))
       .sort(compareServices)[0] ?? null;
 
   return {
@@ -397,7 +364,6 @@ function resolveRuntimeAvailability(input: {
 }
 
 export function collectWorkflowOperationalServiceIds(input: {
-  readonly binding?: StudioScopeBindingStatus | null;
   readonly services?: readonly ServiceCatalogSnapshot[];
   readonly workflows: readonly ScopeWorkflowSummary[];
 }): string[] {
@@ -406,7 +372,6 @@ export function collectWorkflowOperationalServiceIds(input: {
 
   input.workflows.forEach((workflow) => {
     const matchedService = matchWorkflowOperationalService({
-      binding: input.binding ?? null,
       services,
       workflow,
     }).matchedService;
@@ -426,7 +391,6 @@ export function resolveWorkflowOperationalUnit(
   const servicesAvailable = input.signals?.servicesAvailable ?? true;
   const serviceMatch = servicesAvailable
     ? matchWorkflowOperationalService({
-        binding: input.binding ?? null,
         preferredServiceId: input.preferredServiceId,
         services,
         workflow: input.workflow,
@@ -526,7 +490,6 @@ export function buildWorkflowOperationalUnits(
 ): WorkflowOperationalUnit[] {
   const units = input.workflows.map((workflow) => {
     const unitWithoutRuns = resolveWorkflowOperationalUnit({
-      binding: input.binding ?? null,
       services: input.services ?? [],
       signals: input.signals,
       workflow,
@@ -534,7 +497,6 @@ export function buildWorkflowOperationalUnits(
     const serviceId = trimOptional(unitWithoutRuns.matchedService?.serviceId);
 
     return resolveWorkflowOperationalUnit({
-      binding: input.binding ?? null,
       runs:
         serviceId.length > 0
           ? input.runsByServiceId?.[serviceId] ?? []
