@@ -1716,6 +1716,19 @@ export type StudioScriptBuildPanelProps = {
   readonly onRefreshScripts?: () => Promise<unknown> | unknown;
   readonly onContinueToBind: () => void;
   readonly onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
+  readonly onScriptBuildStateChange?: (state: StudioScriptBuildState | null) => void;
+};
+
+export type StudioScriptBuildState = {
+  readonly scriptId: string;
+  readonly displayName: string;
+  readonly scriptRevision: string;
+  readonly revisionId?: string;
+  readonly sourceHash?: string;
+  readonly definitionActorId?: string;
+  readonly dirty: boolean;
+  readonly validationStatus: 'unknown' | 'valid' | 'invalid';
+  readonly saveStatus: 'idle' | 'accepted' | 'applied' | 'failed';
 };
 
 export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
@@ -1726,6 +1739,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   onRefreshScripts,
   onContinueToBind,
   onRegisterLeaveGuard,
+  onScriptBuildStateChange,
 }) => {
   const [scriptPackage, setScriptPackage] = React.useState(() =>
     deserializePersistedSource(''),
@@ -1737,6 +1751,8 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const [validationError, setValidationError] = React.useState('');
   const [savePending, setSavePending] = React.useState(false);
   const [saveNotice, setSaveNotice] = React.useState('');
+  const [saveStatus, setSaveStatus] =
+    React.useState<StudioScriptBuildState['saveStatus']>('idle');
   const [runPending, setRunPending] = React.useState(false);
   const [runInput, setRunInput] = React.useState(
     JSON.stringify(
@@ -1804,6 +1820,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     setValidationResult(null);
     setValidationError('');
     setSaveNotice('');
+    setSaveStatus('idle');
   }, [activeScript?.script?.scriptId, activeScript?.source?.sourceText]);
 
   React.useEffect(() => {
@@ -1833,6 +1850,84 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     };
   }, [isDirty, onRegisterLeaveGuard]);
 
+  const validationStatus: StudioScriptBuildState['validationStatus'] =
+    validationResult
+      ? validationResult.success
+        ? 'valid'
+        : 'invalid'
+      : validationError
+        ? 'invalid'
+        : 'unknown';
+  const effectiveSaveStatus: StudioScriptBuildState['saveStatus'] =
+    isDirty
+      ? saveStatus === 'failed'
+        ? 'failed'
+        : 'idle'
+      : saveStatus === 'accepted' || saveStatus === 'failed'
+        ? saveStatus
+        : activeScript?.script?.activeRevision
+          ? 'applied'
+          : saveStatus;
+  const scriptReadyToBind = Boolean(
+    activeScript?.script?.scriptId &&
+      !isDirty &&
+      effectiveSaveStatus === 'applied',
+  );
+  const primaryActionLabel =
+    !activeScript?.script?.scriptId
+      ? 'Select Script'
+      : isDirty || validationStatus === 'unknown' || validationStatus === 'invalid'
+        ? 'Validate'
+        : effectiveSaveStatus === 'accepted'
+          ? 'Waiting for catalog'
+          : effectiveSaveStatus === 'applied'
+            ? 'Continue to Bind'
+            : 'Save revision';
+
+  React.useEffect(() => {
+    if (!activeScript?.script?.scriptId) {
+      onScriptBuildStateChange?.(null);
+      return;
+    }
+
+    onScriptBuildStateChange?.({
+      scriptId: activeScript.script.scriptId,
+      displayName: activeScript.script.scriptId,
+      scriptRevision:
+        activeScript.source?.revision ||
+        activeScript.script.activeRevision ||
+        currentRevision,
+      revisionId:
+        activeScript.source?.revision ||
+        activeScript.script.activeRevision ||
+        currentRevision,
+      sourceHash:
+        activeScript.source?.sourceHash ||
+        activeScript.script.activeSourceHash ||
+        '',
+      definitionActorId:
+        activeScript.source?.definitionActorId ||
+        activeScript.script.definitionActorId ||
+        '',
+      dirty: isDirty,
+      validationStatus,
+      saveStatus: effectiveSaveStatus,
+    });
+  }, [
+    activeScript?.script?.activeRevision,
+    activeScript?.script?.activeSourceHash,
+    activeScript?.script?.definitionActorId,
+    activeScript?.script?.scriptId,
+    activeScript?.source?.definitionActorId,
+    activeScript?.source?.revision,
+    activeScript?.source?.sourceHash,
+    currentRevision,
+    effectiveSaveStatus,
+    isDirty,
+    onScriptBuildStateChange,
+    validationStatus,
+  ]);
+
   const resolveLeave = React.useCallback((value: boolean) => {
     leaveResolverRef.current?.(value);
     leaveResolverRef.current = null;
@@ -1854,13 +1949,16 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         package: scriptPackage,
       });
       setValidationResult(result);
+      if (result.success && isDirty) {
+        setSaveStatus('idle');
+      }
     } catch (error) {
       setValidationError(describeError(error));
       setValidationResult(null);
     } finally {
       setValidationPending(false);
     }
-  }, [activeScript?.script?.scriptId, currentRevision, scriptPackage]);
+  }, [activeScript?.script?.scriptId, currentRevision, isDirty, scriptPackage]);
 
   const handleSave = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
@@ -1877,11 +1975,38 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         expectedBaseRevision: activeScript.script.activeRevision || undefined,
         sourceText: serializePersistedSource(scriptPackage),
       });
-      await onRefreshScripts?.();
-      setSaveNotice(
-        `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+      setSaveStatus('accepted');
+      const observation = await scriptsApi.observeSaveScript(
+        scopeId,
+        activeScript.script.scriptId,
+        {
+          revisionId: accepted.acceptedScript.revisionId,
+          definitionActorId: accepted.acceptedScript.definitionActorId,
+          sourceHash: accepted.acceptedScript.sourceHash,
+          proposalId: accepted.acceptedScript.proposalId,
+          expectedBaseRevision: accepted.acceptedScript.expectedBaseRevision,
+          acceptedAt: accepted.acceptedScript.acceptedAt,
+        },
       );
+      await onRefreshScripts?.();
+      if (observation.status === 'applied') {
+        setSaveStatus('applied');
+        setSaveNotice(
+          `Save applied for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+        );
+      } else if (observation.status === 'rejected') {
+        setSaveStatus('failed');
+        setSaveNotice(
+          observation.message ||
+            `Save rejected for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+        );
+      } else {
+        setSaveNotice(
+          `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Waiting for catalog.`,
+        );
+      }
     } catch (error) {
+      setSaveStatus('failed');
       setSaveNotice(describeError(error));
     } finally {
       setSavePending(false);
@@ -1966,6 +2091,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
               <Tag color="gold">lints · partial</Tag>
+              <Tag color={scriptReadyToBind ? 'green' : 'default'}>
+                {primaryActionLabel}
+              </Tag>
               <Select
                 aria-label="Script ID"
                 style={{ minWidth: 220 }}
@@ -1991,7 +2119,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 loading={savePending}
                 onClick={() => void handleSave()}
               >
-                Save draft
+                Save revision
               </Button>
             </Space>
           </div>
@@ -2050,11 +2178,15 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                   language={selectedPackageEntry.kind === 'csharp' ? 'csharp' : 'plaintext'}
                   markers={editorMarkers}
                   value={selectedPackageEntry.content}
-                  onChange={(value) =>
+                  onChange={(value) => {
+                    setValidationResult(null);
+                    setValidationError('');
+                    setSaveNotice('');
+                    setSaveStatus('idle');
                     setScriptPackage((current) =>
                       updatePackageFileContent(current, selectedPackageEntry.path, value),
-                    )
-                  }
+                    );
+                  }}
                 />
               </div>
               <div
@@ -2101,10 +2233,11 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           </Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            disabled={!scriptReadyToBind}
             type="primary"
             onClick={onContinueToBind}
           >
-            Continue to Bind
+            {scriptReadyToBind ? 'Continue to Bind' : primaryActionLabel}
           </Button>
         </div>
 

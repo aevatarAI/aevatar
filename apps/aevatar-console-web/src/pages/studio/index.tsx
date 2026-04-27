@@ -116,6 +116,7 @@ import {
   getDefaultBuildModeCards,
   StudioGAgentBuildPanel,
   StudioScriptBuildPanel,
+  type StudioScriptBuildState,
   StudioWorkflowBuildPanel,
 } from './components/StudioBuildPanels';
 import StudioShell, {
@@ -1316,6 +1317,8 @@ const StudioPage: React.FC = () => {
           ? initialSelectedMember.value
           : '',
   );
+  const [scriptBuildState, setScriptBuildState] =
+    useState<StudioScriptBuildState | null>(null);
   const [selectedGAgentTypeName, setSelectedGAgentTypeName] = useState('');
   const [selectedExecutionId, setSelectedExecutionId] = useState(
     () => initialRouteState.executionId,
@@ -2699,49 +2702,109 @@ const StudioPage: React.FC = () => {
         ? 'gagent'
         : 'workflow';
   const buildPendingBindCandidate = useMemo(() => {
-    if (
-      activeBuildMode !== 'workflow' ||
-      !resolvedStudioScopeId ||
-      !trimOptional(draftYaml)
-    ) {
+    if (!resolvedStudioScopeId) {
       return null;
     }
 
-    const displayName =
-      trimOptional(activeWorkflowName) ||
-      trimOptional(draftWorkflowName) ||
-      'draft';
+    const shouldBuildScriptCandidate =
+      activeBuildMode === 'script' ||
+      (isBindSurface && Boolean(trimOptional(selectedScriptId)));
 
-    return {
-      kind: 'workflow' as const,
-      displayName,
-      description:
-        'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-      actionLabel: 'Bind current revision',
-    };
+    if (shouldBuildScriptCandidate) {
+      const selectedId = trimOptional(selectedScriptId);
+      const catalogScriptState =
+        selectedId
+          ? availableScopeScripts.find(
+              (detail) => trimOptional(detail.script?.scriptId) === selectedId,
+            ) ?? null
+          : null;
+      const effectiveScriptState =
+        scriptBuildState?.scriptId ? scriptBuildState : catalogScriptState
+          ? {
+              scriptId: trimOptional(catalogScriptState.script?.scriptId),
+              displayName: trimOptional(catalogScriptState.script?.scriptId),
+              scriptRevision:
+                trimOptional(catalogScriptState.source?.revision) ||
+                trimOptional(catalogScriptState.script?.activeRevision),
+              revisionId:
+                trimOptional(catalogScriptState.source?.revision) ||
+                trimOptional(catalogScriptState.script?.activeRevision),
+              dirty: false,
+              saveStatus: 'applied' as const,
+            }
+          : null;
+      const scriptId = trimOptional(effectiveScriptState?.scriptId);
+      if (
+        scriptId &&
+        (!selectedId || scriptId === selectedId) &&
+        !effectiveScriptState?.dirty &&
+        effectiveScriptState?.saveStatus === 'applied'
+      ) {
+        return {
+          kind: 'script' as const,
+          displayName: trimOptional(effectiveScriptState.displayName) || scriptId,
+          description:
+            'Bind the catalog-applied Script revision as a callable member service. Draft-run remains a Build-only source test.',
+          actionLabel: 'Bind Script member',
+          scriptId,
+          scriptRevision:
+            trimOptional(effectiveScriptState.scriptRevision) ||
+            trimOptional(effectiveScriptState.revisionId),
+          revisionId: trimOptional(effectiveScriptState.revisionId),
+        };
+      }
+    }
+
+    if (activeBuildMode === 'workflow') {
+      if (!trimOptional(draftYaml)) {
+        return null;
+      }
+
+      const displayName =
+        trimOptional(activeWorkflowName) ||
+        trimOptional(draftWorkflowName) ||
+        'draft';
+
+      return {
+        kind: 'workflow' as const,
+        displayName,
+        description:
+          'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+        actionLabel: 'Bind current revision',
+      };
+    }
+
+    return null;
   }, [
     activeBuildMode,
     activeWorkflowName,
     draftWorkflowName,
     draftYaml,
     resolvedStudioScopeId,
+    scriptBuildState,
+    selectedScriptId,
+    availableScopeScripts,
+    isBindSurface,
   ]);
   const handleBindPendingCandidate = useCallback(async () => {
     if (!buildPendingBindCandidate || !resolvedStudioScopeId) {
       throw new Error('Resolve the current scope before binding this member.');
     }
 
-    if (buildPendingBindCandidate.kind !== 'workflow') {
-      throw new Error(
-        'Studio can only publish workflow revisions from this surface right now.',
-      );
-    }
-
-    const result = await studioApi.bindScopeWorkflow({
-      scopeId: resolvedStudioScopeId,
-      displayName: buildPendingBindCandidate.displayName,
-      workflowYamls: await buildWorkflowYamlBundle(),
-    });
+    const result =
+      buildPendingBindCandidate.kind === 'workflow'
+        ? await studioApi.bindScopeWorkflow({
+            scopeId: resolvedStudioScopeId,
+            displayName: buildPendingBindCandidate.displayName,
+            workflowYamls: await buildWorkflowYamlBundle(),
+          })
+        : await studioApi.bindScopeScript({
+            scopeId: resolvedStudioScopeId,
+            displayName: buildPendingBindCandidate.displayName,
+            scriptId: buildPendingBindCandidate.scriptId,
+            scriptRevision: buildPendingBindCandidate.scriptRevision,
+            revisionId: buildPendingBindCandidate.revisionId,
+          });
     const servicesResult = await scopeServicesQuery.refetch();
     void scopeBindingQuery.refetch();
     const optimisticBoundServiceId =
@@ -2755,9 +2818,13 @@ const StudioPage: React.FC = () => {
         services: servicesResult.data ?? [],
         candidates: [
           buildPendingBindCandidate.displayName,
+          buildPendingBindCandidate.kind === 'script'
+            ? buildPendingBindCandidate.scriptId
+            : '',
           result.displayName,
           result.targetName,
           result.workflowName,
+          result.script?.scriptId,
         ],
       }) ||
       optimisticBoundServiceId;
@@ -4602,7 +4669,10 @@ const StudioPage: React.FC = () => {
   );
   const bindPendingCandidate =
     bindSelectedMemberServiceId ||
-    !workbenchMemberKey.startsWith('workflow:')
+    !(
+      workbenchMemberKey.startsWith('workflow:') ||
+      workbenchMemberKey.startsWith('script:')
+    )
       ? null
       : buildPendingBindCandidate;
   const bindInitialEndpointId = bindSelectedMemberServiceId
@@ -5218,7 +5288,12 @@ const StudioPage: React.FC = () => {
     Boolean(workbenchMemberKey) &&
     Boolean(
       selectedWorkflowId ||
-        selectedScriptId ||
+        (selectedScriptId
+          ? activeScriptPublishedServiceId ||
+            (scriptBuildState?.scriptId === selectedScriptId &&
+              !scriptBuildState.dirty &&
+              scriptBuildState.saveStatus === 'applied')
+          : false) ||
         workbenchPublishedService ||
         (isBuildGAgentSurface && trimOptional(selectedGAgentTypeName))
     );
@@ -5817,8 +5892,19 @@ const StudioPage: React.FC = () => {
       selectedScriptId={selectedScriptId}
       onSelectScriptId={setSelectedScriptId}
       onRefreshScripts={() => scopeScriptsQuery.refetch()}
-      onContinueToBind={() => applyStudioTarget('bind')}
+      onContinueToBind={() => {
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId || undefined,
+            memberKey: selectedScriptId ? `script:${selectedScriptId}` : undefined,
+            step: 'bind',
+            tab: 'bindings',
+          }),
+        );
+        applyStudioTarget('bind');
+      }}
       onRegisterLeaveGuard={handleRegisterScriptLeaveGuard}
+      onScriptBuildStateChange={setScriptBuildState}
     />
   ) : (
     <div

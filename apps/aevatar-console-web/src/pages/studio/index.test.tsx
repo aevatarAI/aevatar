@@ -7,6 +7,7 @@ import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { studioApi } from "@/shared/studio/api";
+import { scriptsApi } from "@/shared/studio/scriptsApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import StudioPage from "./index";
 
@@ -774,6 +775,26 @@ jest.mock("@/shared/studio/api", () => ({
       definitionActorIdPrefix: "scope-workflow:scope-1:default",
       expectedActorId: "scope-workflow:scope-1:default:dep-1",
     })),
+    bindScopeScript: jest.fn(async (input: {
+      scopeId: string;
+      displayName?: string;
+      scriptId: string;
+      scriptRevision: string;
+      revisionId?: string;
+    }) => ({
+      scopeId: input.scopeId,
+      serviceId: input.scriptId,
+      displayName: input.displayName || input.scriptId,
+      targetKind: "script",
+      targetName: input.scriptId,
+      revisionId: input.revisionId || "rev-script-binding",
+      script: {
+        scriptId: input.scriptId,
+        scriptRevision: input.scriptRevision,
+        definitionActorId: "definition-1",
+      },
+      expectedActorId: `scope-script:${input.scopeId}:${input.scriptId}:dep-1`,
+    })),
     bindScopeGAgent: jest.fn(async (input: {
       scopeId: string;
       displayName?: string;
@@ -1118,6 +1139,14 @@ jest.mock("@/shared/studio/scriptsApi", () => ({
       diagnostics: [],
     })),
     saveScript: jest.fn(),
+    observeSaveScript: jest.fn(async () => ({
+      scopeId: "scope-1",
+      scriptId: "script-1",
+      status: "applied",
+      message: "applied",
+      currentScript: null,
+      isTerminal: true,
+    })),
     runDraftScript: jest.fn(),
     proposeEvolution: jest.fn(),
     generateScript: jest.fn(),
@@ -1362,6 +1391,7 @@ jest.mock("./components/StudioBuildPanels", () => {
   const StudioScriptBuildPanel = (props: any) => {
     const [value, setValue] = mockReact.useState("using System;");
     const [dirty, setDirty] = mockReact.useState(false);
+    const selectedScriptId = props.selectedScriptId || "script-1";
 
     mockReact.useEffect(() => {
       props.onRegisterLeaveGuard?.(
@@ -1369,7 +1399,21 @@ jest.mock("./components/StudioBuildPanels", () => {
       );
 
       return () => props.onRegisterLeaveGuard?.(null);
-    }, [dirty, props]);
+    }, [dirty, props.onRegisterLeaveGuard]);
+
+    mockReact.useEffect(() => {
+      props.onScriptBuildStateChange?.({
+        scriptId: selectedScriptId,
+        displayName: selectedScriptId,
+        scriptRevision: "rev-1",
+        revisionId: "rev-1",
+        sourceHash: "hash-1",
+        definitionActorId: "definition-1",
+        dirty,
+        validationStatus: dirty ? "unknown" : "valid",
+        saveStatus: dirty ? "idle" : "applied",
+      });
+    }, [dirty, props.onScriptBuildStateChange, selectedScriptId]);
 
     return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "Script source"),
@@ -1377,7 +1421,7 @@ jest.mock("./components/StudioBuildPanels", () => {
       mockReact.createElement("input", {
         key: "script-id",
         "aria-label": "Script ID",
-        value: props.selectedScriptId || "script-1",
+        value: selectedScriptId,
         onChange: (event: MockValueEvent) => props.onSelectScriptId?.(event.target.value),
       }),
       mockReact.createElement("textarea", {
@@ -2440,6 +2484,17 @@ describe("StudioPage", () => {
     (studioApi.authorWorkflow as jest.Mock).mockImplementation(
       mockAuthorWorkflowSuccess
     );
+    (scriptsApi.listScripts as jest.Mock).mockReset();
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValue([]);
+    (scriptsApi.observeSaveScript as jest.Mock).mockReset();
+    (scriptsApi.observeSaveScript as jest.Mock).mockResolvedValue({
+      scopeId: "scope-1",
+      scriptId: "script-1",
+      status: "applied",
+      message: "applied",
+      currentScript: null,
+      isTerminal: true,
+    });
   });
 
   it("loads workspace data and shows the workflow build workbench by default", async () => {
@@ -4702,6 +4757,90 @@ describe("StudioPage", () => {
     expect(await screen.findByLabelText("Script ID")).toBeTruthy();
     expect(screen.getByTestId("studio-script-build-panel")).toBeTruthy();
     expect(screen.getByText("Script source")).toBeTruthy();
+  });
+
+  it("binds a catalog-applied Script build candidate through the script binding API", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValue([
+      {
+        available: true,
+        scopeId: "scope-1",
+        script: {
+          scopeId: "scope-1",
+          scriptId: "script-alpha",
+          catalogActorId: "catalog-1",
+          definitionActorId: "definition-1",
+          activeRevision: "rev-1",
+          activeSourceHash: "hash-1",
+          updatedAt: "2026-03-18T00:00:00Z",
+        },
+        source: {
+          sourceText: "using System;",
+          definitionActorId: "definition-1",
+          revision: "rev-1",
+          sourceHash: "hash-1",
+        },
+      },
+    ]);
+    mockServicesApi.listServices.mockResolvedValue([
+      {
+        serviceId: "script-alpha",
+        displayName: "script-alpha",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-script-alpha",
+        endpoints: [
+          {
+            endpointId: "script-command",
+            displayName: "Script command",
+            kind: "command",
+            description: "Invoke the script command.",
+            requestTypeUrl: "type.googleapis.com/example.ScriptCommand",
+            responseTypeUrl: "type.googleapis.com/example.ScriptResult",
+          },
+        ],
+      },
+    ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
+      async (_scopeId: string, serviceId: string) =>
+        mockBuildServiceRevisionCatalog({
+          serviceId,
+          displayName: "script-alpha",
+          revisionId: "rev-script-binding",
+        })
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=script%3Ascript-alpha&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:script-alpha")).toBeTruthy();
+      expect(screen.getByText("service:no-service")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeScript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          displayName: "script-alpha",
+          scriptId: "script-alpha",
+          scriptRevision: "rev-1",
+          revisionId: "rev-1",
+        })
+      );
+    });
   });
 
   it("loads discovered GAgent types and the resolved scope binding", async () => {
