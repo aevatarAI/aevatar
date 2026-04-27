@@ -43,7 +43,7 @@ public sealed class ServiceRunCurrentStateProjectorTests
 
         await projector.ProjectAsync(context, envelope);
 
-        var doc = await store.GetAsync("run-1");
+        var doc = await store.GetAsync(ServiceRunIds.BuildKey("tenant-1", "svc-1", "run-1"));
         doc.Should().NotBeNull();
         doc!.RunId.Should().Be("run-1");
         doc.CommandId.Should().Be("cmd-1");
@@ -126,6 +126,55 @@ public sealed class ServiceRunCurrentStateProjectorTests
 
         var byRunWrongScope = await reader.GetByRunIdAsync("tenant-1", "svc-1", "run-c");
         byRunWrongScope.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotCollide_WhenSameRunIdAcrossDifferentScopes()
+    {
+        var store = new RecordingDocumentStore<ServiceRunCurrentStateReadModel>(x => x.Id);
+        var projector = new ServiceRunCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-04-27T00:00:00+00:00")));
+        var observedAt = DateTimeOffset.Parse("2026-04-27T01:00:00+00:00");
+
+        await projector.ProjectAsync(
+            CreateContext("service-run:tenant-a:svc:run-shared"),
+            WrapCommittedRunState(
+                BuildRecord("tenant-a", "svc", "run-shared", "cmd-x", ServiceImplementationKind.Static, "actor-a", observedAt),
+                stateVersion: 1,
+                eventId: "evt-a",
+                observedAt: observedAt));
+        await projector.ProjectAsync(
+            CreateContext("service-run:tenant-b:svc:run-shared"),
+            WrapCommittedRunState(
+                BuildRecord("tenant-b", "svc", "run-shared", "cmd-x", ServiceImplementationKind.Static, "actor-b", observedAt),
+                stateVersion: 1,
+                eventId: "evt-b",
+                observedAt: observedAt));
+
+        var docA = await store.GetAsync(ServiceRunIds.BuildKey("tenant-a", "svc", "run-shared"));
+        var docB = await store.GetAsync(ServiceRunIds.BuildKey("tenant-b", "svc", "run-shared"));
+        docA.Should().NotBeNull();
+        docB.Should().NotBeNull();
+        docA!.TargetActorId.Should().Be("actor-a");
+        docB!.TargetActorId.Should().Be("actor-b");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreState_WithMissingScopeOrService()
+    {
+        var store = new RecordingDocumentStore<ServiceRunCurrentStateReadModel>(x => x.Id);
+        var projector = new ServiceRunCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
+
+        var record = BuildRecord("tenant-1", "svc-1", "run-1", "cmd-1", ServiceImplementationKind.Static, "actor-1");
+        record.ScopeId = string.Empty;
+        await projector.ProjectAsync(
+            CreateContext("service-run:bad"),
+            WrapCommittedRunState(record, stateVersion: 1, eventId: "evt-bad", observedAt: DateTimeOffset.UtcNow));
+
+        (await store.ReadItemsAsync()).Should().BeEmpty();
     }
 
     private static ServiceRunCurrentStateProjectionContext CreateContext(string rootActorId) =>

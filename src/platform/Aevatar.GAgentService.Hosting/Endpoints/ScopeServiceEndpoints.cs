@@ -496,6 +496,7 @@ public static class ScopeServiceEndpoints
         StreamScopeServiceHttpRequest request,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
@@ -520,6 +521,7 @@ public static class ScopeServiceEndpoints
                 appId: null,
                 resolutionService,
                 admissionAuthorizer,
+                serviceRunRegistrationPort,
                 chatRunService,
                 gagentDraftRunService,
                 scriptRuntimeCommandPort,
@@ -867,6 +869,42 @@ public static class ScopeServiceEndpoints
         return Results.Ok(new ScopeServiceRunAuditHttpResponse(summary, report));
     }
 
+    private static async Task RegisterStreamServiceRunAsync(
+        IServiceRunRegistrationPort serviceRunRegistrationPort,
+        ServiceInvocationResolvedTarget target,
+        ServiceInvocationRequest invocationRequest,
+        string scopeId,
+        string serviceId,
+        CancellationToken ct)
+    {
+        var commandId = string.IsNullOrWhiteSpace(invocationRequest.CommandId)
+            ? Guid.NewGuid().ToString("N")
+            : invocationRequest.CommandId;
+        var record = new ServiceRunRecord
+        {
+            ScopeId = scopeId,
+            ServiceId = serviceId,
+            ServiceKey = target.Service.ServiceKey ?? string.Empty,
+            RunId = commandId,
+            CommandId = commandId,
+            CorrelationId = string.IsNullOrWhiteSpace(invocationRequest.CorrelationId)
+                ? commandId
+                : invocationRequest.CorrelationId,
+            EndpointId = target.Endpoint.EndpointId ?? string.Empty,
+            ImplementationKind = target.Artifact.ImplementationKind,
+            // Stream paths construct the implementation-specific run actor downstream
+            // (workflow run actor, draft-run session, scripting runtime); the registry
+            // stores the service primary actor so the directory entry is observable
+            // immediately after invoke returns.
+            TargetActorId = target.Service.PrimaryActorId ?? string.Empty,
+            RevisionId = target.Service.RevisionId ?? string.Empty,
+            DeploymentId = target.Service.DeploymentId ?? string.Empty,
+            Status = ServiceRunStatus.Accepted,
+            Identity = invocationRequest.Identity?.Clone(),
+        };
+        await serviceRunRegistrationPort.RegisterAsync(record, ct);
+    }
+
     private static async Task<ServiceRunSnapshot?> ResolveServiceRunSnapshotAsync(
         string scopeId,
         string serviceId,
@@ -894,6 +932,7 @@ public static class ScopeServiceEndpoints
         string? appId,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
@@ -924,6 +963,13 @@ public static class ScopeServiceEndpoints
                 target.Artifact,
                 target.Endpoint,
                 invocationRequest,
+                ct);
+            await RegisterStreamServiceRunAsync(
+                serviceRunRegistrationPort,
+                target,
+                invocationRequest,
+                scopeId,
+                serviceId,
                 ct);
 
             switch (target.Artifact.ImplementationKind)
@@ -2073,7 +2119,9 @@ const response = await fetch("{{invokePath}}", {
             scopeId,
             serviceId,
             snapshot.RunId,
-            snapshot.ActorId,
+            // ActorId stays the controllable target so existing resume/signal/stop
+            // round-trips keep working; the registry actor is internal infra.
+            snapshot.TargetActorId,
             string.Empty,
             snapshot.RevisionId,
             snapshot.DeploymentId,

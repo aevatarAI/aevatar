@@ -71,6 +71,66 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleRegisterAsync_ShouldRejectScopeMismatchOnReRegister()
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:tenant-1:svc-1:run-1",
+            static () => new ServiceRunGAgent());
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
+        {
+            Record = BuildRecord("run-1"),
+        });
+
+        var foreign = BuildRecord("run-1");
+        foreign.ScopeId = "tenant-2";
+        var act = () => actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = foreign });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*tenant-1*cannot re-register under scope 'tenant-2'*");
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_ShouldRejectServiceMismatchOnReRegister()
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:tenant-1:svc-1:run-1",
+            static () => new ServiceRunGAgent());
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
+        {
+            Record = BuildRecord("run-1"),
+        });
+
+        var foreign = BuildRecord("run-1");
+        foreign.ServiceId = "svc-2";
+        var act = () => actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = foreign });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*svc-1*cannot re-register under service 'svc-2'*");
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_ShouldRejectTargetMismatchOnReRegister()
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:tenant-1:svc-1:run-1",
+            static () => new ServiceRunGAgent());
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
+        {
+            Record = BuildRecord("run-1"),
+        });
+
+        var foreign = BuildRecord("run-1");
+        foreign.TargetActorId = "different-target";
+        var act = () => actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = foreign });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*target-run-1*cannot re-register against target 'different-target'*");
+    }
+
+    [Fact]
     public async Task HandleRegisterAsync_ShouldRejectMissingRequiredFields()
     {
         var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(

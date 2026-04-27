@@ -24,12 +24,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         var existing = State.Record;
         if (existing != null && !string.IsNullOrWhiteSpace(existing.RunId))
         {
-            if (!string.Equals(existing.RunId, command.Record.RunId, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Service run actor '{Id}' is bound to run '{existing.RunId}' and cannot register run '{command.Record.RunId}'.");
-            }
-
+            EnsureExistingMatches(existing, command.Record);
             return;
         }
 
@@ -104,6 +99,32 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record.RunId}:status:{(int)evt.Status}";
         return next;
+    }
+
+    private void EnsureExistingMatches(ServiceRunRecord existing, ServiceRunRecord incoming)
+    {
+        if (!string.Equals(existing.RunId, incoming.RunId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Service run actor '{Id}' is bound to run '{existing.RunId}' and cannot register run '{incoming.RunId}'.");
+        }
+        if (!string.Equals(existing.ScopeId, incoming.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Service run actor '{Id}' is bound to scope '{existing.ScopeId}' and cannot re-register under scope '{incoming.ScopeId}'.");
+        }
+        if (!string.Equals(existing.ServiceId, incoming.ServiceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Service run actor '{Id}' is bound to service '{existing.ServiceId}' and cannot re-register under service '{incoming.ServiceId}'.");
+        }
+        if (!string.IsNullOrWhiteSpace(incoming.TargetActorId) &&
+            !string.IsNullOrWhiteSpace(existing.TargetActorId) &&
+            !string.Equals(existing.TargetActorId, incoming.TargetActorId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Service run actor '{Id}' is bound to target '{existing.TargetActorId}' and cannot re-register against target '{incoming.TargetActorId}'.");
+        }
     }
 
     private static void ValidateRecord(ServiceRunRecord record)

@@ -39,13 +39,17 @@ public sealed class ServiceRunCurrentStateProjector
         }
 
         var record = state.Record;
-        if (string.IsNullOrWhiteSpace(record.RunId))
+        if (string.IsNullOrWhiteSpace(record.RunId) ||
+            string.IsNullOrWhiteSpace(record.ScopeId) ||
+            string.IsNullOrWhiteSpace(record.ServiceId))
+        {
             return;
+        }
 
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var document = new ServiceRunCurrentStateReadModel
         {
-            Id = record.RunId,
+            Id = ServiceRunIds.BuildKey(record.ScopeId, record.ServiceId, record.RunId),
             ActorId = context.RootActorId,
             ScopeId = record.ScopeId ?? string.Empty,
             ServiceId = record.ServiceId ?? string.Empty,

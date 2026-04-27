@@ -36,8 +36,12 @@ public sealed class ServiceRunRegistrationAdapter : IServiceRunRegistrationPort
         ArgumentNullException.ThrowIfNull(record);
         if (string.IsNullOrWhiteSpace(record.RunId))
             throw new InvalidOperationException("run_id is required.");
+        if (string.IsNullOrWhiteSpace(record.ScopeId))
+            throw new InvalidOperationException("scope_id is required.");
+        if (string.IsNullOrWhiteSpace(record.ServiceId))
+            throw new InvalidOperationException("service_id is required.");
 
-        var actorId = BuildRunActorId(record.RunId);
+        var actorId = ServiceRunIds.BuildActorId(record.ScopeId, record.ServiceId, record.RunId);
         var actor = await _runtime.CreateAsync<ServiceRunGAgent>(actorId, ct: ct);
         await _projectionPort.EnsureProjectionAsync(actor.Id, ct);
 
@@ -80,8 +84,6 @@ public sealed class ServiceRunRegistrationAdapter : IServiceRunRegistrationPort
             commandId);
         await _dispatchPort.DispatchAsync(runActorId, envelope, ct);
     }
-
-    private static string BuildRunActorId(string runId) => $"service-run:{runId}";
 
     private static EventEnvelope CreateEnvelope(
         string actorId,

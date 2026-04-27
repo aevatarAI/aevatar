@@ -80,20 +80,17 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
     {
         if (!_enabled)
             return null;
-        if (string.IsNullOrWhiteSpace(runId))
+        if (string.IsNullOrWhiteSpace(runId) ||
+            string.IsNullOrWhiteSpace(scopeId) ||
+            string.IsNullOrWhiteSpace(serviceId))
+        {
             return null;
+        }
 
-        var direct = await _documentStore.GetAsync(runId.Trim(), ct);
-        if (direct != null && MatchesScopeAndService(direct, scopeId, serviceId))
-            return Map(direct);
-
-        var matches = await QueryByEqualityAsync(
-            scopeId,
-            serviceId,
-            nameof(ServiceRunCurrentStateReadModel.RunId),
-            runId.Trim(),
+        var direct = await _documentStore.GetAsync(
+            ServiceRunIds.BuildKey(scopeId, serviceId, runId),
             ct);
-        return matches.FirstOrDefault();
+        return direct == null ? null : Map(direct);
     }
 
     public async Task<ServiceRunSnapshot?> GetByCommandIdAsync(
@@ -159,25 +156,6 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
             },
             ct);
         return result.Items.Select(Map).ToList();
-    }
-
-    private static bool MatchesScopeAndService(
-        ServiceRunCurrentStateReadModel readModel,
-        string? scopeId,
-        string? serviceId)
-    {
-        if (!string.IsNullOrWhiteSpace(scopeId) &&
-            !string.Equals(readModel.ScopeId, scopeId, StringComparison.Ordinal))
-        {
-            return false;
-        }
-        if (!string.IsNullOrWhiteSpace(serviceId) &&
-            !string.Equals(readModel.ServiceId, serviceId, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return true;
     }
 
     private static ServiceRunSnapshot Map(ServiceRunCurrentStateReadModel readModel) =>
