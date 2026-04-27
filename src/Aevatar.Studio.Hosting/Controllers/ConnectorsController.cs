@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Infrastructure.Storage;
@@ -22,7 +23,9 @@ public sealed class ConnectorsController : ControllerBase
     {
         try
         {
-            return Ok(await _connectorService.GetCatalogAsync(cancellationToken));
+            var response = await _connectorService.GetCatalogAsync(cancellationToken);
+            ETagSupport.WriteETag(Response, response.Version);
+            return Ok(response);
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -43,7 +46,9 @@ public sealed class ConnectorsController : ControllerBase
     {
         try
         {
-            return Ok(await _connectorService.GetDraftAsync(cancellationToken));
+            var response = await _connectorService.GetDraftAsync(cancellationToken);
+            ETagSupport.WriteETag(Response, response.Version);
+            return Ok(response);
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -64,9 +69,16 @@ public sealed class ConnectorsController : ControllerBase
         [FromBody] SaveConnectorCatalogRequest request,
         CancellationToken cancellationToken)
     {
+        var effectiveRequest = ApplyIfMatch(request);
         try
         {
-            return Ok(await _connectorService.SaveCatalogAsync(request, cancellationToken));
+            var response = await _connectorService.SaveCatalogAsync(effectiveRequest, cancellationToken);
+            ETagSupport.WriteETag(Response, response.Version);
+            return Ok(response);
+        }
+        catch (EventStoreOptimisticConcurrencyException exception)
+        {
+            return Conflict(new { code = "VERSION_CONFLICT", message = exception.Message });
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -112,9 +124,16 @@ public sealed class ConnectorsController : ControllerBase
         [FromBody] SaveConnectorDraftRequest request,
         CancellationToken cancellationToken)
     {
+        var effectiveRequest = ApplyIfMatch(request);
         try
         {
-            return Ok(await _connectorService.SaveDraftAsync(request, cancellationToken));
+            var response = await _connectorService.SaveDraftAsync(effectiveRequest, cancellationToken);
+            ETagSupport.WriteETag(Response, response.Version);
+            return Ok(response);
+        }
+        catch (EventStoreOptimisticConcurrencyException exception)
+        {
+            return Conflict(new { code = "VERSION_CONFLICT", message = exception.Message });
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -133,10 +152,15 @@ public sealed class ConnectorsController : ControllerBase
     [HttpDelete("draft")]
     public async Task<IActionResult> DeleteDraft(CancellationToken cancellationToken)
     {
+        var expectedVersion = ETagSupport.TryParseIfMatch(Request);
         try
         {
-            await _connectorService.DeleteDraftAsync(cancellationToken);
+            await _connectorService.DeleteDraftAsync(expectedVersion, cancellationToken);
             return NoContent();
+        }
+        catch (EventStoreOptimisticConcurrencyException exception)
+        {
+            return Conflict(new { code = "VERSION_CONFLICT", message = exception.Message });
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -150,5 +174,21 @@ public sealed class ConnectorsController : ControllerBase
         {
             return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
         }
+    }
+
+    private SaveConnectorCatalogRequest ApplyIfMatch(SaveConnectorCatalogRequest request)
+    {
+        if (request.ExpectedVersion is not null)
+            return request;
+        var expected = ETagSupport.TryParseIfMatch(Request);
+        return expected is null ? request : request with { ExpectedVersion = expected };
+    }
+
+    private SaveConnectorDraftRequest ApplyIfMatch(SaveConnectorDraftRequest request)
+    {
+        if (request.ExpectedVersion is not null)
+            return request;
+        var expected = ETagSupport.TryParseIfMatch(Request);
+        return expected is null ? request : request with { ExpectedVersion = expected };
     }
 }

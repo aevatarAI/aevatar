@@ -48,13 +48,15 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         CancellationToken cancellationToken = default)
     {
         var state = await ReadProjectedStateAsync(cancellationToken);
+        var version = state?.LastAppliedEventVersion ?? 0;
         if (state is null)
         {
             return new StoredConnectorCatalog(
                 HomeDirectory: ActorHomeDirectory,
                 FilePath: ActorFilePath,
                 FileExists: false,
-                Connectors: []);
+                Connectors: [],
+                Version: version);
         }
 
         var connectors = state.Connectors
@@ -66,23 +68,29 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath,
             FileExists: connectors.Count > 0,
-            Connectors: connectors);
+            Connectors: connectors,
+            Version: version);
     }
 
     public async Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(
         StoredConnectorCatalog catalog,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ConnectorCatalogSavedEvent();
         evt.Connectors.AddRange(catalog.Connectors.Select(ToProtoConnectorDefinition));
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
+        var refreshed = await ReadProjectedStateAsync(cancellationToken);
         return new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath,
             FileExists: true,
-            Connectors: catalog.Connectors);
+            Connectors: catalog.Connectors,
+            Version: refreshed?.LastAppliedEventVersion ?? ((expectedVersion ?? catalog.Version) + 1));
     }
 
     public async Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(
@@ -114,6 +122,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     {
         var state = await ReadProjectedStateAsync(cancellationToken);
         var draftEntry = state?.Draft;
+        var version = state?.LastAppliedEventVersion ?? 0;
         if (draftEntry is null)
         {
             return new StoredConnectorDraft(
@@ -121,7 +130,8 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
                 FilePath: ActorFilePath + "/draft",
                 FileExists: false,
                 UpdatedAtUtc: null,
-                Draft: null);
+                Draft: null,
+                Version: version);
         }
 
         return new StoredConnectorDraft(
@@ -129,11 +139,13 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
             FilePath: ActorFilePath + "/draft",
             FileExists: true,
             UpdatedAtUtc: draftEntry.UpdatedAtUtc?.ToDateTimeOffset(),
-            Draft: draftEntry.Draft is not null ? ToStoredConnectorDefinition(draftEntry.Draft) : null);
+            Draft: draftEntry.Draft is not null ? ToStoredConnectorDefinition(draftEntry.Draft) : null,
+            Version: version);
     }
 
     public async Task<StoredConnectorDraft> SaveConnectorDraftAsync(
         StoredConnectorDraft draft,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
@@ -143,23 +155,31 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
             Draft = draft.Draft is not null ? ToProtoConnectorDefinition(draft.Draft) : null,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
-        // Also persist to local workspace for offline access
         await _workspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
 
+        var refreshed = await ReadProjectedStateAsync(cancellationToken);
         return new StoredConnectorDraft(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath + "/draft",
             FileExists: true,
             UpdatedAtUtc: updatedAtUtc,
-            Draft: draft.Draft);
+            Draft: draft.Draft,
+            Version: refreshed?.LastAppliedEventVersion ?? ((expectedVersion ?? draft.Version) + 1));
     }
 
-    public async Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default)
+    public async Task DeleteConnectorDraftAsync(
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ConnectorDraftDeletedEvent(), cancellationToken);
+        var evt = new ConnectorDraftDeletedEvent();
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }

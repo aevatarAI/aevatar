@@ -1484,6 +1484,148 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
+    public async Task RoleCatalogStore_SaveDraft_PlumbsExpectedVersionToEvent()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
+        var store = new ActorBackedRoleCatalogStore(
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+
+        var draft = new StoredRoleDraft(
+            HomeDirectory: "test",
+            FilePath: "test/draft",
+            FileExists: true,
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            Draft: new StoredRoleDefinition("r1", "My Role", "prompt", "anthropic", "claude-opus", []));
+
+        await store.SaveRoleDraftAsync(draft, expectedVersion: 5);
+
+        var evt = runtime.Actors["role-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<RoleDraftSavedEvent>();
+        evt.HasExpectedVersion.Should().BeTrue();
+        evt.ExpectedVersion.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task RoleCatalogStore_SaveDraft_WithoutExpectedVersion_LeavesEventUnsetForOptimisticBypass()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
+        var store = new ActorBackedRoleCatalogStore(
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+
+        var draft = new StoredRoleDraft(
+            HomeDirectory: "test",
+            FilePath: "test/draft",
+            FileExists: true,
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            Draft: new StoredRoleDefinition("r1", "My Role", "prompt", "anthropic", "claude-opus", []));
+
+        await store.SaveRoleDraftAsync(draft);
+
+        var evt = runtime.Actors["role-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<RoleDraftSavedEvent>();
+        evt.HasExpectedVersion.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RoleCatalogStore_DeleteDraft_PlumbsExpectedVersionToEvent()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
+        var store = new ActorBackedRoleCatalogStore(
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<RoleCatalogCurrentStateDocument>(), logger);
+
+        await store.DeleteRoleDraftAsync(expectedVersion: 7);
+
+        var evt = runtime.Actors["role-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<RoleDraftDeletedEvent>();
+        evt.HasExpectedVersion.Should().BeTrue();
+        evt.ExpectedVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task RoleCatalogStore_GetDraft_ReturnsVersionFromProjectionState()
+    {
+        var runtime = new FakeActorRuntime();
+        var state = new RoleCatalogState
+        {
+            LastAppliedEventVersion = 42,
+            Draft = new RoleDraftEntry
+            {
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Draft = new RoleDefinitionEntry { Id = "d", Name = "D" },
+            },
+        };
+        var reader = PackedReader("role-catalog-scope-1", state);
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
+        var store = new ActorBackedRoleCatalogStore(
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, reader, logger);
+
+        var draft = await store.GetRoleDraftAsync();
+
+        draft.Version.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task ConnectorCatalogStore_SaveDraft_PlumbsExpectedVersionToEvent()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
+        var store = new ActorBackedConnectorCatalogStore(
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, EmptyReader<ConnectorCatalogCurrentStateDocument>(), logger);
+
+        var draft = new StoredConnectorDraft(
+            HomeDirectory: "test",
+            FilePath: "test/draft",
+            FileExists: true,
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            Draft: new StoredConnectorDefinition(
+                "conn-1", "http", true, 30000, 3,
+                new StoredHttpConnectorConfig("http://x", [], [], [], new Dictionary<string, string>(), new StoredConnectorAuthConfig("", "", "", "", "")),
+                new StoredCliConnectorConfig("", [], [], [], "", new Dictionary<string, string>()),
+                new StoredMcpConnectorConfig("", "", "", [], new Dictionary<string, string>(), new Dictionary<string, string>(), new StoredConnectorAuthConfig("", "", "", "", ""), "", [], [])));
+
+        await store.SaveConnectorDraftAsync(draft, expectedVersion: 9);
+
+        var evt = runtime.Actors["connector-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<ConnectorDraftSavedEvent>();
+        evt.HasExpectedVersion.Should().BeTrue();
+        evt.ExpectedVersion.Should().Be(9);
+    }
+
+    [Fact]
+    public async Task ConnectorCatalogStore_GetDraft_ReturnsVersionFromProjectionState()
+    {
+        var runtime = new FakeActorRuntime();
+        var state = new ConnectorCatalogState
+        {
+            LastAppliedEventVersion = 13,
+            Draft = new ConnectorDraftEntry
+            {
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Draft = new ConnectorDefinitionEntry { Name = "d", Type = "http" },
+            },
+        };
+        var reader = PackedReader("connector-catalog-scope-1", state);
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
+        var store = new ActorBackedConnectorCatalogStore(
+            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, workspaceStore, reader, logger);
+
+        var draft = await store.GetConnectorDraftAsync();
+
+        draft.Version.Should().Be(13);
+    }
+
+    [Fact]
     public async Task RoleCatalogStore_GetCatalog_MapsStateCorrectly()
     {
         var runtime = new FakeActorRuntime();

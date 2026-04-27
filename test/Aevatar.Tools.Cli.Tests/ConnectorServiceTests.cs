@@ -114,7 +114,7 @@ public sealed class ConnectorServiceTests
         public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(LastSavedCatalog ?? new StoredConnectorCatalog(string.Empty, string.Empty, false, []));
 
-        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, CancellationToken cancellationToken = default)
+        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, long? expectedVersion = null, CancellationToken cancellationToken = default)
         {
             LastSavedCatalog = catalog with { FileExists = true };
             return Task.FromResult(LastSavedCatalog);
@@ -126,10 +126,10 @@ public sealed class ConnectorServiceTests
         public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new StoredConnectorDraft(string.Empty, string.Empty, false, null, null));
 
-        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft draft, CancellationToken cancellationToken = default) =>
+        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft draft, long? expectedVersion = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(draft);
 
-        public Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default) =>
+        public Task DeleteConnectorDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
     }
 

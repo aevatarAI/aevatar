@@ -58,23 +58,29 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath,
             FileExists: roles.Count > 0,
-            Roles: roles);
+            Roles: roles,
+            Version: state?.LastAppliedEventVersion ?? 0);
     }
 
     public async Task<StoredRoleCatalog> SaveRoleCatalogAsync(
         StoredRoleCatalog catalog,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
+        var refreshed = await ReadProjectedStateAsync(cancellationToken);
         return new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath,
             FileExists: true,
-            Roles: catalog.Roles);
+            Roles: catalog.Roles,
+            Version: refreshed?.LastAppliedEventVersion ?? ((expectedVersion ?? catalog.Version) + 1));
     }
 
     public async Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
@@ -103,6 +109,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     {
         var state = await ReadProjectedStateAsync(cancellationToken);
         var draftEntry = state?.Draft;
+        var version = state?.LastAppliedEventVersion ?? 0;
         if (draftEntry is null)
         {
             return new StoredRoleDraft(
@@ -110,7 +117,8 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
                 FilePath: ActorFilePath + "/draft",
                 FileExists: false,
                 UpdatedAtUtc: null,
-                Draft: null);
+                Draft: null,
+                Version: version);
         }
 
         return new StoredRoleDraft(
@@ -118,11 +126,13 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             FilePath: ActorFilePath + "/draft",
             FileExists: true,
             UpdatedAtUtc: draftEntry.UpdatedAtUtc?.ToDateTimeOffset(),
-            Draft: draftEntry.Draft is not null ? ToStoredRoleDefinition(draftEntry.Draft) : null);
+            Draft: draftEntry.Draft is not null ? ToStoredRoleDefinition(draftEntry.Draft) : null,
+            Version: version);
     }
 
     public async Task<StoredRoleDraft> SaveRoleDraftAsync(
         StoredRoleDraft draft,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
@@ -132,22 +142,31 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             Draft = draft.Draft is not null ? ToProtoRoleDefinition(draft.Draft) : null,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         await _localWorkspaceStore.SaveRoleDraftAsync(draft, cancellationToken);
 
+        var refreshed = await ReadProjectedStateAsync(cancellationToken);
         return new StoredRoleDraft(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath + "/draft",
             FileExists: true,
             UpdatedAtUtc: updatedAtUtc,
-            Draft: draft.Draft);
+            Draft: draft.Draft,
+            Version: refreshed?.LastAppliedEventVersion ?? ((expectedVersion ?? draft.Version) + 1));
     }
 
-    public async Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default)
+    public async Task DeleteRoleDraftAsync(
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new RoleDraftDeletedEvent(), cancellationToken);
+        var evt = new RoleDraftDeletedEvent();
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
+        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
         await _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
     }
