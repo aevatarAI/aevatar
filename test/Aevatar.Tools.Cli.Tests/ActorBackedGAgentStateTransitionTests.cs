@@ -1176,6 +1176,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
         var next = state.Clone();
         next.Connectors.Clear();
         next.Connectors.AddRange(evt.Connectors);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -1188,6 +1189,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             Draft = evt.Draft?.Clone(),
             UpdatedAtUtc = evt.UpdatedAtUtc,
         };
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -1196,6 +1198,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
     {
         var next = state.Clone();
         next.Draft = null;
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -1396,6 +1399,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
         var next = state.Clone();
         next.Roles.Clear();
         next.Roles.AddRange(evt.Roles);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -1408,6 +1412,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
             Draft = evt.Draft?.Clone(),
             UpdatedAtUtc = evt.UpdatedAtUtc,
         };
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -1416,6 +1421,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
     {
         var next = state.Clone();
         next.Draft = null;
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -1551,6 +1557,42 @@ public sealed class ActorBackedGAgentStateTransitionTests
         var next = ApplyRoleCatalog(state, new RoleDraftDeletedEvent());
 
         next.Draft.Should().BeNull();
+    }
+
+    [Fact]
+    public void RoleCatalog_Apply_IncrementsLastAppliedEventVersion()
+    {
+        var state = new RoleCatalogState();
+
+        var afterFirst = ApplyRoleCatalog(state, new RoleCatalogSavedEvent());
+        afterFirst.LastAppliedEventVersion.Should().Be(1);
+
+        var afterSecond = ApplyRoleCatalog(afterFirst, new RoleDraftSavedEvent
+        {
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        afterSecond.LastAppliedEventVersion.Should().Be(2);
+
+        var afterThird = ApplyRoleCatalog(afterSecond, new RoleDraftDeletedEvent());
+        afterThird.LastAppliedEventVersion.Should().Be(3);
+    }
+
+    [Fact]
+    public void ConnectorCatalog_Apply_IncrementsLastAppliedEventVersion()
+    {
+        var state = new ConnectorCatalogState();
+
+        var afterFirst = ApplyConnectorCatalog(state, new ConnectorCatalogSavedEvent());
+        afterFirst.LastAppliedEventVersion.Should().Be(1);
+
+        var afterSecond = ApplyConnectorCatalog(afterFirst, new ConnectorDraftSavedEvent
+        {
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        afterSecond.LastAppliedEventVersion.Should().Be(2);
+
+        var afterThird = ApplyConnectorCatalog(afterSecond, new ConnectorDraftDeletedEvent());
+        afterThird.LastAppliedEventVersion.Should().Be(3);
     }
 
     [Fact]
