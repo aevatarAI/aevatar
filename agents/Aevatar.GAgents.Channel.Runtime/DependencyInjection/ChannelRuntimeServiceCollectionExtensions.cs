@@ -58,10 +58,13 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
 
-        // Detect projection store provider from configuration
+        // Detect projection store provider from configuration. The helper logs a
+        // misconfiguration warning (Console.Error during SCE composition; structured
+        // log when a real logger is wired in tests) when configuration is present
+        // but Endpoints/Enabled are both empty, so operators see the InMemory
+        // fallback instead of discovering it after a restart wipes the replica.
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
             configuration,
-            logger: null,
             storeName: "ChannelRuntime");
 
         // ─── Channel Bot Registration projection pipeline ───

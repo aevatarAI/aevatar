@@ -26,9 +26,12 @@ public static class DeviceServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // The helper logs a misconfiguration warning (Console.Error during SCE
+        // composition; structured log when a real logger is wired in tests) when
+        // configuration is present but Endpoints/Enabled are both empty, so
+        // operators see the InMemory fallback at startup.
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
             configuration,
-            logger: null,
             storeName: "DeviceRegistration");
 
         // ─── Device Registration projection pipeline ───

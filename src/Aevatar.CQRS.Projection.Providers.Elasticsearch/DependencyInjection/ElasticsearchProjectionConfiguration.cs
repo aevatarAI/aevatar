@@ -27,8 +27,9 @@ public static class ElasticsearchProjectionConfiguration
     /// <param name="logger">
     /// Optional logger; receives a single warning when a configuration is
     /// provided but neither the explicit flag nor any endpoint is set
-    /// (production misconfiguration). When null no diagnostic is emitted —
-    /// callers that want production guarantees should wire a real logger.
+    /// (production misconfiguration). When null the warning falls back to
+    /// <see cref="Console.Error"/> so SCE composition (which has no DI-built
+    /// logger yet) still surfaces the regression in startup output.
     /// </param>
     /// <param name="storeName">
     /// Caller-supplied identifier for the warning text (e.g. "ChannelRuntime",
@@ -51,18 +52,33 @@ public static class ElasticsearchProjectionConfiguration
         var hasEndpoints = section.GetSection("Endpoints").GetChildren()
             .Any(static x => !string.IsNullOrWhiteSpace(x.Value));
 
-        if (!hasEndpoints && logger is not null)
+        if (!hasEndpoints)
         {
             // Configuration is wired but ES is silent — production misconfiguration.
             // Warn so operators can spot the regression in startup logs instead of
             // discovering it after the next restart wipes the InMemory replica.
-            logger.LogWarning(
-                "{StoreName}: Elasticsearch is not configured ({Section}:Endpoints empty). " +
-                "Falling back to volatile InMemory projection store. Set {Section}:Enabled=true " +
-                "or populate Endpoints for production.",
-                storeName ?? "ProjectionStore",
-                SectionPath,
-                SectionPath);
+            // SCEs run before the host builds its logger pipeline, so they pass a
+            // null logger and we route the warning to Console.Error (matching the
+            // pre-helper Console.Error.WriteLine behavior). Tests that wire a mock
+            // logger receive the structured-log call instead.
+            var resolvedStoreName = storeName ?? "ProjectionStore";
+            if (logger is not null)
+            {
+                logger.LogWarning(
+                    "{StoreName}: Elasticsearch is not configured ({Section}:Endpoints empty). " +
+                    "Falling back to volatile InMemory projection store. Set {Section}:Enabled=true " +
+                    "or populate Endpoints for production.",
+                    resolvedStoreName,
+                    SectionPath,
+                    SectionPath);
+            }
+            else
+            {
+                Console.Error.WriteLine(
+                    $"{resolvedStoreName}: Elasticsearch is not configured ({SectionPath}:Endpoints empty). " +
+                    $"Falling back to volatile InMemory projection store. Set {SectionPath}:Enabled=true " +
+                    $"or populate Endpoints for production.");
+            }
         }
 
         return hasEndpoints;

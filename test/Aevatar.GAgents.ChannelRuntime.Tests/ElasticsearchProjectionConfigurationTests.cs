@@ -82,15 +82,68 @@ public sealed class ElasticsearchProjectionConfigurationTests
     }
 
     [Fact]
-    public void IsEnabled_DoesNotLog_WhenLoggerIsNull_AndEndpointsEmpty()
+    public void IsEnabled_WritesConsoleError_WhenLoggerIsNullAndEndpointsEmpty()
     {
         var configuration = BuildConfiguration(new()
         {
             ["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = "aevatar-test",
         });
 
-        // Should not throw even with null logger.
-        ElasticsearchProjectionConfiguration.IsEnabled(configuration).Should().BeFalse();
+        // SCE composition runs before the host builds its logger pipeline, so
+        // the helper falls back to Console.Error to keep operator visibility
+        // (matches the pre-helper Console.Error.WriteLine behavior).
+        var capturedStderr = new StringWriter();
+        var originalStderr = Console.Error;
+        Console.SetError(capturedStderr);
+        try
+        {
+            ElasticsearchProjectionConfiguration
+                .IsEnabled(configuration, logger: null, "TestStore")
+                .Should().BeFalse();
+        }
+        finally
+        {
+            Console.SetError(originalStderr);
+        }
+
+        capturedStderr.ToString().Should().Contain("TestStore");
+        capturedStderr.ToString().Should().Contain("Elasticsearch is not configured");
+        capturedStderr.ToString().Should().Contain("InMemory");
+    }
+
+    [Fact]
+    public void IsEnabled_DoesNotWriteConsoleError_WhenLoggerIsProvided()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = "aevatar-test",
+        });
+        var logger = Substitute.For<ILogger>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+
+        var capturedStderr = new StringWriter();
+        var originalStderr = Console.Error;
+        Console.SetError(capturedStderr);
+        try
+        {
+            ElasticsearchProjectionConfiguration
+                .IsEnabled(configuration, logger, "TestStore")
+                .Should().BeFalse();
+        }
+        finally
+        {
+            Console.SetError(originalStderr);
+        }
+
+        // Logger received the warning; Console.Error must stay clean so
+        // structured-log consumers don't get duplicate entries.
+        capturedStderr.ToString().Should().BeEmpty();
+        logger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>());
     }
 
     [Fact]
