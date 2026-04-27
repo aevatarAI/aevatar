@@ -134,22 +134,25 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new { templates = AgentBuilderTemplates.ListTemplates() });
 
         var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
-        var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
         var nyxClient = _serviceProvider.GetService<NyxIdApiClient>();
-        if (queryPort is null || actorRuntime is null || nyxClient is null)
+        var skillRunnerPort = _serviceProvider.GetService<ISkillRunnerCommandPort>();
+        var workflowAgentPort = _serviceProvider.GetService<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = _serviceProvider.GetService<IUserAgentCatalogCommandPort>();
+        if (queryPort is null || nyxClient is null ||
+            skillRunnerPort is null || workflowAgentPort is null || catalogCommandPort is null)
         {
             return """{"error":"Agent builder runtime not available. Required services are not registered in DI."}""";
         }
 
         return action switch
         {
-            "create_agent" => await CreateAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
+            "create_agent" => await CreateAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, nyxClient, token, ct),
             "list_agents" => await ListAgentsAsync(args, queryPort, nyxClient, token, ct),
             "agent_status" => await GetAgentStatusAsync(args, queryPort, ct),
-            "run_agent" => await RunAgentAsync(args, queryPort, actorRuntime, ct),
-            "disable_agent" => await DisableAgentAsync(args, queryPort, actorRuntime, ct),
-            "enable_agent" => await EnableAgentAsync(args, queryPort, actorRuntime, ct),
-            "delete_agent" => await DeleteAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
+            "run_agent" => await RunAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, ct),
+            "disable_agent" => await DisableAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, ct),
+            "enable_agent" => await EnableAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, ct),
+            "delete_agent" => await DeleteAgentAsync(args, queryPort, catalogCommandPort, skillRunnerPort, workflowAgentPort, nyxClient, token, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
     }
@@ -157,7 +160,8 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> CreateAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        ISkillRunnerCommandPort skillRunnerPort,
+        IWorkflowAgentCommandPort workflowAgentPort,
         NyxIdApiClient nyxClient,
         string token,
         CancellationToken ct)
@@ -172,8 +176,8 @@ public sealed class AgentBuilderTool : IAgentTool
         var template = (args.Str("template") ?? string.Empty).Trim();
         return template.ToLowerInvariant() switch
         {
-            "daily_report" => await CreateDailyReportAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
-            "social_media" => await CreateSocialMediaAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
+            "daily_report" => await CreateDailyReportAgentAsync(args, queryPort, skillRunnerPort, nyxClient, token, ct),
+            "social_media" => await CreateSocialMediaAgentAsync(args, queryPort, workflowAgentPort, nyxClient, token, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported template '{template}'. Supported templates: daily_report, social_media." }),
         };
     }
@@ -181,7 +185,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> CreateDailyReportAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        ISkillRunnerCommandPort skillRunnerPort,
         NyxIdApiClient nyxClient,
         string token,
         CancellationToken ct)
@@ -270,15 +274,7 @@ public sealed class AgentBuilderTool : IAgentTool
             return preflight;
         }
 
-        var actor = await actorRuntime.GetAsync(agentId)
-                    ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
-
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-
-        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
-        // the rationale. A late prime can't recover an event the projector
-        // already missed.
-        await EnsureUserAgentCatalogProjectionAsync(ct);
 
         var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeSkillRunnerCommand
@@ -308,13 +304,8 @@ public sealed class AgentBuilderTool : IAgentTool
             },
         };
 
-        await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
-
         var runImmediatelyRequested = args.Bool("run_immediately") == true;
-        if (runImmediatelyRequested)
-            await actor.HandleEventAsync(
-                BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }),
-                ct);
+        await skillRunnerPort.InitializeAsync(agentId, initialize, runImmediatelyRequested, ct);
 
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
@@ -351,7 +342,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> CreateSocialMediaAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        IWorkflowAgentCommandPort workflowAgentPort,
         NyxIdApiClient nyxClient,
         string token,
         CancellationToken ct)
@@ -421,15 +412,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 templateSpec.DisplayName),
             ct);
 
-        var actor = await actorRuntime.GetAsync(agentId)
-                    ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(agentId, ct);
-
         var versionBefore = await queryPort.GetStateVersionAsync(agentId, ct) ?? -1;
-
-        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
-        // the rationale. A late prime can't recover an event the projector
-        // already missed.
-        await EnsureUserAgentCatalogProjectionAsync(ct);
 
         var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
         var initialize = new InitializeWorkflowAgentCommand
@@ -453,7 +436,11 @@ public sealed class AgentBuilderTool : IAgentTool
             LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
         };
 
-        await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, initialize), ct);
+        // Initialize via the workflow-agent command port; observation lives in
+        // the polling loop below since it crosses actors (Workflow → catalog).
+        // We split run-immediately into a follow-up TriggerAsync so the trigger
+        // fires only after the catalog projection confirms creation.
+        await workflowAgentPort.InitializeAsync(agentId, initialize, runImmediately: false, ct);
 
         var confirmed = await WaitForCreatedAgentAsync(
             queryPort,
@@ -466,9 +453,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         if (args.Bool("run_immediately") == true && confirmed)
         {
-            await actor.HandleEventAsync(
-                BuildDirectEnvelope(actor.Id, new TriggerWorkflowAgentExecutionCommand { Reason = "create_agent" }),
-                ct);
+            await workflowAgentPort.TriggerAsync(agentId, "create_agent", revisionFeedback: null, ct);
         }
 
         return JsonSerializer.Serialize(new
@@ -522,7 +507,9 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> DeleteAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        IUserAgentCatalogCommandPort catalogCommandPort,
+        ISkillRunnerCommandPort skillRunnerPort,
+        IWorkflowAgentCommandPort workflowAgentPort,
         NyxIdApiClient nyxClient,
         string token,
         CancellationToken ct)
@@ -546,38 +533,21 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
-        // Capture the read-model version before issuing tombstone so the wait can
-        // distinguish "projection caught up" from "projector did not run yet".
-        var versionBefore = await queryPort.GetStateVersionAsync(entry.AgentId, ct) ?? -1;
-
-        // Prime the projection scope BEFORE any dispatch. If we primed after
-        // HandleEventAsync, an idle-deactivated projection grain would have
-        // already missed the published event and a late activation could not
-        // recover it (the activation contract is "be alive when the event
-        // arrives", not "replay missed events"). Activating up front costs at
-        // most one extra warm-grain round trip.
-        await EnsureUserAgentCatalogProjectionAsync(ct);
-
-        var disableResult = await DispatchAgentLifecycleAsync(entry, actorRuntime, "delete_agent", LifecycleAction.Disable, null, ct);
+        // Disable via the typed lifecycle port (dispatch + projection priming
+        // happen there); skip if the agent type isn't managed.
+        var disableResult = await TryDispatchLifecycleAsync(
+            entry, "delete_agent", LifecycleAction.Disable, revisionFeedback: null,
+            skillRunnerPort, workflowAgentPort, ct);
         if (disableResult.error != null)
             return disableResult.error;
 
         if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
             await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
 
-        var registryActor = await actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-                           ?? await actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
-        await registryActor.HandleEventAsync(
-            BuildDirectEnvelope(registryActor.Id, new UserAgentCatalogTombstoneCommand { AgentId = entry.AgentId }),
-            ct);
-
-        var deleted = await WaitForTombstoneReflectedAsync(
-            queryPort,
-            entry.AgentId,
-            versionBefore,
-            ct,
-            _projectionWaitAttempts,
-            _projectionWaitDelayMilliseconds);
+        // Tombstone via UserAgentCatalogCommandPort; port owns priming +
+        // version observation and returns an honest accepted/observed status.
+        var tombstoneResult = await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
+        var deleted = tombstoneResult.Outcome == CatalogCommandOutcome.Observed;
 
         var ownerFilter = !string.IsNullOrWhiteSpace(entry.OwnerNyxUserId)
             ? entry.OwnerNyxUserId
@@ -612,7 +582,8 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> RunAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        ISkillRunnerCommandPort skillRunnerPort,
+        IWorkflowAgentCommandPort workflowAgentPort,
         CancellationToken ct)
     {
         var agentId = args.Str("agent_id");
@@ -631,7 +602,7 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' is disabled. Enable it before running." });
 
         var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
-        var dispatch = await DispatchAgentLifecycleAsync(entry, actorRuntime, "run_agent", LifecycleAction.Run, revisionFeedback, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, workflowAgentPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -649,7 +620,8 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> DisableAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        ISkillRunnerCommandPort skillRunnerPort,
+        IWorkflowAgentCommandPort workflowAgentPort,
         CancellationToken ct)
     {
         var entry = await RequireManagedAgentAsync(args, queryPort, "disable_agent", ct);
@@ -667,12 +639,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // against a fast projection that already advanced the version.
         var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
 
-        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
-        // the rationale. A late prime can't recover an event the projector
-        // already missed.
-        await EnsureUserAgentCatalogProjectionAsync(ct);
-
-        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "disable_agent", LifecycleAction.Disable, null, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, workflowAgentPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -690,7 +657,8 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> EnableAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        IActorRuntime actorRuntime,
+        ISkillRunnerCommandPort skillRunnerPort,
+        IWorkflowAgentCommandPort workflowAgentPort,
         CancellationToken ct)
     {
         var entry = await RequireManagedAgentAsync(args, queryPort, "enable_agent", ct);
@@ -705,12 +673,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // any dispatch) and not inside WaitForAgentStatusAsync.
         var versionBefore = await queryPort.GetStateVersionAsync(entry.value.AgentId, ct) ?? -1;
 
-        // Prime the projection scope BEFORE dispatch — see DeleteAgentAsync for
-        // the rationale. A late prime can't recover an event the projector
-        // already missed.
-        await EnsureUserAgentCatalogProjectionAsync(ct);
-
-        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "enable_agent", LifecycleAction.Enable, null, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, workflowAgentPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -720,20 +683,6 @@ public sealed class AgentBuilderTool : IAgentTool
 
         // See DisableAgentAsync for the rationale on the un-confirmed branch.
         return SerializeAgentStatus(entry.value, "Enable submitted. Run /agent-status in a few seconds to confirm the agent is running.");
-    }
-
-    private static EventEnvelope BuildDirectEnvelope(string targetActorId, IMessage payload)
-    {
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = targetActorId },
-            },
-        };
     }
 
     /// <summary>
@@ -870,14 +819,6 @@ public sealed class AgentBuilderTool : IAgentTool
         return false;
     }
 
-    private async Task EnsureUserAgentCatalogProjectionAsync(CancellationToken ct)
-    {
-        var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
-        if (projectionPort is null)
-            return;
-
-        await projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
-    }
 
     private async Task<(bool Confirmed, UserAgentCatalogEntry? Entry)> WaitForAgentStatusAsync(
         IUserAgentCatalogQueryPort queryPort,
@@ -963,49 +904,50 @@ public sealed class AgentBuilderTool : IAgentTool
         return false;
     }
 
-    private async Task<(bool success, string? error)> DispatchAgentLifecycleAsync(
+    private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(
         UserAgentCatalogEntry entry,
-        IActorRuntime actorRuntime,
         string reason,
         LifecycleAction action,
         string? revisionFeedback,
+        ISkillRunnerCommandPort skillRunnerPort,
+        IWorkflowAgentCommandPort workflowAgentPort,
         CancellationToken ct)
     {
         if (string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
         {
-            var actor = await actorRuntime.GetAsync(entry.AgentId)
-                        ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.AgentId, ct);
-
-            IMessage payload = action switch
+            switch (action)
             {
-                LifecycleAction.Run => new TriggerSkillRunnerExecutionCommand { Reason = reason },
-                LifecycleAction.Disable => new DisableSkillRunnerCommand { Reason = reason },
-                LifecycleAction.Enable => new EnableSkillRunnerCommand { Reason = reason },
-                _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
-            };
-
-            await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, payload), ct);
+                case LifecycleAction.Run:
+                    await skillRunnerPort.TriggerAsync(entry.AgentId, reason, ct);
+                    break;
+                case LifecycleAction.Disable:
+                    await skillRunnerPort.DisableAsync(entry.AgentId, reason, ct);
+                    break;
+                case LifecycleAction.Enable:
+                    await skillRunnerPort.EnableAsync(entry.AgentId, reason, ct);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(action), action, null);
+            }
             return (true, null);
         }
 
         if (string.Equals(entry.AgentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal))
         {
-            var actor = await actorRuntime.GetAsync(entry.AgentId)
-                        ?? await actorRuntime.CreateAsync<WorkflowAgentGAgent>(entry.AgentId, ct);
-
-            IMessage payload = action switch
+            switch (action)
             {
-                LifecycleAction.Run => new TriggerWorkflowAgentExecutionCommand
-                {
-                    Reason = reason,
-                    RevisionFeedback = revisionFeedback?.Trim() ?? string.Empty,
-                },
-                LifecycleAction.Disable => new DisableWorkflowAgentCommand { Reason = reason },
-                LifecycleAction.Enable => new EnableWorkflowAgentCommand { Reason = reason },
-                _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
-            };
-
-            await actor.HandleEventAsync(BuildDirectEnvelope(actor.Id, payload), ct);
+                case LifecycleAction.Run:
+                    await workflowAgentPort.TriggerAsync(entry.AgentId, reason, revisionFeedback?.Trim(), ct);
+                    break;
+                case LifecycleAction.Disable:
+                    await workflowAgentPort.DisableAsync(entry.AgentId, reason, ct);
+                    break;
+                case LifecycleAction.Enable:
+                    await workflowAgentPort.EnableAsync(entry.AgentId, reason, ct);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(action), action, null);
+            }
             return (true, null);
         }
 
