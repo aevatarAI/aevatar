@@ -35,7 +35,9 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
     [EventHandler(EndpointName = "authorizeScopeResource")]
     public Task HandleScopeResourceAdmissionRequested(ScopeResourceAdmissionRequested request)
     {
-        if (string.IsNullOrWhiteSpace(request.GagentType) || string.IsNullOrWhiteSpace(request.ActorId))
+        if (string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.GagentType) ||
+            string.IsNullOrWhiteSpace(request.ActorId))
             throw new GAgentRegistryAdmissionNotFoundException();
 
         var group = State.Groups.FirstOrDefault(g =>

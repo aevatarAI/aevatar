@@ -111,6 +111,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
 
             await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ScopeResourceAdmissionRequested
             {
+                ScopeId = normalized.ScopeId,
                 GagentType = normalized.GAgentType,
                 ActorId = normalized.ActorId,
                 Operation = ToRegistryOperation(normalized.Operation),
@@ -178,6 +179,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         {
             await ActorCommandDispatcher.SendAsync(_dispatchPort, registryActor, new ScopeResourceAdmissionRequested
             {
+                ScopeId = registration.ScopeId,
                 GagentType = registration.GAgentType,
                 ActorId = registration.ActorId,
                 Operation = GAgentRegistryOperation.Use,

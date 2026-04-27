@@ -586,6 +586,7 @@ public sealed class ActorBackedStoreAdapterTests
         var envelope = runtime.Actors["gagent-registry-admission-scope"].ReceivedEnvelopes.Last();
         envelope.Payload.Is(ScopeResourceAdmissionRequested.Descriptor).Should().BeTrue();
         var request = envelope.Payload.Unpack<ScopeResourceAdmissionRequested>();
+        request.ScopeId.Should().Be("admission-scope");
         request.GagentType.Should().Be("MyGAgent");
         request.ActorId.Should().Be("actor-123");
         request.Operation.Should().Be(GAgentRegistryOperation.Chat);

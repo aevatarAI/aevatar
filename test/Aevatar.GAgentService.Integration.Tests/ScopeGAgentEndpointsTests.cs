@@ -368,6 +368,47 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
+    public async Task HandleDraftRunAsync_ShouldReturnConflict_WhenPreparationReportsActorTypeMismatch()
+    {
+        var executed = false;
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                executed = true;
+                return Task.FromResult(
+                    CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                        new GAgentDraftRunAcceptedReceipt("actor-1", "RoleGAgent", "cmd-1", "corr-1"),
+                        new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(GAgentDraftRunCompletionStatus.RunFinished, true)));
+            }
+        };
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Failure(GAgentDraftRunStartError.ActorTypeMismatch)
+        };
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext();
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "hello",
+                PreferredActorId: "existing-actor"),
+            interactionService,
+            actorPreparationPort,
+            logger,
+            CancellationToken.None);
+
+        executed.Should().BeFalse();
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.Conflict);
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("GAGENT_ACTOR_TYPE_MISMATCH");
+        body.Should().Contain("existing-actor");
+    }
+
+    [Fact]
     public async Task HandleDraftRunAsync_ShouldPreRegisterGeneratedActorId_ForNewActors()
     {
         var interactionService = new FakeGAgentDraftRunInteractionService

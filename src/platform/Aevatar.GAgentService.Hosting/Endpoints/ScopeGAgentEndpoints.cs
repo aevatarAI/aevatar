@@ -306,7 +306,13 @@ public static class ScopeGAgentEndpoints
             if (!interaction.Succeeded)
             {
                 await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
-                await WriteDraftRunStartErrorAsync(http.Response, preparedActor, request.ActorTypeName, interaction.Error, ct);
+                await WriteDraftRunStartErrorAsync(
+                    http.Response,
+                    preparedActor,
+                    request.ActorTypeName,
+                    request.PreferredActorId,
+                    interaction.Error,
+                    ct);
                 return;
             }
 
@@ -395,7 +401,13 @@ public static class ScopeGAgentEndpoints
             ct);
         if (!preparation.Succeeded)
         {
-            await WriteDraftRunStartErrorAsync(response, preparedActor: null, request.ActorTypeName, preparation.Error, ct);
+            await WriteDraftRunStartErrorAsync(
+                response,
+                preparedActor: null,
+                request.ActorTypeName,
+                request.PreferredActorId,
+                preparation.Error,
+                ct);
             return null;
         }
 
@@ -446,6 +458,7 @@ public static class ScopeGAgentEndpoints
         HttpResponse response,
         GAgentDraftRunPreparedActor? preparedActor,
         string requestedActorTypeName,
+        string? requestedActorId,
         GAgentDraftRunStartError error,
         CancellationToken ct)
     {
@@ -459,12 +472,20 @@ public static class ScopeGAgentEndpoints
                     $"GAgent type '{requestedActorTypeName}' could not be resolved.",
                     ct);
                 break;
-            case GAgentDraftRunStartError.ActorTypeMismatch when preparedActor is not null:
+            case GAgentDraftRunStartError.ActorTypeMismatch:
+                var actorId = string.IsNullOrWhiteSpace(preparedActor?.ActorId)
+                    ? requestedActorId?.Trim()
+                    : preparedActor.ActorId;
+                var actorTypeName = string.IsNullOrWhiteSpace(preparedActor?.ActorTypeName)
+                    ? requestedActorTypeName
+                    : preparedActor.ActorTypeName;
                 response.StatusCode = StatusCodes.Status409Conflict;
                 await WriteJsonErrorAsync(
                     response,
                     "GAGENT_ACTOR_TYPE_MISMATCH",
-                    $"Actor '{preparedActor.ActorId}' is not compatible with requested type '{preparedActor.ActorTypeName}'.",
+                    string.IsNullOrWhiteSpace(actorId)
+                        ? $"Requested actor is not compatible with requested type '{actorTypeName}'."
+                        : $"Actor '{actorId}' is not compatible with requested type '{actorTypeName}'.",
                     ct);
                 break;
         }

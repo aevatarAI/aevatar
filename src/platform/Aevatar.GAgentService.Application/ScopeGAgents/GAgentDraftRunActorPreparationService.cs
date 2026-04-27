@@ -101,6 +101,13 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         if (!preparedActor.RequiresRollbackOnFailure)
             return;
 
+        if (!await TryUnregisterDraftRunActorAsync(
+                preparedActor.ScopeId,
+                preparedActor.ActorTypeName,
+                preparedActor.ActorId,
+                ct))
+            return;
+
         try
         {
             await _actorRuntime.DestroyAsync(preparedActor.ActorId, ct);
@@ -110,19 +117,6 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
             _logger?.LogWarning(ex, "Failed to destroy draft-run actor {ActorId} during rollback", preparedActor.ActorId);
         }
 
-        try
-        {
-            await _registryCommandPort.UnregisterActorAsync(
-                new GAgentActorRegistration(
-                    preparedActor.ScopeId,
-                    preparedActor.ActorTypeName,
-                    preparedActor.ActorId),
-                ct);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Failed to remove draft-run actor {ActorId} from registry during rollback", preparedActor.ActorId);
-        }
     }
 
     private async Task RollbackCreatedActorAsync(
@@ -132,6 +126,10 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         bool unregisterFromRegistry,
         CancellationToken ct)
     {
+        if (unregisterFromRegistry &&
+            !await TryUnregisterDraftRunActorAsync(scopeId, actorTypeName, actorId, ct))
+            return;
+
         try
         {
             await _actorRuntime.DestroyAsync(actorId, ct);
@@ -141,18 +139,25 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
             _logger?.LogWarning(ex, "Failed to destroy draft-run actor {ActorId} during rollback", actorId);
         }
 
-        if (!unregisterFromRegistry)
-            return;
+    }
 
+    private async Task<bool> TryUnregisterDraftRunActorAsync(
+        string scopeId,
+        string actorTypeName,
+        string actorId,
+        CancellationToken ct)
+    {
         try
         {
             await _registryCommandPort.UnregisterActorAsync(
                 new GAgentActorRegistration(scopeId, actorTypeName, actorId),
                 ct);
+            return true;
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to remove draft-run actor {ActorId} from registry during rollback", actorId);
+            return false;
         }
     }
 

@@ -43,4 +43,5 @@ message ScopeResourceAdmissionRequested {
   string gagent_type = 1;
   string actor_id = 2;
   GAgentRegistryOperation operation = 3;
+  string scope_id = 4;
 }
