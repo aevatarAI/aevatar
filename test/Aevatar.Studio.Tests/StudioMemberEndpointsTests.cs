@@ -1,0 +1,364 @@
+using System.Reflection;
+using System.Security.Claims;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Hosting.Endpoints;
+using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
+namespace Aevatar.Studio.Tests;
+
+/// <summary>
+/// Locks in the HTTP-handler invariants for member-first endpoints:
+///
+/// - Each handler defers to <see cref="IStudioMemberService"/> only.
+/// - Scope-access guard short-circuits with 403 before any service call.
+/// - Domain validation failures from the service map to 400 with a stable
+///   error code Studio's frontend can switch on.
+/// - GET endpoints map "no document" to 404 (not 200 with a null body).
+/// </summary>
+public sealed class StudioMemberEndpointsTests
+{
+    private const string ScopeId = "scope-1";
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldReturnCreated_OnSuccess()
+    {
+        var service = new RecordingMemberService
+        {
+            CreateResponse = NewSummary(),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleCreateAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: MemberImplementationKindNames.Workflow),
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Created<StudioMemberSummaryResponse>>()
+            .Which.Location.Should().Be($"/api/scopes/{ScopeId}/members/{NewSummary().MemberId}");
+        service.CreateInvoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldReturnBadRequest_OnDomainError()
+    {
+        var service = new RecordingMemberService
+        {
+            CreateException = new InvalidOperationException("displayName is required."),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleCreateAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: string.Empty,
+                ImplementationKind: MemberImplementationKindNames.Workflow),
+            service,
+            CancellationToken.None);
+
+        // BadRequest<TAnonymousType> — the anonymous type is internal, so we
+        // assert via the open generic shape rather than nailing the closed type.
+        result.GetType().Name.Should().StartWith("BadRequest");
+    }
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleCreateAsync",
+            CreateAuthenticatedContext("other-scope"),
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: MemberImplementationKindNames.Workflow),
+            service,
+            CancellationToken.None);
+
+        // Service must not be touched after the guard short-circuits.
+        service.CreateInvoked.Should().BeFalse();
+        // The denied result is JSON with statusCode 403; assertion via shape.
+        AssertIsJsonStatus(result, expectedStatus: StatusCodes.Status403Forbidden);
+    }
+
+    [Fact]
+    public async Task HandleListAsync_ShouldReturnOk_OnSuccess()
+    {
+        var service = new RecordingMemberService
+        {
+            ListResponse = new StudioMemberRosterResponse(ScopeId, [NewSummary()]),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleListAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            service,
+            (int?)null,
+            (string?)null,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberRosterResponse>>()
+            .Which.Value!.Members.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleGetAsync_ShouldReturnTyped404_WhenMemberMissing()
+    {
+        // GetAsync now throws StudioMemberNotFoundException for missing
+        // members; the endpoint returns the same typed 404 body that
+        // bind / get-binding do — three endpoints, one 404 shape.
+        var service = new RecordingMemberService
+        {
+            GetException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-missing",
+            service,
+            CancellationToken.None);
+
+        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
+        statusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleGetAsync_ShouldReturnOk_WhenServiceReturnsDetail()
+    {
+        var detail = new StudioMemberDetailResponse(NewSummary(), null, null);
+        var service = new RecordingMemberService
+        {
+            GetResponse = detail,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberDetailResponse>>()
+            .Which.Value.Should().BeSameAs(detail);
+    }
+
+    [Fact]
+    public async Task HandleBindAsync_ShouldReturnOk_OnSuccess()
+    {
+        var binding = new StudioMemberBindingResponse(
+            MemberId: "m-1",
+            PublishedServiceId: "member-m-1",
+            RevisionId: "rev-1",
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            ScopeId: ScopeId,
+            ExpectedActorId: "actor");
+        var service = new RecordingMemberService
+        {
+            BindResponse = binding,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleBindAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            new UpdateStudioMemberBindingRequest(
+                Workflow: new StudioMemberWorkflowBindingSpec(["w:"])),
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberBindingResponse>>()
+            .Which.Value.Should().BeSameAs(binding);
+    }
+
+    [Fact]
+    public async Task HandleBindAsync_ShouldReturnBadRequest_OnDomainError()
+    {
+        var service = new RecordingMemberService
+        {
+            BindException = new InvalidOperationException("workflow yamls are required."),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleBindAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            new UpdateStudioMemberBindingRequest(),
+            service,
+            CancellationToken.None);
+
+        // BadRequest<TAnonymousType> — the anonymous type is internal, so we
+        // assert via the open generic shape rather than nailing the closed type.
+        result.GetType().Name.Should().StartWith("BadRequest");
+    }
+
+    [Fact]
+    public async Task HandleGetBindingAsync_ShouldReturnOk_WithNullBinding_WhenMemberExistsButNeverBound()
+    {
+        // Disambiguates the prior 404 shape: a member that exists but has
+        // never been bound is NOT missing (which has its own typed 404).
+        // It's a member with a null binding — surface as 200 with the
+        // wrapper and let the frontend dispatch on `lastBinding === null`.
+        var service = new RecordingMemberService
+        {
+            GetBindingResponse = null,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberBindingViewResponse>>()
+            .Which.Value!.LastBinding.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleGetBindingAsync_ShouldReturnOk_WhenServiceReturnsBinding()
+    {
+        var contract = new StudioMemberBindingContractResponse(
+            "member-m-1", "rev-1", MemberImplementationKindNames.Workflow, DateTimeOffset.UtcNow);
+        var service = new RecordingMemberService
+        {
+            GetBindingResponse = contract,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberBindingViewResponse>>()
+            .Which.Value!.LastBinding.Should().BeSameAs(contract);
+    }
+
+    private static StudioMemberSummaryResponse NewSummary() => new(
+        MemberId: "m-1",
+        ScopeId: ScopeId,
+        DisplayName: "Alpha",
+        Description: string.Empty,
+        ImplementationKind: MemberImplementationKindNames.Workflow,
+        LifecycleStage: MemberLifecycleStageNames.Created,
+        PublishedServiceId: "member-m-1",
+        LastBoundRevisionId: null,
+        CreatedAt: DateTimeOffset.UtcNow,
+        UpdatedAt: DateTimeOffset.UtcNow);
+
+    private static HttpContext CreateAuthenticatedContext(string claimedScopeId)
+    {
+        var identity = new ClaimsIdentity(
+            [new Claim("scope_id", claimedScopeId)],
+            "test");
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = "true",
+                })
+                .Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
+        return new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(identity),
+            RequestServices = services,
+        };
+    }
+
+    private static void AssertIsJsonStatus(IResult result, int expectedStatus)
+    {
+        // ASP.NET Core's Results.Json yields a JsonHttpResult<T> whose
+        // StatusCode property exposes the configured status. We check by
+        // reflection so this test stays decoupled from the precise generic.
+        var statusCodeProperty = result.GetType().GetProperty("StatusCode");
+        var statusCode = statusCodeProperty?.GetValue(result) as int?;
+        statusCode.Should().Be(expectedStatus,
+            because: $"expected JSON result with status {expectedStatus} but got {result.GetType().Name}");
+    }
+
+    private static async Task<TResult> InvokeHandle<TResult>(string methodName, params object?[] args)
+    {
+        var method = typeof(StudioMemberEndpoints)
+            .GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method {methodName} not found.");
+        var task = (Task<IResult>)method.Invoke(null, args)!;
+        return (TResult)(object)await task;
+    }
+
+    private sealed class RecordingMemberService : IStudioMemberService
+    {
+        public StudioMemberSummaryResponse? CreateResponse { get; set; }
+        public Exception? CreateException { get; set; }
+        public bool CreateInvoked { get; private set; }
+
+        public StudioMemberRosterResponse? ListResponse { get; set; }
+        public StudioMemberDetailResponse? GetResponse { get; set; }
+        public Exception? GetException { get; set; }
+        public StudioMemberBindingResponse? BindResponse { get; set; }
+        public Exception? BindException { get; set; }
+        public StudioMemberBindingContractResponse? GetBindingResponse { get; set; }
+
+        public Task<StudioMemberSummaryResponse> CreateAsync(
+            string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default)
+        {
+            CreateInvoked = true;
+            if (CreateException != null) throw CreateException;
+            return Task.FromResult(CreateResponse!);
+        }
+
+        public Task<StudioMemberRosterResponse> ListAsync(
+            string scopeId,
+            StudioMemberRosterPageRequest? page = null,
+            CancellationToken ct = default)
+            => Task.FromResult(ListResponse ?? new StudioMemberRosterResponse(scopeId, []));
+
+        public Task<StudioMemberDetailResponse> GetAsync(
+            string scopeId, string memberId, CancellationToken ct = default)
+        {
+            if (GetException != null) throw GetException;
+            return Task.FromResult(
+                GetResponse ?? throw new StudioMemberNotFoundException(scopeId, memberId));
+        }
+
+        public Task<StudioMemberBindingResponse> BindAsync(
+            string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default)
+        {
+            if (BindException != null) throw BindException;
+            return Task.FromResult(BindResponse!);
+        }
+
+        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+            string scopeId, string memberId, CancellationToken ct = default)
+            => Task.FromResult(GetBindingResponse);
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.Studio.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
+    }
+}
