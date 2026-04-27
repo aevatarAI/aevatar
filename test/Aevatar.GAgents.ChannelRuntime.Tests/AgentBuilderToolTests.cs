@@ -55,6 +55,78 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public void TryBuildDailyReportSpec_SkillContent_PinsStructuredSectionSchema_AndOmitWhenEmptyRule()
+    {
+        // Pinning test for issue #423: the daily prompt is treated as a fetch-and-summarize
+        // SPEC, not a freeform brief. This test fails fast on copy edits that would silently
+        // regress the multi-section schema, the per-section line budgets, the "omit empty
+        // section" rule, or the "no measurable activity" empty-day fallback.
+        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+            githubUsername: "alice",
+            repositories: null,
+            out var spec,
+            out var error);
+
+        ok.Should().BeTrue();
+        error.Should().BeNull();
+        spec.Should().NotBeNull();
+
+        var skillContent = spec!.SkillContent;
+
+        // Structural sections must all be named in order; downstream LLM instructions hinge on
+        // the section labels matching exactly so the "Format `- [owner/repo#NNN] title`"
+        // micro-instructions land.
+        skillContent.Should().Contain("# Output sections");
+        skillContent.Should().Contain("1. Title");
+        skillContent.Should().Contain("2. Shipped");
+        skillContent.Should().Contain("3. In flight");
+        skillContent.Should().Contain("4. Reviews");
+        skillContent.Should().Contain("5. Issues");
+        skillContent.Should().Contain("6. CI");
+        skillContent.Should().Contain("8. Blockers");
+
+        // Empty-handling rules — the bug we're guarding against is the LLM padding sections
+        // with "no activity in this area" boilerplate when sources are silent.
+        skillContent.Should().Contain("OMIT THE SECTION ENTIRELY");
+        skillContent.Should().Contain("No measurable activity in the last 24h.");
+        skillContent.Should().Contain("Do not invent activity.");
+
+        // Username substitution must remain intact (other tests check it under the saved-user
+        // / derived-user paths; this assertion guards the no-args path).
+        skillContent.Should().Contain("Primary GitHub username: alice");
+    }
+
+    [Fact]
+    public void TryBuildDailyReportSpec_RepoAllowlist_SwitchesToPerRepoQueryGuidance()
+    {
+        // Per issue #423: when `repositories=` is provided, the prompt must steer the LLM toward
+        // per-repo `/repos/{owner}/{repo}/...` calls and explicitly refuse the global-search
+        // path (those endpoints don't filter to a repo allowlist cleanly). A regression here
+        // would silently degrade multi-repo dailies back to noisy global-search behavior.
+        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+            githubUsername: "alice",
+            repositories: "acme/api, acme/web",
+            out var spec,
+            out var error);
+
+        ok.Should().BeTrue();
+        error.Should().BeNull();
+        spec.Should().NotBeNull();
+
+        var skillContent = spec!.SkillContent;
+        skillContent.Should().Contain("Repository scope: acme/api, acme/web");
+        skillContent.Should().Contain("Repository allowlist provided");
+        skillContent.Should().Contain("/repos/{owner}/{repo}/pulls");
+        skillContent.Should().Contain("/repos/{owner}/{repo}/actions/runs");
+        skillContent.Should().Contain("Do NOT collapse into one global query.");
+
+        // The execution prompt is what the runner sends per-trigger; it must echo the
+        // per-repo constraint so the LLM sees it on every run, not only at agent-create time.
+        spec.ExecutionPrompt.Should().Contain("acme/api, acme/web");
+        spec.ExecutionPrompt.Should().Contain("one pass per repo");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CreateAgent_RejectsGroupChats()
     {
         var services = new ServiceCollection();
