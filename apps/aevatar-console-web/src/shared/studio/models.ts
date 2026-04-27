@@ -391,6 +391,87 @@ export function getStudioScopeBindingCurrentRevision(
 
 export type StudioMemberBindingImplementationKind =
   StudioScopeBindingImplementationKind;
+export type StudioMemberImplementationKind =
+  StudioScopeBindingImplementationKind;
+export type StudioMemberLifecycleStage =
+  | 'created'
+  | 'build_ready'
+  | 'bind_ready'
+  | 'unknown';
+
+export function normalizeStudioMemberLifecycleStage(
+  value: string | null | undefined,
+): StudioMemberLifecycleStage {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'created':
+      return 'created';
+    case 'build_ready':
+    case 'buildready':
+      return 'build_ready';
+    case 'bind_ready':
+    case 'bindready':
+      return 'bind_ready';
+    default:
+      return 'unknown';
+  }
+}
+
+export function formatStudioMemberLifecycleStage(
+  value: StudioMemberLifecycleStage | string | null | undefined,
+): string {
+  switch (normalizeStudioMemberLifecycleStage(value)) {
+    case 'created':
+      return 'Created';
+    case 'build_ready':
+      return 'Build ready';
+    case 'bind_ready':
+      return 'Bind ready';
+    default:
+      return 'Unknown';
+  }
+}
+
+export interface StudioMemberSummary {
+  readonly memberId: string;
+  readonly scopeId: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly lifecycleStage: StudioMemberLifecycleStage;
+  readonly publishedServiceId: string;
+  readonly lastBoundRevisionId: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface StudioMemberImplementationRef {
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly workflowId?: string | null;
+  readonly workflowRevision?: string | null;
+  readonly scriptId?: string | null;
+  readonly scriptRevision?: string | null;
+  readonly actorTypeName?: string | null;
+}
+
+export interface StudioMemberBindingContract {
+  readonly publishedServiceId: string;
+  readonly revisionId: string;
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly boundAt: string;
+}
+
+export interface StudioMemberDetail {
+  readonly summary: StudioMemberSummary;
+  readonly implementationRef?: StudioMemberImplementationRef | null;
+  readonly lastBinding?: StudioMemberBindingContract | null;
+}
+
+export interface StudioMemberRoster {
+  readonly scopeId: string;
+  readonly members: readonly StudioMemberSummary[];
+  readonly nextPageToken?: string | null;
+}
+
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
 export type StudioMemberBindingResult = StudioScopeBindingResult;
 export type StudioMemberBindingRevision = StudioScopeBindingRevision;

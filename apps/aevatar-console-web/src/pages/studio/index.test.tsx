@@ -303,6 +303,7 @@ function mockBuildServiceRunAuditSnapshot(
 let mockParsedDocument = mockCloneValue(mockWorkflowDocument);
 let mockWorkflowFile: any;
 let mockWorkflowSummaries: any[];
+let mockStudioMembers: any[];
 let mockConnectorCatalog: any;
 let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
@@ -362,6 +363,23 @@ function mockCreateDefaultWorkflowSummaries() {
   ];
 }
 
+function mockCreateDefaultStudioMembers() {
+  return [
+    {
+      memberId: "workspace-demo",
+      scopeId: "scope-1",
+      displayName: "workspace-demo",
+      description: "Workspace workflow member",
+      implementationKind: "workflow",
+      lifecycleStage: "bind_ready",
+      publishedServiceId: "default",
+      lastBoundRevisionId: "rev-2",
+      createdAt: "2026-04-27T08:00:00Z",
+      updatedAt: "2026-04-27T08:05:00Z",
+    },
+  ];
+}
+
 async function mockAuthorWorkflowSuccess(
   _input: { prompt: string },
   options?: {
@@ -377,6 +395,7 @@ async function mockAuthorWorkflowSuccess(
 function resetMockState(): void {
   mockParsedDocument = mockCloneValue(mockWorkflowDocument);
   mockWorkflowSummaries = mockCreateDefaultWorkflowSummaries();
+  mockStudioMembers = mockCreateDefaultStudioMembers();
   mockWorkflowFile = {
     workflowId: "workflow-1",
     name: "workspace-demo",
@@ -560,6 +579,13 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
     getServiceRevisions: jest.fn(async (_scopeId: string, serviceId: string) =>
       mockBuildServiceRevisionCatalog({ serviceId })
     ),
+    listMemberRuns: jest.fn(async (_scopeId: string, memberId: string) => ({
+      scopeId: "scope-1",
+      serviceId: memberId,
+      serviceKey: `scope-1:default:default:${memberId}`,
+      displayName: "workspace-demo",
+      runs: [mockBuildServiceRunSummary({ serviceId: memberId })],
+    })),
     listServiceRuns: jest.fn(async (_scopeId: string, serviceId: string) => ({
       scopeId: "scope-1",
       serviceId,
@@ -567,6 +593,10 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
       displayName: "workspace-demo",
       runs: [mockBuildServiceRunSummary({ serviceId })],
     })),
+    getMemberRunAudit: jest.fn(
+      async (_scopeId: string, memberId: string, runId: string) =>
+        mockBuildServiceRunAuditSnapshot({ serviceId: memberId, runId })
+    ),
     getServiceRunAudit: jest.fn(
       async (_scopeId: string, serviceId: string, runId: string) =>
         mockBuildServiceRunAuditSnapshot({ serviceId, runId })
@@ -607,7 +637,9 @@ const mockServicesApi = servicesApi as unknown as {
 };
 const mockScopeRuntimeApi = scopeRuntimeApi as unknown as {
   getServiceRevisions: jest.Mock;
+  listMemberRuns: jest.Mock;
   listServiceRuns: jest.Mock;
+  getMemberRunAudit: jest.Mock;
   getServiceRunAudit: jest.Mock;
 };
 const mockRuntimeRunsApi = runtimeRunsApi as unknown as {
@@ -648,6 +680,71 @@ jest.mock("@/shared/studio/api", () => ({
       gatewayUrl: "https://nyx-api.example/gateway",
       supportedModels: ["gpt-4.1-mini", "gpt-5.4-mini"],
     })),
+    listMembers: jest.fn(async () => ({
+      scopeId: "scope-1",
+      members: mockStudioMembers,
+      nextPageToken: null,
+    })),
+    getMember: jest.fn(async (_scopeId: string, memberId: string) => {
+      const matchedMember =
+        mockStudioMembers.find((member) => member.memberId === memberId) ??
+        mockStudioMembers[0];
+      return {
+        summary: matchedMember,
+        implementationRef:
+          matchedMember?.implementationKind === "workflow"
+            ? {
+                implementationKind: "workflow",
+                workflowId: matchedMember.displayName,
+                workflowRevision: matchedMember.lastBoundRevisionId,
+              }
+            : matchedMember?.implementationKind === "script"
+              ? {
+                  implementationKind: "script",
+                  scriptId: matchedMember.displayName,
+                  scriptRevision: matchedMember.lastBoundRevisionId,
+                }
+              : {
+                  implementationKind: "gagent",
+                  actorTypeName: matchedMember?.displayName || "",
+                },
+        lastBinding: matchedMember?.lastBoundRevisionId
+          ? {
+              publishedServiceId: matchedMember.publishedServiceId,
+              revisionId: matchedMember.lastBoundRevisionId,
+              implementationKind: matchedMember.implementationKind,
+              boundAt: matchedMember.updatedAt,
+            }
+          : null,
+      };
+    }),
+    createMember: jest.fn(
+      async (input: {
+        scopeId: string;
+        displayName: string;
+        implementationKind: "workflow" | "script" | "gagent";
+        description?: string | null;
+        memberId?: string | null;
+      }) => {
+        const nextMemberId =
+          input.memberId?.trim() ||
+          input.displayName.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+        const nextMember = {
+          memberId: nextMemberId,
+          scopeId: input.scopeId,
+          displayName: input.displayName.trim(),
+          description: input.description?.trim() || "",
+          implementationKind: input.implementationKind,
+          lifecycleStage: "created",
+          publishedServiceId: `member-${nextMemberId}`,
+          lastBoundRevisionId: null,
+          createdAt: "2026-04-27T08:10:00Z",
+          updatedAt: "2026-04-27T08:10:00Z",
+        };
+        mockStudioMembers = [nextMember, ...mockStudioMembers];
+        return nextMember;
+      }
+    ),
     getSkillsHealth: jest.fn(async () => ({
       baseUrl: "https://ornn.chrono-ai.fun",
       reachable: true,
@@ -922,6 +1019,35 @@ jest.mock("@/shared/studio/api", () => ({
       definitionActorIdPrefix: "scope-workflow:scope-1:default",
       expectedActorId: "scope-workflow:scope-1:default:dep-1",
     })),
+    bindMemberWorkflow: jest.fn(async (input: {
+      scopeId: string;
+      memberId: string;
+      displayName?: string;
+      workflowYamls: string[];
+    }) => {
+      mockStudioMembers = mockStudioMembers.map((member) =>
+        member.memberId === input.memberId
+          ? {
+              ...member,
+              lifecycleStage: "bind_ready",
+              lastBoundRevisionId: "rev-2",
+              updatedAt: "2026-04-27T08:15:00Z",
+            }
+          : member
+      );
+
+      return {
+        scopeId: input.scopeId,
+        serviceId: "default",
+        displayName: input.displayName || "workspace-demo",
+        targetKind: "workflow",
+        targetName: input.displayName || "workspace-demo",
+        revisionId: "rev-2",
+        workflowName: input.displayName || "workspace-demo",
+        definitionActorIdPrefix: "scope-workflow:scope-1:default",
+        expectedActorId: "scope-workflow:scope-1:default:dep-1",
+      };
+    }),
     bindScopeGAgent: jest.fn(async (input: {
       scopeId: string;
       displayName?: string;
@@ -2658,6 +2784,16 @@ describe("StudioPage", () => {
       async (_scopeId: string, serviceId: string) =>
         mockBuildServiceRevisionCatalog({ serviceId })
     );
+    mockScopeRuntimeApi.listMemberRuns.mockReset();
+    mockScopeRuntimeApi.listMemberRuns.mockImplementation(
+      async (_scopeId: string, memberId: string) => ({
+        scopeId: "scope-1",
+        serviceId: memberId,
+        serviceKey: `scope-1:default:default:${memberId}`,
+        displayName: "workspace-demo",
+        runs: [mockBuildServiceRunSummary({ serviceId: memberId })],
+      })
+    );
     mockScopeRuntimeApi.listServiceRuns.mockReset();
     mockScopeRuntimeApi.listServiceRuns.mockImplementation(
       async (_scopeId: string, serviceId: string) => ({
@@ -2667,6 +2803,11 @@ describe("StudioPage", () => {
         displayName: "workspace-demo",
         runs: [mockBuildServiceRunSummary({ serviceId })],
       })
+    );
+    mockScopeRuntimeApi.getMemberRunAudit.mockReset();
+    mockScopeRuntimeApi.getMemberRunAudit.mockImplementation(
+      async (_scopeId: string, memberId: string, runId: string) =>
+        mockBuildServiceRunAuditSnapshot({ serviceId: memberId, runId })
     );
     mockScopeRuntimeApi.getServiceRunAudit.mockReset();
     mockScopeRuntimeApi.getServiceRunAudit.mockImplementation(
@@ -3175,7 +3316,7 @@ describe("StudioPage", () => {
   });
 
   it("creates a workflow draft from the create-member inventory flow", async () => {
-    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     const createButton = await screen.findByLabelText("Create member");
     await waitFor(() => {
@@ -3209,8 +3350,16 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
+      expect(studioApi.createMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        displayName: "orders-draft",
+        implementationKind: "workflow",
+      });
+    });
+
+    await waitFor(() => {
       expect(message.success).toHaveBeenCalledWith(
-        "Created workflow draft for member orders-draft.",
+        "Created member orders-draft and opened its workflow draft.",
       );
     });
   });
@@ -3248,7 +3397,7 @@ describe("StudioPage", () => {
     expect(scriptChip).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.getByText(
-        "Script member creation still relies on the upcoming member API. For now, continue in Build > Script to inspect or edit script implementations.",
+        "Script member authority exists on backend, but this modal still hands off through Build > Script for implementation editing.",
       ),
     ).toBeTruthy();
     expect(within(createDialog).getByRole("button", { name: "Create member" })).toBeDisabled();
@@ -3261,7 +3410,7 @@ describe("StudioPage", () => {
     expect(gagentChip).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.getByText(
-        "GAgent member creation still relies on the upcoming member API. For now, continue in Build > GAgent to inspect or edit GAgent implementations.",
+        "GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing.",
       ),
     ).toBeTruthy();
   });
@@ -3500,9 +3649,10 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith(
         expect.objectContaining({
           scopeId: "scope-1",
+          memberId: "workspace-demo",
           displayName: "workspace-demo",
           workflowYamls: expect.arrayContaining([expect.stringContaining("name: workspace-demo")]),
         }),
@@ -4977,6 +5127,7 @@ describe("StudioPage", () => {
           reason: "user requested stop",
         },
         {
+          memberId: "workspace-demo",
           serviceId: "default",
         }
       );
@@ -5068,7 +5219,7 @@ describe("StudioPage", () => {
   });
 
   it("pins Observe to the selected member service and corrects stale run selection", async () => {
-    mockScopeRuntimeApi.listServiceRuns.mockResolvedValueOnce({
+    mockScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
@@ -5089,9 +5240,9 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Logs")).toBeTruthy();
 
     await waitFor(() => {
-      expect(mockScopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
+      expect(mockScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
         "scope-1",
-        "default",
+        "workspace-demo",
         {
           take: 12,
         }
@@ -5106,7 +5257,7 @@ describe("StudioPage", () => {
   });
 
   it("keeps Observe populated with the latest invoke session while runtime runs warm up", async () => {
-    mockScopeRuntimeApi.listServiceRuns.mockResolvedValue({
+    mockScopeRuntimeApi.listMemberRuns.mockResolvedValue({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
@@ -5132,7 +5283,7 @@ describe("StudioPage", () => {
 
   it("rehydrates Observe from the persisted invoke session after refresh", async () => {
     const now = Date.now();
-    mockScopeRuntimeApi.listServiceRuns.mockResolvedValue({
+    mockScopeRuntimeApi.listMemberRuns.mockResolvedValue({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
