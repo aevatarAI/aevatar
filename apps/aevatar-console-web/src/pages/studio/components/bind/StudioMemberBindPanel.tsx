@@ -21,9 +21,9 @@ import {
   getScopeServiceCurrentRevision,
 } from '@/shared/models/runtime/scopeServices';
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  formatStudioScopeBindingImplementationKind,
+  describeStudioMemberBindingRevisionContext,
+  describeStudioMemberBindingRevisionTarget,
+  formatStudioMemberBindingImplementationKind,
   type StudioAuthSession,
 } from '@/shared/studio/models';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
@@ -1224,7 +1224,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                             <Typography.Text strong>{revision.revisionId}</Typography.Text>
                             <AevatarStatusTag
                               domain="governance"
-                              label={formatStudioScopeBindingImplementationKind(
+                              label={formatStudioMemberBindingImplementationKind(
                                 revision.implementationKind,
                               )}
                               status={revision.status || 'draft'}
@@ -1239,8 +1239,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                             {isCurrent ? <Tag color="gold">current contract</Tag> : null}
                           </Space>
                           <Typography.Text type="secondary">
-                            {describeStudioScopeBindingRevisionTarget(revision)} ·{' '}
-                            {describeStudioScopeBindingRevisionContext(revision) || 'No detail'}
+                            {describeStudioMemberBindingRevisionTarget(revision)} ·{' '}
+                            {describeStudioMemberBindingRevisionContext(revision) || 'No detail'}
                           </Typography.Text>
                           <Typography.Text type="secondary">
                             Serving {revision.servingState || revision.status || 'unknown'} · Published{' '}

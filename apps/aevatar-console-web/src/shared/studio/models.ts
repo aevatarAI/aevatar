@@ -159,6 +159,18 @@ export interface StudioExecutionSummary {
   readonly completedAtUtc: string | null;
   readonly actorId: string | null;
   readonly error: string | null;
+  readonly serviceId?: string | null;
+  readonly revisionId?: string | null;
+  readonly definitionActorId?: string | null;
+  readonly stateVersion?: number | null;
+  readonly lastEventId?: string | null;
+  readonly updatedAtUtc?: string | null;
+  readonly totalSteps?: number | null;
+  readonly completedSteps?: number | null;
+  readonly roleReplyCount?: number | null;
+  readonly output?: string | null;
+  readonly auditUpdatedAtUtc?: string | null;
+  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session';
 }
 
 export interface StudioExecutionFrame {
@@ -376,6 +388,36 @@ export function getStudioScopeBindingCurrentRevision(
     null
   );
 }
+
+export type StudioMemberBindingImplementationKind =
+  StudioScopeBindingImplementationKind;
+export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
+export type StudioMemberBindingResult = StudioScopeBindingResult;
+export type StudioMemberBindingRevision = StudioScopeBindingRevision;
+export type StudioMemberBindingStatus = StudioScopeBindingStatus;
+export type StudioMemberBindingActivationResult =
+  StudioScopeBindingActivationResult;
+export type StudioMemberBindingRetirementResult =
+  StudioScopeBindingRetirementResult;
+export const normalizeStudioMemberBindingImplementationKind =
+  normalizeStudioScopeBindingImplementationKind;
+export const formatStudioMemberBindingImplementationKind =
+  formatStudioScopeBindingImplementationKind;
+export const describeStudioMemberBindingRevisionTarget =
+  describeStudioScopeBindingRevisionTarget;
+export const describeStudioMemberBindingRevisionContext =
+  describeStudioScopeBindingRevisionContext;
+export const getStudioMemberBindingCurrentRevision =
+  getStudioScopeBindingCurrentRevision;
+
+export type StudioDefaultRouteTargetRevision = StudioScopeBindingRevision;
+export type StudioDefaultRouteTargetStatus = StudioScopeBindingStatus;
+export const describeStudioDefaultRouteTargetRevisionTarget =
+  describeStudioScopeBindingRevisionTarget;
+export const describeStudioDefaultRouteTargetRevisionContext =
+  describeStudioScopeBindingRevisionContext;
+export const getStudioDefaultRouteTargetCurrentRevision =
+  getStudioScopeBindingCurrentRevision;
 
 export interface StudioScopeScriptBindingInput {
   readonly scopeId: string;

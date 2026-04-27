@@ -74,7 +74,7 @@ describe("teamRuntimeLens", () => {
   it("derives a blocked health state and compare summary from runtime facts", () => {
     const lens = deriveTeamRuntimeLens({
       scopeId: "scope-team",
-      binding: {
+      defaultRouteTargetStatus: {
         available: true,
         scopeId: "scope-team",
         serviceId: "default",
@@ -427,7 +427,7 @@ describe("teamRuntimeLens", () => {
   it("keeps health at attention when serving is active but no recent run exists", () => {
     const lens = deriveTeamRuntimeLens({
       scopeId: "scope-team",
-      binding: {
+      defaultRouteTargetStatus: {
         available: true,
         scopeId: "scope-team",
         serviceId: "default",

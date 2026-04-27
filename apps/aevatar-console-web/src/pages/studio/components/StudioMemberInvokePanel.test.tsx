@@ -217,8 +217,11 @@ describe('StudioMemberInvokePanel', () => {
   });
 
   it('records runs into the merged Runs area and shows technical detail inline', async () => {
+    const onObserveSessionChange = jest.fn();
+
     render(
       React.createElement(StudioMemberInvokePanel, {
+        onObserveSessionChange,
         scopeId: 'scope-1',
         services: [
           {
@@ -276,6 +279,19 @@ describe('StudioMemberInvokePanel', () => {
         {
           serviceId: 'default',
         },
+      );
+    });
+    await waitFor(() => {
+      expect(onObserveSessionChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          actorId: 'actor-1',
+          completedAtUtc: expect.any(String),
+          endpointId: 'submit',
+          prompt: 'Route this escalation to billing review.',
+          runId: 'run-1',
+          serviceId: 'default',
+          status: 'success',
+        }),
       );
     });
 

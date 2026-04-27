@@ -5,7 +5,7 @@ import type {
 import { isChatServiceEndpoint } from '@/shared/runs/scopeConsole';
 import type {
   StudioAuthSession,
-  StudioScopeBindingRevision,
+  StudioMemberBindingRevision,
 } from '@/shared/studio/models';
 
 export type StudioBindStreaming = {
@@ -42,7 +42,7 @@ type BuildStudioBindContractInput = {
   readonly authSession?: StudioAuthSession | null;
   readonly endpoint: ServiceEndpointSnapshot | null;
   readonly origin?: string;
-  readonly revision?: StudioScopeBindingRevision | null;
+  readonly revision?: StudioMemberBindingRevision | null;
   readonly scopeId: string;
   readonly service: ServiceCatalogSnapshot | null;
 };

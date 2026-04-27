@@ -1251,6 +1251,10 @@ export const studioApi = {
     );
   },
 
+  getDefaultRouteTarget(scopeId: string): Promise<StudioScopeBindingStatus> {
+    return this.getScopeBinding(scopeId);
+  },
+
   getScopeScriptBinding(
     scopeId: string
   ): Promise<StudioScopeScriptBindingStatus> {

@@ -148,6 +148,47 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
+    getDefaultRouteTarget: jest.fn(async () => ({
+      available: true,
+      scopeId: "scope-a",
+      serviceId: "service-alpha",
+      displayName: "NyxID Chat",
+      serviceKey: "scope-a:alpha",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "deploy-1",
+      deploymentStatus: "Active",
+      primaryActorId: "actor://workflow-alpha",
+      updatedAt: "2026-04-13T10:00:00Z",
+      revisions: [
+        {
+          revisionId: "rev-2",
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-home",
+          failureReason: "",
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: "Active",
+          deploymentId: "deploy-1",
+          primaryActorId: "actor://workflow-alpha",
+          createdAt: "2026-04-13T09:00:00Z",
+          preparedAt: "2026-04-13T09:05:00Z",
+          publishedAt: "2026-04-13T09:10:00Z",
+          retiredAt: null,
+          workflowName: "support-escalation",
+          workflowDefinitionActorId: "workflow-def://support-escalation",
+          inlineWorkflowCount: 1,
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "",
+        },
+      ],
+    })),
   },
 }));
 
@@ -161,7 +202,7 @@ describe("TeamsHomePage", () => {
   it("renders the team homepage around the current scope-backed team preview", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 3, name: "当前团队" })).toBeTruthy();
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.getByText("当前 Scope")).toBeTruthy();
@@ -201,7 +242,7 @@ describe("TeamsHomePage", () => {
   it("does not show the roster view toggle when the homepage only has one visible team", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    await screen.findByRole("heading", { level: 3, name: "NyxID Chat" });
+    await screen.findByRole("heading", { level: 3, name: "当前团队" });
     expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
     expect(screen.queryByRole("button", { name: "切换到卡片视图" })).toBeNull();
@@ -214,7 +255,7 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 3, name: "当前团队" })).toBeTruthy();
     expect(screen.getByText("部分团队信号暂时不可见")).toBeTruthy();
     expect(
       screen.queryByText("No stub for /api/scopes/scope-a/services/service-alpha/runs"),
@@ -257,7 +298,7 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByRole("heading", { level: 3, name: "NyxID Chat" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 3, name: "当前团队" })).toBeTruthy();
     expect(screen.getByText("当前登录态校验失败，已回退到本地 Scope")).toBeTruthy();
     expect(
       screen.getByText(
@@ -268,6 +309,95 @@ describe("TeamsHomePage", () => {
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
     });
+  });
+
+  it("keeps the homepage team title stable when the current bound member changes", async () => {
+    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        scopeId: "scope-a",
+        workflowId: "workflow-joker",
+        displayName: "joker",
+        serviceKey: "scope-a:default:joker",
+        workflowName: "joker",
+        actorId: "actor://workflow-joker",
+        activeRevisionId: "rev-joker",
+        deploymentStatus: "Active",
+        deploymentId: "deploy-joker",
+        updatedAt: "2026-04-24T19:20:00Z",
+      },
+    ]);
+    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-a:default:joker",
+        tenantId: "scope-a",
+        appId: "default",
+        namespace: "default",
+        serviceId: "joker",
+        displayName: "joker",
+        defaultServingRevisionId: "rev-joker",
+        activeServingRevisionId: "rev-joker",
+        deploymentId: "deploy-joker",
+        primaryActorId: "actor://workflow-joker",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-24T19:21:00Z",
+      },
+    ]);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      serviceId: "joker",
+      serviceKey: "scope-a:default:joker",
+      displayName: "joker",
+      runs: [],
+    });
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: "scope-a",
+      serviceId: "joker",
+      displayName: "joker",
+      serviceKey: "scope-a:default:joker",
+      defaultServingRevisionId: "rev-joker",
+      activeServingRevisionId: "rev-joker",
+      deploymentId: "deploy-joker",
+      deploymentStatus: "Active",
+      primaryActorId: "actor://workflow-joker",
+      updatedAt: "2026-04-24T19:21:00Z",
+      revisions: [
+        {
+          revisionId: "rev-joker",
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-joker",
+          failureReason: "",
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: "Active",
+          deploymentId: "deploy-joker",
+          primaryActorId: "actor://workflow-joker",
+          createdAt: "2026-04-24T19:20:00Z",
+          preparedAt: "2026-04-24T19:20:30Z",
+          publishedAt: "2026-04-24T19:21:00Z",
+          retiredAt: null,
+          workflowName: "joker",
+          workflowDefinitionActorId: "definition://workflow-joker",
+          inlineWorkflowCount: 1,
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "",
+        },
+      ],
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("heading", { level: 3, name: "当前团队" })).toBeTruthy();
+    expect(screen.getByText("默认入口：joker")).toBeTruthy();
+    expect(screen.getByText("joker")).toBeTruthy();
   });
 
   it("does not turn saved workflows into homepage teams before the current scope has an entry", async () => {
@@ -317,7 +447,7 @@ describe("TeamsHomePage", () => {
     expect(params.get("scopeLabel")).toBeNull();
   });
 
-  it("does not query runs for the default service when the scope binding is unavailable", async () => {
+  it("does not query runs for the default service when the default entry is unavailable", async () => {
     (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
     (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({

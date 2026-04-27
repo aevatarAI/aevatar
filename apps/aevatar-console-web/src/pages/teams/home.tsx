@@ -28,17 +28,8 @@ import {
 } from "@/shared/navigation/teamRoutes";
 import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
-import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
-import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
-  describeStudioScopeBindingRevisionTarget,
-  getStudioScopeBindingCurrentRevision,
-  type StudioScopeBindingStatus,
-} from "@/shared/studio/models";
-import {
-  buildStudioWorkflowMemberKey,
-  buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
 import {
@@ -59,6 +50,7 @@ import {
   buildWorkflowOperationalUnits,
   collectWorkflowOperationalServiceIds,
   WORKFLOW_RUNTIME_GUARDRAIL,
+  type WorkflowOperationalUnit,
   type WorkflowOperationalAttention,
 } from "./workflowOperationalUnits";
 
@@ -66,16 +58,17 @@ const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
+const scopeBackedTeamTitle = "当前团队";
 
 type ScopeBackedTeamPreview = {
   readonly attention: WorkflowOperationalAttention;
   readonly attentionDetail: string;
   readonly detailHref: string;
-  readonly entryLabel: string;
   readonly latestRun: ScopeServiceRunSummary | null;
+  readonly memberCount: number;
   readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
-  readonly serviceId: string;
-  readonly serviceLabel: string;
+  readonly publishedServiceCount: number;
+  readonly recentActivityLabel: string;
   readonly title: string;
   readonly updatedAt: string | null;
 };
@@ -119,35 +112,6 @@ function formatRunStatusLabel(status: string | null | undefined): string {
       return "稳定";
     default:
       return trimOptional(status) || "未知";
-  }
-}
-
-function formatOperationalStatusLabel(
-  status: string | null | undefined,
-  attention: WorkflowOperationalAttention,
-): string {
-  const normalizedStatus = trimOptional(status);
-  if (normalizedStatus) {
-    return formatRunStatusLabel(normalizedStatus);
-  }
-
-  switch (attention) {
-    case "healthy":
-      return "运行中";
-    case "waiting":
-      return "待关注";
-    case "failed":
-      return "异常";
-    case "draft":
-      return "草稿中";
-    case "no-bound-service":
-      return "待绑定";
-    case "no-recent-runs":
-      return "待运行";
-    case "runtime-unresolved":
-      return "待确认";
-    default:
-      return "未知";
   }
 }
 
@@ -214,10 +178,6 @@ function parseTimestamp(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function normalizeStatus(value: string | null | undefined): string {
-  return trimOptional(value).toLowerCase();
-}
-
 function compareRuns(
   left: ScopeServiceRunSummary,
   right: ScopeServiceRunSummary,
@@ -233,54 +193,6 @@ function compareRuns(
   }
 
   return right.runId.localeCompare(left.runId);
-}
-
-function isSuccessfulRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  if (run.lastSuccess === true) {
-    return true;
-  }
-
-  return ["completed", "finished", "success", "succeeded"].includes(
-    normalizeStatus(run.completionStatus),
-  );
-}
-
-function isWaitingRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  return [
-    "waiting",
-    "waiting_approval",
-    "waiting_signal",
-    "blocked",
-    "human_approval",
-    "human_input",
-    "suspended",
-  ].includes(normalizeStatus(run.completionStatus));
-}
-
-function isFailedRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  if (isWaitingRun(run)) {
-    return false;
-  }
-
-  if (run.lastSuccess === false) {
-    return true;
-  }
-
-  return ["failed", "error", "stopped", "timed_out", "timedout"].includes(
-    normalizeStatus(run.completionStatus),
-  );
 }
 
 function stopEvent<T extends (...args: any[]) => void>(handler: T): T {
@@ -361,26 +273,6 @@ const TeamFact: React.FC<{
   </div>
 );
 
-function resolveScopePreviewService(input: {
-  readonly binding: StudioScopeBindingStatus | null | undefined;
-  readonly services: readonly ServiceCatalogSnapshot[];
-}): ServiceCatalogSnapshot | null {
-  if (!input.binding?.available) {
-    return null;
-  }
-
-  const boundServiceId = trimOptional(input.binding?.serviceId);
-  if (!boundServiceId) {
-    return null;
-  }
-
-  return (
-    input.services.find(
-      (service) => trimOptional(service.serviceId) === boundServiceId,
-    ) ?? null
-  );
-}
-
 function resolveRuntimeUnavailable(input: {
   readonly serviceId: string;
   readonly runtimeAvailableByServiceId?: ReadonlySet<string>;
@@ -402,138 +294,132 @@ function resolveRuntimeUnavailable(input: {
   return !input.runtimeAvailableByServiceId.has(serviceId);
 }
 
+function formatOperationalUnitLabel(unit: WorkflowOperationalUnit | null | undefined): string {
+  if (!unit) {
+    return "未命名成员";
+  }
+
+  return (
+    pickMeaningfulLabel(
+      trimOptional(unit.workflow.displayName),
+      trimOptional(unit.workflow.workflowName),
+      trimOptional(unit.workflow.workflowId),
+      trimOptional(unit.matchedService?.displayName),
+      trimOptional(unit.matchedService?.serviceId),
+    ) || "未命名成员"
+  );
+}
+
+function resolveAttentionPriority(attention: WorkflowOperationalAttention): number {
+  switch (attention) {
+    case "failed":
+      return 6;
+    case "waiting":
+      return 5;
+    case "runtime-unresolved":
+      return 4;
+    case "no-recent-runs":
+      return 3;
+    case "no-bound-service":
+      return 2;
+    case "draft":
+      return 1;
+    case "healthy":
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+function resolveOperationalUnitTimestamp(unit: WorkflowOperationalUnit): number {
+  return Math.max(
+    parseTimestamp(unit.latestRun?.lastUpdatedAt),
+    parseTimestamp(unit.matchedService?.updatedAt),
+    parseTimestamp(unit.workflow.updatedAt),
+  );
+}
+
+function compareOperationalUnits(
+  left: WorkflowOperationalUnit,
+  right: WorkflowOperationalUnit,
+): number {
+  const priorityDelta =
+    resolveAttentionPriority(right.attention) -
+    resolveAttentionPriority(left.attention);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  return resolveOperationalUnitTimestamp(right) - resolveOperationalUnitTimestamp(left);
+}
+
+function describeTeamPreviewAttention(
+  primaryUnit: WorkflowOperationalUnit,
+): string {
+  const unitLabel = formatOperationalUnitLabel(primaryUnit);
+  switch (primaryUnit.attention) {
+    case "failed":
+      return `${unitLabel} 最近一次运行异常，需要先处理。`;
+    case "waiting":
+      return `${unitLabel} 正在等待人工或外部信号。`;
+    case "healthy":
+      return `${unitLabel} 最近一次运行正常，可继续进入团队详情查看。`;
+    case "no-recent-runs":
+      return `${unitLabel} 已经形成已发布服务，但还没有可见运行信号。`;
+    case "no-bound-service":
+      return `${unitLabel} 还没有形成已发布服务。`;
+    case "runtime-unresolved":
+      return `${unitLabel} 已有服务记录，但当前运行信号暂时不可见。`;
+    case "draft":
+    default:
+      return `${unitLabel} 还停留在草稿阶段，团队概览尚未完全成形。`;
+  }
+}
+
 function buildScopeBackedTeamPreview(input: {
-  readonly binding: StudioScopeBindingStatus | null | undefined;
   readonly guardrailedServiceIds?: ReadonlySet<string>;
-  readonly runsByServiceId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
   readonly runtimeAvailableByServiceId?: ReadonlySet<string>;
   readonly scopeId: string;
-  readonly services: readonly ServiceCatalogSnapshot[];
-  readonly workflows: readonly ScopeWorkflowSummary[];
+  readonly units: readonly WorkflowOperationalUnit[];
 }): ScopeBackedTeamPreview | null {
-  const currentRevision = getStudioScopeBindingCurrentRevision(input.binding);
-  const revisionTarget = describeStudioScopeBindingRevisionTarget(currentRevision);
-  const matchedService = resolveScopePreviewService({
-    binding: input.binding,
-    services: input.services,
-  });
-  const boundServiceId = input.binding?.available
-    ? trimOptional(input.binding?.serviceId)
-    : "";
-  const serviceId = trimOptional(matchedService?.serviceId) || boundServiceId;
-  const runtimeUnavailable = resolveRuntimeUnavailable({
-    runtimeAvailableByServiceId: input.runtimeAvailableByServiceId,
-    runtimeGuardrailedServiceIds: input.guardrailedServiceIds,
-    serviceId,
-  });
-  const runs =
-    serviceId && !runtimeUnavailable ? input.runsByServiceId[serviceId] ?? [] : [];
-  const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
-  const hasEntryFacts = Boolean(
-    serviceId ||
-      matchedService ||
-      currentRevision ||
-      trimOptional(input.binding?.serviceKey) ||
-      trimOptional(input.binding?.displayName),
-  );
-
-  if (!hasEntryFacts) {
+  if (input.units.length === 0) {
     return null;
   }
 
-  const entryLabel =
-    pickMeaningfulLabel(
-      revisionTarget,
-      trimOptional(input.binding?.serviceKey),
-      trimOptional(input.binding?.displayName),
-      trimOptional(matchedService?.displayName),
-    ) || "未命名入口";
-  const serviceLabel =
-    pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
-    "未记录";
-  const title =
-    pickMeaningfulLabel(
-      trimOptional(input.binding?.displayName),
-      trimOptional(matchedService?.displayName),
-      entryLabel,
-    ) || "未命名团队";
-  const matchedWorkflow =
-    input.workflows.find((workflow) => {
-      const workflowServiceId = trimOptional(workflow.serviceKey).split(":").pop()?.trim() || "";
-      if (serviceId && workflowServiceId === serviceId) {
-        return true;
-      }
-
-      const workflowName = trimOptional(workflow.workflowName);
-      const workflowDisplayName = trimOptional(workflow.displayName);
-      return [
-        trimOptional(currentRevision?.workflowName),
-        trimOptional(input.binding?.displayName),
-        trimOptional(matchedService?.displayName),
-      ].some(
-        (candidate) =>
-          Boolean(candidate) &&
-          (candidate === workflowName || candidate === workflowDisplayName),
-      );
-    }) ?? null;
-  const studioHref = matchedWorkflow
-    ? buildStudioWorkflowEditorRoute({
-        scopeId: input.scopeId,
-        memberKey: buildStudioWorkflowMemberKey({
-          workflowId: matchedWorkflow.workflowId,
-          workflowName: matchedWorkflow.displayName || matchedWorkflow.workflowName,
-        }),
-        workflowId: matchedWorkflow.workflowId,
-      })
-    : buildStudioWorkflowWorkspaceRoute({
-        scopeId: input.scopeId,
-        memberKey: serviceId ? `member:${serviceId}` : undefined,
-      });
-
-  let attention: WorkflowOperationalAttention = "draft";
-  let attentionDetail = "当前团队入口还没有形成可运行状态。";
-
-  if (runtimeUnavailable) {
-    attention = "runtime-unresolved";
-    attentionDetail = "团队入口已经存在，但当前运行信号暂时不可见。";
-  } else if (latestRun && isFailedRun(latestRun)) {
-    attention = "failed";
-    attentionDetail =
-      trimOptional(latestRun.lastError) || "最近一次团队运行处于异常状态。";
-  } else if (latestRun && isWaitingRun(latestRun)) {
-    attention = "waiting";
-    attentionDetail =
-      trimOptional(latestRun.lastError) || "最近一次团队运行正在等待人工或外部信号。";
-  } else if (latestRun && isSuccessfulRun(latestRun)) {
-    attention = "healthy";
-    attentionDetail = "最近一次团队运行正常，可继续进入详情查看。";
-  } else if (serviceId || matchedService) {
-    attention = "no-recent-runs";
-    attentionDetail = "已存在 service 记录，但当前还没有可见的运行信号。";
-  } else if (
-    currentRevision ||
-    trimOptional(input.binding?.serviceKey) ||
-    trimOptional(input.binding?.displayName)
-  ) {
-    attention = "no-bound-service";
-    attentionDetail = "当前团队入口已经绑定，但服务能力还没有完整就绪。";
+  const sortedUnits = [...input.units].sort(compareOperationalUnits);
+  const primaryUnit = sortedUnits[0] ?? null;
+  if (!primaryUnit) {
+    return null;
   }
 
-  const detailHref = buildTeamDetailHref({
-    runId: latestRun?.runId || undefined,
-    scopeId: input.scopeId,
-    serviceId: serviceId || undefined,
+  const latestRun =
+    input.units
+      .flatMap((unit) => (unit.latestRun ? [unit.latestRun] : []))
+      .sort(compareRuns)[0] ?? null;
+  const publishedServiceIds = new Set(
+    input.units
+      .map((unit) => trimOptional(unit.matchedService?.serviceId))
+      .filter(Boolean),
+  );
+  const recentActivityLabel = latestRun
+    ? `${trimOptional(latestRun.workflowName) || formatOperationalUnitLabel(primaryUnit)} · ${formatRunStatusLabel(latestRun.completionStatus)}`
+    : formatOperationalUnitLabel(primaryUnit);
+  const runtimeServiceId =
+    trimOptional(latestRun?.serviceId) || trimOptional(primaryUnit.matchedService?.serviceId);
+  const runtimeUnavailable = resolveRuntimeUnavailable({
+    runtimeAvailableByServiceId: input.runtimeAvailableByServiceId,
+    runtimeGuardrailedServiceIds: input.guardrailedServiceIds,
+    serviceId: runtimeServiceId,
   });
   const runtimeHref =
-    serviceId.length > 0
+    runtimeServiceId.length > 0 && !runtimeUnavailable
       ? buildRuntimeRunsHref({
           actorId:
             latestRun?.actorId ||
-            matchedService?.primaryActorId ||
-            trimOptional(input.binding?.primaryActorId) ||
+            trimOptional(primaryUnit.matchedService?.primaryActorId) ||
             undefined,
           scopeId: input.scopeId,
-          serviceId,
+          serviceId: runtimeServiceId,
         })
       : "";
   const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
@@ -547,23 +433,30 @@ function buildScopeBackedTeamPreview(input: {
   moreActions.push({
     key: "builder",
     label: "进入 Studio",
-    onClick: () => history.push(studioHref),
+    onClick: () =>
+      history.push(
+        buildStudioWorkflowWorkspaceRoute({
+          scopeId: input.scopeId,
+        }),
+      ),
   });
 
   return {
-    attention,
-    attentionDetail,
-    detailHref,
-    entryLabel,
+    attention: primaryUnit.attention,
+    attentionDetail: describeTeamPreviewAttention(primaryUnit),
+    detailHref: buildTeamDetailHref({
+      scopeId: input.scopeId,
+    }),
     latestRun,
+    memberCount: input.units.length,
     moreActions,
-    serviceId,
-    serviceLabel,
-    title,
+    publishedServiceCount: publishedServiceIds.size,
+    recentActivityLabel,
+    title: scopeBackedTeamTitle,
     updatedAt:
       latestRun?.lastUpdatedAt ||
-      matchedService?.updatedAt ||
-      input.binding?.updatedAt ||
+      primaryUnit.matchedService?.updatedAt ||
+      primaryUnit.workflow.updatedAt ||
       null,
   };
 }
@@ -681,7 +574,7 @@ const ScopeBackedTeamCard: React.FC<{
           fontSize: 13,
         }}
       >
-        默认入口：{preview.entryLabel}
+        最近动态：{preview.recentActivityLabel}
       </Typography.Text>
 
       <div
@@ -693,18 +586,9 @@ const ScopeBackedTeamCard: React.FC<{
           paddingTop: 14,
         }}
       >
-        <TeamFact
-          label="当前状态"
-          value={formatOperationalStatusLabel(
-            preview.latestRun?.completionStatus,
-            preview.attention,
-          )}
-        />
-        <TeamFact
-          label="最近更新"
-          value={formatShortTime(preview.updatedAt)}
-        />
-        <TeamFact label="关联服务" value={preview.serviceLabel} />
+        <TeamFact label="成员数" value={preview.memberCount} />
+        <TeamFact label="已发布服务" value={preview.publishedServiceCount} />
+        <TeamFact label="最近更新" value={formatShortTime(preview.updatedAt)} />
       </div>
 
       <Space wrap>
@@ -794,19 +678,13 @@ const ScopeBackedTeamRow: React.FC<{
             fontSize: 13,
           }}
         >
-          默认入口：{preview.entryLabel}
+          最近动态：{preview.recentActivityLabel}
         </Typography.Text>
       </div>
 
-      <TeamFact
-        label="状态"
-        value={formatOperationalStatusLabel(
-          preview.latestRun?.completionStatus,
-          preview.attention,
-        )}
-      />
+      <TeamFact label="成员" value={preview.memberCount} />
+      <TeamFact label="已发布服务" value={preview.publishedServiceCount} />
       <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
-      <TeamFact label="服务" value={preview.serviceLabel} />
 
       <Space wrap>
         <Button
@@ -884,12 +762,6 @@ const TeamsHomePage: React.FC = () => {
     history.replace(buildScopeHref("/teams", activeDraft));
   }, [activeDraft]);
 
-  const bindingQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["teams", "binding", scopeId],
-    queryFn: () => studioApi.getScopeBinding(scopeId),
-    retry: false,
-  });
   const workflowsQuery = useQuery({
     enabled: scopeId.length > 0,
     queryKey: ["teams", "workflows", scopeId],
@@ -911,29 +783,14 @@ const TeamsHomePage: React.FC = () => {
   const matchedServiceIds = React.useMemo(
     () =>
       collectWorkflowOperationalServiceIds({
-        binding: bindingQuery.data ?? null,
         services: servicesQuery.data ?? [],
         workflows: workflowsQuery.data ?? [],
       }),
-    [bindingQuery.data, servicesQuery.data, workflowsQuery.data],
-  );
-  const scopePreviewServiceId = React.useMemo(
-    () =>
-      bindingQuery.data?.available
-        ? trimOptional(bindingQuery.data?.serviceId)
-        : "",
-    [bindingQuery.data?.available, bindingQuery.data?.serviceId],
+    [servicesQuery.data, workflowsQuery.data],
   );
   const runtimeServiceIds = React.useMemo(() => {
-    const normalizedScopePreviewServiceId = trimOptional(scopePreviewServiceId);
-    const ordered = normalizedScopePreviewServiceId
-      ? [
-          normalizedScopePreviewServiceId,
-          ...matchedServiceIds.filter((serviceId) => serviceId !== normalizedScopePreviewServiceId),
-        ]
-      : matchedServiceIds;
-    return ordered;
-  }, [matchedServiceIds, scopePreviewServiceId]);
+    return matchedServiceIds;
+  }, [matchedServiceIds]);
   const runtimeSampleServiceIds = runtimeServiceIds.slice(
     0,
     WORKFLOW_RUNTIME_GUARDRAIL,
@@ -975,7 +832,6 @@ const TeamsHomePage: React.FC = () => {
   const units = React.useMemo(
     () =>
       buildWorkflowOperationalUnits({
-        binding: bindingQuery.data ?? null,
         runsByServiceId,
         services: servicesQuery.data ?? [],
         signals: {
@@ -986,7 +842,6 @@ const TeamsHomePage: React.FC = () => {
         workflows: workflowsQuery.data ?? [],
       }),
     [
-      bindingQuery.data,
       guardrailedServiceIds,
       runsByServiceId,
       runtimeAvailableByServiceId,
@@ -998,22 +853,16 @@ const TeamsHomePage: React.FC = () => {
   const scopePreviewTeam = React.useMemo(
     () =>
       buildScopeBackedTeamPreview({
-        binding: bindingQuery.data ?? null,
         guardrailedServiceIds,
-        runsByServiceId,
         runtimeAvailableByServiceId,
         scopeId,
-        services: servicesQuery.data ?? [],
-        workflows: workflowsQuery.data ?? [],
+        units,
       }),
     [
-      bindingQuery.data,
       guardrailedServiceIds,
-      runsByServiceId,
       runtimeAvailableByServiceId,
       scopeId,
-      servicesQuery.data,
-      workflowsQuery.data,
+      units,
     ],
   );
 
@@ -1021,16 +870,6 @@ const TeamsHomePage: React.FC = () => {
     (unit) => unit.isDraftOnly || (!unit.matchedService && !unit.latestRun),
   );
   const visibleTeamCount = scopePreviewTeam ? 1 : 0;
-  const scopeBindingUnavailableNotice =
-    scopeId.length > 0 &&
-    bindingQuery.isSuccess &&
-    bindingQuery.data?.available === false
-      ? {
-          description:
-            "没有找到已发布的默认入口服务，所以首页暂时没有运行信号。去 Studio 发布团队后，这里会自动出现。",
-          title: "当前 Scope 还没有默认团队入口",
-        }
-      : null;
   const resolvedRosterView =
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
@@ -1040,11 +879,10 @@ const TeamsHomePage: React.FC = () => {
     scopePreviewTeam && scopePreviewTeam.attention !== "healthy" ? 1 : 0;
   const draftHint =
     draftUnits.length > 0
-      ? `当前 Scope 里还有 ${draftUnits.length} 个已保存的行为定义，但它们还没有形成首页团队入口。`
-      : "当前 Scope 里还没有形成首页团队入口。";
+      ? `当前 Scope 里还有 ${draftUnits.length} 个已保存的行为定义，但它们还没有汇总成稳定的团队概览。`
+      : "当前 Scope 里还没有可展示的团队概览。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
-    bindingQuery.isError ? "当前 Scope 的团队绑定信息暂时不可见。" : null,
     ...serviceRunQueries.map((query) =>
       query.isError ? "部分运行信号暂时不可见。" : null,
     ),
@@ -1191,7 +1029,7 @@ const TeamsHomePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
               <Typography.Text type="secondary">
-                首页按这个 Scope 汇总已经形成入口的团队，Scope 只做上下文，不再直接当团队名展示。
+                首页按这个 Scope 汇总当前团队的成员与运行态，Scope 只做上下文，不再直接当团队名展示。
               </Typography.Text>
             </div>
           </div>
@@ -1231,15 +1069,6 @@ const TeamsHomePage: React.FC = () => {
           />
         ) : null}
 
-        {scopeBindingUnavailableNotice ? (
-          <Alert
-            description={scopeBindingUnavailableNotice.description}
-            showIcon
-            title={scopeBindingUnavailableNotice.title}
-            type="info"
-          />
-        ) : null}
-
         {scopeId ? (
           <>
             <div
@@ -1249,7 +1078,7 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="团队入口" value={visibleTeamCount} />
+              <SummaryStatCard accent label="当前团队" value={visibleTeamCount} />
               <SummaryStatCard label="运行正常" value={healthyTeamCount} />
               <SummaryStatCard label="需要处理" value={attentionTeamCount} />
             </div>
@@ -1271,7 +1100,7 @@ const TeamsHomePage: React.FC = () => {
                     打开 Studio
                   </Button>
                 }
-                description={`其中 ${draftUnits.length} 个行为定义还停留在草稿阶段，尚未形成首页团队入口。`}
+                description={`其中 ${draftUnits.length} 个行为定义还停留在草稿阶段，团队概览还不完整。`}
                 showIcon
                 title="还有草稿待整理"
                 type="info"
@@ -1279,11 +1108,11 @@ const TeamsHomePage: React.FC = () => {
             ) : null}
 
             {workflowsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在整理当前 Scope 的团队入口。" />
+              <AevatarInspectorEmpty description="正在整理当前团队概览。" />
             ) : workflowsQuery.isError ? (
               <Alert
                 showIcon
-                title="当前 Scope 的团队入口暂时无法加载。"
+                title="当前 Scope 的团队概览暂时无法加载。"
                 type="error"
               />
             ) : scopePreviewTeam ? (
@@ -1310,10 +1139,10 @@ const TeamsHomePage: React.FC = () => {
                         margin: 0,
                       }}
                     >
-                      团队入口
+                      当前团队
                     </Typography.Title>
                     <Typography.Text type="secondary">
-                      当前 Scope 下已经形成首页入口的团队。
+                      当前 Scope 下这个团队的成员与运行概况。
                     </Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (

@@ -423,6 +423,47 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
+    getDefaultRouteTarget: jest.fn(async () => ({
+      available: true,
+      scopeId: "scope-1",
+      serviceId: "default",
+      displayName: "Support Escalation Triage",
+      serviceKey: "scope-1:default",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-intake",
+      updatedAt: "2026-04-09T09:00:00Z",
+      revisions: [
+        {
+          revisionId: "rev-2",
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-2",
+          failureReason: "",
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: "Active",
+          deploymentId: "dep-2",
+          primaryActorId: "actor-intake",
+          createdAt: "2026-04-09T08:00:00Z",
+          preparedAt: "2026-04-09T08:01:00Z",
+          publishedAt: "2026-04-09T08:02:00Z",
+          retiredAt: null,
+          workflowName: "support-triage",
+          workflowDefinitionActorId: "definition://support-triage",
+          inlineWorkflowCount: 1,
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "",
+        },
+      ],
+    })),
     getWorkspaceSettings: jest.fn(async () => ({
       runtimeBaseUrl: "https://runtime.aevatar.test",
       directories: [
@@ -610,7 +651,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByRole("heading", { level: 1, name: "团队详情" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "当前团队" }),
+    ).toBeTruthy();
     expect(screen.queryByText(`Team ${longScopeId}`)).toBeNull();
     expect(screen.getByText("scopeId")).toBeTruthy();
     expect(screen.getByText("1626c177...71b0d6")).toBeTruthy();
@@ -762,7 +805,8 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("Bindings 与连接能力")).toBeTruthy();
     expect(screen.getByText("当前选中绑定")).toBeTruthy();
     expect(screen.getByRole("button", { name: "选择绑定 web-search" })).toBeTruthy();
-    expect(window.location.search).toContain("tab=bindings");
+    expect(window.location.search).toContain("step=bind");
+    expect(window.location.search).not.toContain("tab=bindings");
   });
 
   it("shows the team asset view with workflow and script entries", async () => {
@@ -1095,7 +1139,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "当前团队" }),
+    ).toBeTruthy();
     expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
   });
 });

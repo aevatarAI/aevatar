@@ -5,7 +5,7 @@ import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
-import { studioApi } from "@/shared/studio/api";
+import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
 import { deriveTeamRuntimeLens, selectTeamCompareRuns } from "./teamRuntimeLens";
 
 const scopeServiceAppId = "default";
@@ -19,6 +19,31 @@ type UseTeamRuntimeLensOptions = {
   preferredServiceId?: string;
 };
 
+function trimOptional(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function compareServices(
+  left: { displayName?: string | null; serviceId: string },
+  right: { displayName?: string | null; serviceId: string },
+): number {
+  const leftDisplayName = trimOptional(left.displayName);
+  const rightDisplayName = trimOptional(right.displayName);
+  if (leftDisplayName && rightDisplayName && leftDisplayName !== rightDisplayName) {
+    return leftDisplayName.localeCompare(rightDisplayName);
+  }
+
+  if (leftDisplayName && !rightDisplayName) {
+    return -1;
+  }
+
+  if (!leftDisplayName && rightDisplayName) {
+    return 1;
+  }
+
+  return trimOptional(left.serviceId).localeCompare(trimOptional(right.serviceId));
+}
+
 export function useTeamRuntimeLens(
   scopeId: string,
   options?: UseTeamRuntimeLensOptions,
@@ -30,12 +55,6 @@ export function useTeamRuntimeLens(
   const preferredServiceId = options?.preferredServiceId?.trim() ?? "";
   const preferredRunId = options?.preferredRunId?.trim() ?? "";
 
-  const bindingQuery = useQuery({
-    enabled: normalizedScopeId.length > 0,
-    queryKey: ["teams", "binding", normalizedScopeId],
-    queryFn: () => studioApi.getScopeBinding(normalizedScopeId),
-    retry: false,
-  });
   const workflowsQuery = useQuery({
     enabled: normalizedScopeId.length > 0 && includeCatalogSignals,
     queryKey: ["teams", "workflows", normalizedScopeId],
@@ -66,14 +85,20 @@ export function useTeamRuntimeLens(
     retry: false,
   });
 
+  const services = useMemo(
+    () => [...(servicesQuery.data ?? [])].sort(compareServices),
+    [servicesQuery.data],
+  );
   const serviceId =
-    servicesQuery.data?.find((service) => service.serviceId === preferredServiceId)
-      ?.serviceId ||
-    servicesQuery.data?.find(
-      (service) => service.serviceId === bindingQuery.data?.serviceId,
-    )?.serviceId ||
-    servicesQuery.data?.[0]?.serviceId ||
+    services.find((service) => service.serviceId === preferredServiceId)?.serviceId ||
+    services[0]?.serviceId ||
     "";
+  const serviceRevisionsQuery = useQuery({
+    enabled: normalizedScopeId.length > 0 && serviceId.length > 0,
+    queryKey: ["teams", "service-revisions", normalizedScopeId, serviceId],
+    queryFn: () => scopeRuntimeApi.getServiceRevisions(normalizedScopeId, serviceId),
+    retry: false,
+  });
   const runsQuery = useQuery({
     enabled: normalizedScopeId.length > 0 && serviceId.length > 0,
     queryKey: ["teams", "runs", normalizedScopeId, serviceId],
@@ -93,11 +118,17 @@ export function useTeamRuntimeLens(
   );
   const currentRunId = compareRuns.currentRun?.runId?.trim() || "";
   const baselineRunId = compareRuns.baselineRun?.runId?.trim() || "";
+  const activeServiceRevision = useMemo(
+    () => getScopeServiceCurrentRevision(serviceRevisionsQuery.data ?? null),
+    [serviceRevisionsQuery.data],
+  );
 
   const focusActorId =
     preferredActorId ||
     compareRuns.currentRun?.actorId?.trim() ||
-    bindingQuery.data?.primaryActorId?.trim() ||
+    activeServiceRevision?.primaryActorId?.trim() ||
+    serviceRevisionsQuery.data?.primaryActorId?.trim() ||
+    services.find((service) => service.serviceId === serviceId)?.primaryActorId?.trim() ||
     actorsQuery.data?.flatMap((group) => group.actorIds)[0] ||
     "";
 
@@ -165,8 +196,9 @@ export function useTeamRuntimeLens(
     () =>
       deriveTeamRuntimeLens({
         scopeId: normalizedScopeId,
-        binding: bindingQuery.data ?? null,
-        services: servicesQuery.data ?? [],
+        focusedServiceId: serviceId || null,
+        serviceRevisionCatalog: serviceRevisionsQuery.data ?? null,
+        services,
         actors: actorsQuery.data ?? [],
         runs: runsQuery.data?.runs ?? [],
         currentRun: compareRuns.currentRun,
@@ -181,18 +213,15 @@ export function useTeamRuntimeLens(
       actorGraphQuery.data,
       actorsQuery.data,
       baselineRunAuditQuery.data,
-      baselineRunId,
-      bindingQuery.data,
       compareRuns.baselineRun,
       compareRuns.currentRun,
       currentRunAuditQuery.data,
-      currentRunId,
-      graphDepth,
       normalizedScopeId,
-      preferredActorId,
       runsQuery.data?.runs,
+      serviceId,
+      serviceRevisionsQuery.data,
+      services,
       scriptsQuery.data?.length,
-      servicesQuery.data,
       workflowsQuery.data?.length,
     ],
   );
@@ -201,10 +230,10 @@ export function useTeamRuntimeLens(
     actorGraphQuery,
     actorsQuery,
     baselineRunAuditQuery,
-    bindingQuery,
     currentRunAuditQuery,
     lens,
     runsQuery,
+    serviceRevisionsQuery,
     scriptsQuery,
     servicesQuery,
     workflowsQuery,

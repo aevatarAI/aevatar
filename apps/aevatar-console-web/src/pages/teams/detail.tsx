@@ -166,6 +166,13 @@ function resolveTeamHeading(input: {
 
   const genericLensTitle =
     normalizedScopeId ? `Team ${normalizedScopeId}` : "";
+  if (normalizedLensTitle === "当前团队") {
+    return {
+      metaScopeId: normalizedScopeId || undefined,
+      title: normalizedLensTitle,
+    };
+  }
+
   if (
     normalizedLensTitle &&
     normalizedLensTitle !== normalizedScopeId &&
@@ -376,10 +383,10 @@ function formatTopologyFocusReason(reason: string): string {
   switch (normalized) {
     case "Focused on the actor behind the most recent team activity.":
       return "当前焦点跟随最近一次团队运行里的实际执行成员。";
-    case "Focused on the currently serving revision actor because no active run was selected.":
-      return "当前还没有选中运行，所以先对齐到正在 serving 的版本成员。";
-    case "Focused on the team primary actor from the current binding.":
-      return "当前还没有更强的运行信号，所以先对齐到团队主 Actor。";
+    case "Focused on the currently selected service revision actor because no active run was selected.":
+      return "当前还没有选中运行，所以先对齐到当前所选服务版本对应的成员。";
+    case "Focused on the currently selected service actor because no stronger runtime signal was available.":
+      return "当前还没有更强的运行信号，所以先对齐到当前所选服务对应的成员。";
     case "Focused on the first known team member because no stronger runtime signal was available.":
       return "当前运行信号不足，先落在当前可见的第一位团队成员。";
     case "No actor focus is available yet.":
@@ -1115,10 +1122,10 @@ const TeamDetailPage: React.FC = () => {
     actorGraphQuery,
     actorsQuery,
     baselineRunAuditQuery,
-    bindingQuery,
     currentRunAuditQuery,
     lens,
     runsQuery,
+    serviceRevisionsQuery,
     scriptsQuery,
     servicesQuery,
     workflowsQuery,
@@ -1198,7 +1205,6 @@ const TeamDetailPage: React.FC = () => {
     const loadedServiceId =
       trimText(lens.currentService?.serviceId) || trimText(preferredServiceId);
     return resolveWorkflowOperationalUnit({
-      binding: bindingQuery.data ?? null,
       preferredRunId,
       preferredServiceId,
       runs: runsQuery.data?.runs ?? [],
@@ -1214,7 +1220,6 @@ const TeamDetailPage: React.FC = () => {
     });
   }, [
     activeWorkflowSummary,
-    bindingQuery.data,
     lens.currentService?.serviceId,
     preferredServiceId,
     preferredRunId,
@@ -1368,7 +1373,7 @@ const TeamDetailPage: React.FC = () => {
   );
   const selectedStudioMemberId =
     trimText(runtimeServiceId) ||
-    trimText(bindingQuery.data?.serviceId) ||
+    trimText(serviceRevisionsQuery.data?.serviceId) ||
     trimText(preferredServiceId) ||
     trimText(servicesQuery.data?.[0]?.serviceId) ||
     trimText(activeWorkflowSummary?.serviceKey).split(":").pop()?.trim() ||
@@ -1846,7 +1851,7 @@ const TeamDetailPage: React.FC = () => {
     [selectedConnectorRows, token],
   );
   const connectorsEmptyDescription =
-    "一旦 scope binding、连接器目录或治理策略可见，这里会自动展开成 Bindings 视图。";
+    "一旦当前成员服务、连接器目录或治理策略可见，这里会自动展开成 Bindings 视图。";
   const configurationDetailRows = React.useMemo(
     () => [
       {
@@ -3156,7 +3161,7 @@ const TeamDetailPage: React.FC = () => {
   ];
 
   const initialLoading =
-    bindingQuery.isLoading ||
+    serviceRevisionsQuery.isLoading ||
     servicesQuery.isLoading ||
     actorsQuery.isLoading ||
     workflowsQuery.isLoading ||
