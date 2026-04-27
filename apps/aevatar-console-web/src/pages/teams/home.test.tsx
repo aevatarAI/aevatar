@@ -196,6 +196,19 @@ describe("TeamsHomePage", () => {
     expect(params.get("scopeLabel")).toBeNull();
   });
 
+  it("routes Create Team directly into Studio member creation", async () => {
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
+
+    expect(window.location.pathname).toBe("/studio");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("tab")).toBe("studio");
+    expect(params.get("intent")).toBe("create-member");
+    expect(params.get("teamName")).toBeNull();
+    expect(params.get("entryName")).toBeNull();
+  });
+
   it("does not show the roster view toggle when the homepage only has one visible team", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 

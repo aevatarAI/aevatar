@@ -53,6 +53,14 @@ function isStudioHostRoute(pathname: string): boolean {
   return STUDIO_HOST_ROUTES.has(pathname);
 }
 
+function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
+  if (!isStudioHostRoute(pathname)) {
+    return false;
+  }
+
+  return new URLSearchParams(search).get("intent") === "create-member";
+}
+
 function buildLoginRoute(returnTo: string): string {
   const params = new URLSearchParams({
     redirect: sanitizeReturnTo(returnTo),
@@ -814,6 +822,10 @@ export const layout = ({
       overflow: "hidden",
       padding: 0,
     },
+    defaultCollapsed: shouldDefaultCollapseLayout(
+      window.location.pathname,
+      window.location.search,
+    ),
     logo: <BrandLogo />,
   };
 };

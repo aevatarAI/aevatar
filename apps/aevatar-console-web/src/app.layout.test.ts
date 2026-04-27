@@ -4,6 +4,10 @@ import defaultSettings from "../config/defaultSettings";
 import { layout } from "./app";
 
 describe("layout menu collapse behavior", () => {
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/teams");
+  });
+
   it("keeps grouped navigation titles hidden in collapsed mode", () => {
     const runtimeLayout = layout({
       initialState: {
@@ -18,6 +22,36 @@ describe("layout menu collapse behavior", () => {
       collapsedShowTitle: false,
       type: "group",
     });
+  });
+
+  it("defaults the global menu to collapsed for Studio create-member intent", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/studio?tab=studio&intent=create-member",
+    );
+
+    const runtimeLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+
+    expect(runtimeLayout.defaultCollapsed).toBe(true);
+  });
+
+  it("does not default-collapse the global menu for ordinary Studio entry", () => {
+    window.history.replaceState({}, "", "/studio?tab=studio");
+
+    const runtimeLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+
+    expect(runtimeLayout.defaultCollapsed).toBe(false);
   });
 
   it("styles collapsed menu items without icons as visible tokens", () => {

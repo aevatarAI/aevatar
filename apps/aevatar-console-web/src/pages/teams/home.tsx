@@ -23,7 +23,6 @@ import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
-  buildTeamCreateHref,
   buildTeamDetailHref,
 } from "@/shared/navigation/teamRoutes";
 import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
@@ -35,7 +34,10 @@ import {
   getStudioScopeBindingCurrentRevision,
   type StudioScopeBindingStatus,
 } from "@/shared/studio/models";
-import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
+import {
+  buildStudioRoute,
+  buildStudioWorkflowWorkspaceRoute,
+} from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
@@ -1044,7 +1046,9 @@ const TeamsHomePage: React.FC = () => {
         <Space wrap>
           <Button
             icon={<PlusOutlined />}
-            onClick={() => history.push(buildTeamCreateHref())}
+            onClick={() =>
+              history.push(buildStudioRoute({ tab: "studio", intent: "create-member" }))
+            }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >

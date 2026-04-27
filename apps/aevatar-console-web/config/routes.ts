@@ -37,6 +37,7 @@ export default [
     path: "/teams/new",
     name: "Create Team",
     component: "./teams/new",
+    hideInMenu: true,
     menuGroupKey: "teams",
   },
   {

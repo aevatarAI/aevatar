@@ -75,6 +75,7 @@ import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import {
   buildStudioRoute,
   type StudioBuildFocus,
+  type StudioIntent,
   type StudioStep,
   type StudioTab,
 } from '@/shared/studio/navigation';
@@ -128,6 +129,7 @@ type StudioRouteState = {
   step: StudioStep;
   focusKey: string;
   tab: StudioTab;
+  intent: StudioIntent | '';
   prompt: string;
   executionId: string;
   logsMode: '' | 'popout';
@@ -755,6 +757,10 @@ function buildWorkflowFileName(workflowName: string): string {
   return `${normalizedWorkflowName}.yaml`;
 }
 
+function parseStudioIntent(value: string | null | undefined): StudioIntent | '' {
+  return trimOptional(value) === 'create-member' ? 'create-member' : '';
+}
+
 function readWorkflowIdFromMemberKey(memberKey: string): string {
   const normalizedMemberKey = trimOptional(memberKey);
   if (!normalizedMemberKey.startsWith('workflow:')) {
@@ -805,6 +811,7 @@ function readStudioRouteState(search?: string): StudioRouteState {
       step: 'build',
       focusKey: '',
       tab: 'workflows',
+      intent: '',
       prompt: '',
       executionId: '',
       logsMode: '',
@@ -825,6 +832,7 @@ function readStudioRouteState(search?: string): StudioRouteState {
     step: parseStudioStep(params.get('step')),
     focusKey: buildFocus.key,
     tab: parseStudioTab(params.get('tab')),
+    intent: parseStudioIntent(params.get('intent')),
     prompt: trimOptional(params.get('prompt')),
     executionId: trimOptional(params.get('execution')),
     logsMode: parseLogsMode(params.get('logs')),
@@ -1005,6 +1013,12 @@ const StudioPage: React.FC = () => {
   const [appliedRouteSnapshot, setAppliedRouteSnapshot] = useState(
     locationSnapshot,
   );
+  const [pendingCreateMemberIntentSnapshot, setPendingCreateMemberIntentSnapshot] =
+    useState(() =>
+      readStudioRouteState().intent === 'create-member'
+        ? getLocationSnapshot()
+        : '',
+    );
   const [promptHistory, setPromptHistory] = useState<
     PlaygroundPromptHistoryEntry[]
   >(() => loadPlaygroundPromptHistory());
@@ -1024,6 +1038,7 @@ const StudioPage: React.FC = () => {
   });
   const scriptLeaveGuardRef = useRef<(() => Promise<boolean>) | null>(null);
   const handledLocationSnapshotRef = useRef(locationSnapshot);
+  const handledCreateMemberIntentSnapshotRef = useRef('');
   const executionLogsWindowRef = useRef<Window | null>(null);
   const [logsDetached, setLogsDetached] = useState(false);
   const [authRecoveryPending, setAuthRecoveryPending] = useState(false);
@@ -1052,6 +1067,9 @@ const StudioPage: React.FC = () => {
     setAppliedRouteSnapshot((currentSnapshot) =>
       currentSnapshot === locationSnapshot ? currentSnapshot : locationSnapshot,
     );
+    if (routeState.intent === 'create-member') {
+      setPendingCreateMemberIntentSnapshot(locationSnapshot);
+    }
     setStudioSurface((currentSurface) =>
       currentSurface === routeStudioSurface ? currentSurface : routeStudioSurface,
     );
@@ -1090,6 +1108,7 @@ const StudioPage: React.FC = () => {
   }, [
     locationSnapshot,
     routeState.executionId,
+    routeState.intent,
     routeState.prompt,
     routeBuildFocus.kind,
     routeBuildFocus.value,
@@ -2677,6 +2696,33 @@ const StudioPage: React.FC = () => {
     inventoryDirectoryId,
     inventoryDirectoryOptions,
     suggestedCreateWorkflowName,
+  ]);
+
+  useEffect(() => {
+    if (!isStudioLocation || !pendingCreateMemberIntentSnapshot) {
+      return;
+    }
+
+    if (!studioHostReady || createMemberModalOpen) {
+      return;
+    }
+
+    if (
+      handledCreateMemberIntentSnapshotRef.current ===
+      pendingCreateMemberIntentSnapshot
+    ) {
+      return;
+    }
+
+    handledCreateMemberIntentSnapshotRef.current = pendingCreateMemberIntentSnapshot;
+    setPendingCreateMemberIntentSnapshot('');
+    void openCreateMemberFlow();
+  }, [
+    createMemberModalOpen,
+    isStudioLocation,
+    openCreateMemberFlow,
+    pendingCreateMemberIntentSnapshot,
+    studioHostReady,
   ]);
 
   const closeCreateMemberFlow = useCallback(() => {
