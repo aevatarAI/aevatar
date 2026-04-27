@@ -4,6 +4,10 @@ import defaultSettings from "../config/defaultSettings";
 import { layout } from "./app";
 
 describe("layout menu collapse behavior", () => {
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/teams");
+  });
+
   it("keeps grouped navigation titles hidden in collapsed mode", () => {
     const runtimeLayout = layout({
       initialState: {
@@ -18,6 +22,59 @@ describe("layout menu collapse behavior", () => {
       collapsedShowTitle: false,
       type: "group",
     });
+  });
+
+  it("collapses the global menu for Studio create-member intent", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/studio?tab=studio&intent=create-member",
+    );
+
+    const runtimeLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+
+    expect(runtimeLayout.defaultCollapsed).toBe(true);
+    expect(runtimeLayout.collapsed).toBe(true);
+  });
+
+  it("leaves the global menu uncontrolled for ordinary Studio entry", () => {
+    window.history.replaceState({}, "", "/studio?tab=studio");
+
+    const runtimeLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+
+    expect(runtimeLayout.defaultCollapsed).toBe(false);
+    expect(runtimeLayout.collapsed).toBeUndefined();
+  });
+
+  it("updates the controlled global menu collapse state after SPA route changes", () => {
+    window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    const teamsLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+
+    window.history.pushState({}, "", "/studio?tab=studio&intent=create-member");
+    const studioLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+
+    expect(teamsLayout.collapsed).toBeUndefined();
+    expect(studioLayout.collapsed).toBe(true);
   });
 
   it("styles collapsed menu items without icons as visible tokens", () => {

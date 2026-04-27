@@ -9,6 +9,7 @@ export type StudioTab =
 
 export type StudioStep = 'build' | 'bind' | 'invoke' | 'observe';
 export type StudioBuildFocus = `workflow:${string}` | `script:${string}` | `template:${string}`;
+export type StudioIntent = 'create-member';
 export type StudioMemberKey =
   | `member:${string}`
   | `workflow:${string}`
@@ -21,6 +22,7 @@ type StudioRouteOptions = {
   step?: StudioStep;
   focus?: StudioBuildFocus;
   tab?: StudioTab;
+  intent?: StudioIntent;
   prompt?: string;
   executionId?: string;
   logsMode?: 'popout';
@@ -153,6 +155,9 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   const tab = resolveStudioTab(options);
   if (tab) {
     params.set('tab', tab);
+  }
+  if (options?.intent === 'create-member') {
+    params.set('intent', options.intent);
   }
   if (options?.prompt?.trim()) {
     params.set('prompt', options.prompt.trim());
