@@ -64,17 +64,17 @@ public sealed class TelegramNyxClient : ITelegramNyxClient
 
     public Task<string> GetChatAsync(string token, TelegramGetChatRequest request, CancellationToken ct)
     {
-        var body = JsonSerializer.Serialize(new
+        var body = new JsonObject
         {
-            chat_id = request.ChatId,
-        });
+            ["chat_id"] = request.ChatId,
+        };
 
         return _nyxClient.ProxyRequestAsync(
             token,
             _options.ProviderSlug,
             "getChat",
             "POST",
-            body,
+            body.ToJsonString(JsonOptions),
             extraHeaders: null,
             ct);
     }

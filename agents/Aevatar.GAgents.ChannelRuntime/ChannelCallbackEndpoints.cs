@@ -104,11 +104,7 @@ public static class ChannelCallbackEndpoints
             });
         }
 
-        var accessToken = http.Request.Headers.Authorization.ToString();
-        const string bearerPrefix = "Bearer ";
-        if (accessToken.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
-            accessToken = accessToken[bearerPrefix.Length..].Trim();
-
+        var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 

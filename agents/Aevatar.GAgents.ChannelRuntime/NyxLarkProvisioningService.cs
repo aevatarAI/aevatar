@@ -205,29 +205,17 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 routeId);
 
             if (!localMirrorAccepted && routeId is not null)
-                await TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, ct), "channel_route", routeId);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, ct), "channel_route", routeId, _logger);
             if (!localMirrorAccepted && channelBotId is not null)
-                await TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId, _logger);
             if (!localMirrorAccepted && apiKeyId is not null)
-                await TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId, _logger);
 
             return Failure(localMirrorAccepted
                 ? "local_mirror_accepted_remote_cleanup_skipped"
-                : SanitizeFailureReason(ex));
+                : NyxApiResponseHelper.SanitizeFailureReason(ex));
         }
     }
-
-    /// <summary>
-    /// Returns a client-safe failure reason. <see cref="InvalidOperationException"/> instances
-    /// thrown inside this service carry controlled, structured error codes (e.g.
-    /// <c>channel_bot_id_request_failed nyx_status=401</c>) so they are safe to surface verbatim.
-    /// Anything else (HTTP transport errors, JSON parser internals, generic exceptions) collapses
-    /// to <c>provisioning_failed</c> so we don't leak endpoint paths, internal state, or stack
-    /// fragments through the registration response. Operators get the full exception via the
-    /// LogWarning above.
-    /// </summary>
-    private static string SanitizeFailureReason(Exception ex) =>
-        ex is InvalidOperationException ? ex.Message : "provisioning_failed";
 
     public async Task<NyxLarkMirrorRepairResult> RepairLocalMirrorAsync(NyxLarkMirrorRepairRequest request, CancellationToken ct)
     {
@@ -301,7 +289,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 request.NyxAgentApiKeyId,
                 request.NyxConversationRouteId);
 
-            return MirrorFailure(SanitizeFailureReason(ex));
+            return MirrorFailure(NyxApiResponseHelper.SanitizeFailureReason(ex));
         }
     }
 
@@ -346,7 +334,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             }),
             ct);
 
-        return ExtractRequiredRelayApiKeyCredentials(response);
+        return new RelayApiKeyCredentials(NyxApiResponseHelper.ExtractRequiredApiKeyId(response));
     }
 
     private async Task<string> RegisterChannelBotAsync(
@@ -374,7 +362,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             JsonSerializer.Serialize(payload),
             ct);
 
-        return ExtractRequiredId(response, "channel_bot_id");
+        return NyxApiResponseHelper.ExtractRequiredId(response, "channel_bot_id");
     }
 
     private async Task<string> CreateDefaultRouteAsync(
@@ -393,7 +381,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             }),
             ct);
 
-        return ExtractRequiredId(response, "channel_route_id");
+        return NyxApiResponseHelper.ExtractRequiredId(response, "channel_route_id");
     }
 
     private async Task RegisterLocalMirrorAsync(
@@ -432,8 +420,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         CancellationToken ct)
     {
         var response = await _nyxClient.GetApiKeyAsync(accessToken, apiKeyId, ct);
-        if (LooksLikeErrorEnvelope(response))
-            throw new InvalidOperationException($"api_key_lookup_failed {ExtractErrorDetail(response)}");
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+            throw new InvalidOperationException($"api_key_lookup_failed {NyxApiResponseHelper.ExtractErrorDetail(response)}");
 
         try
         {
@@ -461,8 +449,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         CancellationToken ct)
     {
         var response = await _nyxClient.GetChannelBotAsync(accessToken, channelBotId, ct);
-        if (LooksLikeErrorEnvelope(response))
-            throw new InvalidOperationException($"channel_bot_lookup_failed {ExtractErrorDetail(response)}");
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+            throw new InvalidOperationException($"channel_bot_lookup_failed {NyxApiResponseHelper.ExtractErrorDetail(response)}");
 
         try
         {
@@ -497,15 +485,15 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         if (!string.IsNullOrWhiteSpace(requestedRouteId))
         {
             var response = await _nyxClient.GetConversationRouteAsync(accessToken, requestedRouteId, ct);
-            if (LooksLikeErrorEnvelope(response))
-                throw new InvalidOperationException($"channel_route_lookup_failed {ExtractErrorDetail(response)}");
+            if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+                throw new InvalidOperationException($"channel_route_lookup_failed {NyxApiResponseHelper.ExtractErrorDetail(response)}");
 
             return ParseConfirmedConversationRoute(response, expectedChannelBotId, expectedApiKeyId, "channel_route_lookup");
         }
 
         var listResponse = await _nyxClient.ListConversationRoutesAsync(accessToken, expectedChannelBotId, ct);
-        if (LooksLikeErrorEnvelope(listResponse))
-            throw new InvalidOperationException($"channel_route_list_failed {ExtractErrorDetail(listResponse)}");
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(listResponse))
+            throw new InvalidOperationException($"channel_route_list_failed {NyxApiResponseHelper.ExtractErrorDetail(listResponse)}");
 
         var matches = ParseConversationRoutes(listResponse)
             .Where(route =>
@@ -649,124 +637,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     }
 
     private static string NormalizeUrl(string value) => value.Trim().TrimEnd('/');
-
-    private async Task TryRollbackAsync(Func<Task<string>> rollback, string resourceType, string resourceId)
-    {
-        try
-        {
-            var response = await rollback();
-            if (LooksLikeErrorEnvelope(response))
-            {
-                _logger.LogWarning(
-                    "Nyx rollback returned an error envelope: type={ResourceType}, id={ResourceId}, response={Response}",
-                    resourceType,
-                    resourceId,
-                    response);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Nyx rollback failed: type={ResourceType}, id={ResourceId}",
-                resourceType,
-                resourceId);
-        }
-    }
-
-    private static string ExtractRequiredId(string response, string resourceName)
-    {
-        if (LooksLikeErrorEnvelope(response))
-            throw new InvalidOperationException($"{resourceName}_request_failed {ExtractErrorDetail(response)}");
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("id", out var idElement) || idElement.ValueKind != JsonValueKind.String)
-                throw new InvalidOperationException($"missing_id_in_{resourceName}_response");
-
-            var id = idElement.GetString()?.Trim();
-            if (string.IsNullOrWhiteSpace(id))
-                throw new InvalidOperationException($"empty_id_in_{resourceName}_response");
-
-            return id;
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException($"invalid_json_in_{resourceName}_response", ex);
-        }
-    }
-
-    private static RelayApiKeyCredentials ExtractRequiredRelayApiKeyCredentials(string response)
-    {
-        if (LooksLikeErrorEnvelope(response))
-            throw new InvalidOperationException($"api_key_id_request_failed {ExtractErrorDetail(response)}");
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("id", out var idElement) || idElement.ValueKind != JsonValueKind.String)
-                throw new InvalidOperationException("missing_id_in_api_key_id_response");
-
-            var id = idElement.GetString()?.Trim();
-            if (string.IsNullOrWhiteSpace(id))
-                throw new InvalidOperationException("empty_id_in_api_key_id_response");
-
-            return new RelayApiKeyCredentials(id);
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException($"invalid_json_in_api_key_id_response {ex.Message}", ex);
-        }
-    }
-
-    private static bool LooksLikeErrorEnvelope(string response)
-    {
-        if (string.IsNullOrWhiteSpace(response))
-            return true;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            return document.RootElement.TryGetProperty("error", out var errorProp) &&
-                   errorProp.ValueKind == JsonValueKind.True;
-        }
-        catch (JsonException)
-        {
-            return true;
-        }
-    }
-
-    private static string ExtractErrorDetail(string response)
-    {
-        if (string.IsNullOrWhiteSpace(response))
-            return "empty_response";
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            var status = root.TryGetProperty("status", out var statusElement) && statusElement.ValueKind == JsonValueKind.Number
-                ? statusElement.GetInt32().ToString()
-                : "unknown";
-            var body = root.TryGetProperty("body", out var bodyElement) && bodyElement.ValueKind == JsonValueKind.String
-                ? bodyElement.GetString()
-                : string.Empty;
-            var message = root.TryGetProperty("message", out var messageElement) && messageElement.ValueKind == JsonValueKind.String
-                ? messageElement.GetString()
-                : string.Empty;
-
-            return $"nyx_status={status}" +
-                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
-                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
-        }
-        catch (JsonException)
-        {
-            return "invalid_error_envelope";
-        }
-    }
 
     private static NyxLarkProvisioningResult Failure(string error) =>
         new(
