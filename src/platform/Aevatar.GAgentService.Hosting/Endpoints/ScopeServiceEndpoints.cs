@@ -2584,64 +2584,23 @@ public static class ScopeServiceEndpoints
                 : null);
     }
 
-    private static string? ResolveScopeServiceStreamFrameFormat(bool supportsSse, string? implementationKind)
-    {
-        if (!supportsSse)
-            return null;
-
-        if (string.Equals(implementationKind, ServiceImplementationKind.Workflow.ToString(), StringComparison.OrdinalIgnoreCase))
-            return StreamFrameFormatWorkflow;
-
-        if (string.Equals(implementationKind, ServiceImplementationKind.Static.ToString(), StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(implementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
-        {
-            return StreamFrameFormatAgui;
-        }
-
-        return null;
-    }
+    // Pure projection helpers were moved to
+    // Aevatar.GAgentService.Abstractions.Services.ServiceEndpointContractMath
+    // so the legacy scope-default route here and the new member-first
+    // Studio route share one source of truth — a fix in one no longer
+    // silently rots the other. The thin wrappers keep call-site
+    // compatibility for the rest of this file.
+    private static string? ResolveScopeServiceStreamFrameFormat(bool supportsSse, string? implementationKind) =>
+        ServiceEndpointContractMath.ResolveStreamFrameFormat(supportsSse, implementationKind);
 
     private static ServiceRevisionSnapshot? ResolveCurrentContractRevision(
         ServiceCatalogSnapshot service,
         ServiceRevisionCatalogSnapshot? revisions,
-        string endpointId)
-    {
-        if (revisions == null || revisions.Revisions.Count == 0)
-            return null;
-
-        foreach (var preferredRevisionId in EnumeratePreferredContractRevisionIds(service))
-        {
-            var preferredRevision = revisions.Revisions.FirstOrDefault(x =>
-                string.Equals(x.RevisionId, preferredRevisionId, StringComparison.Ordinal) &&
-                RevisionContainsEndpoint(x, endpointId));
-            if (preferredRevision != null)
-                return preferredRevision;
-        }
-
-        return revisions.Revisions.FirstOrDefault(x =>
-                   RevisionContainsEndpoint(x, endpointId))
-               ?? revisions.Revisions[0];
-    }
-
-    private static IEnumerable<string> EnumeratePreferredContractRevisionIds(ServiceCatalogSnapshot service)
-    {
-        var defaultRevisionId = NormalizeOptional(service.DefaultServingRevisionId);
-        if (!string.IsNullOrWhiteSpace(defaultRevisionId))
-            yield return defaultRevisionId;
-
-        var activeRevisionId = NormalizeOptional(service.ActiveServingRevisionId);
-        if (!string.IsNullOrWhiteSpace(activeRevisionId) &&
-            !string.Equals(activeRevisionId, defaultRevisionId, StringComparison.Ordinal))
-        {
-            yield return activeRevisionId;
-        }
-    }
-
-    private static bool RevisionContainsEndpoint(ServiceRevisionSnapshot revision, string endpointId) =>
-        revision.Endpoints.Any(endpoint => string.Equals(endpoint.EndpointId, endpointId, StringComparison.Ordinal));
+        string endpointId) =>
+        ServiceEndpointContractMath.ResolveCurrentContractRevision(service, revisions, endpointId);
 
     private static bool IsChatEndpoint(string? endpointKind) =>
-        string.Equals(endpointKind?.Trim(), "chat", StringComparison.OrdinalIgnoreCase);
+        ServiceEndpointContractMath.IsChatEndpoint(endpointKind);
 
     private static string BuildScopeServiceInvokePath(string scopeId, string serviceId, string endpointId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}/invoke/{Uri.EscapeDataString(endpointId)}";
@@ -2652,30 +2611,11 @@ public static class ScopeServiceEndpoints
     private static string BuildMemberApiPath(string scopeId, string memberId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
 
-    private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted)
-    {
-        var normalizedRequestTypeUrl = NormalizeOptional(requestTypeUrl);
-        if (normalizedRequestTypeUrl == null)
-            return null;
+    private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted) =>
+        ServiceEndpointContractMath.BuildTypedInvokeRequestExampleBody(requestTypeUrl, prettyPrinted);
 
-        return JsonSerializer.Serialize(
-            new
-            {
-                payloadTypeUrl = normalizedRequestTypeUrl,
-                payloadBase64 = BuildBase64PayloadPlaceholder(normalizedRequestTypeUrl),
-            },
-            prettyPrinted ? PrettyJsonSerializerOptions : null);
-    }
-
-    private static string BuildBase64PayloadPlaceholder(string requestTypeUrl)
-    {
-        var typeName = requestTypeUrl
-            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .LastOrDefault();
-        return string.IsNullOrWhiteSpace(typeName)
-            ? "<base64-encoded-protobuf-bytes>"
-            : $"<base64-encoded-{typeName}-protobuf-bytes>";
-    }
+    private static string BuildBase64PayloadPlaceholder(string requestTypeUrl) =>
+        ServiceEndpointContractMath.BuildBase64PayloadPlaceholder(requestTypeUrl);
 
     private static string BuildScopeServiceCurlExample(
         string invokePath,
