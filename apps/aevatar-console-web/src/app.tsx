@@ -61,6 +61,10 @@ function shouldDefaultCollapseLayout(pathname: string, search: string): boolean 
   return new URLSearchParams(search).get("intent") === "create-member";
 }
 
+function shouldCollapseLayout(pathname: string, search: string): boolean {
+  return shouldDefaultCollapseLayout(pathname, search);
+}
+
 function buildLoginRoute(returnTo: string): string {
   const params = new URLSearchParams({
     redirect: sanitizeReturnTo(returnTo),
@@ -650,6 +654,10 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 export const layout = ({
   initialState,
 }: LayoutRuntimeProps): Record<string, unknown> => {
+  const pathname = window.location.pathname;
+  const search = window.location.search;
+  const collapseForRoute = shouldCollapseLayout(pathname, search);
+
   return {
     onPageChange: () => {
       const pathname = window.location.pathname;
@@ -822,10 +830,8 @@ export const layout = ({
       overflow: "hidden",
       padding: 0,
     },
-    defaultCollapsed: shouldDefaultCollapseLayout(
-      window.location.pathname,
-      window.location.search,
-    ),
+    defaultCollapsed: shouldDefaultCollapseLayout(pathname, search),
+    ...(collapseForRoute ? { collapsed: true } : {}),
     logo: <BrandLogo />,
   };
 };

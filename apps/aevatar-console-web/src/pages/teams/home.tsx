@@ -62,7 +62,6 @@ import {
   type WorkflowOperationalAttention,
 } from "./workflowOperationalUnits";
 
-const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
@@ -823,8 +822,12 @@ const ScopeBackedTeamRow: React.FC<{
 
 const TeamsHomePage: React.FC = () => {
   const { token } = theme.useToken();
-  const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
-  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [draft, setDraft] = React.useState<ScopeQueryDraft>(() =>
+    readScopeQueryDraft(),
+  );
+  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(() =>
+    readScopeQueryDraft(),
+  );
   const [manualRosterView, setManualRosterView] = React.useState<
     "cards" | "list" | null
   >(null);
@@ -1082,7 +1085,17 @@ const TeamsHomePage: React.FC = () => {
           <Button
             icon={<PlusOutlined />}
             onClick={() =>
-              history.push(buildStudioRoute({ tab: "studio", intent: "create-member" }))
+              history.push(
+                buildStudioRoute({
+                  scopeId:
+                    scopeId ||
+                    readScopeQueryDraft().scopeId ||
+                    resolvedScope?.scopeId ||
+                    localScopeId,
+                  tab: "studio",
+                  intent: "create-member",
+                }),
+              )
             }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"

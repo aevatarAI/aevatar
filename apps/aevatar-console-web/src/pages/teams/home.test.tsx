@@ -205,6 +205,7 @@ describe("TeamsHomePage", () => {
 
     expect(window.location.pathname).toBe("/studio");
     const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-a");
     expect(params.get("tab")).toBe("studio");
     expect(params.get("intent")).toBe("create-member");
     expect(params.get("teamName")).toBeNull();
