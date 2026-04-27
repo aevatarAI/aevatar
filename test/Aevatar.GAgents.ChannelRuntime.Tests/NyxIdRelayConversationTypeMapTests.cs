@@ -9,6 +9,8 @@ public sealed class NyxIdRelayConversationTypeMapTests
     [Theory]
     [InlineData("private", ConversationScope.DirectMessage)]
     [InlineData("group", ConversationScope.Group)]
+    [InlineData("supergroup", ConversationScope.Group)]
+    [InlineData("SUPERGROUP", ConversationScope.Group)]
     [InlineData("channel", ConversationScope.Channel)]
     public void TryMap_ShouldResolveSupportedConversationTypes(string rawType, ConversationScope expected)
     {

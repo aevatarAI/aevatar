@@ -175,3 +175,31 @@ message ServiceTrafficTargetReadModel {
   int32 allocation_weight = 4;
   string serving_state = 5;
 }
+
+// --- ServiceRunCurrentStateReadModel ---
+
+message ServiceRunCurrentStateReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+
+  string scope_id = 5;
+  string service_id = 6;
+  string service_key = 7;
+  string run_id = 8;
+  string command_id = 9;
+  string correlation_id = 10;
+  string endpoint_id = 11;
+  int32 implementation_kind = 12;
+  string target_actor_id = 13;
+  string revision_id = 14;
+  string deployment_id = 15;
+  int32 status = 16;
+  string tenant_id = 17;
+  string app_id = 18;
+  string namespace = 19;
+
+  google.protobuf.Timestamp created_at_utc_value = 20;
+  google.protobuf.Timestamp updated_at_utc_value = 21;
+}

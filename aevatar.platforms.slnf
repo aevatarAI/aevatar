@@ -3,8 +3,10 @@
     "path": "aevatar.slnx",
     "projects": [
       "agents\\platforms\\Aevatar.GAgents.Platform.Lark\\Aevatar.GAgents.Platform.Lark.csproj",
+      "agents\\platforms\\Aevatar.GAgents.Platform.Telegram\\Aevatar.GAgents.Platform.Telegram.csproj",
       "test\\Aevatar.GAgents.Channel.Testing\\Aevatar.GAgents.Channel.Testing.csproj",
-      "test\\Aevatar.GAgents.Platform.Lark.Tests\\Aevatar.GAgents.Platform.Lark.Tests.csproj"
+      "test\\Aevatar.GAgents.Platform.Lark.Tests\\Aevatar.GAgents.Platform.Lark.Tests.csproj",
+      "test\\Aevatar.GAgents.Platform.Telegram.Tests\\Aevatar.GAgents.Platform.Telegram.Tests.csproj"
     ]
   }
 }

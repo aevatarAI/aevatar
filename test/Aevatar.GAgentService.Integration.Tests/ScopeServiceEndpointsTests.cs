@@ -14,6 +14,7 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -362,6 +363,136 @@ public sealed class ScopeServiceEndpointsTests
         response.ScopeId.Should().Be("scope-a");
         response.ServiceId.Should().Be("default");
         response.Revisions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetMemberPublishedServiceEndpoint_ShouldReturnStableMemberMapping()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberPublishedServiceHttpResponse>(
+            "/api/scopes/scope-a/members/member-a/published-service");
+
+        response.Should().NotBeNull();
+        response!.ScopeId.Should().Be("scope-a");
+        response.MemberId.Should().Be("member-a");
+        response.PublishedServiceId.Should().Be("member-a");
+        response.PublishedServiceKey.Should().Be("scope-a:default:default:member-a");
+    }
+
+    [Fact]
+    public async Task GetMemberPublishedServiceEndpoint_ShouldRejectDifferentAuthenticatedMember()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/published-service");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task MemberBindingEndpoint_ShouldBindToMemberPublishedService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Put, "/api/scopes/scope-a/members/member-a/binding")
+        {
+            Content = JsonContent.Create(new
+            {
+                implementationKind = "workflow",
+                displayName = "Member A",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - run: echo hello",
+                },
+            }),
+        };
+        request.Headers.Add("X-Test-Role", "scope-admin");
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeBindingUpsertHttpResponse>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.MemberId.Should().Be("member-a");
+        body.PublishedServiceId.Should().Be("member-a");
+        host.ScopeBindingPort.LastRequest.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
+        host.ScopeBindingPort.LastRequest.ServiceId.Should().Be("member-a");
+        host.ScopeBindingPort.LastRequest.AppId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task MemberBindingEndpoint_ShouldRequireScopeAdminUntilMemberCatalogIsAuthoritative()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/members/member-a/binding", new
+        {
+            implementationKind = "workflow",
+            displayName = "Member A",
+            workflowYamls = new[]
+            {
+                "name: main\nsteps:\n  - run: echo hello",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        host.ScopeBindingPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetMemberBindingEndpoint_ShouldReturnMemberBindingSummary()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-a");
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:member-a",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-1",
+                    "workflow",
+                    "Published",
+                    "hash-1",
+                    string.Empty,
+                    [],
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    null),
+            ],
+            DateTimeOffset.UtcNow,
+            5,
+            "evt-5");
+        host.ServingQueryPort.ServingSet = new ServiceServingSetSnapshot(
+            "scope-a:default:default:member-a",
+            5,
+            string.Empty,
+            [
+                new ServiceServingTargetSnapshot(
+                    "dep-member-a",
+                    "rev-1",
+                    "def-member-a",
+                    100,
+                    ServiceServingState.Active.ToString(),
+                    []),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeBindingStatusHttpResponse>(
+            "/api/scopes/scope-a/members/member-a/binding");
+
+        response.Should().NotBeNull();
+        response!.Available.Should().BeTrue();
+        response.ScopeId.Should().Be("scope-a");
+        response.MemberId.Should().Be("member-a");
+        response.PublishedServiceId.Should().Be("member-a");
+        response.PublishedServiceKey.Should().Be("scope-a:default:default:member-a");
+        response.Revisions.Should().ContainSingle();
+        response.Revisions[0].DeploymentId.Should().Be("dep-member-a");
+        response.CatalogStateVersion.Should().Be(5);
+        response.CatalogLastEventId.Should().Be("evt-5");
     }
 
     [Fact]
@@ -1359,6 +1490,13 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        // Service-run registry receives the actual workflow run actor id as the run id, so
+        // /runs/{runId} can resolve the same id the SSE RunStarted frame carries.
+        host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle();
+        host.ServiceRunRegistrationPort.RegisterCalls[0].RunId.Should().Be("run-actor-1");
+        host.ServiceRunRegistrationPort.RegisterCalls[0].CommandId.Should().Be("cmd-1");
+        host.ServiceRunRegistrationPort.RegisterCalls[0].TargetActorId.Should().Be("run-actor-1");
+        host.ServiceRunRegistrationPort.RegisterCalls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
     }
 
     [Fact]
@@ -1684,9 +1822,12 @@ public sealed class ScopeServiceEndpointsTests
                 "hello",
                 "session-1",
                 "scope-a",
+                "default",
                 new Dictionary<string, string>(),
                 new NoOpScriptRuntimeCommandPort(),
                 new NoOpScriptExecutionProjectionPort(),
+                new ServiceInvocationRequest(),
+                new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -1745,9 +1886,12 @@ public sealed class ScopeServiceEndpointsTests
                 "hello",
                 "session-1",
                 "scope-a",
+                "default",
                 new Dictionary<string, string>(),
                 new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'script-runtime-1' could not be resolved. The service may not be activated.")),
                 new NoOpScriptExecutionProjectionPort(),
+                new ServiceInvocationRequest(),
+                new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -1835,6 +1979,89 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+    }
+
+    [Fact]
+    public async Task MemberInvokeStreamEndpoint_ShouldResolveMemberPublishedServiceAndDelegateToWorkflowPipeline()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var service = BuildService("scope-a", "member-a", "definition-actor-member-a");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-member-a-1",
+                            "rev-member-a-1",
+                            "definition-actor-member-a",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-member-a-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "member-a",
+                },
+                RevisionId = "rev-member-a-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "member-a",
+                        WorkflowYaml = "name: member_a\nsteps:\n  - run: echo member",
+                        DefinitionActorId = "definition-actor-member-a",
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-member-a", "member-a", "cmd-member-a", "corr-member-a");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/invoke/chat:stream", new
+        {
+            prompt = "hello member",
+            headers = new Dictionary<string, string> { ["channel"] = "member-tests" },
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        body.Should().Contain("aevatar.run.context");
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
     }
 
     [Fact]
@@ -2201,6 +2428,31 @@ public sealed class ScopeServiceEndpointsTests
             ServiceId = "default",
         });
         host.InvocationPort.LastRequest.EndpointId.Should().Be("run");
+    }
+
+    [Fact]
+    public async Task MemberInvokeEndpoint_ShouldMapMemberToPublishedServiceIdentity()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a");
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "member-a",
+        });
+        host.InvocationPort.LastRequest.EndpointId.Should().Be("chat");
     }
 
     [Fact]
@@ -2576,8 +2828,6 @@ public sealed class ScopeServiceEndpointsTests
         response.Runs[0].RevisionId.Should().Be("rev-1");
         response.Runs[0].DeploymentId.Should().Be("dep-old");
         response.Runs[0].WorkflowName.Should().Be("default-flow");
-        host.RunBindingReader.Queries.Should().ContainSingle();
-        host.RunBindingReader.Queries[0].ScopeId.Should().Be("scope-a");
     }
 
     [Fact]
@@ -2628,6 +2878,281 @@ public sealed class ScopeServiceEndpointsTests
         response.WorkflowName.Should().Be("approval");
         response.StateVersion.Should().Be(4);
         response.LastEventId.Should().Be("evt-4");
+    }
+
+    [Fact]
+    public async Task ListMemberRunsEndpoint_ShouldReturnMemberScopedRunHistory()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-active");
+        host.LifecycleQueryPort.Deployments = new ServiceDeploymentCatalogSnapshot(
+            "scope-a:default:default:member-a",
+            [
+                new ServiceDeploymentSnapshot("dep-member-active", "rev-2", "def-member-active", "Active", createdAt, updatedAt),
+                new ServiceDeploymentSnapshot("dep-member-old", "rev-1", "def-member-old", "Inactive", createdAt.AddMinutes(-10), updatedAt.AddMinutes(-10)),
+            ],
+            updatedAt);
+        host.RunBindingReader.BindingsByRunId["run-member-list-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-list-1",
+                "def-member-old",
+                "run-member-list-1",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: createdAt,
+                UpdatedAt: updatedAt),
+        ];
+        host.WorkflowQueryService.SnapshotsByActorId["run-actor-member-list-1"] = new WorkflowActorSnapshot
+        {
+            ActorId = "run-actor-member-list-1",
+            WorkflowName = "member-flow",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 13,
+            LastEventId = "evt-13",
+            LastUpdatedAt = updatedAt,
+            LastSuccess = true,
+            TotalSteps = 2,
+            CompletedSteps = 2,
+            RoleReplyCount = 1,
+            LastOutput = "done",
+        };
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunCatalogHttpResponse>(
+            "/api/scopes/scope-a/members/member-a/runs?take=5");
+
+        response.Should().NotBeNull();
+        response!.ScopeId.Should().Be("scope-a");
+        response.MemberId.Should().Be("member-a");
+        response.PublishedServiceId.Should().Be("member-a");
+        response.PublishedServiceKey.Should().Be("scope-a:default:default:member-a");
+        response.Runs.Should().ContainSingle();
+        response.Runs[0].RunId.Should().Be("run-member-list-1");
+        response.Runs[0].MemberId.Should().Be("member-a");
+        response.Runs[0].PublishedServiceId.Should().Be("member-a");
+        response.Runs[0].RevisionId.Should().Be("rev-1");
+        response.Runs[0].DeploymentId.Should().Be("dep-member-old");
+        response.Runs[0].StateVersion.Should().Be(13);
+    }
+
+    [Fact]
+    public async Task GetMemberRunEndpoint_ShouldReturnMemberScopedRunSummary()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-7);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-member-1", "rev-1", "def-member-1");
+        host.RunBindingReader.BindingsByRunId["run-member-detail-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-detail-1",
+                "def-member-1",
+                "run-member-detail-1",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: createdAt,
+                UpdatedAt: updatedAt),
+        ];
+        host.WorkflowQueryService.SnapshotsByActorId["run-actor-member-detail-1"] = new WorkflowActorSnapshot
+        {
+            ActorId = "run-actor-member-detail-1",
+            WorkflowName = "member-flow",
+            CompletionStatus = WorkflowRunCompletionStatus.Running,
+            StateVersion = 14,
+            LastEventId = "evt-14",
+            LastUpdatedAt = updatedAt,
+            LastSuccess = null,
+            TotalSteps = 3,
+            CompletedSteps = 1,
+            RoleReplyCount = 1,
+            LastOutput = "working",
+        };
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunSummaryHttpResponse>(
+            "/api/scopes/scope-a/members/member-a/runs/run-member-detail-1");
+
+        response.Should().NotBeNull();
+        response!.ScopeId.Should().Be("scope-a");
+        response.MemberId.Should().Be("member-a");
+        response.PublishedServiceId.Should().Be("member-a");
+        response.RunId.Should().Be("run-member-detail-1");
+        response.ActorId.Should().Be("run-actor-member-detail-1");
+        response.RevisionId.Should().Be("rev-1");
+        response.WorkflowName.Should().Be("member-flow");
+        response.StateVersion.Should().Be(14);
+        response.LastEventId.Should().Be("evt-14");
+    }
+
+    [Fact]
+    public async Task GetMemberRunAuditEndpoint_ShouldReturnMemberScopedRunAuditReport()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-7);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-audit");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-member-audit", "rev-1", "def-member-audit");
+        host.RunBindingReader.BindingsByRunId["run-member-audit-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-audit-1",
+                "def-member-audit",
+                "run-member-audit-1",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: createdAt,
+                UpdatedAt: updatedAt),
+        ];
+        host.WorkflowQueryService.SnapshotsByActorId["run-actor-member-audit-1"] = new WorkflowActorSnapshot
+        {
+            ActorId = "run-actor-member-audit-1",
+            WorkflowName = "member-flow",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 15,
+            LastEventId = "evt-15",
+            LastUpdatedAt = updatedAt,
+            LastSuccess = true,
+            TotalSteps = 3,
+            CompletedSteps = 3,
+            RoleReplyCount = 1,
+            LastOutput = "done",
+        };
+        host.WorkflowQueryService.ReportsByActorId["run-actor-member-audit-1"] = new WorkflowRunReport
+        {
+            WorkflowName = "member-flow",
+            RootActorId = "run-actor-member-audit-1",
+            StateVersion = 15,
+            LastEventId = "evt-15",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            ProjectionScope = WorkflowRunProjectionScope.RunIsolated,
+            TopologySource = WorkflowRunTopologySource.RuntimeSnapshot,
+            CreatedAt = createdAt,
+            UpdatedAt = updatedAt,
+            Success = true,
+            FinalOutput = "done",
+            Summary = new WorkflowRunStatistics
+            {
+                TotalSteps = 3,
+                CompletedSteps = 3,
+                RoleReplyCount = 1,
+            },
+        };
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunAuditHttpResponse>(
+            "/api/scopes/scope-a/members/member-a/runs/run-member-audit-1/audit");
+
+        response.Should().NotBeNull();
+        response!.Summary.MemberId.Should().Be("member-a");
+        response.Summary.PublishedServiceId.Should().Be("member-a");
+        response.Summary.RunId.Should().Be("run-member-audit-1");
+        response.Audit.RootActorId.Should().Be("run-actor-member-audit-1");
+        host.WorkflowQueryService.ReportCalls.Should().ContainSingle("run-actor-member-audit-1");
+    }
+
+    [Fact]
+    public async Task ResumeMemberRunEndpoint_ShouldResolveMemberPublishedServiceAndDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-resume");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-member-resume", "rev-1", "def-member-resume");
+        host.RunBindingReader.BindingsByRunId["run-member-resume-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-resume-1",
+                "def-member-resume",
+                "run-member-resume-1",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/runs/run-member-resume-1:resume", new
+        {
+            stepId = "approval-1",
+            approved = true,
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.ResumeDispatchService.LastCommand.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-resume-1");
+        host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-member-resume-1");
+        host.ResumeDispatchService.LastCommand.StepId.Should().Be("approval-1");
+    }
+
+    [Fact]
+    public async Task SignalMemberRunEndpoint_ShouldResolveMemberPublishedServiceAndDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-signal");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-member-signal", "rev-1", "def-member-signal");
+        host.RunBindingReader.BindingsByRunId["run-member-signal-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-signal-1",
+                "def-member-signal",
+                "run-member-signal-1",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/runs/run-member-signal-1:signal", new
+        {
+            signalName = "ops_window_open",
+            stepId = "wait-1",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.SignalDispatchService.LastCommand.Should().NotBeNull();
+        host.SignalDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-signal-1");
+        host.SignalDispatchService.LastCommand.RunId.Should().Be("run-member-signal-1");
+        host.SignalDispatchService.LastCommand.SignalName.Should().Be("ops_window_open");
+    }
+
+    [Fact]
+    public async Task StopMemberRunEndpoint_ShouldResolveMemberPublishedServiceAndDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-stop");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-member-stop", "rev-1", "def-member-stop");
+        host.RunBindingReader.BindingsByRunId["run-member-stop-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-stop-1",
+                "def-member-stop",
+                "run-member-stop-1",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/runs/run-member-stop-1:stop", new
+        {
+            reason = "manual",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.StopDispatchService.LastCommand.Should().NotBeNull();
+        host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-stop-1");
+        host.StopDispatchService.LastCommand.RunId.Should().Be("run-member-stop-1");
+        host.StopDispatchService.LastCommand.Reason.Should().Be("manual");
     }
 
     [Fact]
@@ -2683,10 +3208,6 @@ public sealed class ScopeServiceEndpointsTests
         response.Runs[0].CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
         response.Runs[0].StateVersion.Should().Be(7);
         response.Runs[0].LastEventId.Should().Be("evt-7");
-        host.RunBindingReader.Queries.Should().ContainSingle();
-        host.RunBindingReader.Queries[0].ScopeId.Should().Be("scope-a");
-        host.RunBindingReader.Queries[0].Take.Should().Be(5);
-        host.RunBindingReader.Queries[0].DefinitionActorIds.Should().BeEquivalentTo(["def-actor-active", "def-actor-old"]);
     }
 
     [Fact]
@@ -3636,7 +4157,9 @@ public sealed class ScopeServiceEndpointsTests
             FakeWorkflowRunBindingReader runBindingReader,
             RecordingResumeDispatchService resumeDispatchService,
             RecordingSignalDispatchService signalDispatchService,
-            RecordingStopDispatchService stopDispatchService)
+            RecordingStopDispatchService stopDispatchService,
+            RecordingServiceRunRegistrationPort serviceRunRegistrationPort,
+            FakeServiceRunQueryPort serviceRunQueryPort)
         {
             _app = app;
             Client = client;
@@ -3656,6 +4179,8 @@ public sealed class ScopeServiceEndpointsTests
             ResumeDispatchService = resumeDispatchService;
             SignalDispatchService = signalDispatchService;
             StopDispatchService = stopDispatchService;
+            ServiceRunRegistrationPort = serviceRunRegistrationPort;
+            ServiceRunQueryPort = serviceRunQueryPort;
         }
 
         public HttpClient Client { get; }
@@ -3692,6 +4217,10 @@ public sealed class ScopeServiceEndpointsTests
 
         public RecordingStopDispatchService StopDispatchService { get; }
 
+        public RecordingServiceRunRegistrationPort ServiceRunRegistrationPort { get; }
+
+        public FakeServiceRunQueryPort ServiceRunQueryPort { get; }
+
         public static async Task<ScopeServiceEndpointTestHost> StartAsync(bool authenticationEnabled = true)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -3722,6 +4251,20 @@ public sealed class ScopeServiceEndpointsTests
             var stopDispatchService = new RecordingStopDispatchService();
             var actorRuntime = new NoOpActorRuntime();
             var eventSubscriptionProvider = new NoOpActorEventSubscriptionProvider();
+            var serviceRunQueryPort = new FakeServiceRunQueryPort
+            {
+                WorkflowBindingFallback = runBindingReader,
+                DeploymentResolver = binding =>
+                {
+                    var deployment = lifecycleQueryPort.Deployments?.Deployments.FirstOrDefault(d =>
+                        string.Equals(d.PrimaryActorId, binding.EffectiveDefinitionActorId, StringComparison.Ordinal));
+                    return (deployment?.DeploymentId ?? string.Empty, deployment?.RevisionId ?? string.Empty);
+                },
+            };
+            var serviceRunRegistrationPort = new RecordingServiceRunRegistrationPort
+            {
+                LinkedQueryPort = serviceRunQueryPort,
+            };
             builder.Services.AddSingleton<IServiceGovernanceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceGovernanceQueryPort>(queryPort);
             builder.Services.AddSingleton<IScopeBindingCommandPort>(scopeBindingPort);
@@ -3729,6 +4272,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(lifecycleQueryPort);
             builder.Services.AddSingleton<IServiceServingQueryPort>(servingQueryPort);
+            builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
             builder.Services.AddSingleton<IServiceRevisionArtifactStore>(artifactStore);
@@ -3745,6 +4289,8 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(stopDispatchService);
             builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
             builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
+            builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
+            builder.Services.AddSingleton<IServiceRunQueryPort>(serviceRunQueryPort);
             builder.Services.AddSingleton<IOptions<ScopeWorkflowCapabilityOptions>>(
                 Options.Create(new ScopeWorkflowCapabilityOptions
                 {
@@ -3787,6 +4333,33 @@ public sealed class ScopeServiceEndpointsTests
                             claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, requestedScopeId));
                         }
 
+                        if (http.Request.Headers.TryGetValue("X-Test-Member-Id", out var claimedMemberValues))
+                        {
+                            var claimedMemberIds = claimedMemberValues
+                                .ToString()
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                            foreach (var claimedMemberId in claimedMemberIds)
+                            {
+                                claims.Add(new Claim("member_id", claimedMemberId));
+                            }
+                        }
+                        else if (!hasExplicitAuthenticationHeader &&
+                            TryGetRequestedMemberId(http.Request.Path.Value, out var requestedMemberId))
+                        {
+                            claims.Add(new Claim("member_id", requestedMemberId));
+                        }
+
+                        if (http.Request.Headers.TryGetValue("X-Test-Role", out var claimedRoleValues))
+                        {
+                            var claimedRoles = claimedRoleValues
+                                .ToString()
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                            foreach (var claimedRole in claimedRoles)
+                            {
+                                claims.Add(new Claim("role", claimedRole));
+                            }
+                        }
+
                         http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
                     }
 
@@ -3825,7 +4398,9 @@ public sealed class ScopeServiceEndpointsTests
                 runBindingReader,
                 resumeDispatchService,
                 signalDispatchService,
-                stopDispatchService);
+                stopDispatchService,
+                serviceRunRegistrationPort,
+                serviceRunQueryPort);
         }
 
         private static bool TryGetRequestedScopeId(string? path, out string scopeId)
@@ -3842,6 +4417,24 @@ public sealed class ScopeServiceEndpointsTests
             }
 
             scopeId = string.Empty;
+            return false;
+        }
+
+        private static bool TryGetRequestedMemberId(string? path, out string memberId)
+        {
+            var segments = path?
+                .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (segments is { Length: >= 5 } &&
+                string.Equals(segments[0], "api", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(segments[1], "scopes", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(segments[3], "members", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(segments[4]))
+            {
+                memberId = segments[4];
+                return true;
+            }
+
+            memberId = string.Empty;
             return false;
         }
 
@@ -4012,6 +4605,147 @@ public sealed class ScopeServiceEndpointsTests
             throw new NotSupportedException();
     }
 
+    private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
+    {
+        public List<ServiceRunRecord> RegisterCalls { get; } = [];
+        public List<(string runActorId, string runId, ServiceRunStatus status)> StatusCalls { get; } = [];
+
+        public FakeServiceRunQueryPort? LinkedQueryPort { get; set; }
+
+        public Task<ServiceRunRegistrationResult> RegisterAsync(ServiceRunRecord record, CancellationToken ct = default)
+        {
+            RegisterCalls.Add(record.Clone());
+            LinkedQueryPort?.Upsert(BuildSnapshot(record));
+            return Task.FromResult(new ServiceRunRegistrationResult($"service-run:{record.ScopeId}:{record.ServiceId}:{record.RunId}", record.RunId));
+        }
+
+        public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default)
+        {
+            StatusCalls.Add((runActorId, runId, status));
+            return Task.CompletedTask;
+        }
+
+        private static ServiceRunSnapshot BuildSnapshot(ServiceRunRecord record) =>
+            new(
+                record.ScopeId,
+                record.ServiceId,
+                record.ServiceKey,
+                record.RunId,
+                record.CommandId,
+                record.CorrelationId,
+                record.EndpointId,
+                record.ImplementationKind,
+                record.TargetActorId,
+                record.RevisionId,
+                record.DeploymentId,
+                record.Status,
+                $"service-run:{record.ScopeId}:{record.ServiceId}:{record.RunId}",
+                record.Identity?.TenantId ?? string.Empty,
+                record.Identity?.AppId ?? string.Empty,
+                record.Identity?.Namespace ?? string.Empty,
+                StateVersion: 1,
+                LastEventId: $"{record.RunId}:registered",
+                CreatedAt: record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow,
+                UpdatedAt: record.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow);
+    }
+
+    private sealed class FakeServiceRunQueryPort : IServiceRunQueryPort
+    {
+        private readonly List<ServiceRunSnapshot> _snapshots = [];
+
+        // Bridge to existing FakeWorkflowRunBindingReader fixtures so tests that pre-populate
+        // workflow run bindings also see the runs through the new IServiceRunQueryPort surface.
+        public FakeWorkflowRunBindingReader? WorkflowBindingFallback { get; set; }
+
+        // Optional resolver that maps a workflow run binding to (deploymentId, revisionId) so the
+        // bridged snapshot mirrors what production projector would write from the dispatcher.
+        public Func<WorkflowActorBinding, (string DeploymentId, string RevisionId)>? DeploymentResolver { get; set; }
+
+        public IReadOnlyList<ServiceRunSnapshot> Snapshots => _snapshots;
+
+        public void Upsert(ServiceRunSnapshot snapshot)
+        {
+            _snapshots.RemoveAll(x =>
+                string.Equals(x.ScopeId, snapshot.ScopeId, StringComparison.Ordinal) &&
+                string.Equals(x.ServiceId, snapshot.ServiceId, StringComparison.Ordinal) &&
+                string.Equals(x.RunId, snapshot.RunId, StringComparison.Ordinal));
+            _snapshots.Add(snapshot);
+        }
+
+        public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(ServiceRunQuery query, CancellationToken ct = default)
+        {
+            var bridged = MaterializeForQuery(query.ScopeId, query.ServiceId).ToList();
+            IEnumerable<ServiceRunSnapshot> results = bridged;
+            if (!string.IsNullOrWhiteSpace(query.ScopeId))
+                results = results.Where(s => string.Equals(s.ScopeId, query.ScopeId, StringComparison.Ordinal));
+            if (!string.IsNullOrWhiteSpace(query.ServiceId))
+                results = results.Where(s => string.Equals(s.ServiceId, query.ServiceId, StringComparison.Ordinal));
+            return Task.FromResult<IReadOnlyList<ServiceRunSnapshot>>(
+                results.OrderByDescending(s => s.UpdatedAt).Take(query.Take).ToList());
+        }
+
+        public Task<ServiceRunSnapshot?> GetByRunIdAsync(string scopeId, string serviceId, string runId, CancellationToken ct = default) =>
+            Task.FromResult(MaterializeForQuery(scopeId, serviceId).FirstOrDefault(s =>
+                string.Equals(s.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(s.ServiceId, serviceId, StringComparison.Ordinal) &&
+                string.Equals(s.RunId, runId, StringComparison.Ordinal)));
+
+        public Task<ServiceRunSnapshot?> GetByCommandIdAsync(string scopeId, string serviceId, string commandId, CancellationToken ct = default) =>
+            Task.FromResult(MaterializeForQuery(scopeId, serviceId).FirstOrDefault(s =>
+                string.Equals(s.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(s.ServiceId, serviceId, StringComparison.Ordinal) &&
+                string.Equals(s.CommandId, commandId, StringComparison.Ordinal)));
+
+        // Materializes snapshots, treating any workflow binding fixtures as belonging to the queried service
+        // (workflow bindings predate the service-run registry and don't carry serviceId in the test fixtures).
+        private IEnumerable<ServiceRunSnapshot> MaterializeForQuery(string scopeId, string serviceId)
+        {
+            foreach (var snapshot in _snapshots)
+                yield return snapshot;
+            if (WorkflowBindingFallback != null)
+            {
+                foreach (var binding in WorkflowBindingFallback.AllBindings())
+                {
+                    if (_snapshots.Any(s => string.Equals(s.RunId, binding.RunId, StringComparison.Ordinal) &&
+                                            string.Equals(s.ServiceId, serviceId, StringComparison.Ordinal)))
+                    {
+                        continue;
+                    }
+                    var (deploymentId, revisionId) = DeploymentResolver?.Invoke(binding) ?? (string.Empty, string.Empty);
+                    yield return BuildSnapshotFromBinding(binding, scopeId, serviceId, deploymentId, revisionId);
+                }
+            }
+        }
+
+        private static ServiceRunSnapshot BuildSnapshotFromBinding(
+            WorkflowActorBinding binding,
+            string scopeId,
+            string serviceId,
+            string deploymentId,
+            string revisionId) =>
+            new(
+                ScopeId: string.IsNullOrWhiteSpace(scopeId) ? binding.ScopeId ?? string.Empty : scopeId,
+                ServiceId: serviceId ?? string.Empty,
+                ServiceKey: string.Empty,
+                RunId: binding.RunId,
+                CommandId: binding.RunId,
+                CorrelationId: binding.RunId,
+                EndpointId: string.Empty,
+                ImplementationKind: ServiceImplementationKind.Workflow,
+                TargetActorId: binding.ActorId,
+                RevisionId: revisionId,
+                DeploymentId: deploymentId,
+                Status: ServiceRunStatus.Accepted,
+                ActorId: binding.ActorId,
+                TenantId: binding.ScopeId ?? string.Empty,
+                AppId: string.Empty,
+                Namespace: string.Empty,
+                StateVersion: binding.SourceVersion,
+                LastEventId: binding.SourceEventId ?? string.Empty,
+                CreatedAt: binding.CreatedAt ?? DateTimeOffset.UtcNow,
+                UpdatedAt: binding.UpdatedAt ?? DateTimeOffset.UtcNow);
+    }
+
     private sealed class RecordingServiceInvocationPort : IServiceInvocationPort
     {
         public ServiceInvocationRequest? LastRequest { get; private set; }
@@ -4141,6 +4875,9 @@ public sealed class ScopeServiceEndpointsTests
 
         public List<WorkflowRunBindingQuery> Queries { get; } = [];
 
+        public IEnumerable<WorkflowActorBinding> AllBindings() =>
+            BindingsByRunId.Values.SelectMany(x => x);
+
         public Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
             string runId,
             int take = 20,
@@ -4254,6 +4991,15 @@ public sealed class ScopeServiceEndpointsTests
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
                     .Failure(GAgentDraftRunStartError.UnknownActorType));
         }
+    }
+
+    private sealed class NoOpServiceRunRegistrationPort : IServiceRunRegistrationPort
+    {
+        public Task<ServiceRunRegistrationResult> RegisterAsync(ServiceRunRecord record, CancellationToken ct = default) =>
+            Task.FromResult(new ServiceRunRegistrationResult($"service-run:{record.RunId}", record.RunId));
+
+        public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class NoOpScriptRuntimeCommandPort : IScriptRuntimeCommandPort

@@ -26,25 +26,32 @@ describe('TeamCreatePage', () => {
     jest.clearAllMocks();
   });
 
-  it('renders the create-team page with the same summary-plus-main-card rhythm as teams home', async () => {
+  it('renders the hidden compatibility page for saved draft recovery', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
     expect(await screen.findByText('Aevatar / Teams')).toBeTruthy();
-    expect(screen.getByText('Create Team')).toBeTruthy();
-    expect(screen.getByText('入口')).toBeTruthy();
-    expect(screen.getByText('构建对象')).toBeTruthy();
-    expect(screen.getByText('完成后')).toBeTruthy();
-    expect(screen.getByText('新增后端流')).toBeTruthy();
-    expect(screen.getByText('Start Building')).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 3, name: 'Studio' })).toBeTruthy();
-    expect(screen.getByLabelText('团队名称')).toBeTruthy();
-    expect(screen.getByLabelText('入口名称')).toBeTruthy();
+    expect(screen.getByText('Saved Draft Recovery')).toBeTruthy();
+    expect(screen.getByText('用途')).toBeTruthy();
+    expect(screen.getByText('恢复对象')).toBeTruthy();
+    expect(screen.getByText('继续位置')).toBeTruthy();
+    expect(screen.getByText('新增后端事实')).toBeTruthy();
+    expect(screen.getByText('Continue initial member draft')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 3, name: 'Saved draft recovery' })).toBeTruthy();
+    expect(screen.getByLabelText('Legacy team label')).toBeTruthy();
+    expect(screen.getByLabelText('Initial member label')).toBeTruthy();
     expect(
-      screen.getAllByRole('button', { name: 'Open Studio' }).length,
+      screen.getAllByRole('button', { name: 'Continue in Studio' }).length,
     ).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'View Behaviors' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Back to My Teams' })).toBeTruthy();
+    expect(
+      screen.getByText(
+        'This compatibility page preserves old Create Team links and saved draft recovery. New team creation now starts in Studio by creating the first member.',
+      ),
+    ).toBeTruthy();
     expect(screen.queryByText('Team Builder Entry')).toBeNull();
+    expect(screen.queryByText('Start Building')).toBeNull();
+    expect(screen.queryByText('Open Studio')).toBeNull();
     expect(
       screen.queryByText(
         '当前实现不会新增一套独立后端流程，而是复用现有 Studio 工作区先组建团队，再进入 Team Details 查看拓扑和事件流。',
@@ -61,15 +68,15 @@ describe('TeamCreatePage', () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
     const openStudioButtons = await screen.findAllByRole('button', {
-      name: 'Open Studio',
+      name: 'Continue in Studio',
     });
 
     expect(openStudioButtons[0]).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText('团队名称'), {
+    fireEvent.change(screen.getByLabelText('Legacy team label'), {
       target: { value: '订单助手团队' },
     });
-    fireEvent.change(screen.getByLabelText('入口名称'), {
+    fireEvent.change(screen.getByLabelText('Initial member label'), {
       target: { value: '订单入口' },
     });
 
@@ -100,7 +107,7 @@ describe('TeamCreatePage', () => {
     expect(screen.getByText('order-entry-draft')).toBeTruthy();
     expect(
       screen.getByText(
-        'Delete Draft 会删除当前创建流程关联的行为草稿；团队名称和入口名称会保留在这个页面。',
+        'Delete Draft removes the linked workflow draft. Legacy labels stay in the URL so old links remain understandable.',
       ),
     ).toBeTruthy();
 
