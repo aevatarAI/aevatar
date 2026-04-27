@@ -30,8 +30,10 @@ public static class AevatarConfigLoader
         this IConfigurationBuilder builder,
         bool allowLocalFileStore = true)
     {
-        // 确保目录存在
-        AevatarPaths.EnsureDirectories();
+        // 仅在使用本地文件 store 时创建 ~/.aevatar/ 目录树；
+        // 生产入口（allowLocalFileStore=false）保持零本地文件足迹。
+        if (allowLocalFileStore)
+            AevatarPaths.EnsureDirectories();
 
         // config.json — 非敏感配置（低优先级）
         builder.AddJsonFile(AevatarPaths.ConfigJson, optional: true, reloadOnChange: true);

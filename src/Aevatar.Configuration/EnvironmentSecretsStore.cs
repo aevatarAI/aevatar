@@ -59,16 +59,33 @@ public sealed class EnvironmentSecretsStore : IAevatarSecretsStore
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
+    /// <summary>
+    /// Returns a snapshot of secret-shaped configuration entries. Only keys
+    /// that match the conventions <see cref="GetApiKey"/> understands are
+    /// included: anything under <c>LLMProviders:</c> (provider definitions,
+    /// API keys, default name) and any <c>{NAME}_API_KEY</c>-style keys.
+    /// <para>
+    /// This is intentionally narrower than dumping the entire
+    /// <see cref="IConfiguration"/> view: in env-driven hosts, the config root
+    /// also contains binding URLs, feature flags and connection strings, none
+    /// of which belong on the secrets API surface.
+    /// </para>
+    /// </summary>
     public IReadOnlyDictionary<string, string> GetAll()
     {
         var snapshot = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var kv in _configuration.AsEnumerable())
         {
-            if (!string.IsNullOrEmpty(kv.Value))
-                snapshot[kv.Key] = kv.Value;
+            if (string.IsNullOrEmpty(kv.Value)) continue;
+            if (!IsSecretShapedKey(kv.Key)) continue;
+            snapshot[kv.Key] = kv.Value;
         }
         return snapshot;
     }
+
+    private static bool IsSecretShapedKey(string key) =>
+        key.StartsWith("LLMProviders:", StringComparison.OrdinalIgnoreCase) ||
+        key.EndsWith("_API_KEY", StringComparison.OrdinalIgnoreCase);
 
     public void Set(string key, string value) =>
         throw new InvalidOperationException(

@@ -392,6 +392,37 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_WhenSecretsStoreOptionAbsent_ShouldUseDIRegisteredStore()
+    {
+        // Mainnet path: a host registers IAevatarSecretsStore (e.g. the
+        // read-only EnvironmentSecretsStore) into DI but does not pass
+        // options.SecretsStore. Before the fix, AddAevatarAIFeatures fell
+        // back to `new AevatarSecretsStore()` which re-opens secrets.json
+        // from disk. This asserts that the DI-registered store is honored.
+        var diRegistered = new InMemorySecretsStore(new Dictionary<string, string>
+        {
+            ["LLMProviders:Providers:deepseek:ApiKey"] = "from-di-registered-store",
+            ["LLMProviders:Providers:deepseek:ProviderType"] = "deepseek",
+            ["LLMProviders:Default"] = "deepseek",
+        });
+        var services = new ServiceCollection();
+        services.AddSingleton<IAevatarSecretsStore>(diRegistered);
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = true;
+            options.EnableMEAIToTornadoFailover = false;
+            // intentionally leave options.SecretsStore = null
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("deepseek");
+        llmFactory.GetDefault().Name.Should().Be("deepseek");
+    }
+
+    [Fact]
     public async Task AddAevatarAIFeatures_WhenMCPEnabledAndConfigured_ShouldRegisterMCPToolSourceAndConnectorBuilder()
     {
         var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-mcp-{Guid.NewGuid():N}");

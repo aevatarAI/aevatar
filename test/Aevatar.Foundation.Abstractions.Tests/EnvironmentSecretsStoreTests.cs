@@ -44,22 +44,31 @@ public sealed class EnvironmentSecretsStoreTests
     }
 
     [Fact]
-    public void GetAll_ShouldFlattenConfigurationEntries_AndDropEmptyValues()
+    public void GetAll_ShouldOnlyReturnSecretShapedKeys_NotArbitraryConfiguration()
     {
         var configuration = BuildConfiguration(new()
         {
-            ["A:B"] = "1",
-            ["C"] = "",
-            ["D"] = "2",
+            // Secret-shaped: included
+            ["LLMProviders:Providers:deepseek:ApiKey"] = "k1",
+            ["LLMProviders:Default"] = "deepseek",
+            ["GROQ_API_KEY"] = "k2",
+            // Non-secret config: must NOT leak through GetAll
+            ["ConnectionStrings:Db"] = "Server=...;Pwd=should-not-leak",
+            ["Cors:AllowedOrigins:0"] = "https://app.example.com",
+            ["FeatureFlags:Foo"] = "true",
+            ["Empty"] = "",
         });
         var store = new EnvironmentSecretsStore(configuration);
 
         var snapshot = store.GetAll();
 
-        snapshot.ContainsKey("A:B").ShouldBeTrue();
-        snapshot["A:B"].ShouldBe("1");
-        snapshot["D"].ShouldBe("2");
-        snapshot.ContainsKey("C").ShouldBeFalse();
+        snapshot.ContainsKey("LLMProviders:Providers:deepseek:ApiKey").ShouldBeTrue();
+        snapshot.ContainsKey("LLMProviders:Default").ShouldBeTrue();
+        snapshot.ContainsKey("GROQ_API_KEY").ShouldBeTrue();
+        snapshot.ContainsKey("ConnectionStrings:Db").ShouldBeFalse();
+        snapshot.ContainsKey("Cors:AllowedOrigins:0").ShouldBeFalse();
+        snapshot.ContainsKey("FeatureFlags:Foo").ShouldBeFalse();
+        snapshot.ContainsKey("Empty").ShouldBeFalse();
     }
 
     [Fact]

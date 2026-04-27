@@ -61,6 +61,18 @@ public sealed class ServiceCollectionExtensionsTests
             .ShouldBeFalse();
     }
 
+    [Fact]
+    public void AddAevatarConfig_WhenLocalFileStoreDisabled_ShouldNotCreateLocalDirectoryTree()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"aevatar-config-tests-{Guid.NewGuid():N}");
+        using var scope = new EnvironmentVariableScope(AevatarPaths.HomeEnv, tempRoot);
+        var services = new ServiceCollection();
+
+        services.AddAevatarConfig(allowLocalFileStore: false);
+
+        Directory.Exists(tempRoot).ShouldBeFalse();
+    }
+
     private sealed class EnvironmentVariableScope : IDisposable
     {
         private readonly string _name;
