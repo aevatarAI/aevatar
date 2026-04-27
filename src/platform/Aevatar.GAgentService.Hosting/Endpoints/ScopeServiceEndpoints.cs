@@ -1461,40 +1461,41 @@ public static class ScopeServiceEndpoints
         return Results.Ok(new ScopeServiceRunAuditHttpResponse(summary, report));
     }
 
-    private static async Task RegisterStreamServiceRunAsync(
+    // Registers a stream-invocation run with the durable service-run registry using the
+    // actual run id that the implementation pipeline produced (workflow run actor id /
+    // draft-run command id / scripting-generated run id). Called once the downstream
+    // run id is known so /runs/{runId} resolves the same id the client receives via SSE.
+    private static ValueTask RegisterStreamServiceRunAsync(
         IServiceRunRegistrationPort serviceRunRegistrationPort,
         ServiceInvocationResolvedTarget target,
         ServiceInvocationRequest invocationRequest,
         string scopeId,
         string serviceId,
+        string runId,
+        string commandId,
+        string correlationId,
+        string targetActorId,
         CancellationToken ct)
     {
-        var commandId = string.IsNullOrWhiteSpace(invocationRequest.CommandId)
-            ? Guid.NewGuid().ToString("N")
-            : invocationRequest.CommandId;
         var record = new ServiceRunRecord
         {
             ScopeId = scopeId,
             ServiceId = serviceId,
             ServiceKey = target.Service.ServiceKey ?? string.Empty,
-            RunId = commandId,
-            CommandId = commandId,
-            CorrelationId = string.IsNullOrWhiteSpace(invocationRequest.CorrelationId)
-                ? commandId
-                : invocationRequest.CorrelationId,
+            RunId = runId,
+            CommandId = string.IsNullOrWhiteSpace(commandId) ? runId : commandId,
+            CorrelationId = string.IsNullOrWhiteSpace(correlationId) ? runId : correlationId,
             EndpointId = target.Endpoint.EndpointId ?? string.Empty,
             ImplementationKind = target.Artifact.ImplementationKind,
-            // Stream paths construct the implementation-specific run actor downstream
-            // (workflow run actor, draft-run session, scripting runtime); the registry
-            // stores the service primary actor so the directory entry is observable
-            // immediately after invoke returns.
-            TargetActorId = target.Service.PrimaryActorId ?? string.Empty,
+            TargetActorId = string.IsNullOrWhiteSpace(targetActorId)
+                ? target.Service.PrimaryActorId ?? string.Empty
+                : targetActorId,
             RevisionId = target.Service.RevisionId ?? string.Empty,
             DeploymentId = target.Service.DeploymentId ?? string.Empty,
             Status = ServiceRunStatus.Accepted,
             Identity = invocationRequest.Identity?.Clone(),
         };
-        await serviceRunRegistrationPort.RegisterAsync(record, ct);
+        return new ValueTask(serviceRunRegistrationPort.RegisterAsync(record, ct));
     }
 
     private static async Task<ServiceRunSnapshot?> ResolveServiceRunSnapshotAsync(
@@ -1556,14 +1557,6 @@ public static class ScopeServiceEndpoints
                 target.Endpoint,
                 invocationRequest,
                 ct);
-            await RegisterStreamServiceRunAsync(
-                serviceRunRegistrationPort,
-                target,
-                invocationRequest,
-                scopeId,
-                serviceId,
-                ct);
-
             switch (target.Artifact.ImplementationKind)
             {
                 case ServiceImplementationKind.Workflow:
@@ -1580,7 +1573,20 @@ public static class ScopeServiceEndpoints
                             Metadata = scopedHeaders,
                         },
                         chatRunService,
-                        ct);
+                        ct,
+                        onAcceptedHook: (receipt, token) => RegisterStreamServiceRunAsync(
+                            serviceRunRegistrationPort,
+                            target,
+                            invocationRequest,
+                            scopeId,
+                            serviceId,
+                            // For workflow, the SSE RunStarted carries the workflow run actor id as the run identifier;
+                            // use the same id so /runs/{runId} resolves to this run after refresh.
+                            runId: receipt.ActorId,
+                            commandId: receipt.CommandId,
+                            correlationId: receipt.CorrelationId,
+                            targetActorId: receipt.ActorId,
+                            token));
                     break;
 
                 case ServiceImplementationKind.Static:
@@ -1591,9 +1597,12 @@ public static class ScopeServiceEndpoints
                         request.ActorId,
                         request.SessionId,
                         scopeId,
+                        serviceId,
                         scopedHeaders,
                         request.InputParts,
                         gagentDraftRunService,
+                        invocationRequest,
+                        serviceRunRegistrationPort,
                         ct);
                     break;
 
@@ -1604,9 +1613,12 @@ public static class ScopeServiceEndpoints
                         normalizedPrompt,
                         request.SessionId,
                         scopeId,
+                        serviceId,
                         scopedHeaders,
                         scriptRuntimeCommandPort,
                         scriptExecutionProjectionPort,
+                        invocationRequest,
+                        serviceRunRegistrationPort,
                         ct);
                     break;
 
@@ -1642,9 +1654,12 @@ public static class ScopeServiceEndpoints
         string? actorId,
         string? sessionId,
         string scopeId,
+        string serviceId,
         IReadOnlyDictionary<string, string>? headers,
         IReadOnlyList<StreamContentPartHttpRequest>? inputParts,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        ServiceInvocationRequest invocationRequest,
+        IServiceRunRegistrationPort serviceRunRegistrationPort,
         CancellationToken ct)
     {
         var plan = target.Artifact.DeploymentPlan.StaticPlan;
@@ -1677,6 +1692,19 @@ public static class ScopeServiceEndpoints
         async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
         {
             http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+            // Register the service run with the same id we are about to send to the client
+            // so /runs/{runId} resolves immediately on refresh.
+            await RegisterStreamServiceRunAsync(
+                serviceRunRegistrationPort,
+                target,
+                invocationRequest,
+                scopeId,
+                serviceId,
+                runId: receipt.CommandId,
+                commandId: receipt.CommandId,
+                correlationId: receipt.CorrelationId,
+                targetActorId: receipt.ActorId,
+                token);
             await EnsureSseStartedAsync(token);
             await writer.WriteAsync(
                 new AGUIEvent
@@ -1764,9 +1792,12 @@ public static class ScopeServiceEndpoints
         string prompt,
         string? sessionId,
         string scopeId,
+        string serviceId,
         IReadOnlyDictionary<string, string>? headers,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
         IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        ServiceInvocationRequest invocationRequest,
+        IServiceRunRegistrationPort serviceRunRegistrationPort,
         CancellationToken ct)
     {
         var actorId = target.Service.PrimaryActorId;
@@ -1775,6 +1806,18 @@ public static class ScopeServiceEndpoints
                 "Script runtime actor is not available. The service may not be activated.");
 
         var runId = Guid.NewGuid().ToString("N");
+        // Register the service run with the same id the SSE RunStarted frame will carry.
+        await RegisterStreamServiceRunAsync(
+            serviceRunRegistrationPort,
+            target,
+            invocationRequest,
+            scopeId,
+            serviceId,
+            runId: runId,
+            commandId: runId,
+            correlationId: runId,
+            targetActorId: actorId,
+            ct);
         var chatRequest = new ChatRequestEvent
         {
             Prompt = prompt,
