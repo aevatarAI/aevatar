@@ -423,6 +423,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
             observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
             empty_scope_registrations_observed = backfill?.EmptyScopeRegistrationsObserved,
             empty_scope_registrations_backfilled = backfill?.BackfilledRegistrations,
+            // Machine-readable backfill outcome + warnings (issue #391); CLI/UI
+            // callers should branch on backfill_status, not infer success from the
+            // 202 rebuild dispatch alone.
+            backfill_status = backfill?.Status,
+            warnings = backfill?.Warnings ?? Array.Empty<string>(),
             note,
         });
     }

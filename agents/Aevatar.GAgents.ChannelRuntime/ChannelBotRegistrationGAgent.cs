@@ -24,6 +24,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             .Match(current, evt)
             .On<ChannelBotRegisteredEvent>(ApplyRegistered)
             .On<ChannelBotProjectionRebuildRequestedEvent>(static (state, _) => state)
+            .On<ChannelBotRegistrationRejectedEvent>(static (state, _) => state)
+            .On<ChannelBotScopeIdRepairedEvent>(ApplyScopeIdRepaired)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
             .On<ChannelBotTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .OrCurrent();
@@ -57,11 +59,22 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
 
         if (string.IsNullOrWhiteSpace(cmd.ScopeId))
         {
-            Logger.LogWarning(
-                "Ignoring channel bot registration without scope id: platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
+            // Elevated to LogError so log-based metrics surface upstream
+            // contract breaks; persisted as a domain event so the audit trail
+            // captures the rejection without polluting the registration set.
+            Logger.LogError(
+                "Rejecting channel bot registration without scope id: platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
                 cmd.Platform,
                 cmd.RequestedId,
                 cmd.NyxAgentApiKeyId);
+            await PersistDomainEventAsync(new ChannelBotRegistrationRejectedEvent
+            {
+                Reason = "missing_scope_id",
+                Platform = cmd.Platform ?? string.Empty,
+                RequestedId = cmd.RequestedId ?? string.Empty,
+                NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
+                RejectedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
             return;
         }
 
@@ -99,6 +112,53 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             TombstoneStateVersion = NextCommittedVersion(),
         });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
+    }
+
+    [EventHandler]
+    public async Task HandleRepairScopeId(ChannelBotRepairScopeIdCommand cmd)
+    {
+        var registrationId = cmd.RegistrationId?.Trim();
+        if (string.IsNullOrWhiteSpace(registrationId))
+        {
+            Logger.LogWarning("Cannot repair scope id: registration id is required.");
+            return;
+        }
+
+        var scopeId = cmd.ScopeId?.Trim();
+        if (string.IsNullOrWhiteSpace(scopeId))
+        {
+            Logger.LogWarning(
+                "Cannot repair scope id: scope id is required for registrationId={RegistrationId}",
+                registrationId);
+            return;
+        }
+
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == registrationId);
+        if (entry is null || entry.Tombstoned)
+        {
+            Logger.LogWarning(
+                "Cannot repair scope id: registration not found or tombstoned: {RegistrationId}",
+                registrationId);
+            return;
+        }
+
+        // Idempotent: re-applying the same scope id is a no-op so the audit log
+        // is not littered with redundant repair events.
+        if (string.Equals(entry.ScopeId, scopeId, StringComparison.Ordinal))
+            return;
+
+        await PersistDomainEventAsync(new ChannelBotScopeIdRepairedEvent
+        {
+            RegistrationId = registrationId,
+            PreviousScopeId = entry.ScopeId ?? string.Empty,
+            ScopeId = scopeId,
+            RepairedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        Logger.LogInformation(
+            "Repaired channel bot registration scope id: registrationId={RegistrationId}, previousScopeId={PreviousScopeId}, scopeId={ScopeId}",
+            registrationId,
+            entry.ScopeId ?? string.Empty,
+            scopeId);
     }
 
     [EventHandler]
@@ -151,6 +211,22 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         entry.Tombstoned = false;
         entry.TombstoneStateVersion = 0;
         next.Registrations.Add(entry);
+        return next;
+    }
+
+    // Repair-only transition: rewrites the scope id of an existing entry while
+    // preserving created_at and the rest of the registration shape.
+    private static ChannelBotRegistrationStoreState ApplyScopeIdRepaired(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotScopeIdRepairedEvent evt)
+    {
+        var entry = current.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
+        if (entry is null || entry.Tombstoned)
+            return current;
+
+        var next = current.Clone();
+        var target = next.Registrations.First(r => r.Id == evt.RegistrationId);
+        target.ScopeId = evt.ScopeId ?? string.Empty;
         return next;
     }
 

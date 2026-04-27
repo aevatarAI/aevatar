@@ -258,6 +258,10 @@ public static class ChannelCallbackEndpoints
             observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
             empty_scope_registrations_observed = backfill?.EmptyScopeRegistrationsObserved,
             empty_scope_registrations_backfilled = backfill?.BackfilledRegistrations,
+            // Machine-readable backfill outcome so CLI/UI callers do not misread
+            // a 202 rebuild dispatch as a successful backfill (issue #391).
+            backfill_status = backfill?.Status,
+            warnings = backfill?.Warnings ?? Array.Empty<string>(),
             note,
         });
     }

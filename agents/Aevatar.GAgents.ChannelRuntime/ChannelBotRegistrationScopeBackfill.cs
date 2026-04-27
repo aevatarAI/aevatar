@@ -11,11 +11,26 @@ internal sealed record ChannelBotRegistrationScopeBackfillAuthorization(
     string? AccessToken = null,
     INyxRelayApiKeyOwnershipVerifier? OwnershipVerifier = null);
 
+/// <summary>
+/// Stable machine-readable status for the rebuild backfill outcome. Surfaced
+/// to CLI/UI callers so a 202 rebuild dispatch is not misread as a successful
+/// backfill — see issue #391.
+/// </summary>
+internal static class ChannelBotRegistrationScopeBackfillStatus
+{
+    public const string NotRequired = "not_required";
+    public const string Skipped = "skipped";
+    public const string Verified = "verified";
+    public const string Rejected = "rejected";
+}
+
 internal sealed record ChannelBotRegistrationScopeBackfillResult(
+    string Status,
     int EmptyScopeRegistrationsObserved,
     int CandidateRegistrations,
     int BackfilledRegistrations,
-    string Note);
+    string Note,
+    IReadOnlyList<string> Warnings);
 
 internal static class ChannelBotRegistrationScopeBackfill
 {
@@ -44,20 +59,25 @@ internal static class ChannelBotRegistrationScopeBackfill
         if (emptyScopeRegistrations.Length == 0)
         {
             return new ChannelBotRegistrationScopeBackfillResult(
+                ChannelBotRegistrationScopeBackfillStatus.NotRequired,
                 0,
                 0,
                 0,
-                "No empty-scope channel bot registrations were observed.");
+                "No empty-scope channel bot registrations were observed.",
+                Array.Empty<string>());
         }
 
         var normalizedScopeId = NormalizeOptional(scopeId);
         if (normalizedScopeId is null)
         {
+            const string warning = "Empty-scope registrations were observed, but no canonical scope_id was available for repair.";
             return new ChannelBotRegistrationScopeBackfillResult(
+                ChannelBotRegistrationScopeBackfillStatus.Skipped,
                 emptyScopeRegistrations.Length,
                 0,
                 0,
-                "Empty-scope registrations were observed, but no canonical scope_id was available for repair.");
+                warning,
+                new[] { warning });
         }
 
         var registrationId = NormalizeOptional(selection.RegistrationId);
@@ -70,39 +90,51 @@ internal static class ChannelBotRegistrationScopeBackfill
         var hasExplicitSelector = registrationId is not null || apiKeyId is not null;
         if (!hasExplicitSelector)
         {
+            const string warning = "Empty-scope registrations were observed; pass registration_id or nyx_agent_api_key_id to repair one safely. force=true only applies after a selector matches multiple registrations.";
             return new ChannelBotRegistrationScopeBackfillResult(
+                ChannelBotRegistrationScopeBackfillStatus.Skipped,
                 emptyScopeRegistrations.Length,
                 candidates.Length,
                 0,
-                "Empty-scope registrations were observed; pass registration_id or nyx_agent_api_key_id to repair one safely. force=true only applies after a selector matches multiple registrations.");
+                warning,
+                new[] { warning });
         }
 
         if (candidates.Length == 0)
         {
+            const string warning = "No empty-scope registration matched the requested repair selector.";
             return new ChannelBotRegistrationScopeBackfillResult(
+                ChannelBotRegistrationScopeBackfillStatus.Skipped,
                 emptyScopeRegistrations.Length,
                 0,
                 0,
-                "No empty-scope registration matched the requested repair selector.");
+                warning,
+                new[] { warning });
         }
 
         if (!selection.Force && candidates.Length != 1)
         {
+            const string warning = "Multiple empty-scope registrations matched the repair selector; pass force=true to repair all matched registrations.";
             return new ChannelBotRegistrationScopeBackfillResult(
+                ChannelBotRegistrationScopeBackfillStatus.Skipped,
                 emptyScopeRegistrations.Length,
                 candidates.Length,
                 0,
-                "Multiple empty-scope registrations matched the repair selector; pass force=true to repair all matched registrations.");
+                warning,
+                new[] { warning });
         }
 
         var accessToken = NormalizeOptional(authorization.AccessToken);
         if (accessToken is null || authorization.OwnershipVerifier is null)
         {
+            const string warning = "Empty-scope registration repair requires NyxID api-key ownership verification.";
             return new ChannelBotRegistrationScopeBackfillResult(
+                ChannelBotRegistrationScopeBackfillStatus.Rejected,
                 emptyScopeRegistrations.Length,
                 candidates.Length,
                 0,
-                "Empty-scope registration repair requires NyxID api-key ownership verification.");
+                warning,
+                new[] { warning });
         }
 
         foreach (var entry in candidates)
@@ -110,11 +142,14 @@ internal static class ChannelBotRegistrationScopeBackfill
             var candidateApiKeyId = NormalizeOptional(entry.NyxAgentApiKeyId);
             if (candidateApiKeyId is null)
             {
+                var warning = $"Empty-scope registration '{entry.Id}' is missing nyx_agent_api_key_id; cannot verify ownership.";
                 return new ChannelBotRegistrationScopeBackfillResult(
+                    ChannelBotRegistrationScopeBackfillStatus.Rejected,
                     emptyScopeRegistrations.Length,
                     candidates.Length,
                     0,
-                    $"Empty-scope registration '{entry.Id}' is missing nyx_agent_api_key_id; cannot verify ownership.");
+                    warning,
+                    new[] { warning });
             }
 
             var ownership = await authorization.OwnershipVerifier.VerifyAsync(
@@ -124,38 +159,36 @@ internal static class ChannelBotRegistrationScopeBackfill
                 ct);
             if (!ownership.Succeeded)
             {
+                var warning = $"Empty-scope registration '{entry.Id}' failed NyxID api-key ownership verification: {ownership.Detail}";
                 return new ChannelBotRegistrationScopeBackfillResult(
+                    ChannelBotRegistrationScopeBackfillStatus.Rejected,
                     emptyScopeRegistrations.Length,
                     candidates.Length,
                     0,
-                    $"Empty-scope registration '{entry.Id}' failed NyxID api-key ownership verification: {ownership.Detail}");
+                    warning,
+                    new[] { warning });
             }
         }
 
+        // Repair-only path: rewrites scope_id while preserving created_at and the
+        // rest of the registration shape (issue #391 follow-up 3).
         foreach (var entry in candidates)
         {
-            await ChannelBotRegistrationStoreCommands.DispatchRegisterAsync(
+            await ChannelBotRegistrationStoreCommands.DispatchRepairScopeIdAsync(
                 actorRuntime,
                 dispatchPort,
-                new ChannelBotRegisterCommand
-                {
-                    RequestedId = entry.Id,
-                    Platform = entry.Platform,
-                    NyxProviderSlug = entry.NyxProviderSlug,
-                    ScopeId = normalizedScopeId,
-                    WebhookUrl = entry.WebhookUrl,
-                    NyxChannelBotId = entry.NyxChannelBotId,
-                    NyxAgentApiKeyId = entry.NyxAgentApiKeyId,
-                    NyxConversationRouteId = entry.NyxConversationRouteId,
-                },
+                entry.Id,
+                normalizedScopeId,
                 ct);
         }
 
         return new ChannelBotRegistrationScopeBackfillResult(
+            ChannelBotRegistrationScopeBackfillStatus.Verified,
             emptyScopeRegistrations.Length,
             candidates.Length,
             candidates.Length,
-            "Empty-scope channel bot registrations were backfilled before projection rebuild; backfill re-registers entries and refreshes created_at.");
+            "Empty-scope channel bot registrations were repaired in place; created_at preserved.",
+            Array.Empty<string>());
     }
 
     private static string? NormalizeOptional(string? value)

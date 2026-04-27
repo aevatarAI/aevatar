@@ -165,8 +165,12 @@ public sealed class ChannelRegistrationToolTests
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         doc.RootElement.GetProperty("observed_registrations_before_rebuild").GetInt32().Should().Be(1);
         doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(1);
+        doc.RootElement.GetProperty("backfill_status").GetString().Should().Be("verified");
+        doc.RootElement.GetProperty("warnings").GetArrayLength().Should().Be(0);
         capturedEnvelopes.Should().HaveCount(2);
-        capturedEnvelopes[0].Payload.Unpack<ChannelBotRegisterCommand>().ScopeId.Should().Be("scope-1");
+        var repair = capturedEnvelopes[0].Payload.Unpack<ChannelBotRepairScopeIdCommand>();
+        repair.RegistrationId.Should().Be("reg-1");
+        repair.ScopeId.Should().Be("scope-1");
         capturedEnvelopes[1].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
         verifier.Calls.Should().ContainSingle()
             .Which.Should().Be(("test-token", "scope-1", "key-1"));
@@ -211,6 +215,12 @@ public sealed class ChannelRegistrationToolTests
         doc.RootElement.GetProperty("observed_registrations_before_rebuild").GetInt32().Should().Be(1);
         doc.RootElement.GetProperty("empty_scope_registrations_observed").GetInt32().Should().Be(1);
         doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(0);
+        doc.RootElement.GetProperty("backfill_status").GetString().Should().Be("skipped");
+        doc.RootElement.GetProperty("warnings")
+            .EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should()
+            .ContainSingle(message => message != null && message.Contains("pass registration_id", StringComparison.Ordinal));
         doc.RootElement.GetProperty("note").GetString().Should().Contain("pass registration_id");
         capturedEnvelopes.Should().HaveCount(1);
         capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");

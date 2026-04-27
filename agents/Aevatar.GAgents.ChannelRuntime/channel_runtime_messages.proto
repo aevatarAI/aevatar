@@ -133,6 +133,14 @@ message ChannelBotCompactTombstonesCommand {
   int64 safe_state_version = 1;
 }
 
+// Repairs the canonical scope_id of an existing registration without rewriting
+// the rest of the entry. Emitted by the rebuild backfill path so empty-scope
+// entries can be patched in place — preserves created_at and webhook target.
+message ChannelBotRepairScopeIdCommand {
+  string registration_id = 1;
+  string scope_id = 2;
+}
+
 message ChannelBotProjectionRebuildRequestedEvent {
   string reason = 1;
   google.protobuf.Timestamp requested_at = 2;
@@ -141,6 +149,28 @@ message ChannelBotProjectionRebuildRequestedEvent {
 message ChannelBotTombstonesCompactedEvent {
   repeated string registration_ids = 1;
   int64 safe_state_version = 2;
+}
+
+// Persisted when the registration store rejects an inbound register command
+// (e.g. missing scope_id). Carries no state transition; lives in the actor
+// event log as a durable diagnostic so upstream contract breaks remain
+// auditable without polluting the registration set.
+message ChannelBotRegistrationRejectedEvent {
+  string reason = 1;
+  string platform = 2;
+  string requested_id = 3;
+  string nyx_agent_api_key_id = 4;
+  google.protobuf.Timestamp rejected_at = 5;
+}
+
+// Emitted when a previously empty-scope entry is repaired in place. Captures
+// the prior scope_id so the audit trail records the rewrite without losing
+// historical context, and the projector picks the new scope_id off state.
+message ChannelBotScopeIdRepairedEvent {
+  string registration_id = 1;
+  string previous_scope_id = 2;
+  string scope_id = 3;
+  google.protobuf.Timestamp repaired_at = 4;
 }
 
 // Projection read model for channel bot registrations
