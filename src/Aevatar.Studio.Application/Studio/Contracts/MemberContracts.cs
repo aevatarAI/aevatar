@@ -26,6 +26,18 @@ public static class MemberLifecycleStageNames
 }
 
 /// <summary>
+/// Wire-format status values returned in
+/// <see cref="StudioMemberBindingRevisionActionResponse.Status"/>. Centralizing
+/// the literal lets future lifecycle actions (e.g. "deprecated") declare
+/// themselves alongside <see cref="Retired"/> instead of rotting as a magic
+/// string scattered across handler bodies.
+/// </summary>
+public static class MemberRevisionLifecycleStatusNames
+{
+    public const string Retired = "retired";
+}
+
+/// <summary>
 /// Implementation reference returned to the caller. Always typed — never a
 /// generic property bag — so the frontend can dispatch on
 /// <see cref="ImplementationKind"/> without parsing arbitrary keys.
