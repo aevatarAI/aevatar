@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Microsoft.Extensions.Logging;
 using System.Threading.Channels;
 
@@ -185,6 +186,9 @@ public static class StreamingProxyEndpoints
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to unregister room {RoomId} from registry", roomId);
+            return Results.Json(
+                new { error = "Failed to delete room" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
         try
         {

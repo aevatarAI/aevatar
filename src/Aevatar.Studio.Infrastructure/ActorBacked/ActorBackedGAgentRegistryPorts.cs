@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Registry;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -15,6 +16,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     private const string WriteActorIdPrefix = "gagent-registry-";
 
     private readonly IStudioActorBootstrap _bootstrap;
+    private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
@@ -22,12 +24,14 @@ internal sealed class ActorBackedGAgentRegistryPorts :
 
     public ActorBackedGAgentRegistryPorts(
         IStudioActorBootstrap bootstrap,
+        IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
         IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedGAgentRegistryPorts> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
+        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
@@ -97,7 +101,11 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         };
         try
         {
-            var actor = await EnsureWriteActorAsync(normalized.ScopeId, cancellationToken);
+            var actorId = ResolveWriteActorId(normalized.ScopeId);
+            var actor = await _actorRuntime.GetAsync(actorId);
+            if (actor is null)
+                return ScopeResourceAdmissionResult.NotFound();
+
             await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, new ScopeResourceAdmissionRequested
             {
                 GagentType = normalized.GAgentType,

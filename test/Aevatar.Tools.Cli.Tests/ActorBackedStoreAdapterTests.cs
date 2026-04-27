@@ -9,6 +9,7 @@ using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
@@ -114,6 +115,58 @@ public sealed class ActorBackedStoreAdapterTests
         {
             if (envelope.Payload.Is(ScopeResourceAdmissionRequested.Descriptor))
                 throw new GAgentRegistryAdmissionNotFoundException();
+
+            return _inner.DispatchAsync(actorId, envelope, ct);
+        }
+    }
+
+    private sealed class StatefulRegistryDispatchPort : IActorDispatchPort
+    {
+        private readonly FakeActorDispatchPort _inner;
+        private readonly Dictionary<string, GAgentRegistryState> _states = new(StringComparer.Ordinal);
+
+        public StatefulRegistryDispatchPort(FakeActorRuntime runtime)
+        {
+            _inner = new FakeActorDispatchPort(runtime);
+        }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            var state = _states.GetValueOrDefault(actorId) ?? new GAgentRegistryState();
+
+            if (envelope.Payload.Is(ActorRegisteredEvent.Descriptor))
+            {
+                var evt = envelope.Payload.Unpack<ActorRegisteredEvent>();
+                var group = state.Groups.FirstOrDefault(g =>
+                    string.Equals(g.GagentType, evt.GagentType, StringComparison.Ordinal));
+                if (group is null)
+                {
+                    group = new GAgentRegistryEntry { GagentType = evt.GagentType };
+                    state.Groups.Add(group);
+                }
+
+                if (!group.ActorIds.Contains(evt.ActorId))
+                    group.ActorIds.Add(evt.ActorId);
+                _states[actorId] = state;
+            }
+            else if (envelope.Payload.Is(ActorUnregisteredEvent.Descriptor))
+            {
+                var evt = envelope.Payload.Unpack<ActorUnregisteredEvent>();
+                var group = state.Groups.FirstOrDefault(g =>
+                    string.Equals(g.GagentType, evt.GagentType, StringComparison.Ordinal));
+                group?.ActorIds.Remove(evt.ActorId);
+                if (group?.ActorIds.Count == 0)
+                    state.Groups.Remove(group);
+                _states[actorId] = state;
+            }
+            else if (envelope.Payload.Is(ScopeResourceAdmissionRequested.Descriptor))
+            {
+                var request = envelope.Payload.Unpack<ScopeResourceAdmissionRequested>();
+                var group = state.Groups.FirstOrDefault(g =>
+                    string.Equals(g.GagentType, request.GagentType, StringComparison.Ordinal));
+                if (group is null || !group.ActorIds.Contains(request.ActorId))
+                    throw new GAgentRegistryAdmissionNotFoundException();
+            }
 
             return _inner.DispatchAsync(actorId, envelope, ct);
         }
@@ -230,9 +283,17 @@ public sealed class ActorBackedStoreAdapterTests
         public async Task<IActor> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
             where TAgent : IAgent, IProjectedActor
         {
+            EnsureCalls++;
+            if (ThrowOnEnsure)
+                throw new InvalidOperationException("Bootstrap should not be used for this path.");
+
             var existing = await _runtime.GetAsync(actorId);
             return existing ?? await _runtime.CreateAsync<TAgent>(actorId, ct);
         }
+
+        public int EnsureCalls { get; private set; }
+
+        public bool ThrowOnEnsure { get; set; }
     }
 
     private static FakeProjectionDocumentReader<UserMemoryCurrentStateDocument> PackedReader(
@@ -357,7 +418,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
         var store = new ActorBackedGAgentRegistryPorts(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         var snapshot = await store.ListActorsAsync("empty-scope");
 
@@ -386,7 +447,7 @@ public sealed class ActorBackedStoreAdapterTests
         });
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
         var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
-        var store = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
+        var store = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var snapshot = await store.ListActorsAsync("scope-1");
         var groups = snapshot.Groups;
@@ -410,7 +471,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
         var store = new ActorBackedGAgentRegistryPorts(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         await store.RegisterActorAsync(new GAgentActorRegistration("cmd-scope", "MyGAgent", "actor-123"));
 
@@ -438,6 +499,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedGAgentRegistryPorts(
             new FakeStudioActorBootstrap(runtime),
+            runtime,
             new FakeActorDispatchPort(runtime),
             scopeResolver,
             EmptyReader<GAgentRegistryCurrentStateDocument>(),
@@ -457,7 +519,7 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
         var store = new ActorBackedGAgentRegistryPorts(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+            new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
         await store.UnregisterActorAsync(new GAgentActorRegistration("cmd-scope", "MyGAgent", "actor-456"));
 
@@ -477,8 +539,10 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "admission-scope" };
         var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+        await runtime.CreateAsync<GAgentRegistryGAgent>("gagent-registry-admission-scope");
         var store = new ActorBackedGAgentRegistryPorts(
             new FakeStudioActorBootstrap(runtime),
+            runtime,
             new FakeActorDispatchPort(runtime),
             scopeResolver,
             EmptyReader<GAgentRegistryCurrentStateDocument>(),
@@ -506,8 +570,10 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "admission-scope" };
         var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+        await runtime.CreateAsync<GAgentRegistryGAgent>("gagent-registry-admission-scope");
         var store = new ActorBackedGAgentRegistryPorts(
             new FakeStudioActorBootstrap(runtime),
+            runtime,
             new ThrowingAdmissionDispatchPort(runtime),
             scopeResolver,
             EmptyReader<GAgentRegistryCurrentStateDocument>(),
@@ -521,6 +587,47 @@ public sealed class ActorBackedStoreAdapterTests
             ScopeResourceOperation.Chat));
 
         result.Status.Should().Be(ScopeResourceAdmissionStatus.NotFound);
+    }
+
+    [Fact]
+    public async Task ScopeResourceAdmissionPort_AuthorizeTargetAsync_UsesRegistryStateWhenReadModelLags()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "lag-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+        var bootstrap = new FakeStudioActorBootstrap(runtime);
+        var dispatchPort = new StatefulRegistryDispatchPort(runtime);
+        var store = new ActorBackedGAgentRegistryPorts(
+            bootstrap,
+            runtime,
+            dispatchPort,
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        await store.RegisterActorAsync(new GAgentActorRegistration("lag-scope", "MyGAgent", "actor-registered"));
+        var ensureCallsAfterRegister = bootstrap.EnsureCalls;
+        bootstrap.ThrowOnEnsure = true;
+
+        var allowed = await store.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "lag-scope",
+            ScopeResourceKind.GAgentActor,
+            "MyGAgent",
+            "actor-registered",
+            ScopeResourceOperation.Chat));
+        var missing = await store.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "lag-scope",
+            ScopeResourceKind.GAgentActor,
+            "MyGAgent",
+            "actor-missing",
+            ScopeResourceOperation.Chat));
+        var snapshot = await store.ListActorsAsync("lag-scope");
+
+        allowed.Status.Should().Be(ScopeResourceAdmissionStatus.Allowed);
+        missing.Status.Should().Be(ScopeResourceAdmissionStatus.NotFound);
+        snapshot.Groups.Should().BeEmpty("the registry read model can lag behind admission");
+        bootstrap.EnsureCalls.Should().Be(ensureCallsAfterRegister);
+        runtime.Actors.Should().NotContainKey("actor-missing");
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1709,11 +1816,11 @@ public sealed class ActorBackedStoreAdapterTests
         var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
         var scopeA = new FakeScopeResolver { ScopeIdToReturn = "scope-a" };
-        var storeA = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeA, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        var storeA = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeA, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
         await storeA.RegisterActorAsync(new GAgentActorRegistration("scope-a", "MyAgent", "actor-1"));
 
         var scopeB = new FakeScopeResolver { ScopeIdToReturn = "scope-b" };
-        var storeB = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeB, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        var storeB = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeB, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
         await storeB.RegisterActorAsync(new GAgentActorRegistration("scope-b", "MyAgent", "actor-2"));
 
         runtime.Actors.Should().ContainKey("gagent-registry-scope-a");

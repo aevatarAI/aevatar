@@ -11,6 +11,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using StreamingProxyParticipant = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
 using Google.Protobuf;
 using Any = Google.Protobuf.WellKnownTypes.Any;
@@ -149,6 +150,31 @@ public class StreamingProxyCoverageTests
             x.scopeId == "scope-a" &&
             x.gagentType == StreamingProxyDefaults.GAgentTypeName && x.actorId == "room-1");
         participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
+    }
+
+    [Fact]
+    public async Task HandleDeleteRoomAsync_UnregisterFailure_ShouldReturnUnavailable()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            UnregisterException = new InvalidOperationException("registry unavailable"),
+        };
+        var participantStore = new StubParticipantStore();
+
+        var result = await InvokeResultAsync(
+            "HandleDeleteRoomAsync",
+            CreateScopedHttpContext(),
+            "scope-a",
+            "room-1",
+            actorStore,
+            actorStore,
+            participantStore,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        participantStore.RemovedRooms.Should().BeEmpty();
     }
 
     [Fact]
@@ -1443,6 +1469,7 @@ public class StreamingProxyCoverageTests
         public List<GAgentActorGroup> Groups { get; } = [];
         public List<(string scopeId, string gagentType, string actorId)> AddedActors { get; } = [];
         public List<(string scopeId, string gagentType, string actorId)> RemovedActors { get; } = [];
+        public Exception? UnregisterException { get; init; }
 
         public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
             string scopeId,
@@ -1468,6 +1495,9 @@ public class StreamingProxyCoverageTests
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
+            if (UnregisterException is not null)
+                throw UnregisterException;
+
             RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,

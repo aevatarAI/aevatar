@@ -1,4 +1,4 @@
-namespace Aevatar.Studio.Application.Studio.Abstractions;
+namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
 
 public interface IGAgentActorRegistryCommandPort
 {
