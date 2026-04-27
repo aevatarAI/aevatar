@@ -100,3 +100,30 @@ message ChatConversationCurrentStateDocument {
   google.protobuf.Timestamp updated_at = 5;
   google.protobuf.Any state_root = 10;
 }
+
+// ─── StudioMember Current State ReadModel ───
+//
+// Materialized from StudioMemberGAgent committed events. Document id is the
+// actor id (<c>studio-member:{scopeId}:{memberId}</c>). scope_id is the prefix
+// used by query ports to list members per scope; published_service_id is the
+// stable per-member service id used by member binding orchestration.
+
+message StudioMemberCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+
+  // Denormalized view fields for roster scans
+  string member_id = 20;
+  string scope_id = 21;
+  string display_name = 22;
+  string description = 23;
+  int32 implementation_kind = 24;
+  int32 lifecycle_stage = 25;
+  string published_service_id = 26;
+  string last_bound_revision_id = 27;
+  google.protobuf.Timestamp created_at = 28;
+}
