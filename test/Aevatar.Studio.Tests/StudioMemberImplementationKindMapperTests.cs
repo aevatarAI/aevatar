@@ -54,4 +54,14 @@ public sealed class StudioMemberImplementationKindMapperTests
     {
         MemberImplementationKindMapper.ToWireName(stage).Should().Be(expected);
     }
+
+    [Fact]
+    public void ToWireName_LifecycleStage_ShouldReturnEmpty_ForUnspecified()
+    {
+        // An Unspecified value indicates a malformed projection; previously
+        // this silently mapped to "created", which lied to callers.
+        MemberImplementationKindMapper
+            .ToWireName(StudioMemberLifecycleStage.Unspecified)
+            .Should().BeEmpty();
+    }
 }

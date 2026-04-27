@@ -33,7 +33,7 @@ internal static class StudioMemberEndpoints
             .WithTags("StudioMembers");
     }
 
-    private static async Task<IResult> HandleCreateAsync(
+    internal static async Task<IResult> HandleCreateAsync(
         HttpContext http,
         string scopeId,
         CreateStudioMemberRequest request,
@@ -58,7 +58,7 @@ internal static class StudioMemberEndpoints
         }
     }
 
-    private static async Task<IResult> HandleListAsync(
+    internal static async Task<IResult> HandleListAsync(
         HttpContext http,
         string scopeId,
         IStudioMemberService memberService,
@@ -81,7 +81,7 @@ internal static class StudioMemberEndpoints
         }
     }
 
-    private static async Task<IResult> HandleGetAsync(
+    internal static async Task<IResult> HandleGetAsync(
         HttpContext http,
         string scopeId,
         string memberId,
@@ -106,7 +106,7 @@ internal static class StudioMemberEndpoints
         }
     }
 
-    private static async Task<IResult> HandleBindAsync(
+    internal static async Task<IResult> HandleBindAsync(
         HttpContext http,
         string scopeId,
         string memberId,
@@ -131,7 +131,7 @@ internal static class StudioMemberEndpoints
         }
     }
 
-    private static async Task<IResult> HandleGetBindingAsync(
+    internal static async Task<IResult> HandleGetBindingAsync(
         HttpContext http,
         string scopeId,
         string memberId,

@@ -23,6 +23,7 @@
     <ProjectReference Include="../../src/platform/Aevatar.GAgentService.Hosting/Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="../../src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Projection/Aevatar.Studio.Projection.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
   </ItemGroup>
 

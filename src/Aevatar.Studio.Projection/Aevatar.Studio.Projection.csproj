@@ -36,4 +36,8 @@
   <ItemGroup>
     <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.Studio.Tests" />
+  </ItemGroup>
 </Project>

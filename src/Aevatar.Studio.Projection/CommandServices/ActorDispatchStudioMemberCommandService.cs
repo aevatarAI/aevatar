@@ -20,16 +20,13 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IStudioMemberQueryPort _queryPort;
 
     public ActorDispatchStudioMemberCommandService(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
-        IStudioMemberQueryPort queryPort)
+        IActorDispatchPort dispatchPort)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
     }
 
     public async Task<StudioMemberSummaryResponse> CreateAsync(

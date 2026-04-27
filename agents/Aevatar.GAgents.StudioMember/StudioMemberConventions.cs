@@ -41,6 +41,9 @@ public static class StudioMemberConventions
         var trimmed = scopeId?.Trim();
         if (string.IsNullOrEmpty(trimmed))
             throw new ArgumentException("scopeId is required.", nameof(scopeId));
+        if (ContainsActorIdSeparator(trimmed))
+            throw new ArgumentException(
+                "scopeId must not contain ':' (it is the actor-id separator).", nameof(scopeId));
         return trimmed;
     }
 
@@ -49,6 +52,11 @@ public static class StudioMemberConventions
         var trimmed = memberId?.Trim();
         if (string.IsNullOrEmpty(trimmed))
             throw new ArgumentException("memberId is required.", nameof(memberId));
+        if (ContainsActorIdSeparator(trimmed))
+            throw new ArgumentException(
+                "memberId must not contain ':' (it is the actor-id separator).", nameof(memberId));
         return trimmed;
     }
+
+    private static bool ContainsActorIdSeparator(string value) => value.Contains(':');
 }

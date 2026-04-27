@@ -44,4 +44,28 @@ public sealed class StudioMemberConventionsTests
         var b = StudioMemberConventions.BuildPublishedServiceId("m-bbb");
         a.Should().NotBe(b);
     }
+
+    [Fact]
+    public void NormalizeScopeId_ShouldRejectActorIdSeparator()
+    {
+        // Allowing ':' would let a caller forge actor IDs by collision —
+        // e.g. "scope-1:m-evil" would round-trip to the actor id of a real
+        // member in scope-1. Reject at the boundary.
+        var act = () => StudioMemberConventions.NormalizeScopeId("scope:1");
+        act.Should().Throw<ArgumentException>().WithParameterName("scopeId");
+    }
+
+    [Fact]
+    public void NormalizeMemberId_ShouldRejectActorIdSeparator()
+    {
+        var act = () => StudioMemberConventions.NormalizeMemberId("m:nested");
+        act.Should().Throw<ArgumentException>().WithParameterName("memberId");
+    }
+
+    [Fact]
+    public void BuildActorId_ShouldRejectActorIdSeparatorInMemberId()
+    {
+        var act = () => StudioMemberConventions.BuildActorId("scope-1", "m:nested");
+        act.Should().Throw<ArgumentException>().WithParameterName("memberId");
+    }
 }

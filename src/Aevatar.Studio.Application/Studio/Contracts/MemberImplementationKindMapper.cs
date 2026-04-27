@@ -40,6 +40,6 @@ public static class MemberImplementationKindMapper
         StudioMemberLifecycleStage.Created => MemberLifecycleStageNames.Created,
         StudioMemberLifecycleStage.BuildReady => MemberLifecycleStageNames.BuildReady,
         StudioMemberLifecycleStage.BindReady => MemberLifecycleStageNames.BindReady,
-        _ => MemberLifecycleStageNames.Created,
+        _ => string.Empty,
     };
 }
