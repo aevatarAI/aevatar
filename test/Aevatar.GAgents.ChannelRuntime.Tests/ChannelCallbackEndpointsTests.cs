@@ -157,6 +157,35 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRegisterAsync_ReturnsBadRequest_WhenTelegramBotTokenMissing()
+    {
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("telegram");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: "telegram",
+                Error: "missing_bot_token")));
+
+        var http = CreateJsonHttpContext(
+            """{"platform":"telegram","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            new[] { provisioningService },
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("missing_bot_token");
+    }
+
+    [Fact]
     public async Task HandleListRegistrationsAsync_ReturnsRelayModeOnly()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();

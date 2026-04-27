@@ -78,6 +78,10 @@ public static class ServiceCollectionExtensions
             StudioMaterializationContext,
             ChatConversationCurrentStateProjector>();
 
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StudioMemberCurrentStateProjector>();
+
         // ── Document metadata providers (for index creation in Elasticsearch) ──
 
         services.TryAddSingleton<
@@ -112,6 +116,10 @@ public static class ServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<ChatConversationCurrentStateDocument>,
             ChatConversationCurrentStateDocumentMetadataProvider>();
 
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StudioMemberCurrentStateDocument>,
+            StudioMemberCurrentStateDocumentMetadataProvider>();
+
         // Projection scope activation port — required so Studio projectors
         // actually subscribe to their actor streams and materialize events.
         services.TryAddSingleton<StudioProjectionPort>();
@@ -124,9 +132,11 @@ public static class ServiceCollectionExtensions
 
         // Query ports (read side)
         services.TryAddSingleton<IUserConfigQueryPort, ProjectionUserConfigQueryPort>();
+        services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
 
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
+        services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
 
         return services;
     }

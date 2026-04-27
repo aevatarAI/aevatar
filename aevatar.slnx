@@ -13,9 +13,11 @@
     <Project Path="agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <Project Path="agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
+    <Project Path="agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
+    <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
   </Folder>
   <Folder Name="/demos/">
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
@@ -43,6 +45,7 @@
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Channel/Aevatar.AI.ToolProviders.Channel.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Lark/Aevatar.AI.ToolProviders.Lark.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.Telegram/Aevatar.AI.ToolProviders.Telegram.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.NyxId/Aevatar.AI.ToolProviders.NyxId.csproj" />
     <Project Path="src/Aevatar.CQRS.Projection.Runtime.Abstractions/Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <Project Path="src/Aevatar.Foundation.ExternalLinks.WebSocket/Aevatar.Foundation.ExternalLinks.WebSocket.csproj" />
@@ -149,6 +152,7 @@
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.ServiceInvoke.Tests\Aevatar.AI.ToolProviders.ServiceInvoke.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Lark.Tests\Aevatar.AI.ToolProviders.Lark.Tests.csproj" />
+    <Project Path="test\Aevatar.AI.ToolProviders.Telegram.Tests\Aevatar.AI.ToolProviders.Telegram.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Workflow.Tests\Aevatar.AI.ToolProviders.Workflow.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Binding.Tests\Aevatar.AI.ToolProviders.Binding.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Infrastructure.Local.Tests\Aevatar.AI.Infrastructure.Local.Tests.csproj" />
@@ -175,6 +179,7 @@
     <Project Path="test\Aevatar.Architecture.Tests\Aevatar.Architecture.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Platform.Lark.Tests\Aevatar.GAgents.Platform.Lark.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Channel.Protocol.Tests\Aevatar.GAgents.Channel.Protocol.Tests.csproj" />
+    <Project Path="test\Aevatar.GAgents.Platform.Telegram.Tests\Aevatar.GAgents.Platform.Telegram.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Channel.Testing\Aevatar.GAgents.Channel.Testing.csproj" />
     <Project Path="test\Aevatar.GAgents.ChannelRuntime.Tests\Aevatar.GAgents.ChannelRuntime.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Household.Tests\Aevatar.GAgents.Household.Tests.csproj" />
