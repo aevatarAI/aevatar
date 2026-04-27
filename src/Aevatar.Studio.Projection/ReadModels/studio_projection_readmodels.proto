@@ -100,3 +100,51 @@ message ChatConversationCurrentStateDocument {
   google.protobuf.Timestamp updated_at = 5;
   google.protobuf.Any state_root = 10;
 }
+
+// ─── StudioMember Current State ReadModel ───
+//
+// Materialized from StudioMemberGAgent committed events. Document id is the
+// actor id (<c>studio-member:{scopeId}:{memberId}</c>). scope_id is the prefix
+// used by query ports to list members per scope; published_service_id is the
+// stable per-member service id used by member binding orchestration.
+//
+// CLAUDE.md `状态镜像契约面向查询` — read-model payload is a query-shaped
+// strongly-typed contract. Implementation_ref and last_binding are
+// denormalized to top-level fields (not packed via google.protobuf.Any of
+// the actor's internal state) so the query port never has to peek at the
+// authority's internal state layout. wire-stable strings (e.g.
+// implementation_kind = "workflow") are preferred over int enum codes so a
+// stale document can never silently round-trip an out-of-range value.
+
+message StudioMemberCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  // ── Identity / display ──
+  string member_id = 20;
+  string scope_id = 21;
+  string display_name = 22;
+  string description = 23;
+
+  // ── Lifecycle (wire-stable) ──
+  string implementation_kind = 24;       // "workflow" | "script" | "gagent" | ""
+  string lifecycle_stage = 25;           // "created" | "build_ready" | "bind_ready" | ""
+  string published_service_id = 26;
+  google.protobuf.Timestamp created_at = 28;
+
+  // ── Implementation ref (typed, only one of the *_id fields is set) ──
+  string implementation_workflow_id = 30;
+  string implementation_workflow_revision = 31;
+  string implementation_script_id = 32;
+  string implementation_script_revision = 33;
+  string implementation_actor_type_name = 34;
+
+  // ── Last-binding contract (denormalized) ──
+  string last_bound_published_service_id = 40;
+  string last_bound_revision_id = 41;
+  string last_bound_implementation_kind = 42; // wire-stable string
+  google.protobuf.Timestamp last_bound_at = 43;
+}
