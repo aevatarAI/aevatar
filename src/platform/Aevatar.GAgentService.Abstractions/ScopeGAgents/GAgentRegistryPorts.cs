@@ -41,6 +41,7 @@ public enum GAgentActorRegistryCommandStage
 {
     AcceptedForDispatch = 0,
     AdmissionVisible = 1,
+    AdmissionRemoved = 2,
 }
 
 public sealed record GAgentActorRegistrySnapshot(

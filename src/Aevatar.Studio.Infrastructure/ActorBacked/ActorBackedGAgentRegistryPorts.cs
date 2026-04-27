@@ -49,9 +49,12 @@ internal sealed class ActorBackedGAgentRegistryPorts :
             GagentType = normalized.GAgentType,
             ActorId = normalized.ActorId,
         }, cancellationToken);
+        var stage = await VerifyAdmissionVisibleAsync(actor, normalized, cancellationToken)
+            ? GAgentActorRegistryCommandStage.AdmissionVisible
+            : GAgentActorRegistryCommandStage.AcceptedForDispatch;
         return new GAgentActorRegistryCommandReceipt(
             normalized,
-            GAgentActorRegistryCommandStage.AdmissionVisible);
+            stage);
     }
 
     public async Task<GAgentActorRegistryCommandReceipt> UnregisterActorAsync(
@@ -67,7 +70,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         }, cancellationToken);
         return new GAgentActorRegistryCommandReceipt(
             normalized,
-            GAgentActorRegistryCommandStage.AdmissionVisible);
+            GAgentActorRegistryCommandStage.AdmissionRemoved);
     }
 
     public async Task<GAgentActorRegistrySnapshot> ListActorsAsync(
@@ -165,6 +168,36 @@ internal sealed class ActorBackedGAgentRegistryPorts :
 
     private Task<IActor> EnsureWriteActorAsync(string? scopeId, CancellationToken ct) =>
         _bootstrap.EnsureAsync<GAgentRegistryGAgent>(ResolveWriteActorId(scopeId), ct);
+
+    private async Task<bool> VerifyAdmissionVisibleAsync(
+        IActor registryActor,
+        GAgentActorRegistration registration,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ActorCommandDispatcher.SendAsync(_dispatchPort, registryActor, new ScopeResourceAdmissionRequested
+            {
+                GagentType = registration.GAgentType,
+                ActorId = registration.ActorId,
+                Operation = GAgentRegistryOperation.Use,
+            }, ct);
+            return true;
+        }
+        catch (GAgentRegistryAdmissionNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Registry registration was dispatched but admission visibility could not be verified for scope {ScopeId}, actor {ActorId}",
+                registration.ScopeId,
+                registration.ActorId);
+            return false;
+        }
+    }
 
     private string NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId)

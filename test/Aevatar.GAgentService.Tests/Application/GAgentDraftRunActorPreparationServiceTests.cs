@@ -218,7 +218,7 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
             UnregisteredActors.Add(registration);
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
-                GAgentActorRegistryCommandStage.AdmissionVisible));
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
     }
 

@@ -26,6 +26,7 @@ Target actors may own their capability-local business facts. They must not indep
 - unregister actor membership for a scope
 - return only an honest dispatch/acceptance result unless a stronger receipt is explicitly modeled
 - expose a committed or admission-visible receipt when a caller needs create-then-immediately-operate semantics
+- expose a distinct removal receipt for unregister; removal must not be reported as admission-visible
 
 `IGAgentActorRegistryQueryPort` owns registry listing reads:
 

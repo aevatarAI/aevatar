@@ -182,6 +182,34 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleCreateConversationAsync_ShouldRollback_WhenRegistrationIsNotAdmissionVisible()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
+        };
+        var runtime = new StubActorRuntime();
+
+        var result = await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            runtime,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        actorStore.AddedActors.Should().ContainSingle();
+        var actorId = actorStore.AddedActors.Single().ActorId;
+        actorStore.RemovedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == actorId);
+        runtime.DestroyCalls.Should().ContainSingle(actorId);
+    }
+
+    [Fact]
     public async Task HandleListConversationsAsync_ShouldReturnRegisteredActors()
     {
         var actorStore = new StubGAgentActorStore
@@ -2004,6 +2032,8 @@ public class NyxIdChatEndpointsCoverageTests
         public IReadOnlyList<GAgentActorGroup> GroupsToReturn { get; init; } = [];
         public Exception? AddActorException { get; init; }
         public Exception? RemoveActorException { get; init; }
+        public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
+            GAgentActorRegistryCommandStage.AdmissionVisible;
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
         public string? LastRequestedScopeId { get; private set; }
@@ -2030,7 +2060,7 @@ public class NyxIdChatEndpointsCoverageTests
             AddedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
-                GAgentActorRegistryCommandStage.AdmissionVisible));
+                RegisterStage));
         }
 
         public Task<GAgentActorRegistryCommandReceipt> UnregisterActorAsync(
@@ -2042,7 +2072,7 @@ public class NyxIdChatEndpointsCoverageTests
             RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
-                GAgentActorRegistryCommandStage.AdmissionVisible));
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
 
         public Task<ScopeResourceAdmissionResult> AuthorizeTargetAsync(

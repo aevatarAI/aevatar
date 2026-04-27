@@ -1113,7 +1113,7 @@ public sealed class ScopeGAgentEndpointsTests
             RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
-                GAgentActorRegistryCommandStage.AdmissionVisible));
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
 
         public Task<ScopeResourceAdmissionResult> AuthorizeTargetAsync(

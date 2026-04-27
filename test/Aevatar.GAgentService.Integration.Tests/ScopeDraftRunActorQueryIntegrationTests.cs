@@ -246,7 +246,7 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
                 string.Equals(registration.ActorId, target.ActorId, StringComparison.Ordinal));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 target,
-                GAgentActorRegistryCommandStage.AdmissionVisible));
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
 
         public Task<ScopeResourceAdmissionResult> AuthorizeTargetAsync(

@@ -91,14 +91,22 @@ public static partial class NyxIdChatEndpoints
         // degraded mode where a conversation can run without being registered.
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
         await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+        var registrationAttempted = false;
         try
         {
+            registrationAttempted = true;
             var receipt = await registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
                 ct);
             if (!receipt.IsAdmissionVisible)
             {
-                await actorRuntime.DestroyAsync(actorId, CancellationToken.None);
+                await TryRollbackConversationCreationAsync(
+                    http,
+                    scopeId,
+                    actorId,
+                    registryCommandPort,
+                    actorRuntime,
+                    registrationAttempted);
                 return Results.Json(
                     new { error = "Conversation registration is not admission-visible" },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -106,11 +114,56 @@ public static partial class NyxIdChatEndpoints
         }
         catch
         {
-            await actorRuntime.DestroyAsync(actorId, CancellationToken.None);
+            await TryRollbackConversationCreationAsync(
+                http,
+                scopeId,
+                actorId,
+                registryCommandPort,
+                actorRuntime,
+                registrationAttempted);
             throw;
         }
 
         return Results.Ok(new { actorId });
+    }
+
+    private static async Task TryRollbackConversationCreationAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        IGAgentActorRegistryCommandPort registryCommandPort,
+        IActorRuntime actorRuntime,
+        bool registrationAttempted)
+    {
+        var logger = http.RequestServices?.GetService<ILoggerFactory>()
+            ?.CreateLogger("Aevatar.NyxId.Chat.CreateConversation");
+
+        if (registrationAttempted)
+        {
+            try
+            {
+                await registryCommandPort.UnregisterActorAsync(
+                    new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Failed to unregister NyxId chat conversation during create rollback: scope={ScopeId}, actor={ActorId}",
+                    scopeId,
+                    actorId);
+            }
+        }
+
+        try
+        {
+            await actorRuntime.DestroyAsync(actorId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Failed to destroy NyxId chat actor {ActorId} during create rollback", actorId);
+        }
     }
 
     private static async Task<IResult> HandleListConversationsAsync(
