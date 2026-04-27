@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import { ensureActiveAuthSession } from "@/shared/auth/client";
 import {
   clearStoredAuthSession,
   persistAuthSession,
@@ -20,6 +21,10 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
     listMemberRuns: jest.fn(),
   },
+}));
+
+jest.mock("@/shared/auth/client", () => ({
+  ensureActiveAuthSession: jest.fn(async () => null),
 }));
 
 jest.mock("@/shared/studio/api", () => ({
@@ -316,6 +321,56 @@ describe("TeamsHomePage", () => {
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
+  it("waits for auth recovery before loading the member roster", async () => {
+    let authLookupCount = 0;
+    (studioApi.getAuthSession as jest.Mock).mockImplementation(async () => {
+      authLookupCount += 1;
+      if (authLookupCount === 1) {
+        return {
+          enabled: true,
+          authenticated: false,
+          scopeId: null,
+          scopeSource: null,
+        };
+      }
+
+      return {
+        enabled: true,
+        authenticated: true,
+        scopeId: "scope-a",
+        scopeSource: "nyxid",
+      };
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByText("正在恢复当前登录态并整理成员清单。"),
+    ).toBeTruthy();
+
+    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(ensureActiveAuthSession).toHaveBeenCalledTimes(1);
+    expect(studioApi.listMembers).toHaveBeenCalledWith("scope-a");
+  });
+
+  it("keeps the roster query blocked when auth recovery still cannot authenticate", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockImplementation(async () => ({
+      enabled: true,
+      authenticated: false,
+      scopeId: null,
+      scopeSource: null,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    await waitFor(() => {
+      expect(ensureActiveAuthSession).toHaveBeenCalledTimes(1);
+    });
+
+    expect(await screen.findByText("当前登录态尚未准备好")).toBeTruthy();
+    expect(studioApi.listMembers).not.toHaveBeenCalled();
   });
 
   it("opens Studio from the empty member roster state", async () => {

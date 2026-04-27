@@ -18,6 +18,8 @@ import {
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import { ensureActiveAuthSession } from "@/shared/auth/client";
+import { getNyxIDRuntimeConfig } from "@/shared/auth/config";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
@@ -790,12 +792,23 @@ const TeamsHomePage: React.FC = () => {
     "cards" | "list" | null
   >(null);
   const [showScopePicker, setShowScopePicker] = React.useState(false);
+  const [authRecoveryAttempted, setAuthRecoveryAttempted] = React.useState(false);
+  const [authRecoveryPending, setAuthRecoveryPending] = React.useState(false);
+  const isMountedRef = React.useRef(true);
+  const nyxIdConfig = React.useMemo(() => getNyxIDRuntimeConfig(), []);
+
+  React.useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
+  const refetchAuthSession = authSessionQuery.refetch;
   const localScopeId = trimOptional(loadRestorableAuthSession()?.user.sub);
   const locallyResolvedScope = React.useMemo(() => {
     if (!localScopeId) {
@@ -821,6 +834,49 @@ const TeamsHomePage: React.FC = () => {
       "登录状态暂时不可用，请刷新后重试。",
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
+  const authSessionAccessResolved =
+    !authSessionQuery.isLoading && !authSessionQuery.isError;
+  const authSessionAuthenticated =
+    authSessionQuery.data?.enabled === false ||
+    Boolean(authSessionQuery.data?.authenticated);
+
+  React.useEffect(() => {
+    if (authSessionQuery.isLoading || authSessionQuery.isError) {
+      return;
+    }
+
+    if (!authSessionQuery.data?.enabled || authSessionQuery.data.authenticated) {
+      setAuthRecoveryAttempted(false);
+      setAuthRecoveryPending(false);
+      return;
+    }
+
+    if (!nyxIdConfig.enabled || authRecoveryAttempted) {
+      return;
+    }
+
+    setAuthRecoveryAttempted(true);
+    setAuthRecoveryPending(true);
+
+    void (async () => {
+      try {
+        await ensureActiveAuthSession(nyxIdConfig);
+        await refetchAuthSession();
+      } finally {
+        if (isMountedRef.current) {
+          setAuthRecoveryPending(false);
+        }
+      }
+    })();
+  }, [
+    authRecoveryAttempted,
+    authSessionQuery.data?.authenticated,
+    authSessionQuery.data?.enabled,
+    authSessionQuery.isError,
+    authSessionQuery.isLoading,
+    nyxIdConfig,
+    refetchAuthSession,
+  ]);
 
   React.useEffect(() => {
     if (!resolvedScope?.scopeId) {
@@ -840,19 +896,32 @@ const TeamsHomePage: React.FC = () => {
   }, [resolvedScope?.scopeId]);
 
   const scopeId = activeDraft.scopeId.trim();
+  const scopeQueriesEnabled =
+    scopeId.length > 0 &&
+    !authRecoveryPending &&
+    (authSessionQuery.isError ||
+      (authSessionAccessResolved && authSessionAuthenticated));
+  const rosterAuthPending =
+    scopeId.length > 0 && (authSessionQuery.isLoading || authRecoveryPending);
+  const rosterAuthUnavailable =
+    scopeId.length > 0 &&
+    !authSessionQuery.isError &&
+    authSessionAccessResolved &&
+    !authSessionAuthenticated &&
+    !authRecoveryPending;
 
   React.useEffect(() => {
     history.replace(buildScopeHref("/teams", activeDraft));
   }, [activeDraft]);
 
   const membersQuery = useQuery({
-    enabled: scopeId.length > 0,
+    enabled: scopeQueriesEnabled,
     queryKey: ["teams", "members", scopeId],
     queryFn: () => studioApi.listMembers(scopeId),
     retry: false,
   });
   const servicesQuery = useQuery({
-    enabled: scopeId.length > 0,
+    enabled: scopeQueriesEnabled,
     queryKey: ["teams", "services", scopeId],
     queryFn: () =>
       servicesApi.listServices({
@@ -892,7 +961,7 @@ const TeamsHomePage: React.FC = () => {
   );
   const memberRunQueries = useQueries({
     queries: runtimeSampleMembers.map((member) => ({
-      enabled: scopeId.length > 0 && membersQuery.isSuccess,
+      enabled: scopeQueriesEnabled && membersQuery.isSuccess,
       queryKey: ["teams", "member-runs", scopeId, member.memberId],
       queryFn: () =>
         scopeRuntimeApi.listMemberRuns(scopeId, member.memberId, {
@@ -1204,8 +1273,21 @@ const TeamsHomePage: React.FC = () => {
               />
             ) : null}
 
-            {membersQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在整理当前 Scope 的成员清单。" />
+            {rosterAuthPending || membersQuery.isLoading ? (
+              <AevatarInspectorEmpty
+                description={
+                  authRecoveryPending
+                    ? "正在恢复当前登录态并整理成员清单。"
+                    : "正在整理当前 Scope 的成员清单。"
+                }
+              />
+            ) : rosterAuthUnavailable ? (
+              <Alert
+                description="成员清单会在登录态恢复完成后再加载；如果长时间停留在这里，请重新登录。"
+                showIcon
+                title="当前登录态尚未准备好"
+                type="info"
+              />
             ) : membersQuery.isError ? (
               <Alert
                 showIcon
