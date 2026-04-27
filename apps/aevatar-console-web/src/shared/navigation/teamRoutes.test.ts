@@ -49,6 +49,7 @@ describe("teamRoutes", () => {
         "/teams/scope-alpha",
       ),
     ).toEqual({
+      memberId: "",
       runId: "run-1",
       scopeId: "scope-alpha",
       serviceId: "service-1",
@@ -64,6 +65,7 @@ describe("teamRoutes", () => {
         "/teams/scope-alpha",
       ),
     ).toEqual({
+      memberId: "",
       runId: "",
       scopeId: "scope-alpha",
       serviceId: "",
@@ -79,6 +81,7 @@ describe("teamRoutes", () => {
         "/teams/scope-query",
       ),
     ).toEqual({
+      memberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",
@@ -94,6 +97,7 @@ describe("teamRoutes", () => {
         "/runtime/runs",
       ),
     ).toEqual({
+      memberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",

@@ -1093,6 +1093,7 @@ const TeamDetailPage: React.FC = () => {
     [scopeId],
   );
   const [graphDepth, setGraphDepth] = React.useState(2);
+  const [preferredMemberId, setPreferredMemberId] = React.useState(routeState.memberId);
   const [preferredServiceId, setPreferredServiceId] = React.useState(
     routeState.serviceId,
   );
@@ -1104,9 +1105,13 @@ const TeamDetailPage: React.FC = () => {
   const { token } = theme.useToken();
 
   React.useEffect(() => {
+    const nextMemberId = trimText(routeState.memberId);
     const nextServiceId = trimText(routeState.serviceId);
     const nextRunId = trimText(routeState.runId);
 
+    setPreferredMemberId((currentMemberId) =>
+      trimText(currentMemberId) === nextMemberId ? currentMemberId : nextMemberId,
+    );
     setPreferredServiceId((currentServiceId) =>
       trimText(currentServiceId) === nextServiceId ? currentServiceId : nextServiceId,
     );
@@ -1116,7 +1121,7 @@ const TeamDetailPage: React.FC = () => {
     setActiveTab((currentTab) =>
       currentTab === routeState.tab ? currentTab : routeState.tab,
     );
-  }, [routeState.runId, routeState.serviceId, routeState.tab]);
+  }, [routeState.memberId, routeState.runId, routeState.serviceId, routeState.tab]);
 
   const {
     actorGraphQuery,
@@ -1125,6 +1130,7 @@ const TeamDetailPage: React.FC = () => {
     currentRunAuditQuery,
     lens,
     runsQuery,
+    preferredMemberSummary,
     serviceRevisionsQuery,
     scriptsQuery,
     servicesQuery,
@@ -1132,6 +1138,7 @@ const TeamDetailPage: React.FC = () => {
   } = useTeamRuntimeLens(scopeId, {
     graphDepth,
     preferredActorId: selectedActorId || undefined,
+    preferredMemberId,
     preferredRunId,
     preferredServiceId,
   });
@@ -1360,6 +1367,9 @@ const TeamDetailPage: React.FC = () => {
     lens.currentService?.serviceId ||
     lens.currentRun?.serviceId ||
     undefined;
+  const currentMemberId =
+    trimText(preferredMemberSummary?.memberId) ||
+    trimText(preferredMemberId);
   const currentPlatformService =
     focusedOperationalUnit?.matchedService || lens.currentService || servicesQuery.data?.[0] || null;
   const platformRouteIdentity = React.useMemo(
@@ -1372,6 +1382,7 @@ const TeamDetailPage: React.FC = () => {
     [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
   );
   const selectedStudioMemberId =
+    currentMemberId ||
     trimText(runtimeServiceId) ||
     trimText(serviceRevisionsQuery.data?.serviceId) ||
     trimText(preferredServiceId) ||
@@ -1558,7 +1569,9 @@ const TeamDetailPage: React.FC = () => {
     scopeId,
     workflowId: activeWorkflowSummary?.workflowId,
     workflowName: activeWorkflowSummary?.workflowName,
-    displayName: activeWorkflowSummary?.displayName,
+    displayName:
+      trimText(preferredMemberSummary?.displayName) ||
+      activeWorkflowSummary?.displayName,
     lensTitle: lens.title,
   });
   const teamTitle = teamHeading.title;
@@ -3172,6 +3185,7 @@ const TeamDetailPage: React.FC = () => {
       setActiveTab(tab);
       history.push(
         buildTeamDetailHref({
+          memberId: currentMemberId || undefined,
           scopeId,
           workflowId: activeWorkflowId || undefined,
           serviceId: runtimeServiceId,
@@ -3186,6 +3200,7 @@ const TeamDetailPage: React.FC = () => {
     },
     [
       activeWorkflowId,
+      currentMemberId,
       lens.currentRun?.runId,
       lens.playback.currentRunId,
       preferredRunId,
@@ -3202,6 +3217,7 @@ const TeamDetailPage: React.FC = () => {
       setSelectedTopologyNodeId("");
       history.push(
         buildTeamDetailHref({
+          memberId: currentMemberId || undefined,
           scopeId,
           workflowId: activeWorkflowId || undefined,
           serviceId: runtimeServiceId,
@@ -3210,7 +3226,7 @@ const TeamDetailPage: React.FC = () => {
         }),
       );
     },
-    [activeTab, activeWorkflowId, runtimeServiceId, scopeId],
+    [activeTab, activeWorkflowId, currentMemberId, runtimeServiceId, scopeId],
   );
 
   const handleOpenConversation = React.useCallback(() => {

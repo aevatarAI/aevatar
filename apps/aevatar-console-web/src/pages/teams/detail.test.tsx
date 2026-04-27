@@ -73,6 +73,78 @@ function mockCreateRunsCatalog() {
   };
 }
 
+function mockCreateServiceRevisionCatalog(overrides?: Record<string, any>) {
+  return {
+    scopeId: "scope-1",
+    serviceId: "default",
+    serviceKey: "scope-1:default",
+    displayName: "Support Escalation Triage",
+    defaultServingRevisionId: "rev-2",
+    activeServingRevisionId: "rev-2",
+    deploymentId: "dep-2",
+    deploymentStatus: "Active",
+    primaryActorId: "actor-intake",
+    catalogStateVersion: 2,
+    catalogLastEventId: "evt-catalog-2",
+    updatedAt: "2026-04-09T09:00:00Z",
+    revisions: [
+      {
+        revisionId: "rev-2",
+        implementationKind: "workflow",
+        status: "Published",
+        artifactHash: "hash-2",
+        failureReason: "",
+        isDefaultServing: true,
+        isActiveServing: true,
+        isServingTarget: true,
+        allocationWeight: 100,
+        servingState: "Active",
+        deploymentId: "dep-2",
+        primaryActorId: "actor-intake",
+        createdAt: "2026-04-09T08:00:00Z",
+        preparedAt: "2026-04-09T08:01:00Z",
+        publishedAt: "2026-04-09T08:02:00Z",
+        retiredAt: null,
+        workflowName: "support-triage",
+        workflowDefinitionActorId: "definition://support-triage",
+        inlineWorkflowCount: 1,
+        scriptId: "",
+        scriptRevision: "",
+        scriptDefinitionActorId: "",
+        scriptSourceHash: "",
+        staticActorTypeName: "",
+      },
+      {
+        revisionId: "rev-1",
+        implementationKind: "workflow",
+        status: "Published",
+        artifactHash: "hash-1",
+        failureReason: "",
+        isDefaultServing: false,
+        isActiveServing: false,
+        isServingTarget: false,
+        allocationWeight: 0,
+        servingState: "",
+        deploymentId: "",
+        primaryActorId: "actor-intake-v1",
+        createdAt: "2026-04-08T08:00:00Z",
+        preparedAt: "2026-04-08T08:01:00Z",
+        publishedAt: "2026-04-08T08:02:00Z",
+        retiredAt: null,
+        workflowName: "support-triage-v1",
+        workflowDefinitionActorId: "definition://support-triage-v1",
+        inlineWorkflowCount: 1,
+        scriptId: "",
+        scriptRevision: "",
+        scriptDefinitionActorId: "",
+        scriptSourceHash: "",
+        staticActorTypeName: "",
+      },
+    ],
+    ...overrides,
+  };
+}
+
 function mockCreateRunAudit(scopeId: string, runId: string) {
   return {
     summary: {
@@ -347,6 +419,7 @@ jest.mock("@/shared/api/runtimeActorsApi", () => ({
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
+    getServiceRevisions: jest.fn(async () => mockCreateServiceRevisionCatalog()),
     listServiceRuns: jest.fn(async () => mockCreateRunsCatalog()),
     getServiceRunAudit: jest.fn(async (scopeId: string, _serviceId: string, runId: string) =>
       mockCreateRunAudit(scopeId, runId),
@@ -531,6 +604,10 @@ jest.mock("@/shared/studio/api", () => ({
 describe("TeamDetailPage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1");
+    (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockReset();
+    (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockImplementation(
+      async () => mockCreateServiceRevisionCatalog(),
+    );
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockReset();
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
       async () => mockCreateRunsCatalog(),
@@ -716,55 +793,24 @@ describe("TeamDetailPage", () => {
     const longRevisionId =
       "rev-20260414154556-4d89bc2a3bf347f8b3bde41d716964f3";
 
-    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
-      available: true,
-      scopeId: "scope-1",
-      serviceId: "default",
-      displayName: "Support Escalation Triage",
-      serviceKey: "scope-1:default",
-      defaultServingRevisionId: longRevisionId,
-      activeServingRevisionId: longRevisionId,
-      deploymentId: "dep-2",
-      deploymentStatus: "Active",
-      primaryActorId: "actor-intake",
-      updatedAt: "2026-04-09T09:00:00Z",
-      revisions: [
-        {
-          revisionId: longRevisionId,
-          implementationKind: "workflow",
-          status: "Published",
-          artifactHash: "hash-2",
-          failureReason: "",
-          isDefaultServing: true,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: "Active",
-          deploymentId: "dep-2",
-          primaryActorId: "actor-intake",
-          createdAt: "2026-04-09T08:00:00Z",
-          preparedAt: "2026-04-09T08:01:00Z",
-          publishedAt: "2026-04-09T08:02:00Z",
-          retiredAt: null,
-          workflowName: "support-triage",
-          workflowDefinitionActorId: "definition://support-triage",
-          inlineWorkflowCount: 1,
-          scriptId: "",
-          scriptRevision: "",
-          scriptDefinitionActorId: "",
-          scriptSourceHash: "",
-          staticActorTypeName: "",
-        },
-      ],
-    });
+    (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockResolvedValueOnce(
+      mockCreateServiceRevisionCatalog({
+        defaultServingRevisionId: longRevisionId,
+        activeServingRevisionId: longRevisionId,
+        revisions: [
+          {
+            ...mockCreateServiceRevisionCatalog().revisions[0],
+            revisionId: longRevisionId,
+          },
+        ],
+      }),
+    );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByText("运行摘要");
 
-    const revisionNote = await screen.findByText((_, node) => {
-      return node?.tagName === "SPAN" && (node.textContent || "").includes("revisionId ·");
-    });
+    const revisionNote = await screen.findByText(/revisionId ·/);
 
     fireEvent.mouseEnter(revisionNote);
 
@@ -805,8 +851,8 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("Bindings 与连接能力")).toBeTruthy();
     expect(screen.getByText("当前选中绑定")).toBeTruthy();
     expect(screen.getByRole("button", { name: "选择绑定 web-search" })).toBeTruthy();
-    expect(window.location.search).toContain("step=bind");
-    expect(window.location.search).not.toContain("tab=bindings");
+    expect(window.location.search).toContain("tab=bindings");
+    expect(window.location.search).not.toContain("step=bind");
   });
 
   it("shows the team asset view with workflow and script entries", async () => {
@@ -1086,7 +1132,6 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
-    await screen.findByText("Support Escalation Triage");
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
     await screen.findByText("当前 Team 资产");
 

@@ -160,7 +160,7 @@ describe("GAgentsPage", () => {
         actorIds: ["planner-1"],
       },
     ];
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: false,
       scopeId: "scope-a",
       serviceId: "",
@@ -406,7 +406,7 @@ describe("GAgentsPage", () => {
   });
 
   it("surfaces the current binding and active binding type in the workbench", async () => {
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: true,
       scopeId: "scope-a",
       serviceId: "service-orders",
@@ -459,7 +459,7 @@ describe("GAgentsPage", () => {
   });
 
   it("requires acknowledgement before replacing a published binding and then publishes the revision", async () => {
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: true,
       scopeId: "scope-a",
       serviceId: "service-orders",
@@ -555,7 +555,7 @@ describe("GAgentsPage", () => {
   });
 
   it("activates and retires a selectable binding revision", async () => {
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: true,
       scopeId: "scope-a",
       serviceId: "service-orders",
