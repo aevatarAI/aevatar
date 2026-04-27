@@ -211,7 +211,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleRebuildRegistrationsAsync_RepairsScopeIdInPlaceForVerifiedBackfill()
+    public async Task HandleRebuildRegistrationsAsync_RepairsScopeIdInPlaceAndDispatches()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
@@ -254,7 +254,7 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("\"status\":\"accepted\"");
         response.Body.Should().Contain("\"observed_registrations_before_rebuild\":1");
         response.Body.Should().Contain("\"empty_scope_registrations_backfilled\":1");
-        response.Body.Should().Contain("\"backfill_status\":\"verified\"");
+        response.Body.Should().Contain("\"backfill_status\":\"dispatched\"");
         response.Body.Should().Contain("\"warnings\":[]");
         capturedEnvelopes.Should().HaveCount(2);
         var repair = capturedEnvelopes[0].Payload.Unpack<ChannelBotRepairScopeIdCommand>();
@@ -492,7 +492,8 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("\"status\":\"accepted\"");
         response.Body.Should().Contain("\"observed_registrations_before_rebuild\":null");
-        response.Body.Should().Contain("Query-side observation is currently unavailable");
+        response.Body.Should().Contain("\"backfill_status\":\"unavailable\"");
+        response.Body.Should().Contain("projection reader unavailable");
         capturedEnvelope.Should().NotBeNull();
     }
 

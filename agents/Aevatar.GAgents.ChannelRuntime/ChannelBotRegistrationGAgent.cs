@@ -220,12 +220,11 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         ChannelBotRegistrationStoreState current,
         ChannelBotScopeIdRepairedEvent evt)
     {
-        var entry = current.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
-        if (entry is null || entry.Tombstoned)
+        var next = current.Clone();
+        var target = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
+        if (target is null || target.Tombstoned)
             return current;
 
-        var next = current.Clone();
-        var target = next.Registrations.First(r => r.Id == evt.RegistrationId);
         target.ScopeId = evt.ScopeId ?? string.Empty;
         return next;
     }

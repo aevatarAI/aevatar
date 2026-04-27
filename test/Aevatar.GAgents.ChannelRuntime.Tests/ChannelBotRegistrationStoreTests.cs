@@ -110,21 +110,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRegister_RejectsLarkRegistrationWithoutScopeId()
-    {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            RequestedId = "reg-1",
-            NyxAgentApiKeyId = "key-1",
-        });
-
-        _agent.State.Registrations.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task HandleRegister_PersistsRejectionEvent_WhenScopeIdMissing()
+    public async Task HandleRegister_RejectsLarkRegistrationWithoutScopeId_AndPersistsRejectionEvent()
     {
         var beforeVersion = _agent.EventSourcing!.CurrentVersion;
 
@@ -136,7 +122,9 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxAgentApiKeyId = "key-1",
         });
 
-        // Audit event recorded; state unchanged.
+        // Audit event recorded for the contract break (issue #391); the
+        // registration set stays empty because the rejection is a no-op
+        // transition.
         _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
         _agent.State.Registrations.Should().BeEmpty();
     }

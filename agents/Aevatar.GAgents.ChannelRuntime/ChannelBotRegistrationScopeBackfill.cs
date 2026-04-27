@@ -16,24 +16,61 @@ internal sealed record ChannelBotRegistrationScopeBackfillAuthorization(
 /// to CLI/UI callers so a 202 rebuild dispatch is not misread as a successful
 /// backfill — see issue #391.
 /// </summary>
-internal static class ChannelBotRegistrationScopeBackfillStatus
+internal enum ChannelBotRegistrationScopeBackfillStatus
 {
-    public const string NotRequired = "not_required";
-    public const string Skipped = "skipped";
-    public const string Verified = "verified";
-    public const string Rejected = "rejected";
+    NotRequired,
+    Skipped,
+    Rejected,
+    // Ownership verified and repair commands dispatched. Application is
+    // eventually consistent — repair commands may no-op if the actor's
+    // authoritative state diverges from the projection snapshot used to pick
+    // candidates, so callers should re-query to confirm completion.
+    Dispatched,
+    // The query/backfill path threw before a status could be decided. Surfaced
+    // so callers always receive a known enum value rather than null.
+    Unavailable,
+}
+
+internal static class ChannelBotRegistrationScopeBackfillStatusExtensions
+{
+    // Wire format is snake_case to match the surrounding JSON conventions.
+    // Kept explicit so renaming the enum members never silently changes the
+    // wire contract that CLI/UI callers branch on.
+    public static string ToWireString(this ChannelBotRegistrationScopeBackfillStatus status) => status switch
+    {
+        ChannelBotRegistrationScopeBackfillStatus.NotRequired => "not_required",
+        ChannelBotRegistrationScopeBackfillStatus.Skipped => "skipped",
+        ChannelBotRegistrationScopeBackfillStatus.Rejected => "rejected",
+        ChannelBotRegistrationScopeBackfillStatus.Dispatched => "dispatched",
+        ChannelBotRegistrationScopeBackfillStatus.Unavailable => "unavailable",
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown backfill status."),
+    };
 }
 
 internal sealed record ChannelBotRegistrationScopeBackfillResult(
-    string Status,
+    ChannelBotRegistrationScopeBackfillStatus Status,
     int EmptyScopeRegistrationsObserved,
     int CandidateRegistrations,
-    int BackfilledRegistrations,
+    int RepairCommandsDispatched,
     string Note,
     IReadOnlyList<string> Warnings);
 
 internal static class ChannelBotRegistrationScopeBackfill
 {
+    public static ChannelBotRegistrationScopeBackfillResult Unavailable(string detail)
+    {
+        var warning = string.IsNullOrWhiteSpace(detail)
+            ? "Channel registration query/backfill path was unavailable; backfill outcome could not be decided."
+            : $"Channel registration query/backfill path was unavailable; backfill outcome could not be decided: {detail}";
+        return new ChannelBotRegistrationScopeBackfillResult(
+            ChannelBotRegistrationScopeBackfillStatus.Unavailable,
+            EmptyScopeRegistrationsObserved: 0,
+            CandidateRegistrations: 0,
+            RepairCommandsDispatched: 0,
+            Note: warning,
+            Warnings: new[] { warning });
+    }
+
     public static async Task<ChannelBotRegistrationScopeBackfillResult> BackfillAsync(
         IReadOnlyList<ChannelBotRegistrationEntry> registrations,
         string? scopeId,
@@ -171,7 +208,10 @@ internal static class ChannelBotRegistrationScopeBackfill
         }
 
         // Repair-only path: rewrites scope_id while preserving created_at and the
-        // rest of the registration shape (issue #391 follow-up 3).
+        // rest of the registration shape (issue #391 follow-up 3). The dispatch is
+        // fire-and-forget — the authoritative actor may no-op if the candidate has
+        // since been tombstoned or already has a matching scope_id, so we surface
+        // `dispatched` (not `verified`) to honestly signal eventual consistency.
         foreach (var entry in candidates)
         {
             await ChannelBotRegistrationStoreCommands.DispatchRepairScopeIdAsync(
@@ -183,11 +223,11 @@ internal static class ChannelBotRegistrationScopeBackfill
         }
 
         return new ChannelBotRegistrationScopeBackfillResult(
-            ChannelBotRegistrationScopeBackfillStatus.Verified,
+            ChannelBotRegistrationScopeBackfillStatus.Dispatched,
             emptyScopeRegistrations.Length,
             candidates.Length,
             candidates.Length,
-            "Empty-scope channel bot registrations were repaired in place; created_at preserved.",
+            "Empty-scope channel bot registration repair commands dispatched (created_at preserved); re-query the registrations endpoint to confirm completion.",
             Array.Empty<string>());
     }
 
