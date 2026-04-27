@@ -865,45 +865,6 @@ public sealed class AgentBuilderTool : IAgentTool
         return (Confirmed: false, Entry: null);
     }
 
-    /// <summary>
-    /// Polls the read model until the agent's tombstoned state is reflected as a
-    /// document deletion. The read-model contract guarantees that a tombstoned
-    /// entry causes <see cref="UserAgentCatalogProjector"/> to dispatch
-    /// <c>DeleteAsync</c>; document absence is therefore the authoritative signal.
-    /// </summary>
-    private static async Task<bool> WaitForTombstoneReflectedAsync(
-        IUserAgentCatalogQueryPort queryPort,
-        string agentId,
-        long versionBefore,
-        CancellationToken ct,
-        int maxAttempts = ProjectionWaitDefaults.Attempts,
-        int delayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
-    {
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(delayMilliseconds, ct);
-
-            // GetStateVersionAsync reads the same document; if it is null the
-            // document has been deleted by the projector.
-            var versionAfter = await queryPort.GetStateVersionAsync(agentId, ct);
-            if (versionAfter == null)
-                return true;
-
-            if (versionAfter.Value <= versionBefore)
-                continue;
-
-            // Version advanced (a fresh state event reached the projector) but the
-            // document still exists; if it is the tombstoned entry the projector
-            // would have deleted it on the same advance, so a non-null entry means
-            // either an interleaving upsert or a stale read replica - keep waiting.
-            if (await queryPort.GetAsync(agentId, ct) == null)
-                return true;
-        }
-
-        return false;
-    }
-
     private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(
         UserAgentCatalogEntry entry,
         string reason,
