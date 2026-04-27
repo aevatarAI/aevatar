@@ -146,9 +146,21 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
 
             return Failure(localMirrorAccepted
                 ? "local_mirror_accepted_remote_cleanup_skipped"
-                : ex.Message);
+                : SanitizeFailureReason(ex));
         }
     }
+
+    /// <summary>
+    /// Returns a client-safe failure reason. <see cref="InvalidOperationException"/> instances
+    /// thrown inside this service carry controlled, structured error codes (e.g.
+    /// <c>channel_bot_id_request_failed nyx_status=401</c>) so they are safe to surface verbatim.
+    /// Anything else (HTTP transport errors, JSON parser internals, generic exceptions) collapses
+    /// to <c>provisioning_failed</c> so we don't leak endpoint paths, internal state, or stack
+    /// fragments through the registration response. Operators get the full exception via the
+    /// LogWarning above.
+    /// </summary>
+    private static string SanitizeFailureReason(Exception ex) =>
+        ex is InvalidOperationException ? ex.Message : "provisioning_failed";
 
     async Task<NyxChannelBotProvisioningResult> INyxChannelBotProvisioningService.ProvisionAsync(
         NyxChannelBotProvisioningRequest request,

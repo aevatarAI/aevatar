@@ -109,6 +109,33 @@ public class NyxTelegramProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_surfaces_controlled_invalid_operation_message_but_not_dotnet_internals()
+    {
+        var handler = new RecordingHandler();
+        // Non-JSON body in the api-keys response makes ExtractRequiredRelayApiKeyCredentials
+        // throw InvalidOperationException with a structured controlled message. The catch in
+        // ProvisionAsync routes that through SanitizeFailureReason — the controlled string is
+        // safe to surface, but raw .NET stack/type internals must never leak.
+        handler.Enqueue("/api/v1/api-keys", "not-json-at-all");
+
+        var service = CreateService(handler);
+        var result = await service.ProvisionAsync(
+            new NyxTelegramProvisioningRequest(
+                AccessToken: "user-token",
+                BotToken: "1234567890:AA",
+                WebhookBaseUrl: "https://aevatar.example.com",
+                ScopeId: "scope-1",
+                Label: "Ops Bot",
+                NyxProviderSlug: "api-telegram-bot"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Contain("api_key_id_request_failed");
+        result.Error.Should().NotContain("System.");
+        result.Error.Should().NotContain("StackTrace");
+    }
+
+    [Fact]
     public async Task INyxChannelBotProvisioningService_reads_bot_token_from_credentials_map()
     {
         var handler = new RecordingHandler();

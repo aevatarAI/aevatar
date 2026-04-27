@@ -477,9 +477,12 @@ public static class ChannelCallbackEndpoints
         return bag.Count == 0 ? null : bag;
     }
 
-    private static string ResolveDefaultProviderSlug(string platform) => platform switch
-    {
-        "telegram" => "api-telegram-bot",
-        _ => "api-lark-bot",
-    };
+    /// <summary>
+    /// Builds the default Nyx provider slug echoed back to the client when the registration request
+    /// did not pin <c>nyx_provider_slug</c>. The convention is <c>api-{platform}-bot</c>, so adding
+    /// a new platform doesn't need a new switch arm and a future <c>discord</c> registration would
+    /// surface <c>api-discord-bot</c> rather than silently echoing <c>api-lark-bot</c>.
+    /// </summary>
+    private static string ResolveDefaultProviderSlug(string platform) =>
+        $"api-{platform}-bot";
 }

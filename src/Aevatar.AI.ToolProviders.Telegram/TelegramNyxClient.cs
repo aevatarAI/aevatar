@@ -36,15 +36,20 @@ public sealed class TelegramNyxClient : ITelegramNyxClient
             body["reply_to_message_id"] = replyTo;
         if (!string.IsNullOrWhiteSpace(request.ReplyMarkupJson))
         {
+            JsonNode? parsed;
             try
             {
-                body["reply_markup"] = JsonNode.Parse(request.ReplyMarkupJson);
+                parsed = JsonNode.Parse(request.ReplyMarkupJson);
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                // Caller is responsible for valid JSON; surface as Telegram-side error if invalid.
-                body["reply_markup"] = request.ReplyMarkupJson;
+                throw new ArgumentException(
+                    $"{nameof(TelegramSendMessageRequest)}.{nameof(TelegramSendMessageRequest.ReplyMarkupJson)} must be valid JSON: {ex.Message}",
+                    nameof(request),
+                    ex);
             }
+
+            body["reply_markup"] = parsed;
         }
 
         return _nyxClient.ProxyRequestAsync(

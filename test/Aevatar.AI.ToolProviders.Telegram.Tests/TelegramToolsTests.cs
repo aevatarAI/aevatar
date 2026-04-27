@@ -81,6 +81,30 @@ public class TelegramToolsTests
     }
 
     [Fact]
+    public async Task TelegramNyxClient_throws_argument_exception_for_malformed_reply_markup_json()
+    {
+        var nyxOptions = new NyxId.NyxIdToolOptions { BaseUrl = "https://nyx.example.com" };
+        var client = new TelegramNyxClient(
+            new TelegramToolOptions(),
+            new NyxId.NyxIdApiClient(nyxOptions, new HttpClient(new ThrowingHandler())));
+
+        var act = async () => await client.SendMessageAsync(
+            "token-abc",
+            new TelegramSendMessageRequest(ChatId: "1", Text: "hi", ReplyMarkupJson: "{not-json"),
+            CancellationToken.None);
+
+        var assertion = await act.Should().ThrowAsync<ArgumentException>();
+        assertion.Which.Message.Should().Contain("ReplyMarkupJson");
+        assertion.Which.ParamName.Should().Be("request");
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("nyx client should not be reached when reply_markup_json is invalid");
+    }
+
+    [Fact]
     public async Task ChatsLookup_returns_chat_metadata()
     {
         var client = new StubTelegramNyxClient
