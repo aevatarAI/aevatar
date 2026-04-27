@@ -51,3 +51,44 @@ Concretely:
 
 - ADR-0011 is superseded: the production relay edge remains `Lark -> NyxID -> Aevatar`, but inbound ownership is no longer a Lark-only webhook design
 - ADR-0012 remains in force: Aevatar still does not become the long-term credential authority for channel bots
+
+## Telegram amendment (2026-04-27)
+
+Telegram joins as the second platform to ride this backbone, replacing the earlier
+direct-callback `Aevatar.GAgents.Channel.Telegram` adapter prototype that ADR-0012 had
+already excluded from the supported production contract.
+
+- transport: same `Aevatar.GAgents.Channel.NyxIdRelay`. The relay payload carries
+  `platform="telegram"` so the transport's normalize / parse path needs no Telegram
+  branch. `ConversationReference.Scope` is derived from
+  `NyxIdRelayConversationTypeMap` (`private` -> `DirectMessage`,
+  `group` / `supergroup` -> `Group`, `channel` -> `Channel`).
+- rendering: new `Aevatar.GAgents.Platform.Telegram` package mirrors
+  `Aevatar.GAgents.Platform.Lark` — `TelegramMessageComposer` + `TelegramChannelNativeMessageProducer`
+  + `TelegramOutboundMessage` + `TelegramPayloadRedactor`. Telegram has no card layout
+  primitive, so cards degrade into the rendered text body and action buttons render as a
+  single-row `inline_keyboard` with `callback_data` truncated to the 64-byte Bot API limit.
+- provisioning: new `NyxTelegramProvisioningService` parallels `NyxLarkProvisioningService`
+  but registers `platform="telegram"` with a real `bot_token` (no Lark
+  `__unused_for_lark__` placeholder) and no `app_id` / `app_secret` /
+  `verification_token`. The default Nyx provider slug is `api-telegram-bot`.
+- registration contract: `NyxChannelBotProvisioningRequest` gains an optional
+  `Credentials` map so future platforms can carry their secret bag without growing the
+  record's typed sub-messages. The Lark typed sub-message stays in place to keep the
+  existing Lark provisioning unchanged. The HTTP `POST /api/channels/registrations`
+  endpoint accepts a top-level `bot_token` shorthand for Telegram and a generic
+  `credentials` JSON map for future platforms; the endpoint mirrors the legacy Lark
+  fields into the typed sub-message and the Telegram `bot_token` into the
+  `Credentials["bot_token"]` map.
+- tools: new `Aevatar.AI.ToolProviders.Telegram` exposes the chat-only subset needed
+  today — `telegram_messages_send` (Bot API `sendMessage`) and `telegram_chats_lookup`
+  (Bot API `getChat`). Both go through `NyxIdApiClient.ProxyRequestAsync` against the
+  `api-telegram-bot` provider slug; reply-in-turn keeps flowing through
+  `NyxIdRelayOutboundPort`.
+- credential boundary: ADR-0012 still applies — Aevatar holds no Telegram bot tokens.
+  The bot token only crosses the registration endpoint on the way to Nyx, never persisted
+  locally. Webhook subscription URL points at Nyx (`/api/v1/webhooks/channel/telegram/{channelBotId}`),
+  and inbound traffic still flows through the same callback-JWT-validated
+  `/api/webhooks/nyxid-relay` ingress.
+
+The lessons that shaped this PR are captured in `docs/operations/2026-04-27-telegram-nyx-cutover-runbook.md`.
