@@ -80,22 +80,25 @@ The endpoint returns the standard provisioning payload:
    Lark and Telegram — and that `IChannelMessageComposerRegistry.Get(ChannelId.From("telegram"))`
    resolves to `TelegramMessageComposer`).
 3. Provision the Telegram bot through the registration endpoint (either body shape).
-4. Call Telegram's `setWebhook` with the returned Nyx `webhook_url`. Recommended
-   parameters:
-   - `url` = `webhook_url`
-   - `allowed_updates` = `["message","edited_message","callback_query","channel_post"]`
-   - `secret_token` = whatever Nyx documents for HMAC validation on its side
-5. Observe:
+   NyxID's `POST /api/v1/channel-bots` already calls Telegram's `setWebhook` server-side
+   during this step using a NyxID-managed `secret_token`; **do not call `setWebhook`
+   yourself** — overwriting NyxID's secret breaks `x-telegram-bot-api-secret-token`
+   verification and may also drop `allowed_updates` types Aevatar expects.
+4. Observe:
    - Nyx -> Aevatar relay callback success on `/api/webhooks/nyxid-relay` for inbound
-     Telegram messages
-   - Aevatar -> Nyx `channel-relay/reply` success for outbound replies
+     Telegram messages (NyxID currently subscribes to `message`, `edited_message`,
+     `channel_post` only — `callback_query` button clicks do not round-trip yet, so
+     the Telegram composer degrades action buttons to a plain-text bullet list)
+   - Aevatar -> Nyx `channel-relay/reply` success for outbound replies (NyxID sends
+     these with `parse_mode="Markdown"`; the composer escapes `_`, `*`, `[`, `` ` ``
+     so model output cannot accidentally trip `can't parse entities`)
    - Optional: agent-tool calls `telegram_messages_send` / `telegram_chats_lookup`
      succeed against `api-telegram-bot`
-6. If you need to rotate the bot token:
+5. If you need to rotate the bot token:
    - Issue a new token through `@BotFather` (`/revoke` then `/token`).
-   - Re-provision through the registration endpoint with the new token; this creates a
-     new `nyx_channel_bot_id`.
-   - Re-run `setWebhook` against the new Nyx `webhook_url`.
+   - Re-provision through the registration endpoint with the new token; this creates
+     a new `nyx_channel_bot_id` and triggers NyxID to re-register the webhook.
+   - Do **not** call `setWebhook` manually as part of rotation either.
 
 ## Manual Cleanup On Partial Provisioning Failure
 
@@ -131,12 +134,16 @@ because Aevatar never persisted the bot token.
   which dispatches via `TelegramChannelNativeMessageProducer` -> Nyx
   `channel-relay/reply` -> Telegram `sendMessage`.
 - Cards in agent intents degrade into the rendered text body for Telegram (no native
-  card UI). Action buttons render as a single-row `inline_keyboard` with
-  `callback_data` truncated to the Bot API 64-byte limit; submissions arrive as
-  `CardActionSubmission` activities exactly like Lark `card.action.trigger`.
+  card UI). Action buttons also degrade into a plain-text bullet list of labels
+  rather than `inline_keyboard` callback buttons: NyxID's Telegram channel adapter
+  does not subscribe to `callback_query` updates today, so any `inline_keyboard`
+  click would never round-trip back to Aevatar. The composer's
+  `SupportsActionButtons=false` advertises this honestly so callers can plan around
+  it; once NyxID grows the `callback_query` subscribe + parse + forward contract
+  end-to-end, flip this back and revisit the runbook.
 - Aevatar persists no Telegram bot tokens. The token only exists in transit through
   the registration endpoint; revocation/rotation is handled at Telegram +
-  re-provisioning time as documented in step 6.
+  re-provisioning time as documented in step 5.
 - Telegram tools (`telegram_messages_send`, `telegram_chats_lookup`) require a
   per-call NyxID access token in the request metadata; without it they return
   `success=false, error="No NyxID access token available"` rather than calling Nyx.

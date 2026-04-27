@@ -1905,14 +1905,16 @@ Lark webhook / long-connection / gateway 这类 ingress concern 属于 `Channel.
 
 ### 10.2 Telegram（`agents/platforms/Aevatar.GAgents.Platform.Telegram`）
 
-- **底层传输**：直接调用 Telegram Bot API HTTP endpoint；adapter 内只保留轻量 DTO / composer / redactor / credential snapshot，不再包一层专用 SDK 客户端
-- **Transport**：Webhook 优先；long-polling 作为 fallback（开发模式）
-- **迁移**：
-  - 历史 runtime 中存在 `TelegramPlatformAdapter`；issue `#308` 已移除该适配器
-  - 若未来恢复 Telegram 生产支持，transport/outbound 契约应以 `TelegramChannelAdapter` 这类 channel-scoped 命名落地，而不是恢复旧 callback-owner 适配器
-  - `TelegramMessageComposer`：intent → text + inline keyboard
-  - Group / supergroup / channel 的区分
-- **Capability gap**：不支持 ephemeral / thread / confirm dialog / modal
+- **底层传输**：和 Lark 一样走 ADR-0013 统一通道——唯一生产 transport 是 `agents/channels/Aevatar.GAgents.Channel.NyxIdRelay`。Aevatar 不直接持有 bot token、不直接调用 Telegram Bot API、不暴露 Telegram webhook；所有 ingress / outbound 都经过 NyxID 中继。`Aevatar.GAgents.Platform.Telegram` 只提供 composer / native message producer / payload redactor，没有 transport / credential / SDK 包装代码。
+- **Transport**：N/A —— 见上一条。issue `#262` 早期原型曾经在 `Aevatar.GAgents.Channel.Telegram` 提交了 webhook + long-polling + credential snapshot 的 direct adapter，已在合并前删除；任何"恢复 Telegram 生产支持"的工作都不应该回到那条路径。
+- **Inbound conversation type 映射**：通过 `NyxIdRelayConversationTypeMap` 把 NyxID 投递的 `private / group / supergroup / channel` 映射到 `ConversationScope.DirectMessage / Group / Group / Channel`。`message_thread_id`（forum topic）当前未建模。
+- **Outbound 渲染（`TelegramMessageComposer`）**：
+  - `intent.Text` + `intent.Cards` 拼成单段纯文本，再做 Telegram **legacy Markdown** 转义（NyxID 中继发送时强制 `parse_mode=Markdown`，详见 NyxID `backend/src/services/channel_adapters/telegram.rs::send_reply`）。escape 集合 = `_`、`*`、`[`、`` ` ``，对应 Telegram legacy Markdown 的四个控制字符；不做 MarkdownV2 escaping，避免给后续可能切换到纯 plain 的 NyxID 留 backward-compat 包袱。
+  - `intent.Actions` 当前**降级为纯文本 bullet 列表**，不再发 `inline_keyboard`。原因：NyxID Telegram adapter 的 `register_webhook` 只订阅 `message` / `edited_message` / `channel_post`，没有订阅 `callback_query`；`parse_inbound` 对 callback query 的测试显式断言返回空。也就是说即使 Aevatar 发出 `inline_keyboard`，按钮点击也不会进入 Aevatar，不会被翻译成 `CardActionSubmission`。`DefaultCapabilities.SupportsActionButtons = false` 把这个事实诚实暴露给 caller。
+  - 如果未来 NyxID 把 `callback_query` 全链路接通，把 `SupportsActionButtons` 翻回 `true` 并恢复 `inline_keyboard` 输出 + `BuildCallbackData` 的 64-byte 截断逻辑；同时更新 runbook。
+- **凭据与 webhook 注册**：bot token 只在注册接口入参里出现，不本地持久化（ADR-0012）。NyxID 的 `POST /api/v1/channel-bots` 在创建 channel bot 的同时已经替运营调用了 Telegram `setWebhook`，并使用 NyxID 自己生成/保存的 `secret_token`；运营**不要**手动再 `setWebhook`，否则会覆盖该 secret 并触发 `x-telegram-bot-api-secret-token` 校验失败。
+- **工具支持**：`src/Aevatar.AI.ToolProviders.Telegram` 提供 `telegram_messages_send`（Bot API `sendMessage`）和 `telegram_chats_lookup`（Bot API `getChat`），通过 NyxID `api-telegram-bot` 代理槽位调用。`AddTelegramTools` 已在 `MainnetHostBuilderExtensions` 注册，运行时通过 `IAgentToolSource` 发现。
+- **Capability gap**：当前不支持 ephemeral / thread / confirm dialog / modal / file 附件 / action button click-back。
 
 ### 10.3 Slack（`agents/platforms/Aevatar.GAgents.Platform.Slack`）
 

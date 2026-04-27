@@ -9,7 +9,6 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
 {
     private const int TelegramTextLimit = 4096;
     private const int TelegramCaptionLimit = 1024;
-    private const int CallbackDataMaxBytes = 64;
 
     public static readonly ChannelCapabilities DefaultCapabilities = new()
     {
@@ -20,7 +19,12 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         Streaming = StreamingSupport.EditLoopRateLimited,
         SupportsFiles = false,
         MaxMessageLength = TelegramTextLimit,
-        SupportsActionButtons = true,
+        // NyxID's Telegram channel adapter (backend/src/services/channel_adapters/telegram.rs)
+        // does not subscribe to `callback_query` updates and parse_inbound returns empty for
+        // them, so an inline_keyboard's callback_data round-trip never reaches Aevatar. Until
+        // the relay-side adapter grows that contract end-to-end, we cannot truthfully claim
+        // action-button support — actions degrade into a plain-text bullet list of labels.
+        SupportsActionButtons = false,
         SupportsConfirmDialog = false,
         SupportsModal = false,
         SupportsMention = false,
@@ -41,40 +45,11 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
         var effectiveText = BuildRenderedText(intent, maxLength);
 
-        if (intent.Actions.Count == 0)
-        {
-            return new TelegramOutboundMessage(
-                MessageType: "text",
-                ContentJson: JsonSerializer.Serialize(new { text = effectiveText }),
-                PlainText: effectiveText,
-                IsInteractive: false);
-        }
-
-        var supportsButtons = capabilities.SupportsActionButtons;
-        var keyboard = supportsButtons ? BuildInlineKeyboard(intent.Actions) : null;
-        if (keyboard is null)
-        {
-            return new TelegramOutboundMessage(
-                MessageType: "text",
-                ContentJson: JsonSerializer.Serialize(new { text = effectiveText }),
-                PlainText: effectiveText,
-                IsInteractive: false);
-        }
-
-        var contentJson = JsonSerializer.Serialize(new
-        {
-            text = effectiveText,
-            reply_markup = new
-            {
-                inline_keyboard = keyboard,
-            },
-        });
-
         return new TelegramOutboundMessage(
-            MessageType: "interactive",
-            ContentJson: contentJson,
+            MessageType: "text",
+            ContentJson: JsonSerializer.Serialize(new { text = effectiveText }),
             PlainText: effectiveText,
-            IsInteractive: true);
+            IsInteractive: false);
     }
 
     object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
@@ -91,7 +66,9 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
             degraded = true;
         if (intent.Attachments.Count > 0 && !capabilities.SupportsFiles)
             return ComposeCapability.Unsupported;
-        if (intent.Actions.Count > 0 && !capabilities.SupportsActionButtons)
+        // Actions can only be expressed as text labels for Telegram today (see DefaultCapabilities
+        // comment) — flag as degraded so callers know the click-back path is unavailable.
+        if (intent.Actions.Count > 0)
             degraded = true;
 
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
@@ -99,47 +76,6 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
             degraded = true;
 
         return degraded ? ComposeCapability.Degraded : ComposeCapability.Exact;
-    }
-
-    private static object[][]? BuildInlineKeyboard(IEnumerable<ActionElement> actions)
-    {
-        var rows = actions
-            .Where(static action => action.Kind == ActionElementKind.Button && !string.IsNullOrWhiteSpace(action.Label))
-            .Select(static action => new object[]
-            {
-                new
-                {
-                    text = action.Label,
-                    callback_data = BuildCallbackData(action),
-                },
-            })
-            .ToArray();
-
-        return rows.Length == 0 ? null : rows;
-    }
-
-    private static string BuildCallbackData(ActionElement action)
-    {
-        var raw = !string.IsNullOrWhiteSpace(action.Value)
-            ? action.Value
-            : !string.IsNullOrWhiteSpace(action.ActionId)
-                ? action.ActionId
-                : action.Label;
-        if (Encoding.UTF8.GetByteCount(raw) <= CallbackDataMaxBytes)
-            return raw;
-
-        var textInfo = new StringInfo(raw);
-        var builder = new StringBuilder();
-        for (var i = 0; i < textInfo.LengthInTextElements; i++)
-        {
-            var next = builder.ToString() + textInfo.SubstringByTextElements(i, 1);
-            if (Encoding.UTF8.GetByteCount(next) > CallbackDataMaxBytes)
-                break;
-
-            builder.Append(textInfo.SubstringByTextElements(i, 1));
-        }
-
-        return builder.ToString();
     }
 
     private static string BuildRenderedText(MessageContent intent, int maxLength)
@@ -155,13 +91,31 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                 AppendParagraph(builder, $"{field.Title}: {field.Text}");
         }
 
-        var text = builder.ToString().Trim();
-        if (maxLength <= 0)
-            return text;
+        // Render available action labels as a bullet list so the user can still see what
+        // the agent intended to offer, even though clicks cannot round-trip through the
+        // current Nyx Telegram relay contract.
+        var buttonActions = intent.Actions
+            .Where(static action => action.Kind == ActionElementKind.Button && !string.IsNullOrWhiteSpace(action.Label))
+            .Select(static action => $"• {action.Label.Trim()}")
+            .ToArray();
+        if (buttonActions.Length > 0)
+        {
+            if (builder.Length > 0)
+                builder.AppendLine().AppendLine();
+            builder.Append(string.Join("\n", buttonActions));
+        }
 
-        var textInfo = new StringInfo(text);
+        // NyxID's Telegram relay sends every reply with parse_mode="Markdown"
+        // (telegram.rs::send_reply). Escape Telegram's legacy-Markdown control characters so
+        // ordinary model output containing _ * [ ` does not turn into half-formatted text or,
+        // worse, a "can't parse entities" 400 that breaks the entire reply.
+        var escaped = EscapeLegacyMarkdown(builder.ToString().Trim());
+        if (maxLength <= 0)
+            return escaped;
+
+        var textInfo = new StringInfo(escaped);
         if (textInfo.LengthInTextElements <= maxLength)
-            return text;
+            return escaped;
 
         return textInfo.SubstringByTextElements(0, maxLength);
     }
@@ -174,6 +128,33 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         if (builder.Length > 0)
             builder.AppendLine().AppendLine();
         builder.Append(value.Trim());
+    }
+
+    /// <summary>
+    /// Escapes the four characters Telegram's legacy <c>parse_mode=Markdown</c> uses as control
+    /// tokens (<c>_</c>, <c>*</c>, <c>[</c>, <c>`</c>) by prefixing each with a backslash so
+    /// arbitrary model output never accidentally enters bold / italic / link / code mode and
+    /// never trips the Bot API's <c>can't parse entities</c> rejection.
+    /// </summary>
+    /// <remarks>
+    /// MarkdownV2 would require escaping a much larger set, but NyxID's relay sends
+    /// <c>parse_mode=Markdown</c> (legacy), so only this minimal set is needed and the escape
+    /// stays human-readable.
+    /// </remarks>
+    private static string EscapeLegacyMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        var builder = new StringBuilder(text.Length);
+        foreach (var ch in text)
+        {
+            if (ch is '_' or '*' or '[' or '`')
+                builder.Append('\\');
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     private static int ResolveTextLimit(int configuredMax, int fallback) =>

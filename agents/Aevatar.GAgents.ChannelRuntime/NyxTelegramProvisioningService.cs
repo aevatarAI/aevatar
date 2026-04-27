@@ -125,7 +125,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 NyxConversationRouteId: routeId,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
-                Note: "Provisioning completed in Nyx and the local mirror command was accepted. Configure the Telegram bot webhook URL via setWebhook to point at Nyx; local read model visibility is asynchronous.");
+                Note: "Provisioning completed in Nyx and the local mirror command was accepted. NyxID has already registered the Telegram webhook and secret_token with the Bot API; do not call setWebhook manually or you will overwrite NyxID's secret_token and break inbound verification. Local read model visibility is asynchronous.");
         }
         catch (Exception ex)
         {

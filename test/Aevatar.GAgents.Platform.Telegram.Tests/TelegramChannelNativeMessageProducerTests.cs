@@ -22,8 +22,11 @@ public sealed class TelegramChannelNativeMessageProducerTests
     }
 
     [Fact]
-    public void Produce_for_button_intent_returns_interactive_card_payload()
+    public void Produce_for_button_intent_degrades_to_text_native()
     {
+        // Composer degrades action buttons to a plain-text bullet list because NyxID's Telegram
+        // relay does not subscribe to callback_query updates, so the producer should not surface
+        // a CardPayload for that intent.
         var producer = new TelegramChannelNativeMessageProducer(new TelegramMessageComposer());
         var intent = new MessageContent { Text = "Choose" };
         intent.Actions.Add(new ActionElement
@@ -36,13 +39,13 @@ public sealed class TelegramChannelNativeMessageProducerTests
 
         var native = producer.Produce(intent, BuildContext());
 
-        native.IsInteractive.ShouldBeTrue();
-        native.CardPayload.ShouldNotBeNull();
-        native.MessageType.ShouldBe("interactive");
-        native.CardPayload.ShouldBeOfType<JsonElement>();
-        var cardJson = JsonSerializer.Serialize(native.CardPayload);
-        cardJson.ShouldContain("inline_keyboard");
-        cardJson.ShouldContain("Confirm");
+        native.IsInteractive.ShouldBeFalse();
+        native.CardPayload.ShouldBeNull();
+        native.MessageType.ShouldBe("text");
+        native.Text.ShouldNotBeNull();
+        native.Text!.ShouldContain("Choose");
+        native.Text.ShouldContain("Confirm");
+        native.Capability.ShouldBe(ComposeCapability.Degraded);
     }
 
     [Fact]
