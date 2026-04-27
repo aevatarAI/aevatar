@@ -53,14 +53,25 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/workflow/draft-run", HandleDraftRunAsync);
         group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync);
         group.MapGet("/{scopeId}/binding", HandleGetBindingAsync);
+        group.MapGet("/{scopeId}/members/{memberId}/published-service", HandleGetMemberPublishedServiceAsync);
+        group.MapPut("/{scopeId}/members/{memberId}/binding", HandleUpsertMemberBindingAsync);
+        group.MapGet("/{scopeId}/members/{memberId}/binding", HandleGetMemberBindingAsync);
         group.MapPost("/{scopeId}/binding/revisions/{revisionId}:activate", HandleActivateBindingRevisionAsync);
         group.MapGet("/{scopeId}/revisions", HandleGetDefaultServiceRevisionsAsync);
         group.MapGet("/{scopeId}/revisions/{revisionId}", HandleGetDefaultServiceRevisionAsync);
         group.MapPost("/{scopeId}/binding/revisions/{revisionId}:retire", HandleRetireBindingRevisionAsync);
         group.MapPost("/{scopeId}/invoke/chat:stream", HandleInvokeDefaultChatStreamAsync);
         group.MapPost("/{scopeId}/invoke/{endpointId}", HandleInvokeDefaultAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}:stream", HandleInvokeMemberStreamAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}", HandleInvokeMemberAsync);
         group.MapGet("/{scopeId}/runs", HandleListDefaultRunsAsync);
         group.MapGet("/{scopeId}/runs/{runId}", HandleGetDefaultRunAsync);
+        group.MapGet("/{scopeId}/members/{memberId}/runs", HandleListMemberRunsAsync);
+        group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}", HandleGetMemberRunAsync);
+        group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}/audit", HandleGetMemberRunAuditAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:resume", HandleResumeMemberRunAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:signal", HandleSignalMemberRunAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:stop", HandleStopMemberRunAsync);
         group.MapGet("/{scopeId}/runs/{runId}/audit", HandleGetDefaultRunAuditAsync);
         group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync);
         group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync);
@@ -247,6 +258,147 @@ public static class ScopeServiceEndpoints
         var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
         var servingSet = await servingQueryPort.GetServiceServingSetAsync(identity, ct);
         return Results.Ok(BuildScopeBindingStatusResponse(normalizedScopeId, service, revisions, servingSet));
+    }
+
+    private static async Task<IResult> HandleGetMemberPublishedServiceAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            var identity = BuildScopeServiceIdentity(
+                options.Value,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId);
+            return Results.Ok(BuildMemberPublishedServiceResponse(memberResolution, identity));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_PUBLISHED_SERVICE_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleUpsertMemberBindingAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        UpsertMemberScopeBindingHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IScopeBindingCommandPort commandPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateScopeAdminRequiredResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            var result = await commandPort.UpsertAsync(
+                new ScopeBindingUpsertRequest(
+                    memberResolution.ScopeId,
+                    ParseScopeBindingImplementationKind(request.ImplementationKind),
+                    ToWorkflowSpec(request),
+                    request.Script == null
+                        ? null
+                        : new ScopeBindingScriptSpec(
+                            request.Script.ScriptId,
+                            request.Script.ScriptRevision),
+                    request.GAgent == null
+                        ? null
+                        : new ScopeBindingGAgentSpec(
+                            request.GAgent.ActorTypeName,
+                            (request.GAgent.Endpoints ?? [])
+                            .Select(endpoint => new ScopeBindingGAgentEndpoint(
+                                endpoint.EndpointId,
+                                endpoint.DisplayName,
+                                ParseEndpointKind(endpoint.Kind),
+                                endpoint.RequestTypeUrl,
+                                endpoint.ResponseTypeUrl,
+                                endpoint.Description))
+                            .ToArray()),
+                    request.DisplayName,
+                    request.RevisionId,
+                    null,
+                    memberResolution.PublishedServiceId),
+                ct);
+
+            return Results.Ok(BuildMemberBindingUpsertResponse(memberResolution, result));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_BINDING_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleGetMemberBindingAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IServiceServingQueryPort servingQueryPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            var identity = BuildScopeServiceIdentity(
+                options.Value,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId);
+            var service = await lifecycleQueryPort.GetServiceAsync(identity, ct);
+            if (service == null)
+            {
+                return Results.Ok(BuildUnavailableMemberBindingStatusResponse(memberResolution, identity));
+            }
+
+            var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
+            var servingSet = await servingQueryPort.GetServiceServingSetAsync(identity, ct);
+            return Results.Ok(BuildMemberBindingStatusResponse(memberResolution, service, revisions, servingSet));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_BINDING_REQUEST",
+                message = ex.Message,
+            });
+        }
     }
 
     private static async Task<IResult> HandleActivateBindingRevisionAsync(
@@ -608,6 +760,104 @@ public static class ScopeServiceEndpoints
             options,
             ct);
 
+    private static async Task HandleInvokeMemberStreamAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string endpointId,
+        StreamScopeServiceHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
+        [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
+        [FromServices] IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
+            if (await AevatarMemberAccessGuard.TryWriteMemberAccessDeniedAsync(http, memberId, ct))
+                return;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            await HandleInvokeStreamAsync(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                endpointId,
+                request,
+                null,
+                resolutionService,
+                admissionAuthorizer,
+                chatRunService,
+                gagentDraftRunService,
+                scriptRuntimeCommandPort,
+                scriptExecutionProjectionPort,
+                options,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                StatusCodes.Status400BadRequest,
+                "INVALID_MEMBER_SERVICE_STREAM_REQUEST",
+                ex.Message,
+                ct);
+        }
+    }
+
+    private static async Task<IResult> HandleInvokeMemberAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string endpointId,
+        InvokeScopeServiceHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceInvocationPort invocationPort,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            return await HandleInvokeAsyncCore(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                endpointId,
+                request,
+                null,
+                BuildMemberApiPath(memberResolution.ScopeId, memberResolution.MemberId),
+                invocationPort,
+                catalogReader,
+                artifactStore,
+                options,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return CreateScopeInvokeFailureResult(ex);
+        }
+    }
+
     private static Task<IResult> HandleListDefaultRunsAsync(
         HttpContext http,
         string scopeId,
@@ -737,6 +987,346 @@ public static class ScopeServiceEndpoints
             stopService,
             options,
             ct);
+
+    private static async Task<IResult> HandleListMemberRunsAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        int take,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            var resolution = await ResolveScopeServiceAsync(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                lifecycleQueryPort,
+                options.Value,
+                ct,
+                appId: null);
+            if (resolution.Failure != null)
+                return resolution.Failure;
+
+            var bindings = await ListScopeServiceRunsAsync(
+                memberResolution.ScopeId,
+                resolution.Service!,
+                resolution.Deployments,
+                workflowRunBindingReader,
+                take,
+                ct);
+
+            var summaries = new List<MemberScopeServiceRunSummaryHttpResponse>(bindings.Count);
+            foreach (var binding in bindings)
+            {
+                var serviceSummary = await BuildScopeRunSummaryAsync(
+                    memberResolution.ScopeId,
+                    memberResolution.PublishedServiceId,
+                    binding,
+                    resolution.Service!,
+                    resolution.Deployments,
+                    workflowExecutionQueryService,
+                    ct);
+                summaries.Add(BuildMemberRunSummaryResponse(memberResolution, serviceSummary));
+            }
+
+            return Results.Ok(new MemberScopeServiceRunCatalogHttpResponse(
+                memberResolution.ScopeId,
+                memberResolution.MemberId,
+                memberResolution.PublishedServiceId,
+                resolution.Service!.ServiceKey,
+                resolution.Service.DisplayName,
+                summaries));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUNS_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleGetMemberRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string runId,
+        string? actorId,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            var resolution = await ResolveScopeServiceRunAsync(
+                http,
+                options.Value,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                runId,
+                actorId,
+                lifecycleQueryPort,
+                workflowRunBindingReader,
+                ct,
+                appId: null);
+            if (resolution.Failure != null)
+                return resolution.Failure;
+
+            var serviceSummary = await BuildScopeRunSummaryAsync(
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                resolution.Binding!,
+                resolution.Service!,
+                resolution.Deployments,
+                workflowExecutionQueryService,
+                ct);
+            return Results.Ok(BuildMemberRunSummaryResponse(memberResolution, serviceSummary));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUN_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleGetMemberRunAuditAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string runId,
+        string? actorId,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            var resolution = await ResolveScopeServiceRunAsync(
+                http,
+                options.Value,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                runId,
+                actorId,
+                lifecycleQueryPort,
+                workflowRunBindingReader,
+                ct,
+                appId: null);
+            if (resolution.Failure != null)
+                return resolution.Failure;
+
+            var serviceSummary = await BuildScopeRunSummaryAsync(
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                resolution.Binding!,
+                resolution.Service!,
+                resolution.Deployments,
+                workflowExecutionQueryService,
+                ct);
+            var report = await workflowExecutionQueryService.GetActorReportAsync(resolution.Binding!.ActorId, ct);
+            if (report == null)
+            {
+                return Results.NotFound(new
+                {
+                    code = "MEMBER_SERVICE_RUN_AUDIT_NOT_FOUND",
+                    message = $"Audit report for run '{resolution.Binding.RunId}' was not found for member '{memberResolution.MemberId}' in scope '{memberResolution.ScopeId}'.",
+                });
+            }
+
+            return Results.Ok(new MemberScopeServiceRunAuditHttpResponse(
+                BuildMemberRunSummaryResponse(memberResolution, serviceSummary),
+                report));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUN_AUDIT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleResumeMemberRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string runId,
+        ResumeScopeServiceRunHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            return await HandleResumeRunAsync(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                runId,
+                request,
+                lifecycleQueryPort,
+                workflowRunBindingReader,
+                resumeService,
+                options,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUN_RESUME_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleSignalMemberRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string runId,
+        SignalScopeServiceRunHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            return await HandleSignalRunAsync(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                runId,
+                request,
+                lifecycleQueryPort,
+                workflowRunBindingReader,
+                signalService,
+                options,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUN_SIGNAL_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleStopMemberRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string runId,
+        StopScopeServiceRunHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            return await HandleStopRunAsync(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                runId,
+                request,
+                lifecycleQueryPort,
+                workflowRunBindingReader,
+                stopService,
+                options,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUN_STOP_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
 
     private static async Task<IResult> HandleListRunsAsync(
         HttpContext http,
@@ -1244,6 +1834,33 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionArtifactStore artifactStore,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        await HandleInvokeAsyncCore(
+            http,
+            scopeId,
+            serviceId,
+            endpointId,
+            request,
+            appId,
+            acceptedResourcePath: null,
+            invocationPort,
+            catalogReader,
+            artifactStore,
+            options,
+            ct);
+
+    private static async Task<IResult> HandleInvokeAsyncCore(
+        HttpContext http,
+        string scopeId,
+        string serviceId,
+        string endpointId,
+        InvokeScopeServiceHttpRequest request,
+        string? appId,
+        string? acceptedResourcePath,
+        IServiceInvocationPort invocationPort,
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionArtifactStore artifactStore,
+        IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
         try
@@ -1278,7 +1895,10 @@ public static class ScopeServiceEndpoints
                     AppId = string.Empty,
                 },
             }, ct);
-            return Results.Accepted($"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}", receipt);
+            var locationPath = string.IsNullOrWhiteSpace(acceptedResourcePath)
+                ? $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}"
+                : acceptedResourcePath;
+            return Results.Accepted(locationPath, receipt);
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException)
         {
@@ -1606,10 +2226,11 @@ public static class ScopeServiceEndpoints
         string? requestedActorId,
         IServiceLifecycleQueryPort lifecycleQueryPort,
         IWorkflowRunBindingReader workflowRunBindingReader,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? appId = null)
     {
         var normalizedRunId = ScopeWorkflowCapabilityOptions.NormalizeRequired(runId, nameof(runId));
-        var scopeService = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options, ct);
+        var scopeService = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options, ct, appId);
         if (scopeService.Failure != null)
             return new ScopeServiceRunResolution(scopeService.Identity, scopeService.Service, scopeService.Deployments, null, scopeService.Failure);
 
@@ -1680,6 +2301,83 @@ public static class ScopeServiceEndpoints
             revisionSnapshots,
             revisions?.StateVersion ?? 0,
             revisions?.LastEventId ?? string.Empty);
+    }
+
+    private static MemberPublishedServiceHttpResponse BuildMemberPublishedServiceResponse(
+        MemberPublishedServiceResolution memberResolution,
+        ServiceIdentity identity)
+    {
+        return new MemberPublishedServiceHttpResponse(
+            memberResolution.ScopeId,
+            memberResolution.MemberId,
+            memberResolution.PublishedServiceId,
+            ServiceKeys.Build(identity));
+    }
+
+    private static MemberScopeBindingStatusHttpResponse BuildUnavailableMemberBindingStatusResponse(
+        MemberPublishedServiceResolution memberResolution,
+        ServiceIdentity identity)
+    {
+        return new MemberScopeBindingStatusHttpResponse(
+            false,
+            memberResolution.ScopeId,
+            memberResolution.MemberId,
+            memberResolution.PublishedServiceId,
+            string.Empty,
+            ServiceKeys.Build(identity),
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            null,
+            [],
+            0,
+            string.Empty);
+    }
+
+    private static MemberScopeBindingStatusHttpResponse BuildMemberBindingStatusResponse(
+        MemberPublishedServiceResolution memberResolution,
+        ServiceCatalogSnapshot service,
+        ServiceRevisionCatalogSnapshot? revisions,
+        ServiceServingSetSnapshot? servingSet)
+    {
+        var status = BuildScopeBindingStatusResponse(memberResolution.ScopeId, service, revisions, servingSet);
+        return new MemberScopeBindingStatusHttpResponse(
+            status.Available,
+            status.ScopeId,
+            memberResolution.MemberId,
+            memberResolution.PublishedServiceId,
+            status.DisplayName,
+            status.ServiceKey,
+            status.DefaultServingRevisionId,
+            status.ActiveServingRevisionId,
+            status.DeploymentId,
+            status.DeploymentStatus,
+            status.PrimaryActorId,
+            status.UpdatedAt,
+            status.Revisions,
+            status.CatalogStateVersion,
+            status.CatalogLastEventId);
+    }
+
+    private static MemberScopeBindingUpsertHttpResponse BuildMemberBindingUpsertResponse(
+        MemberPublishedServiceResolution memberResolution,
+        ScopeBindingUpsertResult result)
+    {
+        return new MemberScopeBindingUpsertHttpResponse(
+            memberResolution.ScopeId,
+            memberResolution.MemberId,
+            memberResolution.PublishedServiceId,
+            result.DisplayName,
+            result.RevisionId,
+            result.ImplementationKind,
+            result.ExpectedActorId,
+            result.WorkflowName,
+            result.DefinitionActorIdPrefix,
+            result.Workflow,
+            result.Script,
+            result.GAgent);
     }
 
     private static ScopeServiceRevisionCatalogHttpResponse BuildScopeServiceRevisionCatalogResponse(
@@ -1837,6 +2535,9 @@ public static class ScopeServiceEndpoints
 
     private static string BuildScopeServiceStreamInvokePath(string scopeId, string serviceId, string endpointId) =>
         $"{BuildScopeServiceInvokePath(scopeId, serviceId, endpointId)}:stream";
+
+    private static string BuildMemberApiPath(string scopeId, string memberId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
 
     private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted)
     {
@@ -2026,6 +2727,34 @@ const response = await fetch("{{invokePath}}", {
             snapshot?.RoleReplyCount ?? 0,
             snapshot?.LastOutput ?? string.Empty,
             snapshot?.LastError ?? string.Empty);
+    }
+
+    private static MemberScopeServiceRunSummaryHttpResponse BuildMemberRunSummaryResponse(
+        MemberPublishedServiceResolution memberResolution,
+        ScopeServiceRunSummaryHttpResponse summary)
+    {
+        return new MemberScopeServiceRunSummaryHttpResponse(
+            summary.ScopeId,
+            memberResolution.MemberId,
+            memberResolution.PublishedServiceId,
+            summary.RunId,
+            summary.ActorId,
+            summary.DefinitionActorId,
+            summary.RevisionId,
+            summary.DeploymentId,
+            summary.WorkflowName,
+            summary.CompletionStatus,
+            summary.StateVersion,
+            summary.LastEventId,
+            summary.LastUpdatedAt,
+            summary.BoundAt,
+            summary.BindingUpdatedAt,
+            summary.LastSuccess,
+            summary.TotalSteps,
+            summary.CompletedSteps,
+            summary.RoleReplyCount,
+            summary.LastOutput,
+            summary.LastError);
     }
 
     private static ServiceDeploymentSnapshot? ResolveRunDeployment(
@@ -2451,6 +3180,12 @@ const response = await fetch("{{invokePath}}", {
         return workflowYamls == null ? null : new ScopeBindingWorkflowSpec(workflowYamls);
     }
 
+    private static ScopeBindingWorkflowSpec? ToWorkflowSpec(UpsertMemberScopeBindingHttpRequest request)
+    {
+        var workflowYamls = request.Workflow?.WorkflowYamls ?? request.WorkflowYamls;
+        return workflowYamls == null ? null : new ScopeBindingWorkflowSpec(workflowYamls);
+    }
+
     private static string? NormalizeOptional(string? value)
     {
         var normalized = (value ?? string.Empty).Trim();
@@ -2500,6 +3235,15 @@ const response = await fetch("{{invokePath}}", {
         string? RevisionId = null,
         string? AppId = null,
         string? ServiceId = null);
+
+    public sealed record UpsertMemberScopeBindingHttpRequest(
+        string ImplementationKind,
+        IReadOnlyList<string>? WorkflowYamls = null,
+        ScopeBindingWorkflowHttpRequest? Workflow = null,
+        ScopeBindingScriptHttpRequest? Script = null,
+        ScopeBindingGAgentHttpRequest? GAgent = null,
+        string? DisplayName = null,
+        string? RevisionId = null);
 
     public sealed record ScopeBindingWorkflowHttpRequest(
         IReadOnlyList<string>? WorkflowYamls);
@@ -2597,6 +3341,43 @@ const response = await fetch("{{invokePath}}", {
         long CatalogStateVersion = 0,
         string CatalogLastEventId = "");
 
+    public sealed record MemberPublishedServiceHttpResponse(
+        string ScopeId,
+        string MemberId,
+        string PublishedServiceId,
+        string PublishedServiceKey);
+
+    public sealed record MemberScopeBindingStatusHttpResponse(
+        bool Available,
+        string ScopeId,
+        string MemberId,
+        string PublishedServiceId,
+        string DisplayName,
+        string PublishedServiceKey,
+        string DefaultServingRevisionId,
+        string ActiveServingRevisionId,
+        string DeploymentId,
+        string DeploymentStatus,
+        string PrimaryActorId,
+        DateTimeOffset? UpdatedAt,
+        IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions,
+        long CatalogStateVersion = 0,
+        string CatalogLastEventId = "");
+
+    public sealed record MemberScopeBindingUpsertHttpResponse(
+        string ScopeId,
+        string MemberId,
+        string PublishedServiceId,
+        string DisplayName,
+        string RevisionId,
+        ScopeBindingImplementationKind ImplementationKind,
+        string ExpectedActorId,
+        string WorkflowName = "",
+        string DefinitionActorIdPrefix = "",
+        ScopeBindingWorkflowResult? Workflow = null,
+        ScopeBindingScriptResult? Script = null,
+        ScopeBindingGAgentResult? GAgent = null);
+
     public sealed record ScopeBindingRevisionHttpResponse(
         string RevisionId,
         string ImplementationKind,
@@ -2680,6 +3461,14 @@ const response = await fetch("{{invokePath}}", {
         string DisplayName,
         IReadOnlyList<ScopeServiceRunSummaryHttpResponse> Runs);
 
+    public sealed record MemberScopeServiceRunCatalogHttpResponse(
+        string ScopeId,
+        string MemberId,
+        string PublishedServiceId,
+        string PublishedServiceKey,
+        string DisplayName,
+        IReadOnlyList<MemberScopeServiceRunSummaryHttpResponse> Runs);
+
     public sealed record ScopeServiceRunSummaryHttpResponse(
         string ScopeId,
         string ServiceId,
@@ -2702,7 +3491,34 @@ const response = await fetch("{{invokePath}}", {
         string LastOutput,
         string LastError);
 
+    public sealed record MemberScopeServiceRunSummaryHttpResponse(
+        string ScopeId,
+        string MemberId,
+        string PublishedServiceId,
+        string RunId,
+        string ActorId,
+        string DefinitionActorId,
+        string RevisionId,
+        string DeploymentId,
+        string WorkflowName,
+        WorkflowRunCompletionStatus CompletionStatus,
+        long StateVersion,
+        string LastEventId,
+        DateTimeOffset? LastUpdatedAt,
+        DateTimeOffset? BoundAt,
+        DateTimeOffset? BindingUpdatedAt,
+        bool? LastSuccess,
+        int TotalSteps,
+        int CompletedSteps,
+        int RoleReplyCount,
+        string LastOutput,
+        string LastError);
+
     public sealed record ScopeServiceRunAuditHttpResponse(
         ScopeServiceRunSummaryHttpResponse Summary,
+        WorkflowRunReport Audit);
+
+    public sealed record MemberScopeServiceRunAuditHttpResponse(
+        MemberScopeServiceRunSummaryHttpResponse Summary,
         WorkflowRunReport Audit);
 }
