@@ -292,8 +292,16 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         emit.Success.ShouldBeTrue();
 
         var debounce = Math.Max(CapabilitiesOf(lifetime.Adapter).RecommendedStreamDebounceMs, 0);
-        debounce.ShouldBeLessThanOrEqualTo(3000);
+        debounce.ShouldBeLessThanOrEqualTo(MaxRecommendedStreamDebounceMs);
     }
+
+    /// <summary>
+    /// Upper bound on <see cref="ChannelCapabilities.RecommendedStreamDebounceMs"/> the conformance suite
+    /// will accept. Channels with stricter platform rate limits (Telegram's <c>editMessageText</c> caps near
+    /// once per second per chat) override this to relax the ceiling; the shared default keeps fast-edit
+    /// channels honest.
+    /// </summary>
+    protected virtual int MaxRecommendedStreamDebounceMs => 2000;
 
     [Fact]
     public async Task Lifecycle_StartStop_NoLeaks()

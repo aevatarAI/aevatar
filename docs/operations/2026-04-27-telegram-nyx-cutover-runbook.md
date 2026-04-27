@@ -97,6 +97,28 @@ The endpoint returns the standard provisioning payload:
      new `nyx_channel_bot_id`.
    - Re-run `setWebhook` against the new Nyx `webhook_url`.
 
+## Manual Cleanup On Partial Provisioning Failure
+
+`NyxTelegramProvisioningService` rolls back any of the three Nyx resources it
+created (`api_key` -> `channel_bot` -> `channel_route`) when an exception is
+thrown **before** the local mirror dispatch is accepted. If the local mirror
+dispatch itself fails after all three Nyx resources are live, the service
+returns `error="local_mirror_accepted_remote_cleanup_skipped"` and **does not
+delete the Nyx resources** — the caller is expected to clean up manually so a
+later operator can correlate the orphaned IDs with the failed registration.
+
+When you see that error, the response payload still carries the Nyx resource
+identifiers (`nyx_channel_bot_id`, `nyx_agent_api_key_id`, and the conversation
+route ID is logged on the server side). Reverse-order cleanup against Nyx:
+
+1. Delete the conversation route — `DELETE /api/v1/channel-conversations/{route_id}`
+2. Delete the channel bot — `DELETE /api/v1/channel-bots/{nyx_channel_bot_id}`
+3. Delete the relay api-key — `DELETE /api/v1/api-keys/{nyx_agent_api_key_id}`
+
+Then re-run the registration endpoint to provision a fresh set. The earlier
+ADR-0012 contract still applies — there is no Aevatar-side cleanup needed
+because Aevatar never persisted the bot token.
+
 ## Expected Runtime Behavior
 
 - Inbound Telegram updates arrive at Aevatar through `POST /api/webhooks/nyxid-relay`
