@@ -624,12 +624,25 @@ if rg -n "MapMakerCapabilityEndpoints|/api/maker" src -g '*.cs'; then
   exit 1
 fi
 
-if ! rg -n "AddAevatarPlatform\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+mainnet_program="src/Aevatar.Mainnet.Host.Api/Program.cs"
+mainnet_host_extensions="src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"
+
+if ! rg -n "AddAevatarMainnetHost\(" "${mainnet_program}" >/dev/null; then
+  echo "Mainnet Program.cs must call AddAevatarMainnetHost()."
+  exit 1
+fi
+
+if ! rg -n "MapAevatarMainnetHost\(" "${mainnet_program}" >/dev/null; then
+  echo "Mainnet Program.cs must call MapAevatarMainnetHost()."
+  exit 1
+fi
+
+if ! rg -n "AddAevatarPlatform\(" "${mainnet_host_extensions}" >/dev/null; then
   echo "Mainnet host must register platform capabilities via AddAevatarPlatform(...)."
   exit 1
 fi
 
-if ! rg -n "EnableMakerExtensions\s*=\s*true" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+if ! rg -n "EnableMakerExtensions\s*=\s*true" "${mainnet_host_extensions}" >/dev/null; then
   echo "Mainnet host must enable Maker via AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })."
   exit 1
 fi
@@ -661,17 +674,17 @@ if ! rg -n "AddWorkflowModulePack<MakerModulePack>\(" src/workflow/extensions/Ae
   exit 1
 fi
 
-for host_program in \
-  src/Aevatar.Mainnet.Host.Api/Program.cs \
-  src/workflow/Aevatar.Workflow.Host.Api/Program.cs
+for host_composition_file in \
+  "${mainnet_host_extensions}" \
+  src/workflow/Aevatar.Workflow.Host.Api
 do
-  if ! rg -n "AddAevatarDefaultHost\(" "${host_program}" >/dev/null; then
-    echo "Missing AddAevatarDefaultHost in ${host_program}"
+  if ! rg -n "AddAevatarDefaultHost\(" "${host_composition_file}" -g '*.cs' >/dev/null; then
+    echo "Missing AddAevatarDefaultHost in ${host_composition_file}"
     exit 1
   fi
 
-  if ! rg -n "UseAevatarDefaultHost\(" "${host_program}" >/dev/null; then
-    echo "Missing UseAevatarDefaultHost in ${host_program}"
+  if ! rg -n "UseAevatarDefaultHost\(" "${host_composition_file}" -g '*.cs' >/dev/null; then
+    echo "Missing UseAevatarDefaultHost in ${host_composition_file}"
     exit 1
   fi
 done
