@@ -91,27 +91,31 @@ public sealed record StoredConnectorCatalog(
     string HomeDirectory,
     string FilePath,
     bool FileExists,
-    IReadOnlyList<StoredConnectorDefinition> Connectors);
+    IReadOnlyList<StoredConnectorDefinition> Connectors,
+    long Version = 0);
 
 public sealed record StoredRoleCatalog(
     string HomeDirectory,
     string FilePath,
     bool FileExists,
-    IReadOnlyList<StoredRoleDefinition> Roles);
+    IReadOnlyList<StoredRoleDefinition> Roles,
+    long Version = 0);
 
 public sealed record StoredConnectorDraft(
     string HomeDirectory,
     string FilePath,
     bool FileExists,
     DateTimeOffset? UpdatedAtUtc,
-    StoredConnectorDefinition? Draft);
+    StoredConnectorDefinition? Draft,
+    long Version = 0);
 
 public sealed record StoredRoleDraft(
     string HomeDirectory,
     string FilePath,
     bool FileExists,
     DateTimeOffset? UpdatedAtUtc,
-    StoredRoleDefinition? Draft);
+    StoredRoleDefinition? Draft,
+    long Version = 0);
 
 public sealed record StoredConnectorDefinition(
     string Name,
