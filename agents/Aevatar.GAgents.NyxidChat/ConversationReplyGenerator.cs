@@ -140,6 +140,10 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 if (preferences.MaxToolRounds > 0)
                     effective[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch
             {
                 // User config is additive only; channel runtime falls back to server defaults on failure.
@@ -153,6 +157,10 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 var promptSection = await _userMemoryStore.BuildPromptSectionAsync(2000, ct);
                 if (!string.IsNullOrWhiteSpace(promptSection))
                     effective[LLMRequestMetadataKeys.UserMemoryPrompt] = promptSection;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch
             {

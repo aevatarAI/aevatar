@@ -35,7 +35,17 @@ public sealed class ChannelRuntimeTombstoneCompactor
     {
         foreach (var target in _targets)
         {
-            await CompactAsync(target, ct);
+            try
+            {
+                await CompactAsync(target, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex,
+                    "Tombstone compaction failed for {TargetName}: actorId={ActorId}. Continuing with remaining targets.",
+                    target.TargetName,
+                    target.ActorId);
+            }
         }
     }
 
