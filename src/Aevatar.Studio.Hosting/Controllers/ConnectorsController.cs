@@ -184,7 +184,7 @@ public sealed class ConnectorsController : ControllerBase
 
     private bool TryApplyIfMatch(SaveConnectorCatalogRequest request, out SaveConnectorCatalogRequest effective, out ActionResult? malformed)
     {
-        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        var status = ETagSupport.ParseIfMatch(Request, out var headerVersion);
         if (status == IfMatchStatus.Invalid)
         {
             effective = request;
@@ -192,16 +192,28 @@ public sealed class ConnectorsController : ControllerBase
             return true;
         }
 
-        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
-            ? request with { ExpectedVersion = version }
-            : request;
+        if (status == IfMatchStatus.Valid)
+        {
+            if (request.ExpectedVersion is { } bodyVersion && bodyVersion != headerVersion)
+            {
+                effective = request;
+                malformed = IfMatchBodyMismatch(headerVersion, bodyVersion);
+                return true;
+            }
+
+            effective = request with { ExpectedVersion = headerVersion };
+            malformed = null;
+            return false;
+        }
+
+        effective = request;
         malformed = null;
         return false;
     }
 
     private bool TryApplyIfMatch(SaveConnectorDraftRequest request, out SaveConnectorDraftRequest effective, out ActionResult? malformed)
     {
-        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        var status = ETagSupport.ParseIfMatch(Request, out var headerVersion);
         if (status == IfMatchStatus.Invalid)
         {
             effective = request;
@@ -209,9 +221,21 @@ public sealed class ConnectorsController : ControllerBase
             return true;
         }
 
-        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
-            ? request with { ExpectedVersion = version }
-            : request;
+        if (status == IfMatchStatus.Valid)
+        {
+            if (request.ExpectedVersion is { } bodyVersion && bodyVersion != headerVersion)
+            {
+                effective = request;
+                malformed = IfMatchBodyMismatch(headerVersion, bodyVersion);
+                return true;
+            }
+
+            effective = request with { ExpectedVersion = headerVersion };
+            malformed = null;
+            return false;
+        }
+
+        effective = request;
         malformed = null;
         return false;
     }
@@ -227,5 +251,12 @@ public sealed class ConnectorsController : ControllerBase
         {
             code = "MALFORMED_IF_MATCH",
             message = "If-Match must be a strong validator with a single non-negative integer version (e.g. \"5\").",
+        });
+
+    private BadRequestObjectResult IfMatchBodyMismatch(long headerVersion, long bodyVersion) =>
+        BadRequest(new
+        {
+            code = "IF_MATCH_BODY_MISMATCH",
+            message = $"If-Match header (\"{headerVersion}\") disagrees with body expectedVersion ({bodyVersion}). Send only one, or set them to the same value.",
         });
 }

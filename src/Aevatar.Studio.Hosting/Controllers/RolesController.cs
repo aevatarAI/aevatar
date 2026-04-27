@@ -183,12 +183,15 @@ public sealed class RolesController : ControllerBase
     }
 
     /// <summary>
-    /// Returns true and assigns <paramref name="malformed"/> when the request's If-Match header is invalid;
-    /// otherwise binds the expected version (header takes precedence over body).
+    /// When the request's If-Match header is malformed, returns true and yields a 400.
+    /// When the header is valid AND the body specifies a different expectedVersion, returns
+    /// true and yields a 400 — the request is internally inconsistent and would otherwise let
+    /// the body silently bypass an explicit HTTP precondition. Otherwise binds the header's
+    /// version (header is authoritative when present).
     /// </summary>
     private bool TryApplyIfMatch(SaveRoleCatalogRequest request, out SaveRoleCatalogRequest effective, out ActionResult? malformed)
     {
-        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        var status = ETagSupport.ParseIfMatch(Request, out var headerVersion);
         if (status == IfMatchStatus.Invalid)
         {
             effective = request;
@@ -196,16 +199,28 @@ public sealed class RolesController : ControllerBase
             return true;
         }
 
-        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
-            ? request with { ExpectedVersion = version }
-            : request;
+        if (status == IfMatchStatus.Valid)
+        {
+            if (request.ExpectedVersion is { } bodyVersion && bodyVersion != headerVersion)
+            {
+                effective = request;
+                malformed = IfMatchBodyMismatch(headerVersion, bodyVersion);
+                return true;
+            }
+
+            effective = request with { ExpectedVersion = headerVersion };
+            malformed = null;
+            return false;
+        }
+
+        effective = request;
         malformed = null;
         return false;
     }
 
     private bool TryApplyIfMatch(SaveRoleDraftRequest request, out SaveRoleDraftRequest effective, out ActionResult? malformed)
     {
-        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        var status = ETagSupport.ParseIfMatch(Request, out var headerVersion);
         if (status == IfMatchStatus.Invalid)
         {
             effective = request;
@@ -213,9 +228,21 @@ public sealed class RolesController : ControllerBase
             return true;
         }
 
-        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
-            ? request with { ExpectedVersion = version }
-            : request;
+        if (status == IfMatchStatus.Valid)
+        {
+            if (request.ExpectedVersion is { } bodyVersion && bodyVersion != headerVersion)
+            {
+                effective = request;
+                malformed = IfMatchBodyMismatch(headerVersion, bodyVersion);
+                return true;
+            }
+
+            effective = request with { ExpectedVersion = headerVersion };
+            malformed = null;
+            return false;
+        }
+
+        effective = request;
         malformed = null;
         return false;
     }
@@ -234,5 +261,12 @@ public sealed class RolesController : ControllerBase
         {
             code = "MALFORMED_IF_MATCH",
             message = "If-Match must be a strong validator with a single non-negative integer version (e.g. \"5\").",
+        });
+
+    private BadRequestObjectResult IfMatchBodyMismatch(long headerVersion, long bodyVersion) =>
+        BadRequest(new
+        {
+            code = "IF_MATCH_BODY_MISMATCH",
+            message = $"If-Match header (\"{headerVersion}\") disagrees with body expectedVersion ({bodyVersion}). Send only one, or set them to the same value.",
         });
 }

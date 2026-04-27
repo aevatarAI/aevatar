@@ -71,6 +71,20 @@ public sealed class ConnectorsControllerETagTests
     }
 
     [Fact]
+    public async Task Save_WhenIfMatchHeaderDisagreesWithBodyExpectedVersion_Returns400()
+    {
+        var store = new RecordingConnectorCatalogStore();
+        var controller = CreateController(store, ifMatch: "\"3\"");
+
+        var result = await controller.Save(
+            new SaveConnectorCatalogRequest(Connectors: [SampleHttpConnector()], ExpectedVersion: 4),
+            CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        store.SavedCatalog.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Save_WhenStoreThrowsOptimisticConflict_Returns409()
     {
         var store = new RecordingConnectorCatalogStore
@@ -129,6 +143,35 @@ public sealed class ConnectorsControllerETagTests
         result.Result.Should().BeOfType<OkObjectResult>();
         store.SavedDraftExpectedVersion.Should().BeNull();
         controller.Response.Headers.ContainsKey("ETag").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SaveDraft_WhenIfMatchHeaderDisagreesWithBodyExpectedVersion_Returns400()
+    {
+        var store = new RecordingConnectorCatalogStore();
+        var controller = CreateController(store, ifMatch: "\"5\"");
+
+        var result = await controller.SaveDraft(
+            new SaveConnectorDraftRequest(Draft: SampleHttpConnector(), ExpectedVersion: 6),
+            CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        store.SavedDraft.Should().BeNull();
+        store.SavedDraftExpectedVersion.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SaveDraft_WhenIfMatchHeaderAgreesWithBodyExpectedVersion_HeaderWinsAndStoreReceivesIt()
+    {
+        var store = new RecordingConnectorCatalogStore();
+        var controller = CreateController(store, ifMatch: "\"5\"");
+
+        var result = await controller.SaveDraft(
+            new SaveConnectorDraftRequest(Draft: SampleHttpConnector(), ExpectedVersion: 5),
+            CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>();
+        store.SavedDraftExpectedVersion.Should().Be(5);
     }
 
     [Fact]
