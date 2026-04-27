@@ -101,6 +101,17 @@ public sealed class AgentBuilderToolTests
         skillContent.Should().Contain("always last unless the report is empty-day");
         skillContent.Should().Contain("do not append a Blockers line in this case");
 
+        // Source-health distinction (eanzhao P1 review of PR #458, refs issue #439):
+        // collapsing 4xx/5xx/error-shaped tool results into "zero data" silently masks
+        // revoked OAuth grants and proxy outages as healthy empty-day reports. Pin the
+        // 2xx-empty vs source-failure distinction AND the rule that the empty-day fallback
+        // only applies when every source returned 2xx, so a copy edit cannot regress this
+        // back to the original "4xx/5xx/empty → treat as zero" wording.
+        skillContent.Should().Contain("2xx with an empty list");
+        skillContent.Should().Contain("Source health:");
+        skillContent.Should().Contain("ONLY valid when EVERY source returned 2xx");
+        skillContent.Should().NotContain("4xx, 5xx, or empty, treat that source as zero");
+
         // Substitution-variable documentation must be present and tied to the actual
         // username; otherwise the LLM may emit literal `{username}` placeholders in URLs.
         skillContent.Should().Contain("`{username}` → `alice`");

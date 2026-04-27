@@ -171,7 +171,13 @@ internal static class AgentBuilderTemplates
 
         prompt
             .AppendLine()
-            .AppendLine("If a query returns 4xx, 5xx, or empty, treat that source as zero for the affected section and continue — do not retry, do not fall back to invented data. Do not leave any literal `{username}` / `{iso_date}` / `{owner}/{repo}` placeholders in outbound URLs.");
+            .AppendLine("# Source health — distinguish empty results from source failures")
+            .AppendLine()
+            .AppendLine("Do NOT collapse transport, auth, or proxy failures into the empty-day fallback. Classify every tool result before mapping it to a section:")
+            .AppendLine("- 2xx with an empty list / no matching items → genuine zero data; the section is omitted per the schema.")
+            .AppendLine("- 4xx / 5xx / tool error envelope (e.g. `{\"error\": true, ...}`, revoked OAuth grant, proxy timeout) → the SOURCE is UNAVAILABLE, not zero. Append a final `Source health: <comma-separated list of unavailable sources with short reason>` line at the very bottom of the report (after Blockers).")
+            .AppendLine("- The empty-day fallback (`No measurable activity in the last 24h.`) is ONLY valid when EVERY source returned 2xx. If ANY source failed, emit at least the title plus a `Source health:` footer — silently masking credential expiration as `No measurable activity` is the bug we are guarding against.")
+            .AppendLine("- Do not retry. Do not fall back to invented data. Do not leave any literal `{username}` / `{iso_date}` / `{owner}/{repo}` placeholders in outbound URLs.");
 
         return prompt.ToString();
     }
