@@ -6,6 +6,7 @@ public interface IConnectorCatalogStore
 
     Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(
         StoredConnectorCatalog catalog,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 
     Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
@@ -14,9 +15,12 @@ public interface IConnectorCatalogStore
 
     Task<StoredConnectorDraft> SaveConnectorDraftAsync(
         StoredConnectorDraft draft,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 
-    Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default);
+    Task DeleteConnectorDraftAsync(
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record ImportedConnectorCatalog(
