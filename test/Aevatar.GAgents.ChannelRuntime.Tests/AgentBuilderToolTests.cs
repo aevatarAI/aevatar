@@ -73,11 +73,10 @@ public sealed class AgentBuilderToolTests
 
         var skillContent = spec!.SkillContent;
 
-        // All eight section slots must be pinned in order — the section position itself is
+        // All nine section slots must be pinned in order — the section position itself is
         // load-bearing for the LLM's emission order, even when section 7 (Trend) is optional
-        // (the schema slot still needs to exist so a model that fetches the prior window
-        // emits it in the right place). Skipping any number here would let copy edits
-        // silently drop or reorder a section.
+        // and section 9 (Source health) is conditional. Skipping any number here would let
+        // copy edits silently drop or reorder a section.
         skillContent.Should().Contain("# Output sections");
         skillContent.Should().Contain("1. Title");
         skillContent.Should().Contain("2. Shipped");
@@ -87,6 +86,7 @@ public sealed class AgentBuilderToolTests
         skillContent.Should().Contain("6. CI");
         skillContent.Should().Contain("7. Trend");
         skillContent.Should().Contain("8. Blockers");
+        skillContent.Should().Contain("9. Source health");
 
         // Empty-handling rules — the bug we're guarding against is the LLM padding sections
         // with "no activity in this area" boilerplate when sources are silent.
@@ -94,12 +94,16 @@ public sealed class AgentBuilderToolTests
         skillContent.Should().Contain("No measurable activity in the last 24h.");
         skillContent.Should().Contain("Do not invent activity.");
 
-        // Empty-day Blockers carve-out (codex review of PR #458): the §8 schema says
-        // "always last" but the empty-day fallback says "return ONLY the title line". This
-        // pin keeps both qualifiers present so a copy-edit can't reintroduce the
-        // contradiction by dropping either one.
-        skillContent.Should().Contain("always last unless the report is empty-day");
-        skillContent.Should().Contain("do not append a Blockers line in this case");
+        // Section ordering must be unambiguous when both §8 Blockers and §9 Source health are
+        // present (eanzhao P2 review of PR #458, second pass): the previous "always last"
+        // qualifier on §8 conflicted with "Source health at the very bottom after Blockers".
+        // Promote §9 to a real schema slot and pin §8 as position-locked at slot 8 with §9
+        // as the only section permitted below.
+        skillContent.Should().Contain("Position-locked at slot 8");
+        skillContent.Should().Contain("the only section that may sit below it is the §9 Source health footer");
+        // The empty-day fallback must explicitly forbid both §8 Blockers AND §9 Source health
+        // emission, so a weaker model cannot synthesize a footer onto a genuine empty day.
+        skillContent.Should().Contain("do NOT emit Blockers or Source health");
 
         // Source-health distinction (eanzhao P1 review of PR #458, refs issue #439):
         // collapsing 4xx/5xx/error-shaped tool results into "zero data" silently masks

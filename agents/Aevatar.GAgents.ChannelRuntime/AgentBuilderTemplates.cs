@@ -131,9 +131,10 @@ internal static class AgentBuilderTemplates
             .AppendLine("5. Issues (≤4 lines) — issues opened, closed, or commented on by the user.")
             .AppendLine("6. CI (≤3 lines) — failing GitHub Actions runs on the tracked repos. Best-effort and only feasible in repo-allowlist mode; OMIT this section in no-repo mode (the global search endpoints do not expose Actions run conclusions).")
             .AppendLine("7. Trend (1 line, optional) — running totals vs the prior 24h, e.g. `Trend: shipped 3 (+1), reviews 5 (-2)`. Omit when the prior-window data could not be fetched.")
-            .AppendLine("8. Blockers (1 line, always last unless the report is empty-day) — `Blockers: <short list>` or `No blockers.` Auto-detect from: PRs >24h waiting on a review, CI red >2h, issues with labels `blocked` or `needs-info`.")
+            .AppendLine("8. Blockers (1 line) — `Blockers: <short list>` or `No blockers.` Auto-detect from: PRs >24h waiting on a review, CI red >2h, issues with labels `blocked` or `needs-info`. Position-locked at slot 8; the only section that may sit below it is the §9 Source health footer.")
+            .AppendLine("9. Source health (1 line, footer) — `Source health: <comma-separated list of unavailable sources with short reason>`. Emit ONLY when at least one source returned a non-2xx / error-shaped tool result. When emitted, this is always the final line — below Blockers, below everything.")
             .AppendLine()
-            .AppendLine("If the entire 24h window has no measurable activity across all sources, return ONLY the title line followed by `No measurable activity in the last 24h.` and nothing else (do not append a Blockers line in this case).")
+            .AppendLine("If EVERY source returned 2xx with no matching items (genuine empty day), return ONLY the title line followed by `No measurable activity in the last 24h.` and nothing else — do NOT emit Blockers or Source health. If ANY source failed, you are NOT on the empty-day path: emit at least the title line plus the §9 Source health footer (any other sections that have 2xx data render normally; §8 Blockers is also emitted).")
             .AppendLine("Do not invent activity. Do not paraphrase issue or PR titles into different wording. Keep each line short — Feishu text messages have a body cap, prefer trimming trailing detail over exceeding it.")
             .AppendLine()
             .AppendLine("# Suggested GitHub proxy calls")
@@ -171,12 +172,12 @@ internal static class AgentBuilderTemplates
 
         prompt
             .AppendLine()
-            .AppendLine("# Source health — distinguish empty results from source failures")
+            .AppendLine("# Source health — when to emit the §9 footer")
             .AppendLine()
             .AppendLine("Do NOT collapse transport, auth, or proxy failures into the empty-day fallback. Classify every tool result before mapping it to a section:")
-            .AppendLine("- 2xx with an empty list / no matching items → genuine zero data; the section is omitted per the schema.")
-            .AppendLine("- 4xx / 5xx / tool error envelope (e.g. `{\"error\": true, ...}`, revoked OAuth grant, proxy timeout) → the SOURCE is UNAVAILABLE, not zero. Append a final `Source health: <comma-separated list of unavailable sources with short reason>` line at the very bottom of the report (after Blockers).")
-            .AppendLine("- The empty-day fallback (`No measurable activity in the last 24h.`) is ONLY valid when EVERY source returned 2xx. If ANY source failed, emit at least the title plus a `Source health:` footer — silently masking credential expiration as `No measurable activity` is the bug we are guarding against.")
+            .AppendLine("- 2xx with an empty list / no matching items → genuine zero data; the section is omitted per the schema. Does NOT trigger §9.")
+            .AppendLine("- 4xx / 5xx / tool error envelope (e.g. `{\"error\": true, ...}`, revoked OAuth grant, proxy timeout) → the SOURCE is UNAVAILABLE, not zero. Add the source name + short reason to the §9 Source health footer.")
+            .AppendLine("- The empty-day fallback (`No measurable activity in the last 24h.`) is ONLY valid when EVERY source returned 2xx. If ANY source failed, you are NOT on the empty-day path — emit the title plus the §9 Source health footer at minimum. Silently masking credential expiration as `No measurable activity` is the bug we are guarding against.")
             .AppendLine("- Do not retry. Do not fall back to invented data. Do not leave any literal `{username}` / `{iso_date}` / `{owner}/{repo}` placeholders in outbound URLs.");
 
         return prompt.ToString();
