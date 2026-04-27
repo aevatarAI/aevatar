@@ -58,4 +58,50 @@ public interface IStudioMemberService
         string scopeId,
         string memberId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the request/response contract for a single endpoint on the
+    /// member-owned published service. Resolves the member's
+    /// <c>publishedServiceId</c> internally so callers never pass a serviceId.
+    /// Returns <c>null</c> when the member is bound but no matching endpoint
+    /// exists; throws <see cref="StudioMemberNotFoundException"/> when the
+    /// member itself does not exist; throws
+    /// <see cref="InvalidOperationException"/> when the member exists but has
+    /// not been bound yet (no published service to read a contract from).
+    /// </summary>
+    Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
+        string scopeId,
+        string memberId,
+        string endpointId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Activates a binding revision on the member's published service:
+    /// sets the revision as default-serving and marks it as the active
+    /// service revision. Resolves the member-owned
+    /// <c>publishedServiceId</c> internally; callers never pass a serviceId.
+    /// Throws <see cref="StudioMemberNotFoundException"/> when the member
+    /// is missing, and <see cref="InvalidOperationException"/> when the
+    /// member exists but has not been bound, or when the requested revision
+    /// is missing/retired.
+    /// </summary>
+    Task<StudioMemberBindingActivationResponse> ActivateBindingRevisionAsync(
+        string scopeId,
+        string memberId,
+        string revisionId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Retires a binding revision on the member's published service.
+    /// Resolves the member-owned <c>publishedServiceId</c> internally;
+    /// callers never pass a serviceId.
+    /// Throws <see cref="StudioMemberNotFoundException"/> when the member
+    /// is missing, and <see cref="InvalidOperationException"/> when the
+    /// member is unbound or the revision does not exist.
+    /// </summary>
+    Task<StudioMemberBindingRevisionActionResponse> RetireBindingRevisionAsync(
+        string scopeId,
+        string memberId,
+        string revisionId,
+        CancellationToken ct = default);
 }

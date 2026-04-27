@@ -1,5 +1,8 @@
+using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 
@@ -25,19 +28,44 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// </summary>
 public sealed class StudioMemberService : IStudioMemberService
 {
+    // Mirrors the values pinned in ScopeWorkflowCapabilityOptions
+    // (FixedServiceAppId / FixedServiceNamespace). Adding a runtime options
+    // dependency here would force every Studio.Application consumer to wire
+    // the platform Application layer just to read two const strings; copying
+    // the constants keeps the layer boundary clean and matches what
+    // AppScopedWorkflowService already does for the same reason.
+    private const string ServiceAppId = "default";
+    private const string ServiceNamespace = "default";
+    private const string DefaultSmokePrompt = "Hello from Studio Bind.";
+    private const string StreamFrameFormatWorkflow = "workflow-run-event";
+    private const string StreamFrameFormatAgui = "agui";
+
+    private static readonly JsonSerializerOptions PrettyJsonSerializerOptions = new()
+    {
+        WriteIndented = true,
+    };
+
     private readonly IStudioMemberCommandPort _memberCommandPort;
     private readonly IStudioMemberQueryPort _memberQueryPort;
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
+    private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
+    private readonly IServiceCommandPort _serviceCommandPort;
 
     public StudioMemberService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort,
-        IScopeBindingCommandPort scopeBindingCommandPort)
+        IScopeBindingCommandPort scopeBindingCommandPort,
+        IServiceLifecycleQueryPort serviceLifecycleQueryPort,
+        IServiceCommandPort serviceCommandPort)
     {
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
         _scopeBindingCommandPort = scopeBindingCommandPort
             ?? throw new ArgumentNullException(nameof(scopeBindingCommandPort));
+        _serviceLifecycleQueryPort = serviceLifecycleQueryPort
+            ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
+        _serviceCommandPort = serviceCommandPort
+            ?? throw new ArgumentNullException(nameof(serviceCommandPort));
     }
 
     public Task<StudioMemberSummaryResponse> CreateAsync(
@@ -149,6 +177,403 @@ public sealed class StudioMemberService : IStudioMemberService
             ?? throw new StudioMemberNotFoundException(scopeId, memberId);
         return detail.LastBinding;
     }
+
+    public async Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
+        string scopeId,
+        string memberId,
+        string endpointId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(endpointId))
+            throw new InvalidOperationException("endpointId is required.");
+
+        var (publishedServiceId, identity) =
+            await ResolveMemberServiceIdentityAsync(scopeId, memberId, ct);
+
+        // The published service surfaces only after the member is bound — a
+        // pre-bind read returns 404 from the platform query port. We surface
+        // that as the same "not bound" 400 the activate/retire paths use, so
+        // the frontend can branch on a single cause rather than two.
+        var service = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct)
+            ?? throw BuildMemberNotBoundException(memberId);
+        var revisions = await _serviceLifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
+        return BuildMemberEndpointContractResponse(
+            scopeId,
+            memberId,
+            publishedServiceId,
+            endpointId,
+            service,
+            revisions);
+    }
+
+    public async Task<StudioMemberBindingActivationResponse> ActivateBindingRevisionAsync(
+        string scopeId,
+        string memberId,
+        string revisionId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(revisionId))
+            throw new InvalidOperationException("revisionId is required.");
+
+        var normalizedRevisionId = revisionId.Trim();
+        var (publishedServiceId, identity) =
+            await ResolveMemberServiceIdentityAsync(scopeId, memberId, ct);
+
+        var service = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct)
+            ?? throw BuildMemberNotBoundException(memberId);
+
+        var revision = await ResolveRevisionAsync(identity, normalizedRevisionId, ct);
+        if (string.Equals(
+                revision.Status,
+                ServiceRevisionStatus.Retired.ToString(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{normalizedRevisionId}' is retired and cannot be activated.");
+        }
+
+        await _serviceCommandPort.SetDefaultServingRevisionAsync(
+            new SetDefaultServingRevisionCommand
+            {
+                Identity = identity.Clone(),
+                RevisionId = normalizedRevisionId,
+            },
+            ct);
+        await _serviceCommandPort.ActivateServiceRevisionAsync(
+            new ActivateServiceRevisionCommand
+            {
+                Identity = identity.Clone(),
+                RevisionId = normalizedRevisionId,
+            },
+            ct);
+
+        return new StudioMemberBindingActivationResponse(
+            ScopeId: identity.TenantId,
+            MemberId: memberId,
+            PublishedServiceId: publishedServiceId,
+            DisplayName: service.DisplayName,
+            RevisionId: normalizedRevisionId);
+    }
+
+    public async Task<StudioMemberBindingRevisionActionResponse> RetireBindingRevisionAsync(
+        string scopeId,
+        string memberId,
+        string revisionId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(revisionId))
+            throw new InvalidOperationException("revisionId is required.");
+
+        var normalizedRevisionId = revisionId.Trim();
+        var (publishedServiceId, identity) =
+            await ResolveMemberServiceIdentityAsync(scopeId, memberId, ct);
+
+        // Retire is idempotent on the read-side guard: we still verify the
+        // revision exists so frontend gets a deterministic 400 for typos
+        // rather than a silent success that the projection later contradicts.
+        _ = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct)
+            ?? throw BuildMemberNotBoundException(memberId);
+        _ = await ResolveRevisionAsync(identity, normalizedRevisionId, ct);
+
+        await _serviceCommandPort.RetireRevisionAsync(
+            new RetireServiceRevisionCommand
+            {
+                Identity = identity.Clone(),
+                RevisionId = normalizedRevisionId,
+            },
+            ct);
+
+        return new StudioMemberBindingRevisionActionResponse(
+            ScopeId: identity.TenantId,
+            MemberId: memberId,
+            PublishedServiceId: publishedServiceId,
+            RevisionId: normalizedRevisionId,
+            Status: "retired");
+    }
+
+    private async Task<(string PublishedServiceId, ServiceIdentity Identity)> ResolveMemberServiceIdentityAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct)
+    {
+        var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+
+        var publishedServiceId = detail.Summary.PublishedServiceId;
+        if (string.IsNullOrWhiteSpace(publishedServiceId))
+        {
+            throw new InvalidOperationException(
+                $"member '{memberId}' has no publishedServiceId; this is a backend invariant violation.");
+        }
+
+        var normalizedScopeId = (scopeId ?? string.Empty).Trim();
+        if (normalizedScopeId.Length == 0)
+            throw new InvalidOperationException("scopeId is required.");
+
+        var identity = new ServiceIdentity
+        {
+            TenantId = normalizedScopeId,
+            AppId = ServiceAppId,
+            Namespace = ServiceNamespace,
+            ServiceId = publishedServiceId,
+        };
+        return (publishedServiceId, identity);
+    }
+
+    private async Task<ServiceRevisionSnapshot> ResolveRevisionAsync(
+        ServiceIdentity identity,
+        string revisionId,
+        CancellationToken ct)
+    {
+        var revisions = await _serviceLifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
+        var revision = revisions?.Revisions.FirstOrDefault(x =>
+            string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
+        if (revision == null)
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' was not found on the member's published service.");
+        }
+
+        return revision;
+    }
+
+    private static InvalidOperationException BuildMemberNotBoundException(string memberId) =>
+        new($"member '{memberId}' has no published service yet; bind the member before reading or mutating its revisions.");
+
+    private static StudioMemberEndpointContractResponse? BuildMemberEndpointContractResponse(
+        string scopeId,
+        string memberId,
+        string publishedServiceId,
+        string endpointId,
+        ServiceCatalogSnapshot service,
+        ServiceRevisionCatalogSnapshot? revisions)
+    {
+        var normalizedEndpointId = endpointId.Trim();
+        var currentRevision = ResolveCurrentContractRevision(service, revisions, normalizedEndpointId);
+        var endpoint = currentRevision?.Endpoints.FirstOrDefault(x =>
+                string.Equals(x.EndpointId, normalizedEndpointId, StringComparison.Ordinal))
+            ?? service.Endpoints.FirstOrDefault(x =>
+                string.Equals(x.EndpointId, normalizedEndpointId, StringComparison.Ordinal));
+        if (endpoint == null)
+            return null;
+
+        var implementationKind = NullIfEmpty(currentRevision?.ImplementationKind);
+        var supportsSse = IsChatEndpoint(endpoint.Kind);
+        var streamFrameFormat = ResolveStreamFrameFormat(supportsSse, implementationKind);
+        var supportsAguiFrames = string.Equals(
+            streamFrameFormat,
+            StreamFrameFormatAgui,
+            StringComparison.Ordinal);
+        var invokePath = supportsSse
+            ? BuildMemberStreamInvokePath(scopeId, memberId, normalizedEndpointId)
+            : BuildMemberInvokePath(scopeId, memberId, normalizedEndpointId);
+        var responseContentType = supportsSse ? "text/event-stream" : "application/json";
+        var defaultSmokeInputMode = supportsSse ? "prompt" : "typed-payload";
+        var defaultSmokePrompt = supportsSse ? DefaultSmokePrompt : null;
+        var sampleRequestJson = supportsSse
+            ? null
+            : BuildTypedInvokeRequestExampleBody(endpoint.RequestTypeUrl, prettyPrinted: true);
+        var smokeTestSupported = supportsSse || sampleRequestJson != null;
+
+        return new StudioMemberEndpointContractResponse(
+            ScopeId: scopeId,
+            MemberId: memberId,
+            PublishedServiceId: publishedServiceId,
+            EndpointId: normalizedEndpointId,
+            InvokePath: invokePath,
+            Method: "POST",
+            RequestContentType: "application/json",
+            ResponseContentType: responseContentType,
+            RequestTypeUrl: endpoint.RequestTypeUrl,
+            ResponseTypeUrl: endpoint.ResponseTypeUrl,
+            SupportsSse: supportsSse,
+            SupportsWebSocket: false,
+            SupportsAguiFrames: supportsAguiFrames,
+            StreamFrameFormat: streamFrameFormat,
+            SmokeTestSupported: smokeTestSupported,
+            DefaultSmokeInputMode: defaultSmokeInputMode,
+            DefaultSmokePrompt: defaultSmokePrompt,
+            SampleRequestJson: sampleRequestJson,
+            DeploymentStatus: service.DeploymentStatus,
+            RevisionId: currentRevision?.RevisionId
+                ?? NullIfEmpty(service.DefaultServingRevisionId)
+                ?? NullIfEmpty(service.ActiveServingRevisionId)
+                ?? string.Empty,
+            CurlExample: smokeTestSupported
+                ? BuildCurlExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
+                : null,
+            FetchExample: smokeTestSupported
+                ? BuildFetchExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
+                : null);
+    }
+
+    private static ServiceRevisionSnapshot? ResolveCurrentContractRevision(
+        ServiceCatalogSnapshot service,
+        ServiceRevisionCatalogSnapshot? revisions,
+        string endpointId)
+    {
+        if (revisions == null || revisions.Revisions.Count == 0)
+            return null;
+
+        foreach (var preferredRevisionId in EnumeratePreferredContractRevisionIds(service))
+        {
+            var preferredRevision = revisions.Revisions.FirstOrDefault(x =>
+                string.Equals(x.RevisionId, preferredRevisionId, StringComparison.Ordinal) &&
+                RevisionContainsEndpoint(x, endpointId));
+            if (preferredRevision != null)
+                return preferredRevision;
+        }
+
+        return revisions.Revisions.FirstOrDefault(x =>
+                   RevisionContainsEndpoint(x, endpointId))
+               ?? revisions.Revisions[0];
+    }
+
+    private static IEnumerable<string> EnumeratePreferredContractRevisionIds(ServiceCatalogSnapshot service)
+    {
+        var defaultRevisionId = NullIfEmpty(service.DefaultServingRevisionId);
+        if (!string.IsNullOrWhiteSpace(defaultRevisionId))
+            yield return defaultRevisionId;
+
+        var activeRevisionId = NullIfEmpty(service.ActiveServingRevisionId);
+        if (!string.IsNullOrWhiteSpace(activeRevisionId) &&
+            !string.Equals(activeRevisionId, defaultRevisionId, StringComparison.Ordinal))
+        {
+            yield return activeRevisionId;
+        }
+    }
+
+    private static bool RevisionContainsEndpoint(ServiceRevisionSnapshot revision, string endpointId) =>
+        revision.Endpoints.Any(endpoint =>
+            string.Equals(endpoint.EndpointId, endpointId, StringComparison.Ordinal));
+
+    private static bool IsChatEndpoint(string? endpointKind) =>
+        string.Equals(endpointKind?.Trim(), "chat", StringComparison.OrdinalIgnoreCase);
+
+    private static string? ResolveStreamFrameFormat(bool supportsSse, string? implementationKind)
+    {
+        if (!supportsSse)
+            return null;
+
+        if (string.Equals(
+                implementationKind,
+                ServiceImplementationKind.Workflow.ToString(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return StreamFrameFormatWorkflow;
+        }
+
+        if (string.Equals(
+                implementationKind,
+                ServiceImplementationKind.Static.ToString(),
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                implementationKind,
+                ServiceImplementationKind.Scripting.ToString(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return StreamFrameFormatAgui;
+        }
+
+        return null;
+    }
+
+    private static string BuildMemberInvokePath(string scopeId, string memberId, string endpointId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/invoke/{Uri.EscapeDataString(endpointId)}";
+
+    private static string BuildMemberStreamInvokePath(string scopeId, string memberId, string endpointId) =>
+        $"{BuildMemberInvokePath(scopeId, memberId, endpointId)}:stream";
+
+    private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted)
+    {
+        var normalized = NullIfEmpty(requestTypeUrl);
+        if (normalized == null)
+            return null;
+
+        return JsonSerializer.Serialize(
+            new
+            {
+                payloadTypeUrl = normalized,
+                payloadBase64 = BuildBase64PayloadPlaceholder(normalized),
+            },
+            prettyPrinted ? PrettyJsonSerializerOptions : null);
+    }
+
+    private static string BuildBase64PayloadPlaceholder(string requestTypeUrl)
+    {
+        var typeName = requestTypeUrl
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault();
+        return string.IsNullOrWhiteSpace(typeName)
+            ? "<base64-encoded-protobuf-bytes>"
+            : $"<base64-encoded-{typeName}-protobuf-bytes>";
+    }
+
+    private static string BuildCurlExample(string invokePath, bool supportsSse, string? requestTypeUrl)
+    {
+        if (supportsSse)
+        {
+            var requestBody = JsonSerializer.Serialize(new { prompt = DefaultSmokePrompt });
+            return $"""
+curl -N -X POST \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -H "Authorization: Bearer <token>" \
+  "{invokePath}" \
+  -d '{requestBody}'
+""";
+        }
+
+        var typedBody = BuildTypedInvokeRequestExampleBody(requestTypeUrl, prettyPrinted: false) ?? "{}";
+        return $"""
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  "{invokePath}" \
+  -d '{typedBody}'
+""";
+    }
+
+    private static string BuildFetchExample(string invokePath, bool supportsSse, string? requestTypeUrl)
+    {
+        if (supportsSse)
+        {
+            return $$"""
+const response = await fetch("{{invokePath}}", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <token>",
+  },
+  body: JSON.stringify({
+    prompt: "{{DefaultSmokePrompt}}",
+  }),
+});
+
+// Consume response.body as an SSE stream.
+""";
+        }
+
+        var normalizedRequestTypeUrl = NullIfEmpty(requestTypeUrl) ?? "<type-url>";
+        var payloadBase64 = BuildBase64PayloadPlaceholder(normalizedRequestTypeUrl);
+        return $$"""
+const response = await fetch("{{invokePath}}", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer <token>",
+  },
+  body: JSON.stringify({
+    payloadTypeUrl: "{{normalizedRequestTypeUrl}}",
+    payloadBase64: "{{payloadBase64}}",
+  }),
+});
+""";
+    }
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
         string scopeId,

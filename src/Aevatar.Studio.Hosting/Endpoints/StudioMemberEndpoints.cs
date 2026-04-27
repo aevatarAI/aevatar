@@ -35,6 +35,18 @@ internal static class StudioMemberEndpoints
             .WithTags("StudioMembers");
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}/binding", HandleGetBindingAsync)
             .WithTags("StudioMembers");
+        app.MapGet(
+                "/api/scopes/{scopeId}/members/{memberId}/endpoints/{endpointId}/contract",
+                HandleGetEndpointContractAsync)
+            .WithTags("StudioMembers");
+        app.MapPost(
+                "/api/scopes/{scopeId}/members/{memberId}/binding/revisions/{revisionId}:activate",
+                HandleActivateBindingRevisionAsync)
+            .WithTags("StudioMembers");
+        app.MapPost(
+                "/api/scopes/{scopeId}/members/{memberId}/binding/revisions/{revisionId}:retire",
+                HandleRetireBindingRevisionAsync)
+            .WithTags("StudioMembers");
     }
 
     internal static async Task<IResult> HandleCreateAsync(
@@ -160,6 +172,91 @@ internal static class StudioMemberEndpoints
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleGetEndpointContractAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string endpointId,
+        IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            var contract = await memberService.GetEndpointContractAsync(scopeId, memberId, endpointId, ct);
+            if (contract == null)
+            {
+                return Results.NotFound(new
+                {
+                    code = "STUDIO_MEMBER_ENDPOINT_CONTRACT_NOT_FOUND",
+                    message = $"Endpoint '{endpointId}' was not found on member '{memberId}' in scope '{scopeId}'.",
+                });
+            }
+
+            return Results.Ok(contract);
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_ENDPOINT_CONTRACT_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleActivateBindingRevisionAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string revisionId,
+        IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            return Results.Ok(await memberService.ActivateBindingRevisionAsync(scopeId, memberId, revisionId, ct));
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_BINDING_ACTIVATION_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleRetireBindingRevisionAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string revisionId,
+        IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            return Results.Ok(await memberService.RetireBindingRevisionAsync(scopeId, memberId, revisionId, ct));
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_BINDING_REVISION_REQUEST", ex.Message);
         }
     }
 
