@@ -31,9 +31,9 @@ public sealed class GovernanceEndpointsTests
         {
             Content = JsonContent.Create(new
             {
-                tenantId = "spoof-tenant",
-                appId = "spoof-app",
-                @namespace = "spoof-ns",
+                tenantId = "tenant-claim",
+                appId = "app-claim",
+                @namespace = "ns-claim",
                 bindingId = "binding-a",
                 displayName = "Dependency",
                 bindingKind = "service",
@@ -66,6 +66,58 @@ public sealed class GovernanceEndpointsTests
             Namespace = "ns-claim",
             ServiceId = "dependency",
         });
+    }
+
+    [Fact]
+    public async Task BindingEndpoints_WhenAuthenticatedOwnerIdentityConflictsWithClaims_ShouldReturnBadRequest()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders/bindings")
+        {
+            Content = JsonContent.Create(new
+            {
+                tenantId = "spoof-tenant",
+                appId = "spoof-app",
+                @namespace = "spoof-ns",
+                bindingId = "binding-a",
+                displayName = "Dependency",
+                bindingKind = "service",
+                service = new
+                {
+                    serviceId = "dependency",
+                    endpointId = "run",
+                },
+            }),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.CommandPort.CreateBindingCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindingEndpoints_WhenAuthenticatedOwnerIdentityConflictsWithQuery_ShouldReturnBadRequest()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/services/orders/bindings?tenantId=spoof-tenant&appId=spoof-app&namespace=spoof-ns");
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.QueryPort.LastBindingsIdentity.Should().BeNull();
     }
 
     [Fact]

@@ -5,7 +5,7 @@ public static class NyxIdRelayPromptConfiguration
     public const string RelayCallbackPath = "/api/webhooks/nyxid-relay";
     private const string UnconfiguredCallback = "[nyx relay webhook base URL is not configured in this host]";
 
-    public static string ResolveRelayCallbackUrl(NyxIdRelayOptions? options)
+    public static string ResolveRelayCallbackUrl(global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? options)
     {
         return ResolveRelayCallbackUrl(options?.WebhookBaseUrl);
     }
@@ -19,7 +19,7 @@ public static class NyxIdRelayPromptConfiguration
         return $"{baseUrl.TrimEnd('/')}{RelayCallbackPath}";
     }
 
-    public static string BuildChannelRuntimeConfigurationSection(NyxIdRelayOptions? options)
+    public static string BuildChannelRuntimeConfigurationSection(global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? options)
     {
         var relayCallbackUrl = ResolveRelayCallbackUrl(options);
         return $"""

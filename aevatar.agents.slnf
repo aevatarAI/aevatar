@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "aevatar.slnx",
+    "projects": [
+      "agents\\Aevatar.GAgents.Authoring\\Aevatar.GAgents.Authoring.csproj",
+      "agents\\Aevatar.GAgents.Scheduled\\Aevatar.GAgents.Scheduled.csproj",
+      "agents\\Aevatar.GAgents.Device\\Aevatar.GAgents.Device.csproj"
+    ]
+  }
+}

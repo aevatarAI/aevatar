@@ -5,10 +5,8 @@ package aevatar.gagents.channel.runtime;
 option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "google/protobuf/empty.proto";
-import "google/protobuf/timestamp.proto";
 import "chat_activity.proto";
 import "channel_contracts.proto";
-import "schedule.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -194,35 +192,3 @@ enum FailureKind {
   FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
 }
 
-message ChannelBotRegistrationEntry {
-  aevatar.gagents.channel.abstractions.ChannelTransportBinding transport_binding = 1;
-  string webhook_url = 2;
-  google.protobuf.Timestamp created_at = 3;
-  bool is_deleted = 4;
-}
-
-message UserAgentCatalogEntry {
-  string agent_id = 1;
-  aevatar.gagents.channel.abstractions.ConversationReference conversation = 2;
-  string nyx_provider_slug = 3;
-  string owner_nyx_user_id = 4;
-  string agent_type = 5;
-  string template_name = 6;
-  string scope_id = 7;
-  string api_key_id = 8;
-  aevatar.gagents.channel.abstractions.ScheduleState schedule = 9;
-  string status = 10;
-  google.protobuf.Timestamp created_at = 11;
-  google.protobuf.Timestamp updated_at = 12;
-  bool is_deleted = 13;
-}
-
-message DeviceRegistrationEntry {
-  string id = 1;
-  string scope_id = 2;
-  string nyx_conversation_id = 3;
-  string description = 4;
-  string credential_ref = 5;
-  google.protobuf.Timestamp created_at = 6;
-  bool is_deleted = 7;
-}

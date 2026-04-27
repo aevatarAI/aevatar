@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Xunit;
+using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

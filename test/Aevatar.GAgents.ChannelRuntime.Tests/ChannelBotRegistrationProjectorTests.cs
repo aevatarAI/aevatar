@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Xunit;
+using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

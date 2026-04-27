@@ -6,6 +6,9 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Device;
+using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -49,6 +52,12 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         var sut = new ChannelRuntimeTombstoneCompactor(
             watermarkQueryPort,
             actorRuntime,
+            new ITombstoneCompactionTarget[]
+            {
+                new ChannelBotRegistrationTombstoneCompactionTarget(),
+                new DeviceTombstoneCompactionTarget(),
+                new UserAgentCatalogTombstoneCompactionTarget(),
+            },
             NullLogger<ChannelRuntimeTombstoneCompactor>.Instance);
 
         await sut.RunOnceAsync();
@@ -75,6 +84,12 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         var sut = new ChannelRuntimeTombstoneCompactor(
             watermarkQueryPort,
             actorRuntime,
+            new ITombstoneCompactionTarget[]
+            {
+                new ChannelBotRegistrationTombstoneCompactionTarget(),
+                new DeviceTombstoneCompactionTarget(),
+                new UserAgentCatalogTombstoneCompactionTarget(),
+            },
             NullLogger<ChannelRuntimeTombstoneCompactor>.Instance);
 
         await sut.RunOnceAsync();

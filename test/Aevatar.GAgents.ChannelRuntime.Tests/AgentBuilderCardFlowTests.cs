@@ -4,6 +4,8 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Xunit;
+using Aevatar.GAgents.Authoring;
+using Aevatar.GAgents.Channel.Runtime;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;

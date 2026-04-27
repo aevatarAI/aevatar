@@ -2,6 +2,7 @@ using System.Linq;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Xunit;
+using Aevatar.GAgents.Authoring;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
