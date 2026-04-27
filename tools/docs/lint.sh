@@ -7,7 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DOCS_DIR="$REPO_ROOT/docs"
+# DOCS_DIR can be overridden for testing; defaults to repo's docs/
+DOCS_DIR="${DOCS_DIR:-$REPO_ROOT/docs}"
 
 ERRORS=0
 CHECKED=0
@@ -37,6 +38,13 @@ check_frontmatter() {
 
   CHECKED=$((CHECKED + 1))
 }
+
+# Reject legacy docs/decisions/ — must migrate to docs/adr/
+if [ -d "$DOCS_DIR/decisions" ]; then
+  echo "FAIL: docs/decisions/ still exists — ADRs moved to docs/adr/."
+  echo "       Migrate with: git mv docs/decisions/<file>.md docs/adr/<file>.md"
+  ERRORS=$((ERRORS + 1))
+fi
 
 # Lint canonical docs
 if [ -d "$DOCS_DIR/canon" ]; then

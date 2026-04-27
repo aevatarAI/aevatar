@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DOCS_DIR="$REPO_ROOT/docs"
+# DOCS_DIR can be overridden for testing; defaults to repo's docs/
+DOCS_DIR="${DOCS_DIR:-$REPO_ROOT/docs}"
 OUTPUT="$DOCS_DIR/README.md"
 
 extract_field() {

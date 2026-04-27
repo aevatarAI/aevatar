@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # test/tools/test_docs_tools.sh — Tests for tools/docs/lint.sh and tools/docs/build-index.sh
+#
+# Tests invoke the real scripts via DOCS_DIR override so CI guards stay in sync
+# with what we exercise here. Adding a rule to lint.sh without a test below will
+# leave the rule unverified.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,76 +22,28 @@ setup_test_docs() {
 }
 
 run_lint() {
-  # Override REPO_ROOT for lint.sh by creating a wrapper
-  (cd "$TMPDIR_TEST" && REPO_ROOT="$TMPDIR_TEST" bash -c '
-    SCRIPT_DIR="'"$REPO_ROOT"'/tools/docs"
-    REPO_ROOT="'"$TMPDIR_TEST"'"
-    DOCS_DIR="$REPO_ROOT/docs"
-    source '"$LINT"'
-  ' 2>&1) || true
+  DOCS_DIR="$TMPDIR_TEST/docs" bash "$LINT" > /dev/null 2>&1
 }
 
-assert_pass() {
+assert_lint_passes() {
   local test_name="$1"
-  local exit_code=0
-  (
-    cd "$TMPDIR_TEST"
-    bash -c '
-      DOCS_DIR="'"$TMPDIR_TEST"'/docs"
-      ERRORS=0; CHECKED=0
-      check_frontmatter() {
-        local file="$1"
-        if ! head -1 "$file" | grep -q "^---$"; then ERRORS=$((ERRORS+1)); return; fi
-        local fm=$(awk "NR==1{next} /^---$/{exit} {print}" "$file")
-        for field in title status owner; do
-          if ! echo "$fm" | grep -q "^${field}:"; then ERRORS=$((ERRORS+1)); fi
-        done
-        CHECKED=$((CHECKED+1))
-      }
-      for file in "$DOCS_DIR"/canon/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
-      for file in "$DOCS_DIR"/adr/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
-      exit $ERRORS
-    '
-  ) > /dev/null 2>&1
-  exit_code=$?
-  if [ "$exit_code" -eq 0 ]; then
+  if run_lint; then
     echo "  PASS: $test_name"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: $test_name (expected pass, got exit $exit_code)"
+    echo "  FAIL: $test_name (expected lint pass, got fail)"
     FAIL=$((FAIL + 1))
   fi
 }
 
-assert_fail() {
+assert_lint_fails() {
   local test_name="$1"
-  local exit_code=0
-  (
-    cd "$TMPDIR_TEST"
-    bash -c '
-      DOCS_DIR="'"$TMPDIR_TEST"'/docs"
-      ERRORS=0; CHECKED=0
-      check_frontmatter() {
-        local file="$1"
-        if ! head -1 "$file" | grep -q "^---$"; then ERRORS=$((ERRORS+1)); return; fi
-        local fm=$(awk "NR==1{next} /^---$/{exit} {print}" "$file")
-        for field in title status owner; do
-          if ! echo "$fm" | grep -q "^${field}:"; then ERRORS=$((ERRORS+1)); fi
-        done
-        CHECKED=$((CHECKED+1))
-      }
-      for file in "$DOCS_DIR"/canon/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
-      for file in "$DOCS_DIR"/adr/*.md; do [ -f "$file" ] && check_frontmatter "$file"; done 2>/dev/null
-      exit $ERRORS
-    '
-  ) > /dev/null 2>&1
-  exit_code=$?
-  if [ "$exit_code" -ne 0 ]; then
+  if run_lint; then
+    echo "  FAIL: $test_name (expected lint fail, got pass)"
+    FAIL=$((FAIL + 1))
+  else
     echo "  PASS: $test_name"
     PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $test_name (expected fail, got pass)"
-    FAIL=$((FAIL + 1))
   fi
 }
 
@@ -106,7 +62,7 @@ owner: testuser
 
 # Test
 EOF
-assert_pass "canonical doc with complete frontmatter"
+assert_lint_passes "canonical doc with complete frontmatter"
 
 # Test 2: Missing title → FAIL
 echo "Test 2: Missing title fails"
@@ -119,7 +75,7 @@ owner: testuser
 
 # Test
 EOF
-assert_fail "canonical doc missing title"
+assert_lint_fails "canonical doc missing title"
 
 # Test 3: Missing status → FAIL
 echo "Test 3: Missing status fails"
@@ -132,7 +88,7 @@ owner: testuser
 
 # Test
 EOF
-assert_fail "canonical doc missing status"
+assert_lint_fails "canonical doc missing status"
 
 # Test 4: Missing owner → FAIL
 echo "Test 4: Missing owner fails"
@@ -145,7 +101,7 @@ status: active
 
 # Test
 EOF
-assert_fail "canonical doc missing owner"
+assert_lint_fails "canonical doc missing owner"
 
 # Test 5: No frontmatter at all → FAIL
 echo "Test 5: No frontmatter fails"
@@ -155,7 +111,7 @@ cat > "$TMPDIR_TEST/docs/canon/test.md" << 'EOF'
 
 No frontmatter here.
 EOF
-assert_fail "canonical doc with no frontmatter"
+assert_lint_fails "canonical doc with no frontmatter"
 
 # Test 6: History files without frontmatter → PASS (not checked)
 echo "Test 6: History files not checked"
@@ -164,10 +120,99 @@ mkdir -p "$TMPDIR_TEST/docs/history/2026-03"
 cat > "$TMPDIR_TEST/docs/history/2026-03/test.md" << 'EOF'
 # Historical doc without frontmatter
 EOF
-assert_pass "history files are not lint-checked"
+assert_lint_passes "history files are not lint-checked"
 
-# Test 7: build-index generates README
-echo "Test 7: build-index generates README"
+# Test 7: ADR with valid frontmatter and unique number → PASS
+echo "Test 7: ADR with unique number passes"
+setup_test_docs
+cat > "$TMPDIR_TEST/docs/adr/0001-foo.md" << 'EOF'
+---
+title: "Foo"
+status: accepted
+owner: testuser
+---
+
+# ADR-0001: Foo
+EOF
+cat > "$TMPDIR_TEST/docs/adr/0002-bar.md" << 'EOF'
+---
+title: "Bar"
+status: accepted
+owner: testuser
+---
+
+# ADR-0002: Bar
+EOF
+assert_lint_passes "two ADRs with distinct numbers"
+
+# Test 8: Duplicate ADR numbers → FAIL
+echo "Test 8: Duplicate ADR numbers fail"
+setup_test_docs
+cat > "$TMPDIR_TEST/docs/adr/0017-foo.md" << 'EOF'
+---
+title: "Foo"
+status: accepted
+owner: testuser
+---
+
+# ADR-0017: Foo
+EOF
+cat > "$TMPDIR_TEST/docs/adr/0017-bar.md" << 'EOF'
+---
+title: "Bar"
+status: accepted
+owner: testuser
+---
+
+# ADR-0017: Bar
+EOF
+assert_lint_fails "two ADRs with the same number 0017"
+
+# Test 9: ADR file without NNNN- prefix → FAIL
+echo "Test 9: ADR without numeric prefix fails"
+setup_test_docs
+cat > "$TMPDIR_TEST/docs/adr/no-prefix.md" << 'EOF'
+---
+title: "No prefix"
+status: accepted
+owner: testuser
+---
+
+# No prefix
+EOF
+assert_lint_fails "ADR without NNNN- prefix"
+
+# Test 10: Legacy docs/decisions/ directory → FAIL
+echo "Test 10: Legacy docs/decisions/ rejected"
+setup_test_docs
+mkdir -p "$TMPDIR_TEST/docs/decisions"
+cat > "$TMPDIR_TEST/docs/decisions/0001-old.md" << 'EOF'
+---
+title: "Old"
+status: accepted
+owner: testuser
+---
+
+# ADR-0001: Old
+EOF
+assert_lint_fails "legacy docs/decisions/ directory present"
+
+# Test 11: Canonical doc with date prefix → FAIL
+echo "Test 11: Canonical doc with date prefix fails"
+setup_test_docs
+cat > "$TMPDIR_TEST/docs/canon/2026-04-27-bad.md" << 'EOF'
+---
+title: "Bad"
+status: active
+owner: testuser
+---
+
+# Bad
+EOF
+assert_lint_fails "canonical doc with date prefix"
+
+# Test 12: build-index produces README with overridden DOCS_DIR
+echo "Test 12: build-index honours DOCS_DIR override"
 setup_test_docs
 cat > "$TMPDIR_TEST/docs/canon/test.md" << 'EOF'
 ---
@@ -178,18 +223,7 @@ owner: testuser
 
 # Test
 EOF
-# Run build-index with modified paths
-(
-  DOCS_DIR="$TMPDIR_TEST/docs"
-  OUTPUT="$DOCS_DIR/README.md"
-  echo "# Aevatar Documentation" > "$OUTPUT"
-  echo "" >> "$OUTPUT"
-  for file in "$DOCS_DIR"/canon/*.md; do
-    [ -f "$file" ] || continue
-    title=$(sed -n '2,/^---$/p' "$file" | grep "^title:" | sed 's/^title: *//' | sed 's/^"//' | sed 's/"$//')
-    echo "- [$title](canon/$(basename "$file"))" >> "$OUTPUT"
-  done
-)
+DOCS_DIR="$TMPDIR_TEST/docs" bash "$BUILD_INDEX" > /dev/null 2>&1
 if [ -f "$TMPDIR_TEST/docs/README.md" ] && grep -q "My Test Doc" "$TMPDIR_TEST/docs/README.md"; then
   echo "  PASS: build-index generates README with doc titles"
   PASS=$((PASS + 1))
