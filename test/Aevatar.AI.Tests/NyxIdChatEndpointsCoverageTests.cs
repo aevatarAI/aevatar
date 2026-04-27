@@ -210,6 +210,31 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleCreateConversationAsync_ShouldNotDestroy_WhenRollbackCannotUnregister()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
+            RemoveActorException = new InvalidOperationException("registry unavailable"),
+        };
+        var runtime = new StubActorRuntime();
+
+        var result = await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            runtime,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        actorStore.AddedActors.Should().ContainSingle();
+        actorStore.RemovedActors.Should().BeEmpty();
+        runtime.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleListConversationsAsync_ShouldReturnRegisteredActors()
     {
         var actorStore = new StubGAgentActorStore

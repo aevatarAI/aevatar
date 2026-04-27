@@ -153,6 +153,7 @@ public static partial class NyxIdChatEndpoints
                     "Failed to unregister NyxId chat conversation during create rollback: scope={ScopeId}, actor={ActorId}",
                     scopeId,
                     actorId);
+                return;
             }
         }
 
