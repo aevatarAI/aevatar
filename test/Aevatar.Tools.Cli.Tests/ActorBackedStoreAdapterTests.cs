@@ -1484,7 +1484,7 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task RoleCatalogStore_SaveDraft_PlumbsExpectedVersionToEvent()
+    public async Task RoleCatalogStore_SaveDraft_PlumbsExpectedVersionToEventAndReturnsDeterministicNextVersion()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1500,15 +1500,16 @@ public sealed class ActorBackedStoreAdapterTests
             UpdatedAtUtc: DateTimeOffset.UtcNow,
             Draft: new StoredRoleDefinition("r1", "My Role", "prompt", "anthropic", "claude-opus", []));
 
-        await store.SaveRoleDraftAsync(draft, expectedVersion: 5);
+        var saved = await store.SaveRoleDraftAsync(draft, expectedVersion: 5);
 
         var evt = runtime.Actors["role-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<RoleDraftSavedEvent>();
         evt.HasExpectedVersion.Should().BeTrue();
         evt.ExpectedVersion.Should().Be(5);
+        saved.Version.Should().Be(6);
     }
 
     [Fact]
-    public async Task RoleCatalogStore_SaveDraft_WithoutExpectedVersion_LeavesEventUnsetForOptimisticBypass()
+    public async Task RoleCatalogStore_SaveDraft_WithoutExpectedVersion_LeavesEventUnsetAndReturnsZeroVersion()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1524,10 +1525,13 @@ public sealed class ActorBackedStoreAdapterTests
             UpdatedAtUtc: DateTimeOffset.UtcNow,
             Draft: new StoredRoleDefinition("r1", "My Role", "prompt", "anthropic", "claude-opus", []));
 
-        await store.SaveRoleDraftAsync(draft);
+        var saved = await store.SaveRoleDraftAsync(draft);
 
         var evt = runtime.Actors["role-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<RoleDraftSavedEvent>();
         evt.HasExpectedVersion.Should().BeFalse();
+        // Version is 0 (unknown) — signals "re-GET for authoritative version"
+        // because the projection is eventually consistent and would race a re-read.
+        saved.Version.Should().Be(0);
     }
 
     [Fact]
@@ -1573,7 +1577,7 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task ConnectorCatalogStore_SaveDraft_PlumbsExpectedVersionToEvent()
+    public async Task ConnectorCatalogStore_SaveDraft_PlumbsExpectedVersionToEventAndReturnsDeterministicNextVersion()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1593,11 +1597,12 @@ public sealed class ActorBackedStoreAdapterTests
                 new StoredCliConnectorConfig("", [], [], [], "", new Dictionary<string, string>()),
                 new StoredMcpConnectorConfig("", "", "", [], new Dictionary<string, string>(), new Dictionary<string, string>(), new StoredConnectorAuthConfig("", "", "", "", ""), "", [], [])));
 
-        await store.SaveConnectorDraftAsync(draft, expectedVersion: 9);
+        var saved = await store.SaveConnectorDraftAsync(draft, expectedVersion: 9);
 
         var evt = runtime.Actors["connector-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<ConnectorDraftSavedEvent>();
         evt.HasExpectedVersion.Should().BeTrue();
         evt.ExpectedVersion.Should().Be(9);
+        saved.Version.Should().Be(10);
     }
 
     [Fact]

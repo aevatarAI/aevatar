@@ -84,13 +84,12 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
             evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
-        var refreshed = await ReadProjectedStateAsync(cancellationToken);
         return new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath,
             FileExists: true,
             Connectors: catalog.Connectors,
-            Version: refreshed?.LastAppliedEventVersion ?? ((expectedVersion ?? catalog.Version) + 1));
+            Version: NextDeterministicVersion(expectedVersion));
     }
 
     public async Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(
@@ -161,14 +160,13 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
 
         await _workspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
 
-        var refreshed = await ReadProjectedStateAsync(cancellationToken);
         return new StoredConnectorDraft(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath + "/draft",
             FileExists: true,
             UpdatedAtUtc: updatedAtUtc,
             Draft: draft.Draft,
-            Version: refreshed?.LastAppliedEventVersion ?? ((expectedVersion ?? draft.Version) + 1));
+            Version: NextDeterministicVersion(expectedVersion));
     }
 
     public async Task DeleteConnectorDraftAsync(
@@ -183,6 +181,13 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
 
         await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }
+
+    // Post-write version is deterministic only when caller supplied expected_version
+    // (actor enforces match → Apply increments by exactly one). Without expected_version
+    // the projection is eventually consistent and may still report the pre-write value,
+    // so we return 0 to signal "unknown — re-GET for authoritative version".
+    private static long NextDeterministicVersion(long? expectedVersion) =>
+        expectedVersion is null ? 0 : expectedVersion.Value + 1;
 
     // ── Read from projection ──
 

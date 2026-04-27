@@ -69,11 +69,12 @@ public sealed class RolesController : ControllerBase
         [FromBody] SaveRoleCatalogRequest request,
         CancellationToken cancellationToken)
     {
-        var effectiveRequest = ApplyIfMatch(request);
+        if (TryApplyIfMatch(request, out var effectiveRequest, out var malformed))
+            return malformed!;
         try
         {
             var response = await _roleCatalogService.SaveCatalogAsync(effectiveRequest, cancellationToken);
-            ETagSupport.WriteETag(Response, response.Version);
+            EmitETagIfDeterministic(response.Version);
             return Ok(response);
         }
         catch (EventStoreOptimisticConcurrencyException exception)
@@ -124,11 +125,12 @@ public sealed class RolesController : ControllerBase
         [FromBody] SaveRoleDraftRequest request,
         CancellationToken cancellationToken)
     {
-        var effectiveRequest = ApplyIfMatch(request);
+        if (TryApplyIfMatch(request, out var effectiveRequest, out var malformed))
+            return malformed!;
         try
         {
             var response = await _roleCatalogService.SaveDraftAsync(effectiveRequest, cancellationToken);
-            ETagSupport.WriteETag(Response, response.Version);
+            EmitETagIfDeterministic(response.Version);
             return Ok(response);
         }
         catch (EventStoreOptimisticConcurrencyException exception)
@@ -152,7 +154,11 @@ public sealed class RolesController : ControllerBase
     [HttpDelete("draft")]
     public async Task<IActionResult> DeleteDraft(CancellationToken cancellationToken)
     {
-        var expectedVersion = ETagSupport.TryParseIfMatch(Request);
+        var status = ETagSupport.ParseIfMatch(Request, out var ifMatchVersion);
+        if (status == IfMatchStatus.Invalid)
+            return MalformedIfMatch();
+
+        long? expectedVersion = status == IfMatchStatus.Valid ? ifMatchVersion : null;
         try
         {
             await _roleCatalogService.DeleteDraftAsync(expectedVersion, cancellationToken);
@@ -176,19 +182,57 @@ public sealed class RolesController : ControllerBase
         }
     }
 
-    private SaveRoleCatalogRequest ApplyIfMatch(SaveRoleCatalogRequest request)
+    /// <summary>
+    /// Returns true and assigns <paramref name="malformed"/> when the request's If-Match header is invalid;
+    /// otherwise binds the expected version (header takes precedence over body).
+    /// </summary>
+    private bool TryApplyIfMatch(SaveRoleCatalogRequest request, out SaveRoleCatalogRequest effective, out ActionResult? malformed)
     {
-        if (request.ExpectedVersion is not null)
-            return request;
-        var expected = ETagSupport.TryParseIfMatch(Request);
-        return expected is null ? request : request with { ExpectedVersion = expected };
+        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        if (status == IfMatchStatus.Invalid)
+        {
+            effective = request;
+            malformed = MalformedIfMatch();
+            return true;
+        }
+
+        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
+            ? request with { ExpectedVersion = version }
+            : request;
+        malformed = null;
+        return false;
     }
 
-    private SaveRoleDraftRequest ApplyIfMatch(SaveRoleDraftRequest request)
+    private bool TryApplyIfMatch(SaveRoleDraftRequest request, out SaveRoleDraftRequest effective, out ActionResult? malformed)
     {
-        if (request.ExpectedVersion is not null)
-            return request;
-        var expected = ETagSupport.TryParseIfMatch(Request);
-        return expected is null ? request : request with { ExpectedVersion = expected };
+        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        if (status == IfMatchStatus.Invalid)
+        {
+            effective = request;
+            malformed = MalformedIfMatch();
+            return true;
+        }
+
+        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
+            ? request with { ExpectedVersion = version }
+            : request;
+        malformed = null;
+        return false;
     }
+
+    private void EmitETagIfDeterministic(long version)
+    {
+        // Storage returns 0 when the post-write version is non-deterministic
+        // (caller did not supply expected_version; projection lag would race a re-read).
+        // Only emit ETag when we can guarantee the value reflects this write.
+        if (version > 0)
+            ETagSupport.WriteETag(Response, version);
+    }
+
+    private BadRequestObjectResult MalformedIfMatch() =>
+        BadRequest(new
+        {
+            code = "MALFORMED_IF_MATCH",
+            message = "If-Match must be a strong validator with a single non-negative integer version (e.g. \"5\").",
+        });
 }

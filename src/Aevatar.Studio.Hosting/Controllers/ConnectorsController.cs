@@ -69,11 +69,12 @@ public sealed class ConnectorsController : ControllerBase
         [FromBody] SaveConnectorCatalogRequest request,
         CancellationToken cancellationToken)
     {
-        var effectiveRequest = ApplyIfMatch(request);
+        if (TryApplyIfMatch(request, out var effectiveRequest, out var malformed))
+            return malformed!;
         try
         {
             var response = await _connectorService.SaveCatalogAsync(effectiveRequest, cancellationToken);
-            ETagSupport.WriteETag(Response, response.Version);
+            EmitETagIfDeterministic(response.Version);
             return Ok(response);
         }
         catch (EventStoreOptimisticConcurrencyException exception)
@@ -124,11 +125,12 @@ public sealed class ConnectorsController : ControllerBase
         [FromBody] SaveConnectorDraftRequest request,
         CancellationToken cancellationToken)
     {
-        var effectiveRequest = ApplyIfMatch(request);
+        if (TryApplyIfMatch(request, out var effectiveRequest, out var malformed))
+            return malformed!;
         try
         {
             var response = await _connectorService.SaveDraftAsync(effectiveRequest, cancellationToken);
-            ETagSupport.WriteETag(Response, response.Version);
+            EmitETagIfDeterministic(response.Version);
             return Ok(response);
         }
         catch (EventStoreOptimisticConcurrencyException exception)
@@ -152,7 +154,11 @@ public sealed class ConnectorsController : ControllerBase
     [HttpDelete("draft")]
     public async Task<IActionResult> DeleteDraft(CancellationToken cancellationToken)
     {
-        var expectedVersion = ETagSupport.TryParseIfMatch(Request);
+        var status = ETagSupport.ParseIfMatch(Request, out var ifMatchVersion);
+        if (status == IfMatchStatus.Invalid)
+            return MalformedIfMatch();
+
+        long? expectedVersion = status == IfMatchStatus.Valid ? ifMatchVersion : null;
         try
         {
             await _connectorService.DeleteDraftAsync(expectedVersion, cancellationToken);
@@ -176,19 +182,50 @@ public sealed class ConnectorsController : ControllerBase
         }
     }
 
-    private SaveConnectorCatalogRequest ApplyIfMatch(SaveConnectorCatalogRequest request)
+    private bool TryApplyIfMatch(SaveConnectorCatalogRequest request, out SaveConnectorCatalogRequest effective, out ActionResult? malformed)
     {
-        if (request.ExpectedVersion is not null)
-            return request;
-        var expected = ETagSupport.TryParseIfMatch(Request);
-        return expected is null ? request : request with { ExpectedVersion = expected };
+        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        if (status == IfMatchStatus.Invalid)
+        {
+            effective = request;
+            malformed = MalformedIfMatch();
+            return true;
+        }
+
+        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
+            ? request with { ExpectedVersion = version }
+            : request;
+        malformed = null;
+        return false;
     }
 
-    private SaveConnectorDraftRequest ApplyIfMatch(SaveConnectorDraftRequest request)
+    private bool TryApplyIfMatch(SaveConnectorDraftRequest request, out SaveConnectorDraftRequest effective, out ActionResult? malformed)
     {
-        if (request.ExpectedVersion is not null)
-            return request;
-        var expected = ETagSupport.TryParseIfMatch(Request);
-        return expected is null ? request : request with { ExpectedVersion = expected };
+        var status = ETagSupport.ParseIfMatch(Request, out var version);
+        if (status == IfMatchStatus.Invalid)
+        {
+            effective = request;
+            malformed = MalformedIfMatch();
+            return true;
+        }
+
+        effective = status == IfMatchStatus.Valid && request.ExpectedVersion is null
+            ? request with { ExpectedVersion = version }
+            : request;
+        malformed = null;
+        return false;
     }
+
+    private void EmitETagIfDeterministic(long version)
+    {
+        if (version > 0)
+            ETagSupport.WriteETag(Response, version);
+    }
+
+    private BadRequestObjectResult MalformedIfMatch() =>
+        BadRequest(new
+        {
+            code = "MALFORMED_IF_MATCH",
+            message = "If-Match must be a strong validator with a single non-negative integer version (e.g. \"5\").",
+        });
 }
