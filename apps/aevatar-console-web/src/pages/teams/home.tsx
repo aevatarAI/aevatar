@@ -839,6 +839,7 @@ const TeamsHomePage: React.FC = () => {
   const authSessionAuthenticated =
     authSessionQuery.data?.enabled === false ||
     Boolean(authSessionQuery.data?.authenticated);
+  const authenticatedScopeId = trimOptional(authSessionQuery.data?.scopeId);
 
   React.useEffect(() => {
     if (authSessionQuery.isLoading || authSessionQuery.isError) {
@@ -879,6 +880,34 @@ const TeamsHomePage: React.FC = () => {
   ]);
 
   React.useEffect(() => {
+    if (
+      !authSessionAccessResolved ||
+      !authSessionAuthenticated ||
+      authSessionQuery.data?.enabled === false ||
+      !authenticatedScopeId
+    ) {
+      return;
+    }
+
+    setActiveDraft((currentDraft) =>
+      currentDraft.scopeId.trim() === authenticatedScopeId
+        ? currentDraft
+        : { scopeId: authenticatedScopeId },
+    );
+    setDraft((currentDraft) =>
+      showScopePicker || currentDraft.scopeId.trim() === authenticatedScopeId
+        ? currentDraft
+        : { scopeId: authenticatedScopeId },
+    );
+  }, [
+    authSessionAccessResolved,
+    authSessionAuthenticated,
+    authSessionQuery.data?.enabled,
+    authenticatedScopeId,
+    showScopePicker,
+  ]);
+
+  React.useEffect(() => {
     if (!resolvedScope?.scopeId) {
       return;
     }
@@ -896,13 +925,31 @@ const TeamsHomePage: React.FC = () => {
   }, [resolvedScope?.scopeId]);
 
   const scopeId = activeDraft.scopeId.trim();
+  const rosterScopeMismatch =
+    scopeId.length > 0 &&
+    authSessionAccessResolved &&
+    authSessionAuthenticated &&
+    authSessionQuery.data?.enabled !== false &&
+    authenticatedScopeId.length > 0 &&
+    scopeId !== authenticatedScopeId;
+  const rosterMissingAuthorizedScope =
+    scopeId.length > 0 &&
+    !authSessionQuery.isError &&
+    authSessionAccessResolved &&
+    authSessionAuthenticated &&
+    authSessionQuery.data?.enabled !== false &&
+    !authenticatedScopeId &&
+    !authRecoveryPending;
   const scopeQueriesEnabled =
     scopeId.length > 0 &&
     !authRecoveryPending &&
+    !rosterScopeMismatch &&
+    !rosterMissingAuthorizedScope &&
     (authSessionQuery.isError ||
       (authSessionAccessResolved && authSessionAuthenticated));
   const rosterAuthPending =
-    scopeId.length > 0 && (authSessionQuery.isLoading || authRecoveryPending);
+    scopeId.length > 0 &&
+    (authSessionQuery.isLoading || authRecoveryPending || rosterScopeMismatch);
   const rosterAuthUnavailable =
     scopeId.length > 0 &&
     !authSessionQuery.isError &&
@@ -931,6 +978,16 @@ const TeamsHomePage: React.FC = () => {
     }),
     retry: false,
   });
+  const memberRosterIssue = React.useMemo(() => {
+    if (!membersQuery.isError) {
+      return "";
+    }
+
+    return describeError(
+      membersQuery.error,
+      "当前 Scope 的成员清单暂时无法加载。",
+    );
+  }, [membersQuery.error, membersQuery.isError]);
 
   const studioMembers = React.useMemo(
     () => [...(membersQuery.data?.members ?? [])].sort(compareMembers),
@@ -1276,10 +1333,19 @@ const TeamsHomePage: React.FC = () => {
             {rosterAuthPending || membersQuery.isLoading ? (
               <AevatarInspectorEmpty
                 description={
-                  authRecoveryPending
+                  rosterScopeMismatch
+                    ? "正在对齐当前登录态允许访问的 Scope。"
+                    : authRecoveryPending
                     ? "正在恢复当前登录态并整理成员清单。"
                     : "正在整理当前 Scope 的成员清单。"
                 }
+              />
+            ) : rosterMissingAuthorizedScope ? (
+              <Alert
+                description="当前登录态已经通过认证，但没有解析出 canonical scope_id，所以无法读取受保护的 Scope 资源。请重新登录；如果仍然失败，请检查 NyxID claims transformer 是否生效。"
+                showIcon
+                title="当前登录态缺少 Scope 绑定"
+                type="warning"
               />
             ) : rosterAuthUnavailable ? (
               <Alert
@@ -1290,6 +1356,7 @@ const TeamsHomePage: React.FC = () => {
               />
             ) : membersQuery.isError ? (
               <Alert
+                description={memberRosterIssue}
                 showIcon
                 title="当前 Scope 的成员清单暂时无法加载。"
                 type="error"

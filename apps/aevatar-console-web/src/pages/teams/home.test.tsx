@@ -373,6 +373,40 @@ describe("TeamsHomePage", () => {
     expect(studioApi.listMembers).not.toHaveBeenCalled();
   });
 
+  it("reconciles a stale route scope to the authenticated scope before loading the roster", async () => {
+    window.history.replaceState({}, "", "/teams?scopeId=scope-stale");
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: true,
+      authenticated: true,
+      scopeId: "scope-a",
+      scopeSource: "claim:scope_id",
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
+    });
+
+    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(studioApi.listMembers).toHaveBeenCalledWith("scope-a");
+    expect(studioApi.listMembers).not.toHaveBeenCalledWith("scope-stale");
+  });
+
+  it("blocks the roster query when auth is present but no canonical scope is resolved", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: true,
+      authenticated: true,
+      scopeId: null,
+      scopeSource: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByText("当前登录态缺少 Scope 绑定")).toBeTruthy();
+    expect(studioApi.listMembers).not.toHaveBeenCalled();
+  });
+
   it("opens Studio from the empty member roster state", async () => {
     (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
