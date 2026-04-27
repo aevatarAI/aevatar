@@ -49,6 +49,16 @@ public sealed class StudioMemberServiceBindingTests
         bindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
         bindingPort.LastRequest.Workflow!.WorkflowYamls.Should().ContainSingle();
 
+        // Lifecycle fix: BindAsync must persist the resolved impl_ref on the
+        // member (UpdateImplementationAsync) BEFORE recording the binding
+        // (RecordBindingAsync), so the actor walks Created → BuildReady →
+        // BindReady on every bind. Both must run, and impl_update must
+        // happen first.
+        commandPort.OperationsInOrder.Should().Equal(
+            "UpdateImplementation", "RecordBinding");
+        commandPort.RecordedImplementationUpdates.Should().ContainSingle()
+            .Which.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+
         // The orchestrator records the resulting revision back on the
         // member authority so /members/.../binding can read it from the
         // read model later.
@@ -80,6 +90,11 @@ public sealed class StudioMemberServiceBindingTests
         bindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
         bindingPort.LastRequest.Script!.ScriptId.Should().Be("s-1");
         bindingPort.LastRequest.Script.ScriptRevision.Should().Be("v3");
+
+        commandPort.OperationsInOrder.Should().Equal(
+            "UpdateImplementation", "RecordBinding");
+        commandPort.RecordedImplementationUpdates.Should().ContainSingle()
+            .Which.ScriptId.Should().Be("s-1");
     }
 
     [Fact]
@@ -113,6 +128,11 @@ public sealed class StudioMemberServiceBindingTests
         bindingPort.LastRequest.GAgent!.ActorTypeName.Should().Be("MyActor");
         bindingPort.LastRequest.GAgent.Endpoints.Should().ContainSingle();
         bindingPort.LastRequest.GAgent.Endpoints[0].Kind.Should().Be(ServiceEndpointKind.Chat);
+
+        commandPort.OperationsInOrder.Should().Equal(
+            "UpdateImplementation", "RecordBinding");
+        commandPort.RecordedImplementationUpdates.Should().ContainSingle()
+            .Which.ActorTypeName.Should().Be("MyActor");
     }
 
     [Fact]
@@ -131,7 +151,10 @@ public sealed class StudioMemberServiceBindingTests
                 Workflow: new StudioMemberWorkflowBindingSpec(["workflow:"])),
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
+        // Assert the typed exception so a regression that swaps it for a
+        // plain InvalidOperationException is caught — endpoints map the
+        // typed one to 404 and untyped IOEx to 400.
+        await act.Should().ThrowAsync<StudioMemberNotFoundException>()
             .WithMessage("*not found in scope*");
     }
 
@@ -231,6 +254,8 @@ public sealed class StudioMemberServiceBindingTests
 
         public List<StudioMemberImplementationRefResponse> RecordedImplementationUpdates { get; } = [];
 
+        public List<string> OperationsInOrder { get; } = [];
+
         public Task<StudioMemberSummaryResponse> CreateAsync(
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default)
         {
@@ -244,6 +269,7 @@ public sealed class StudioMemberServiceBindingTests
             CancellationToken ct = default)
         {
             RecordedImplementationUpdates.Add(implementation);
+            OperationsInOrder.Add("UpdateImplementation");
             return Task.CompletedTask;
         }
 
@@ -257,6 +283,7 @@ public sealed class StudioMemberServiceBindingTests
         {
             RecordedBindings.Add(new RecordedBinding(
                 scopeId, memberId, publishedServiceId, revisionId, implementationKindName));
+            OperationsInOrder.Add("RecordBinding");
             return Task.CompletedTask;
         }
 
@@ -278,13 +305,43 @@ public sealed class StudioMemberServiceBindingTests
             ScopeBindingUpsertRequest request, CancellationToken ct = default)
         {
             LastRequest = request;
+            // Mirror the production binding ports: populate the kind-specific
+            // result so BindAsync can derive the resolved implementation_ref
+            // and call UpdateImplementationAsync. Leaving these null skips
+            // the lifecycle wiring entirely and silently passes any test
+            // that doesn't assert on the call ordering.
+            ScopeBindingWorkflowResult? workflowResult = null;
+            ScopeBindingScriptResult? scriptResult = null;
+            ScopeBindingGAgentResult? gagentResult = null;
+            switch (request.ImplementationKind)
+            {
+                case ScopeBindingImplementationKind.Workflow:
+                    workflowResult = new ScopeBindingWorkflowResult(
+                        WorkflowName: $"wf-{request.ServiceId}",
+                        DefinitionActorIdPrefix: $"def-{request.ServiceId}");
+                    break;
+                case ScopeBindingImplementationKind.Scripting:
+                    scriptResult = new ScopeBindingScriptResult(
+                        ScriptId: request.Script?.ScriptId ?? string.Empty,
+                        ScriptRevision: request.Script?.ScriptRevision ?? IssuedRevisionId,
+                        DefinitionActorId: $"def-{request.ServiceId}");
+                    break;
+                case ScopeBindingImplementationKind.GAgent:
+                    gagentResult = new ScopeBindingGAgentResult(
+                        ActorTypeName: request.GAgent?.ActorTypeName ?? string.Empty);
+                    break;
+            }
+
             return Task.FromResult(new ScopeBindingUpsertResult(
                 ScopeId: request.ScopeId,
                 ServiceId: request.ServiceId ?? string.Empty,
                 DisplayName: request.DisplayName ?? string.Empty,
                 RevisionId: IssuedRevisionId,
                 ImplementationKind: request.ImplementationKind,
-                ExpectedActorId: $"actor-{request.ServiceId}-{IssuedRevisionId}"));
+                ExpectedActorId: $"actor-{request.ServiceId}-{IssuedRevisionId}",
+                Workflow: workflowResult,
+                Script: scriptResult,
+                GAgent: gagentResult));
         }
     }
 }

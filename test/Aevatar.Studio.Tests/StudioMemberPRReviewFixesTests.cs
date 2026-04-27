@@ -121,6 +121,39 @@ public sealed class StudioMemberPRReviewFixesTests
     // full HandleCreated flow.
 
     [Fact]
+    public void ApplyImplementationUpdated_ShouldNotMutateImplementationKind()
+    {
+        // ImplementationKind is locked at create. Even on a replayed or
+        // hand-rolled event whose ImplementationKind disagrees with the
+        // existing state, the apply step must preserve State.ImplementationKind
+        // so a Script member can never be silently mutated into a Workflow
+        // member through the implementation-updated event path.
+        var agent = new StudioMemberGAgent();
+        var existing = new StudioMemberState
+        {
+            MemberId = "m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            LifecycleStage = StudioMemberLifecycleStage.BuildReady,
+        };
+
+        var driftEvent = new StudioMemberImplementationUpdatedEvent
+        {
+            // Adversarial: event tries to switch the kind to Workflow.
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef { WorkflowId = "wf-1" },
+            },
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        var next = (StudioMemberState)TransitionStateMethod.Invoke(agent, [existing, driftEvent])!;
+
+        next.ImplementationKind.Should().Be(StudioMemberImplementationKind.Script,
+            because: "ImplementationKind is locked at create; the apply step must not let it drift");
+    }
+
+    [Fact]
     public void StudioMemberInputLimits_ShouldRejectLongDisplayName()
     {
         // Sanity: the constants are reasonable and the regex rejects ':' / spaces.

@@ -52,7 +52,7 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
                 },
             ],
             Take = requestedPageSize,
-            Cursor = string.IsNullOrWhiteSpace(page?.Cursor) ? null : page!.Cursor,
+            Cursor = string.IsNullOrWhiteSpace(page?.PageToken) ? null : page!.PageToken,
         };
 
         var result = await _documentReader.QueryAsync(query, ct);

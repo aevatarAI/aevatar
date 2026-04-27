@@ -74,6 +74,19 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             throw new InvalidOperationException("member not yet created.");
         }
 
+        // ImplementationKind is locked at create. Reject mismatched kinds so
+        // a Script member can't be silently mutated into a Workflow member by
+        // dispatching an UpdatedEvent with a different kind. Unspecified is
+        // accepted as "carry the existing kind" (defensive default).
+        if (evt.ImplementationKind != StudioMemberImplementationKind.Unspecified
+            && evt.ImplementationKind != State.ImplementationKind)
+        {
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' implementationKind is locked at create. " +
+                $"Was {State.ImplementationKind}, attempted {evt.ImplementationKind}. " +
+                "Use create with the correct kind, or rename / impl-update with the same kind.");
+        }
+
         await PersistDomainEventAsync(evt);
     }
 
@@ -140,7 +153,9 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         StudioMemberState state, StudioMemberImplementationUpdatedEvent evt)
     {
         var next = state.Clone();
-        next.ImplementationKind = evt.ImplementationKind;
+        // ImplementationKind is locked at create — see HandleImplementationUpdated.
+        // Do not mutate it here even if the event payload disagrees, so the
+        // invariant holds even on hand-rolled / replayed events.
         next.ImplementationRef = evt.ImplementationRef?.Clone();
         next.UpdatedAtUtc = evt.UpdatedAtUtc;
 

@@ -68,7 +68,7 @@ public sealed record StudioMemberRosterResponse(
 
 public sealed record StudioMemberRosterPageRequest(
     int? PageSize = null,
-    string? Cursor = null);
+    string? PageToken = null);
 
 public sealed record CreateStudioMemberRequest(
     string DisplayName,

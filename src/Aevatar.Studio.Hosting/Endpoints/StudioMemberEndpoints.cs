@@ -52,10 +52,6 @@ internal static class StudioMemberEndpoints
             var summary = await memberService.CreateAsync(scopeId, request, ct);
             return Results.Created($"/api/scopes/{scopeId}/members/{summary.MemberId}", summary);
         }
-        catch (StudioMemberNotFoundException ex)
-        {
-            return NotFound(ex);
-        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
