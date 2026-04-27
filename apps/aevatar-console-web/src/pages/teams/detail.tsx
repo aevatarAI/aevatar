@@ -1370,6 +1370,31 @@ const TeamDetailPage: React.FC = () => {
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
     trimText(preferredMemberId);
+  React.useEffect(() => {
+    const canonicalMemberId = trimText(currentMemberId);
+    if (!scopeId || !canonicalMemberId || trimText(routeState.memberId)) {
+      return;
+    }
+
+    history.replace(
+      buildTeamDetailHref({
+        memberId: canonicalMemberId,
+        scopeId,
+        workflowId: trimText(routeState.workflowId) || undefined,
+        serviceId: trimText(routeState.serviceId) || undefined,
+        runId: trimText(routeState.runId) || undefined,
+        tab: routeState.tab === "overview" ? undefined : routeState.tab,
+      }),
+    );
+  }, [
+    currentMemberId,
+    routeState.memberId,
+    routeState.runId,
+    routeState.serviceId,
+    routeState.tab,
+    routeState.workflowId,
+    scopeId,
+  ]);
   const currentPlatformService =
     focusedOperationalUnit?.matchedService || lens.currentService || servicesQuery.data?.[0] || null;
   const platformRouteIdentity = React.useMemo(

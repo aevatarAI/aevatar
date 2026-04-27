@@ -145,6 +145,27 @@ function mockCreateServiceRevisionCatalog(overrides?: Record<string, any>) {
   };
 }
 
+function mockCreateMembersCatalog() {
+  return {
+    scopeId: "scope-1",
+    members: [
+      {
+        memberId: "member-support",
+        scopeId: "scope-1",
+        displayName: "Support Escalation Triage",
+        description: "负责处理升级工单",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "default",
+        lastBoundRevisionId: "rev-2",
+        createdAt: "2026-04-09T08:00:00Z",
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ],
+    nextPageToken: null,
+  };
+}
+
 function mockCreateRunAudit(scopeId: string, runId: string) {
   return {
     summary: {
@@ -420,7 +441,11 @@ jest.mock("@/shared/api/runtimeActorsApi", () => ({
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
     getServiceRevisions: jest.fn(async () => mockCreateServiceRevisionCatalog()),
+    listMemberRuns: jest.fn(async () => mockCreateRunsCatalog()),
     listServiceRuns: jest.fn(async () => mockCreateRunsCatalog()),
+    getMemberRunAudit: jest.fn(async (scopeId: string, _memberId: string, runId: string) =>
+      mockCreateRunAudit(scopeId, runId),
+    ),
     getServiceRunAudit: jest.fn(async (scopeId: string, _serviceId: string, runId: string) =>
       mockCreateRunAudit(scopeId, runId),
     ),
@@ -584,6 +609,7 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
+    listMembers: jest.fn(async () => mockCreateMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
         name: "support-triage",
@@ -608,14 +634,27 @@ describe("TeamDetailPage", () => {
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockImplementation(
       async () => mockCreateServiceRevisionCatalog(),
     );
+    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockReset();
+    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockImplementation(
+      async () => mockCreateRunsCatalog(),
+    );
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockReset();
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
       async () => mockCreateRunsCatalog(),
+    );
+    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockReset();
+    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockImplementation(
+      async (scopeId: string, _memberId: string, runId: string) =>
+        mockCreateRunAudit(scopeId, runId),
     );
     (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockReset();
     (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockImplementation(
       async (scopeId: string, _serviceId: string, runId: string) =>
         mockCreateRunAudit(scopeId, runId),
+    );
+    (studioApi.listMembers as jest.Mock).mockReset();
+    (studioApi.listMembers as jest.Mock).mockImplementation(
+      async () => mockCreateMembersCatalog(),
     );
   });
 
@@ -853,6 +892,31 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("button", { name: "选择绑定 web-search" })).toBeTruthy();
     expect(window.location.search).toContain("tab=bindings");
     expect(window.location.search).not.toContain("step=bind");
+  });
+
+  it("canonicalizes legacy service deep links into member-first detail routes", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&serviceId=default&tab=events",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
+
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("memberId")).toBe("member-support");
+      expect(params.get("serviceId")).toBe("default");
+      expect(params.get("tab")).toBe("events");
+    });
+
+    expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      "scope-1",
+      "member-support",
+      expect.objectContaining({ take: 12 }),
+    );
   });
 
   it("shows the team asset view with workflow and script entries", async () => {

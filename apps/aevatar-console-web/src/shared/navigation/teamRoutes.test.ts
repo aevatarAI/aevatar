@@ -9,6 +9,7 @@ describe("teamRoutes", () => {
   it("builds a workflow-aware team detail href and trims empty values", () => {
     expect(
       buildTeamDetailHref({
+        memberId: " member-alpha ",
         scopeId: " scope-alpha ",
         workflowId: "workflow-1",
         serviceId: "service-1",
@@ -16,7 +17,7 @@ describe("teamRoutes", () => {
         tab: "events",
       }),
     ).toBe(
-      "/teams/scope-alpha?workflowId=workflow-1&tab=events&serviceId=service-1&runId=run-1",
+      "/teams/scope-alpha?memberId=member-alpha&workflowId=workflow-1&tab=events&serviceId=service-1&runId=run-1",
     );
   });
 
@@ -45,11 +46,11 @@ describe("teamRoutes", () => {
   it("reads the team detail route state from path and query", () => {
     expect(
       readTeamDetailRouteState(
-        "?workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
+        "?memberId=member-alpha&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
         "/teams/scope-alpha",
       ),
     ).toEqual({
-      memberId: "",
+      memberId: "member-alpha",
       runId: "run-1",
       scopeId: "scope-alpha",
       serviceId: "service-1",

@@ -215,6 +215,7 @@ describe("TeamsHomePage", () => {
     });
 
     const params = new URLSearchParams(window.location.search);
+    expect(params.get("memberId")).toBe("member-alpha");
     expect(params.get("serviceId")).toBe("service-alpha");
     expect(params.get("runId")).toBe("run-latest");
   });

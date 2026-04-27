@@ -88,7 +88,9 @@ export function useTeamRuntimeLens(
     retry: false,
   });
   const membersQuery = useQuery({
-    enabled: normalizedScopeId.length > 0 && preferredMemberId.length > 0,
+    enabled:
+      normalizedScopeId.length > 0 &&
+      (preferredMemberId.length > 0 || preferredServiceId.length > 0),
     queryKey: ["teams", "members", normalizedScopeId],
     queryFn: () => studioApi.listMembers(normalizedScopeId),
     retry: false,
@@ -99,13 +101,30 @@ export function useTeamRuntimeLens(
     [servicesQuery.data],
   );
   const preferredMemberSummary = useMemo(
-    () =>
-      preferredMemberId.length > 0
-        ? membersQuery.data?.members.find(
+    () => {
+      const members = membersQuery.data?.members ?? [];
+      if (preferredMemberId.length > 0) {
+        const directMatch =
+          members.find(
             (member) => trimOptional(member.memberId) === preferredMemberId,
+          ) ?? null;
+        if (directMatch) {
+          return directMatch;
+        }
+      }
+
+      if (preferredServiceId.length > 0) {
+        return (
+          members.find(
+            (member) =>
+              trimOptional(member.publishedServiceId) === preferredServiceId,
           ) ?? null
-        : null,
-    [membersQuery.data?.members, preferredMemberId],
+        );
+      }
+
+      return null;
+    },
+    [membersQuery.data?.members, preferredMemberId, preferredServiceId],
   );
   const preferredServiceHint =
     preferredServiceId || trimOptional(preferredMemberSummary?.publishedServiceId);
