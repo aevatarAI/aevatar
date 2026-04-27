@@ -110,6 +110,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<INyxRelayApiKeyOwnershipVerifier, NyxRelayApiKeyOwnershipVerifier>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
+        services.TryAddSingleton<INyxTelegramProvisioningService, NyxTelegramProvisioningService>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxTelegramProvisioningService>());
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)
@@ -200,6 +202,13 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
+        services.TryAddSingleton<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
+        services.TryAddSingleton<Aevatar.GAgents.Platform.Telegram.TelegramChannelNativeMessageProducer>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>(
+            sp => sp.GetRequiredService<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, Aevatar.GAgents.Platform.Telegram.TelegramChannelNativeMessageProducer>(
+            sp => sp.GetRequiredService<Aevatar.GAgents.Platform.Telegram.TelegramChannelNativeMessageProducer>()));
+        services.TryAddSingleton<Aevatar.GAgents.Platform.Telegram.TelegramPayloadRedactor>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
         services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>
         {

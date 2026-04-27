@@ -60,7 +60,8 @@ public sealed record NyxChannelBotProvisioningRequest(
     string ScopeId,
     string Label,
     string NyxProviderSlug,
-    NyxChannelLarkCredentials? Lark = null);
+    NyxChannelLarkCredentials? Lark = null,
+    IReadOnlyDictionary<string, string>? Credentials = null);
 
 public sealed record NyxChannelBotProvisioningResult(
     bool Succeeded,

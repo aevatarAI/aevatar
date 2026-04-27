@@ -132,7 +132,8 @@ public static class ChannelCallbackEndpoints
                 Lark: new NyxChannelLarkCredentials(
                     AppId: request.AppId?.Trim() ?? string.Empty,
                     AppSecret: request.AppSecret?.Trim() ?? string.Empty,
-                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty)),
+                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty),
+                Credentials: BuildCredentialsMap(platformNormalized, request)),
             ct);
 
         var payload = new
@@ -141,7 +142,7 @@ public static class ChannelCallbackEndpoints
             registration_id = result.RegistrationId ?? string.Empty,
             platform = result.Platform,
             nyx_provider_slug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
-                ? "api-lark-bot"
+                ? ResolveDefaultProviderSlug(platformNormalized)
                 : request.NyxProviderSlug.Trim(),
             nyx_channel_bot_id = result.NyxChannelBotId ?? string.Empty,
             nyx_agent_api_key_id = result.NyxAgentApiKeyId ?? string.Empty,
@@ -440,8 +441,45 @@ public static class ChannelCallbackEndpoints
         string? NyxProviderSlug,
         string? ScopeId,
         string? WebhookBaseUrl,
+        // Lark-specific (legacy explicit fields kept for backward compatibility; Telegram and
+        // future platforms use the Credentials map below).
         string? AppId,
         string? AppSecret,
         string? VerificationToken,
+        // Telegram-specific shorthand: equivalent to Credentials["bot_token"].
+        string? BotToken,
+        // Platform-extensible credential bag. Per-platform provisioning services document
+        // which keys they expect (e.g. Telegram reads "bot_token").
+        IReadOnlyDictionary<string, string>? Credentials,
         string? Label);
+
+    private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
+        string platform,
+        RegistrationRequest request)
+    {
+        var bag = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (request.Credentials is { Count: > 0 } incoming)
+        {
+            foreach (var (key, value) in incoming)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                    bag[key] = value.Trim();
+            }
+        }
+
+        if (string.Equals(platform, "telegram", StringComparison.OrdinalIgnoreCase) &&
+            !bag.ContainsKey("bot_token") &&
+            !string.IsNullOrWhiteSpace(request.BotToken))
+        {
+            bag["bot_token"] = request.BotToken!.Trim();
+        }
+
+        return bag.Count == 0 ? null : bag;
+    }
+
+    private static string ResolveDefaultProviderSlug(string platform) => platform switch
+    {
+        "telegram" => "api-telegram-bot",
+        _ => "api-lark-bot",
+    };
 }
