@@ -17,6 +17,11 @@ public static class NyxIdRelayConversationTypeMap
                 scope = ConversationScope.DirectMessage;
                 return true;
             case "group":
+            // Telegram supergroups carry distinct semantics on the Bot API but the
+            // ChatActivity scope only distinguishes DM / Group / Channel; collapse to
+            // Group so supergroup inbound traffic is not rejected as an unsupported
+            // conversation type.
+            case "supergroup":
                 scope = ConversationScope.Group;
                 return true;
             case "channel":

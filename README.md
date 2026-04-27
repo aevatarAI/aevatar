@@ -353,7 +353,7 @@ sequenceDiagram
 - **Event Sourcing**： [docs/canon/event-sourcing.md](docs/canon/event-sourcing.md) — 如何开启事件溯源。
 - **Connector 配置详解**： [docs/canon/connector.md](docs/canon/connector.md) — 配置格式与示例。
 - **Maker 示例**： [demos/Aevatar.Demos.Maker](demos/Aevatar.Demos.Maker) — 自定义步骤类型与 MAKER 工作流。
-- **项目拆分策略**： [docs/decisions/0001-project-split-strategy.md](docs/decisions/0001-project-split-strategy.md) — 分片与拆仓路径。
+- **项目拆分策略**： [docs/adr/0001-project-split-strategy.md](docs/adr/0001-project-split-strategy.md) — 分片与拆仓路径。
 
 ---
 

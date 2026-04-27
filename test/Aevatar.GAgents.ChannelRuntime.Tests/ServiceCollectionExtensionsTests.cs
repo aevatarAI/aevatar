@@ -45,7 +45,8 @@ public sealed class ServiceCollectionExtensionsTests
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
             .Should().Be(0);
         services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
-            .Should().Be(1);
+            .Should().Be(2);
+        registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
     }
 
     [Fact]
