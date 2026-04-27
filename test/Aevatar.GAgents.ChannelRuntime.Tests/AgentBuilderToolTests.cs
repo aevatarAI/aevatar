@@ -1012,6 +1012,8 @@ public sealed class AgentBuilderToolTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             [ChannelMetadataKeys.ChatType] = "p2p",
             [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.Platform] = "lark",
+            [ChannelMetadataKeys.SenderId] = "ou_alice",
             ["scope_id"] = "scope-1",
         };
         try
@@ -1034,8 +1036,12 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeTrue();
             doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeFalse();
 
+            // Issue #436: the bot's RegistrationScopeId is shared across all Lark users using
+            // one bot, so the saved github_username must land in a per-end-user actor
+            // (`{bot}:{platform}:{sender}`), not the bot scope alone. SkillRunner.ScopeId
+            // (asserted elsewhere) keeps the bot scope for downstream NyxID-tenant tools.
             await userConfigCommandService.Received(1)
-                .SaveGithubUsernameAsync("scope-1", "alice", Arg.Any<CancellationToken>());
+                .SaveGithubUsernameAsync("scope-1:lark:ou_alice", "alice", Arg.Any<CancellationToken>());
         }
         finally
         {
