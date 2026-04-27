@@ -947,6 +947,24 @@ public static class StreamingProxyEndpoints
         ILogger logger,
         bool unregisterFromRegistry)
     {
+        if (unregisterFromRegistry)
+        {
+            try
+            {
+                await registryCommandPort.UnregisterActorAsync(
+                    new GAgentActorRegistration(
+                        scopeId,
+                        StreamingProxyDefaults.GAgentTypeName,
+                        roomId),
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to unregister room {RoomId} from registry during rollback", roomId);
+                return;
+            }
+        }
+
         try
         {
             await actorRuntime.DestroyAsync(roomId, CancellationToken.None);
@@ -954,23 +972,6 @@ public static class StreamingProxyEndpoints
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to destroy room actor {RoomId} during rollback", roomId);
-        }
-
-        if (!unregisterFromRegistry)
-            return;
-
-        try
-        {
-            await registryCommandPort.UnregisterActorAsync(
-                new GAgentActorRegistration(
-                    scopeId,
-                    StreamingProxyDefaults.GAgentTypeName,
-                    roomId),
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to unregister room {RoomId} from registry during rollback", roomId);
         }
     }
 

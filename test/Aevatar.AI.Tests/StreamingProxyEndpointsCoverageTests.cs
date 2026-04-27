@@ -120,7 +120,41 @@ public sealed class StreamingProxyEndpointsCoverageTests
             $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
             $"actor:init:{actorStore.AddedActors.Single().ActorId}",
             $"store:add:{actorStore.AddedActors.Single().ActorId}",
-            $"runtime:destroy:{actorStore.AddedActors.Single().ActorId}",
+            $"store:remove:{actorStore.AddedActors.Single().ActorId}",
+            $"runtime:destroy:{actorStore.AddedActors.Single().ActorId}");
+    }
+
+    [Fact]
+    public async Task HandleCreateRoomAsync_ShouldNotDestroyRoom_WhenRollbackCannotUnregister()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("created-room", operations);
+        var actorStore = new RecordingGAgentActorStore(operations)
+        {
+            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
+            ThrowOnUnregister = new InvalidOperationException("registry unavailable")
+        };
+        var runtime = new RecordingActorRuntime(operations, actor);
+        var loggerFactory = LoggerFactory.Create(_ => { });
+
+        var result = await InvokeHandleCreateRoomAsync(
+            CreateScopedHttpContext(),
+            "scope-a",
+            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
+            actorStore,
+            runtime,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("Failed to create room");
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        operations.Should().ContainInOrder(
+            $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
+            $"actor:init:{actorStore.AddedActors.Single().ActorId}",
+            $"store:add:{actorStore.AddedActors.Single().ActorId}",
             $"store:remove:{actorStore.AddedActors.Single().ActorId}");
     }
 
@@ -288,6 +322,9 @@ public sealed class StreamingProxyEndpointsCoverageTests
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
         public Exception? ThrowOnRegister { get; init; }
+        public Exception? ThrowOnUnregister { get; init; }
+        public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
+            GAgentActorRegistryCommandStage.AdmissionVisible;
 
         public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
             string scopeId,
@@ -310,7 +347,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
-                GAgentActorRegistryCommandStage.AdmissionVisible));
+                RegisterStage));
         }
 
         public Task<GAgentActorRegistryCommandReceipt> UnregisterActorAsync(
@@ -319,6 +356,9 @@ public sealed class StreamingProxyEndpointsCoverageTests
         {
             operations.Add($"store:remove:{registration.ActorId}");
             RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            if (ThrowOnUnregister is not null)
+                throw ThrowOnUnregister;
+
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));
