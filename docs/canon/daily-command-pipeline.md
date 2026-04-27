@@ -152,13 +152,17 @@ QA 关注点：
 - 优先用 JWT 里的 `scope_id`
 - 缺失时用 `payload.Agent.ApiKeyId` 反查
 
-**响应码语义**：
-| 状态 | 含义 | 测试关注 |
-|------|------|----------|
-| `202 Accepted` (ignored) | payload 合法但被透传层标记为忽略（如非聊天事件）；handler 永远只回 `202`，不返回 `200`（[NyxIdChatEndpoints.Relay.cs:87](../../agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs)） | 不应触发任何下游逻辑 |
-| `400 invalid_relay_payload` | parse 失败 | 期望 NyxID 重试或上报 |
-| `400 conversation_key_missing` | activity 解析后没有 canonical conversation key | 等价上 |
-| `401 Unauthorized` | JWT 校验失败 / scope 解析失败 | 不应有任何业务副作用，日志含 `Relay callback authentication failed` |
+**响应码语义**（handler 永远只回 `202` / `400` / `401` / `499` / `500`，**不返回 `200`**——成功与忽略路径都是 `202`，靠 body 里的 `status` 字段区分；见 [NyxIdChatEndpoints.Relay.cs:87,147](../../agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs)）：
+
+| 状态 | body | 含义 | 测试关注 |
+|------|------|------|----------|
+| `202 Accepted` | `{status:"accepted", message_id, actor_id}` | **正常成功路径**：activity 已派发到 `ConversationGAgent` inbox | QA 看到 `202` 不能默认是"忽略"，必须读 body `status` 字段 |
+| `202 Accepted` | `{status:"ignored", reason, detail}` | payload 合法但被透传层标记为忽略（如非聊天事件） | 不应触发任何下游逻辑 |
+| `400 Bad Request` | `{error:"invalid_relay_payload", detail}` | parse 失败 | 期望 NyxID 重试或上报 |
+| `400 Bad Request` | `{error:"conversation_key_missing", detail}` | activity 解析后没有 canonical conversation key | 等价上 |
+| `401 Unauthorized` | — | JWT 校验失败 / scope 解析失败 | 不应有任何业务副作用，日志含 `Relay callback authentication failed` |
+| `499` | — | 客户端取消 | — |
+| `500 Internal Server Error` | — | handler 未捕获异常 | 日志含 `Relay handler unexpected error` |
 
 **派发**：成功后构造 `NyxRelayInboundActivity`（含 reply token、user access token、normalized `ChatActivity`），包装成 `EventEnvelope` 后直接调用 `ConversationGAgent.HandleEventAsync`（actor id 由 conversation canonical key 推出）。
 
