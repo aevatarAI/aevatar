@@ -6,7 +6,7 @@ owner: liyingpei
 
 # Issue 204：AGUI / SSE Projection Session Pipeline 落地说明
 
-> 本文档位于 `docs/history/2026-04/`，保留的是一份“落地后回看版”说明，不再保留最初那版大而全的设计推演。当前权威口径仍以 [ADR-0011：AGUI / SSE Projection Session Pipeline](../../decisions/0011-agui-sse-projection-session-pipeline.md) 为准；本文只回答三件事：原来哪里有问题，这次代码具体怎么收了，哪些还没做。
+> 本文档位于 `docs/history/2026-04/`，保留的是一份“落地后回看版”说明，不再保留最初那版大而全的设计推演。当前权威口径仍以 [ADR-0015：AGUI / SSE Projection Session Pipeline](../../adr/0015-agui-sse-projection-session-pipeline.md) 为准；本文只回答三件事：原来哪里有问题，这次代码具体怎么收了，哪些还没做。
 
 ## 1. 这次到底在修什么
 

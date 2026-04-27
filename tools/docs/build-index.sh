@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DOCS_DIR="$REPO_ROOT/docs"
+# DOCS_DIR can be overridden for testing; defaults to repo's docs/
+DOCS_DIR="${DOCS_DIR:-$REPO_ROOT/docs}"
 OUTPUT="$DOCS_DIR/README.md"
 
 extract_field() {
@@ -42,13 +43,13 @@ extract_field() {
   echo ""
   echo "Immutable records of architectural choices and their rationale."
   echo ""
-  if [ -d "$DOCS_DIR/decisions" ]; then
-    for file in "$DOCS_DIR"/decisions/*.md; do
+  if [ -d "$DOCS_DIR/adr" ]; then
+    for file in "$DOCS_DIR"/adr/*.md; do
       [ -f "$file" ] || continue
       basename=$(basename "$file")
       title=$(extract_field "$file" "title")
       [ -z "$title" ] && title="$basename"
-      echo "- [${title}](decisions/${basename})"
+      echo "- [${title}](adr/${basename})"
     done
   else
     echo "_No decision records yet._"
