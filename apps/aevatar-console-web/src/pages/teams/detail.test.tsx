@@ -912,11 +912,13 @@ describe("TeamDetailPage", () => {
       expect(params.get("tab")).toBe("events");
     });
 
-    expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
-      "scope-1",
-      "member-support",
-      expect.objectContaining({ take: 12 }),
-    );
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "member-support",
+        expect.objectContaining({ take: 12 }),
+      );
+    });
   });
 
   it("shows the team asset view with workflow and script entries", async () => {
