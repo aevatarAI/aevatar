@@ -2944,6 +2944,25 @@ describe("StudioPage", () => {
     });
   });
 
+  it("opens the create-member modal once from the typed Studio intent", async () => {
+    renderStudioPage("/studio?tab=studio&intent=create-member");
+
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    expect(within(createDialog).getByLabelText("Member name")).toHaveValue("draft");
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Create member" })).toBeNull();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Create member" })).toBeNull();
+    });
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+  });
+
   it("shows script and gagent as member kinds before their create APIs land", async () => {
     renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
 

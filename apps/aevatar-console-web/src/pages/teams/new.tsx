@@ -137,10 +137,10 @@ const TeamCreatePage: React.FC = () => {
           onClick={openBuilder}
           style={primaryActionButtonStyle}
         >
-          Open Studio
+          Continue in Studio
         </Button>
       }
-      title="Create Team"
+      title="Saved Draft Recovery"
     >
       <div
         style={{
@@ -150,16 +150,16 @@ const TeamCreatePage: React.FC = () => {
           marginBottom: 20,
         }}
       >
-        <ConsoleMetricCard label="入口" tone="purple" value="Studio" />
-        <ConsoleMetricCard label="构建对象" value="行为 + 脚本" />
-        <ConsoleMetricCard label="完成后" value="Team Details" />
-        <ConsoleMetricCard label="新增后端流" tone="green" value="0" />
+        <ConsoleMetricCard label="用途" tone="purple" value="旧链接恢复" />
+        <ConsoleMetricCard label="恢复对象" value="初始 member 草稿" />
+        <ConsoleMetricCard label="继续位置" value="Studio" />
+        <ConsoleMetricCard label="新增后端事实" tone="green" value="0" />
       </div>
 
       <AevatarPanel
         layoutMode="document"
         padding={20}
-        title="Start Building"
+        title="Continue initial member draft"
       >
         <div
           style={{
@@ -180,7 +180,7 @@ const TeamCreatePage: React.FC = () => {
                 margin: 0,
               }}
             >
-              Studio
+              Saved draft recovery
             </Typography.Title>
             <div
               style={{
@@ -189,7 +189,7 @@ const TeamCreatePage: React.FC = () => {
                 gap: 8,
               }}
             >
-              {['行为定义', '脚本行为', 'Agent 角色', '集成'].map((item) => (
+              {['旧链接兼容', '草稿恢复', '显式进入 Studio', '不创建团队事实'].map((item) => (
                 <span key={item} style={stageChipStyle}>
                   {item}
                 </span>
@@ -204,18 +204,18 @@ const TeamCreatePage: React.FC = () => {
               }}
             >
               <div style={{ display: 'grid', gap: 8 }}>
-                <Typography.Text strong>团队名称</Typography.Text>
+                <Typography.Text strong>Legacy team label</Typography.Text>
                 <Input
-                  aria-label="团队名称"
+                  aria-label="Legacy team label"
                   placeholder="例如：订单助手团队"
                   value={teamName}
                   onChange={(event) => setTeamName(event.target.value)}
                 />
               </div>
               <div style={{ display: 'grid', gap: 8 }}>
-                <Typography.Text strong>入口名称</Typography.Text>
+                <Typography.Text strong>Initial member label</Typography.Text>
                 <Input
-                  aria-label="入口名称"
+                  aria-label="Initial member label"
                   placeholder="默认复用团队名称"
                   value={entryName}
                   onChange={(event) => setEntryName(event.target.value)}
@@ -225,10 +225,11 @@ const TeamCreatePage: React.FC = () => {
                 type="secondary"
                 style={{ gridColumn: '1 / -1', lineHeight: 1.6 }}
               >
-                团队名称会显示在创建流程中；入口名称会作为 Studio 新草稿的默认名称。
-                如果入口名称留空，Studio 会自动复用团队名称。
+                This compatibility page preserves old Create Team links and saved
+                draft recovery. New team creation now starts in Studio by creating
+                the first member.
                 {hasSavedDraft
-                  ? ' 这次创建流程已经有已保存草稿，重新进入 Studio 会继续编辑它。'
+                  ? ' Continue in Studio to edit the linked initial member draft.'
                   : ''}
               </Typography.Text>
             </div>
@@ -239,7 +240,7 @@ const TeamCreatePage: React.FC = () => {
                 onClick={openBuilder}
                 style={primaryActionButtonStyle}
               >
-                Open Studio
+                Continue in Studio
               </Button>
               <Button
                 icon={<RocketOutlined />}
@@ -271,8 +272,8 @@ const TeamCreatePage: React.FC = () => {
               }}
             >
               {teamName.trim()
-                ? `已填写团队名称：${teamName.trim()}`
-                : '先填写团队名称，再进入 Studio'}
+                ? `Legacy label: ${teamName.trim()}`
+                : 'Use this page only for old links or saved drafts'}
             </Typography.Text>
           </div>
         </div>
@@ -293,7 +294,8 @@ const TeamCreatePage: React.FC = () => {
             <Typography.Text strong>已保存草稿</Typography.Text>
             <Typography.Text>{resolvedDraftWorkflowName}</Typography.Text>
             <Typography.Text type="secondary" style={{ lineHeight: 1.6 }}>
-              这份行为定义草稿已经和当前创建团队流程关联。再次进入 Studio 时，会继续编辑它。
+              This workflow draft is linked from an old Create Team flow. Continue
+              in Studio to edit the initial member draft.
             </Typography.Text>
             <Space wrap size={[8, 8]}>
               <Button
@@ -313,7 +315,8 @@ const TeamCreatePage: React.FC = () => {
               </Button>
             </Space>
             <Typography.Text type="secondary" style={{ lineHeight: 1.6 }}>
-              Delete Draft 会删除当前创建流程关联的行为草稿；团队名称和入口名称会保留在这个页面。
+              Delete Draft removes the linked workflow draft. Legacy labels stay
+              in the URL so old links remain understandable.
             </Typography.Text>
           </div>
         </AevatarPanel>

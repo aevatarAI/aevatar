@@ -4,7 +4,7 @@ status: accepted
 owner: codex
 ---
 
-# ADR-0012: Studio Member-First Published Service Identity
+# ADR-0016: Studio Member-First Published Service Identity
 
 ## Context
 

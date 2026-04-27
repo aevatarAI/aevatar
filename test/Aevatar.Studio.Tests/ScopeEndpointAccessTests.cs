@@ -92,6 +92,38 @@ public sealed class ScopeEndpointAccessTests
     }
 
     [Fact]
+    public void TryCreateMemberAccessDeniedResult_ShouldAllow_WhenMemberClaimMatches()
+    {
+        var http = CreateContext(true, new Claim("member_id", "member-1"));
+        AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, "member-1", out _)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryCreateMemberAccessDeniedResult_ShouldDeny_WhenMemberClaimDiffers()
+    {
+        var http = CreateContext(true, new Claim("member_id", "member-1"));
+        AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, "member-2", out _)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryCreateScopeAdminRequiredResult_ShouldAllow_WhenScopeAdminRoleIsPresent()
+    {
+        var http = CreateContext(true, new Claim("role", "scope-admin"));
+        AevatarMemberAccessGuard.TryCreateScopeAdminRequiredResult(http, "member-1", out _)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryCreateScopeAdminRequiredResult_ShouldDeny_WhenOnlyMemberClaimMatches()
+    {
+        var http = CreateContext(true, new Claim("member_id", "member-1"));
+        AevatarMemberAccessGuard.TryCreateScopeAdminRequiredResult(http, "member-1", out _)
+            .Should().BeTrue();
+    }
+
+    [Fact]
     public void TryCreateScopeAccessDeniedResult_ShouldMatchTrimmed()
     {
         var http = CreateContext(true, new Claim("scope_id", "  scope-1  "));

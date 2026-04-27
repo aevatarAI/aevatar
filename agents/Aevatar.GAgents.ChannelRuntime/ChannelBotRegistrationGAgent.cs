@@ -30,13 +30,26 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
 
     // ─── Commands ───
 
+    /// <summary>
+    /// Platforms whose registrations are allowed to land in the local mirror. Aligned with the
+    /// set of <c>INyxChannelBotProvisioningService</c> registered on the supported production
+    /// contract. Anything outside this set is treated as a retired direct-callback dispatch and
+    /// dropped without persistence so legacy producers cannot resurface old wire shapes.
+    /// </summary>
+    private static readonly HashSet<string> SupportedPlatforms =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "lark",
+            "telegram",
+        };
+
     [EventHandler]
     public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
-        if (!string.Equals(cmd.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+        if (!SupportedPlatforms.Contains(cmd.Platform ?? string.Empty))
         {
             Logger.LogWarning(
-                "Ignoring retired direct-callback registration request: platform={Platform}, requestedId={RequestedId}",
+                "Ignoring registration request for unsupported platform: platform={Platform}, requestedId={RequestedId}",
                 cmd.Platform,
                 cmd.RequestedId);
             return;

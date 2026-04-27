@@ -53,6 +53,18 @@ function isStudioHostRoute(pathname: string): boolean {
   return STUDIO_HOST_ROUTES.has(pathname);
 }
 
+function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
+  if (!isStudioHostRoute(pathname)) {
+    return false;
+  }
+
+  return new URLSearchParams(search).get("intent") === "create-member";
+}
+
+function shouldCollapseLayout(pathname: string, search: string): boolean {
+  return shouldDefaultCollapseLayout(pathname, search);
+}
+
 function buildLoginRoute(returnTo: string): string {
   const params = new URLSearchParams({
     redirect: sanitizeReturnTo(returnTo),
@@ -642,6 +654,10 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 export const layout = ({
   initialState,
 }: LayoutRuntimeProps): Record<string, unknown> => {
+  const pathname = window.location.pathname;
+  const search = window.location.search;
+  const collapseForRoute = shouldCollapseLayout(pathname, search);
+
   return {
     onPageChange: () => {
       const pathname = window.location.pathname;
@@ -814,6 +830,8 @@ export const layout = ({
       overflow: "hidden",
       padding: 0,
     },
+    defaultCollapsed: shouldDefaultCollapseLayout(pathname, search),
+    ...(collapseForRoute ? { collapsed: true } : {}),
     logo: <BrandLogo />,
   };
 };
