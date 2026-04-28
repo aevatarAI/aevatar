@@ -1218,6 +1218,141 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunLlmReplyAsync_RelayPath_ShouldStillReplyAndSkipSwap_WhenRegistrationLookupThrows()
+    {
+        // Reviewer guard: the post-reply swap needs registration for NyxProviderSlug, but the
+        // relay reply itself uses the reply token and never touches the registration store. A
+        // transient registration-store exception must NOT abort the relay reply — it should
+        // degrade the swap to a no-op for that turn while the user-visible reply still lands.
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ChannelBotRegistrationEntry?>>(_ => throw new InvalidOperationException("registration store unavailable"));
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-relay-no-reg"}""");
+        // If the swap were to fire, it'd hit nyxHandler. The assertion below confirms it does NOT.
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-no-reg",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-no-reg",
+                CorrelationId = "corr-relay-no-reg",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_no_reg_1",
+            });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-no-reg",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "relay reply still lands" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-no-reg", replyMessageId: "relay-msg-no-reg"),
+            CancellationToken.None);
+
+        // Reply delivered through the relay despite the registration store throwing.
+        result.Success.Should().BeTrue();
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"relay reply still lands\"");
+        // Registration is required for the swap, so when lookup throws on the relay path the swap
+        // is degraded to a no-op for that turn (no list / delete / DONE calls).
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunLlmReplyAsync_ShouldPaginate_WhenTypingReactionListSpansMultiplePages()
+    {
+        // Lark's `list message reactions` is paginated. If the bot's own Typing reaction lands on
+        // a later page (chat with many users reacting Typing), the original single-page swap would
+        // miss it and leave Typing alongside DONE. The swap must walk pages until has_more=false.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-paginated"}""");
+        // 5 nyx calls expected: list page 1 (user only, has_more=true) → list page 2 (bot,
+        // has_more=false) → DELETE bot reaction → POST DONE. (No call between pages — the loop
+        // re-issues GET with page_token.)
+        var nyxHandler = new SequencedJsonHandler(
+            expectedCallCount: 4,
+            """{"code":0,"data":{"items":[{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":true,"page_token":"page-2-token"}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-late","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{}}""",
+            """{"code":0,"data":{}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-paginated",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-paginated",
+                CorrelationId = "corr-relay-paginated",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_paginated_1",
+            });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-paginated",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "paginated reply" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-paginated", replyMessageId: "relay-msg-paginated"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        await nyxHandler.Completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        nyxHandler.Requests.Should().HaveCount(4);
+        // 1. List page 1 — no page_token query param.
+        nyxHandler.Requests[0].Method.Should().Be("GET");
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=Typing&page_size=50");
+        // 2. List page 2 — same URL with page_token from page 1's response.
+        nyxHandler.Requests[1].Method.Should().Be("GET");
+        nyxHandler.Requests[1].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=Typing&page_size=50&page_token=page-2-token");
+        // 3. DELETE the bot-owned reaction discovered on page 2.
+        nyxHandler.Requests[2].Method.Should().Be("DELETE");
+        nyxHandler.Requests[2].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions/r-bot-late");
+        // 4. POST DONE.
+        nyxHandler.Requests[3].Method.Should().Be("POST");
+        nyxHandler.Requests[3].Body.Should().Contain("\"emoji_type\":\"DONE\"");
+    }
+
+    [Fact]
     public async Task OnReplyDeliveredAsync_ShouldNoOp_WhenActivityIsNotLark()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -2248,18 +2383,21 @@ public sealed class ChannelConversationTurnRunnerTests
 
     private class RecordingJsonHandler(string body) : HttpMessageHandler
     {
-        public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
+        public List<(string Path, string Method, string? Authorization, string Body)> Requests { get; } = [];
+
+        protected virtual string ResolveBody() => body;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add((
                 request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Method.Method,
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                Content = new StringContent(ResolveBody(), Encoding.UTF8, "application/json"),
             };
         }
     }
@@ -2277,26 +2415,28 @@ public sealed class ChannelConversationTurnRunnerTests
         }
     }
 
-    // Same shape as SequencedJsonHandler, but parks the FIRST request (the typing POST that fires
-    // from RunInboundAsync) on a TaskCompletionSource until the test releases it. Used by the race
-    // test to confirm that the post-reply swap awaits the typing POST before issuing the GET-list
-    // — without the guard, the swap GET would run while typing is still parked here.
-    private sealed class TypingReactionGateHandler : HttpMessageHandler
+    // Parks the FIRST request (the typing POST that fires from RunInboundAsync) on a
+    // TaskCompletionSource until the test releases it. Used by the race test to confirm that
+    // the post-reply swap awaits the typing POST before issuing the GET-list — without the
+    // guard, the swap GET would run while typing is still parked here.
+    private sealed class TypingReactionGateHandler : RecordingJsonHandler
     {
         private readonly Queue<string> _bodies;
         private readonly int _expectedTotalCallCount;
         private int _callCount;
 
         public TypingReactionGateHandler(int expectedTotalCallCount, params string[] bodies)
+            : base(bodies.Length > 0 ? bodies[0] : """{"code":0,"data":{}}""")
         {
             _expectedTotalCallCount = expectedTotalCallCount;
             _bodies = new Queue<string>(bodies);
         }
 
-        public List<(string Path, string Method, string? Authorization, string Body)> Requests { get; } = [];
         public TaskCompletionSource TypingPostStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseTypingPost { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override string ResolveBody() => _bodies.Count > 0 ? _bodies.Dequeue() : """{"code":0,"data":{}}""";
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -2307,60 +2447,38 @@ public sealed class ChannelConversationTurnRunnerTests
                 TypingPostStarted.TrySetResult();
                 await ReleaseTypingPost.Task.WaitAsync(cancellationToken);
             }
-            var body = _bodies.Count > 0 ? _bodies.Dequeue() : """{"code":0,"data":{}}""";
-            var content = request.Content is null
-                ? string.Empty
-                : await request.Content.ReadAsStringAsync(cancellationToken);
-            Requests.Add((
-                request.RequestUri?.PathAndQuery ?? string.Empty,
-                request.Method.Method,
-                request.Headers.Authorization?.ToString(),
-                content));
+            var response = await base.SendAsync(request, cancellationToken);
             if (Requests.Count >= _expectedTotalCallCount)
                 Completed.TrySetResult();
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            };
+            return response;
         }
     }
 
     // Returns a different body for each successive call; signals Completed once expectedCallCount
-    // requests have been served. Records HTTP method as well so tests can assert GET/DELETE/POST
-    // ordering — RecordingJsonHandler tracks path+body but not method, which the typing→done swap
-    // tests need to distinguish list vs delete vs add.
-    private sealed class SequencedJsonHandler : HttpMessageHandler
+    // requests have been served. Extends RecordingJsonHandler which captures Path, Method,
+    // Authorization, and Body — the Method field lets swap tests assert GET/DELETE/POST ordering.
+    private sealed class SequencedJsonHandler : RecordingJsonHandler
     {
         private readonly Queue<string> _bodies;
         private readonly int _expectedCallCount;
 
         public SequencedJsonHandler(int expectedCallCount, params string[] bodies)
+            : base(bodies.Length > 0 ? bodies[0] : """{"code":0,"data":{}}""")
         {
             _expectedCallCount = expectedCallCount;
             _bodies = new Queue<string>(bodies);
         }
 
-        public List<(string Path, string Method, string? Authorization, string Body)> Requests { get; } = [];
         public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override string ResolveBody() => _bodies.Count > 0 ? _bodies.Dequeue() : """{"code":0,"data":{}}""";
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var body = _bodies.Count > 0 ? _bodies.Dequeue() : """{"code":0,"data":{}}""";
-            var content = request.Content is null
-                ? string.Empty
-                : await request.Content.ReadAsStringAsync(cancellationToken);
-            Requests.Add((
-                request.RequestUri?.PathAndQuery ?? string.Empty,
-                request.Method.Method,
-                request.Headers.Authorization?.ToString(),
-                content));
+            var response = await base.SendAsync(request, cancellationToken);
             if (Requests.Count >= _expectedCallCount)
                 Completed.TrySetResult();
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            };
+            return response;
         }
     }
 }

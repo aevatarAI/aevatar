@@ -132,16 +132,40 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         var inbound = ToInboundMessage(reply.Activity);
-        // Resolve registration even on the relay path (where SendReplyAsync itself does not need
-        // it) so the post-reply Lark typing→done reaction swap can find NyxProviderSlug. Skipping
-        // resolution here only when HasRelayDelivery would silently disable the swap on the most
-        // common production path. Direct path still requires registration to send the reply.
-        var registration = await ResolveRegistrationForReplyAsync(reply, ct);
-        if (!HasRelayDelivery(inbound) && registration is null)
+        // Direct path requires registration to actually send the reply; relay path only wants it
+        // for the post-reply reaction swap (relay sends use the reply token, not registration).
+        // So lookup is mandatory on the direct path and best-effort on the relay path — a
+        // transient registration-store error on the relay path must not drop an otherwise valid
+        // reply, only degrade the swap to a no-op for that turn.
+        ChannelBotRegistrationEntry? registration;
+        if (HasRelayDelivery(inbound))
         {
-            return ConversationTurnResult.PermanentFailure(
-                "registration_not_found",
-                "Channel registration not found.");
+            try
+            {
+                registration = await ResolveRegistrationForReplyAsync(reply, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction swap will be skipped. correlation={CorrelationId}",
+                    reply.CorrelationId);
+                registration = null;
+            }
+        }
+        else
+        {
+            registration = await ResolveRegistrationForReplyAsync(reply, ct);
+            if (registration is null)
+            {
+                return ConversationTurnResult.PermanentFailure(
+                    "registration_not_found",
+                    "Channel registration not found.");
+            }
         }
 
         var sentSeed = string.IsNullOrWhiteSpace(reply.CorrelationId)
@@ -1093,27 +1117,51 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         try
         {
-            var listResponse = await _nyxClient.ProxyRequestAsync(
-                accessToken!,
-                providerSlug!,
-                $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions?reaction_type={TypingReactionEmojiType}&page_size=50",
-                "GET",
-                body: null,
-                extraHeaders: null,
-                ct);
-
-            if (LarkProxyResponse.TryGetError(listResponse, out var listCode, out var listDetail))
+            var reactionIds = new List<string>();
+            string? pageToken = null;
+            // Bound the iteration so a misbehaving Lark response (e.g. always-true `has_more`)
+            // can't loop the swap forever. 10 pages × 50 per page = 500 Typing reactions on a
+            // single message — orders of magnitude more than realistic, since this list is
+            // already scoped to one emoji_type and the bot only adds Typing once per inbound.
+            const int MaxListPages = 10;
+            for (var page = 0; page < MaxListPages; page++)
             {
-                _logger.LogDebug(
-                    "Lark typing reaction list failed; skipping swap: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
-                    providerSlug,
-                    platformMessageId,
-                    listCode,
-                    listDetail);
-                return;
+                var pathQuery = $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions?reaction_type={TypingReactionEmojiType}&page_size=50";
+                if (pageToken is not null)
+                    pathQuery += $"&page_token={Uri.EscapeDataString(pageToken)}";
+
+                var listResponse = await _nyxClient.ProxyRequestAsync(
+                    accessToken!,
+                    providerSlug!,
+                    pathQuery,
+                    "GET",
+                    body: null,
+                    extraHeaders: null,
+                    ct);
+
+                if (LarkProxyResponse.TryGetError(listResponse, out var listCode, out var listDetail))
+                {
+                    _logger.LogDebug(
+                        "Lark typing reaction list failed; skipping swap: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        page,
+                        listCode,
+                        listDetail);
+                    return;
+                }
+
+                var (idsOnPage, nextPageToken) = ParseAppReactionsPage(listResponse);
+                reactionIds.AddRange(idsOnPage);
+                if (string.IsNullOrWhiteSpace(nextPageToken))
+                {
+                    pageToken = null;
+                    break;
+                }
+                pageToken = nextPageToken;
             }
 
-            foreach (var reactionId in ParseAppReactionIds(listResponse))
+            foreach (var reactionId in reactionIds)
             {
                 try
                 {
@@ -1196,38 +1244,50 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
     }
 
-    private static IEnumerable<string> ParseAppReactionIds(string? response)
+    private static (IReadOnlyList<string> AppReactionIds, string? NextPageToken) ParseAppReactionsPage(string? response)
     {
         if (string.IsNullOrWhiteSpace(response))
-            yield break;
+            return (Array.Empty<string>(), null);
 
-        List<string> ids;
         try
         {
-            ids = ExtractAppReactionIds(response);
+            return ExtractAppReactionsPage(response);
         }
         catch (JsonException)
         {
-            yield break;
+            return (Array.Empty<string>(), null);
         }
-
-        foreach (var id in ids)
-            yield return id;
     }
 
-    private static List<string> ExtractAppReactionIds(string response)
+    private static (List<string> AppReactionIds, string? NextPageToken) ExtractAppReactionsPage(string response)
     {
         var ids = new List<string>();
+        string? nextPageToken = null;
+
         using var document = JsonDocument.Parse(response);
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object)
-            return ids;
+            return (ids, null);
 
         if (!root.TryGetProperty("data", out var dataProp) || dataProp.ValueKind != JsonValueKind.Object)
-            return ids;
+            return (ids, null);
+
+        // Pin pagination to has_more=true. Following page_token unconditionally would let a Lark
+        // response that returns a stale token alongside has_more=false re-fetch the same page
+        // until the safety cap fires.
+        var hasMore = dataProp.TryGetProperty("has_more", out var hasMoreProp) &&
+                      hasMoreProp.ValueKind == JsonValueKind.True;
+        if (hasMore &&
+            dataProp.TryGetProperty("page_token", out var pageTokenProp) &&
+            pageTokenProp.ValueKind == JsonValueKind.String)
+        {
+            var token = pageTokenProp.GetString();
+            if (!string.IsNullOrWhiteSpace(token))
+                nextPageToken = token;
+        }
 
         if (!dataProp.TryGetProperty("items", out var itemsProp) || itemsProp.ValueKind != JsonValueKind.Array)
-            return ids;
+            return (ids, nextPageToken);
 
         foreach (var item in itemsProp.EnumerateArray())
         {
@@ -1260,7 +1320,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 ids.Add(reactionId);
         }
 
-        return ids;
+        return (ids, nextPageToken);
     }
 
     private static bool ShouldSwapTypingReaction(
