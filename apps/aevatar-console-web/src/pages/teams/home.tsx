@@ -40,6 +40,7 @@ import {
 } from "@/shared/studio/memberRuntime";
 import {
   buildStudioRoute,
+  buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
@@ -450,10 +451,9 @@ function buildMemberRosterPreview(input: {
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
     (trimOptional(input.member.lastBoundRevisionId) ? "已绑定待确认" : "未绑定");
   const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
-  const studioHref = buildStudioRoute({
+  const studioHref = buildStudioWorkflowWorkspaceRoute({
     scopeId: input.scopeId,
     memberId,
-    tab: "studio",
   });
 
   let attention: WorkflowOperationalAttention = "draft";
@@ -988,16 +988,6 @@ const TeamsHomePage: React.FC = () => {
     }),
     retry: false,
   });
-  const memberRosterIssue = React.useMemo(() => {
-    if (!membersQuery.isError) {
-      return "";
-    }
-
-    return describeError(
-      membersQuery.error,
-      "当前 Scope 的成员清单暂时无法加载。",
-    );
-  }, [membersQuery.error, membersQuery.isError]);
 
   const studioMembers = React.useMemo(
     () => [...(membersQuery.data?.members ?? [])].sort(compareMembers),
@@ -1117,7 +1107,7 @@ const TeamsHomePage: React.FC = () => {
   ).length;
   const emptyRosterHint =
     scopeId.length > 0
-      ? "当前 Scope 下还没有创建任何 team。进入 Studio 创建 team 后，再到 team 里添加 member。"
+      ? "当前 Scope 下还没有创建任何 member。进入 Studio 创建成员后，这里会按成员逐个展示。"
       : "先导入一个 Scope，首页才能渲染出这组成员卡片。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
@@ -1280,7 +1270,7 @@ const TeamsHomePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
               <Typography.Text type="secondary">
-                Scope 只提供团队访问上下文；首页先展示当前 Scope 下的 teams，再从 team 进入 member 工作台。
+                首页按这个 Scope 汇总成员本身的绑定与运行状态，Scope 只做上下文，不再直接当团队名展示。
               </Typography.Text>
             </div>
           </div>
@@ -1340,17 +1330,15 @@ const TeamsHomePage: React.FC = () => {
                   <Button
                     onClick={() =>
                       history.push(
-                        buildStudioRoute({
+                        buildStudioWorkflowWorkspaceRoute({
                           scopeId,
-                          intent: "create-member",
-                          tab: "studio",
                         }),
                       )
                     }
                     size="small"
                     type="primary"
                   >
-                    进入 Studio 创建 Team
+                    打开 Studio
                   </Button>
                 }
                 description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的可调用入口。`}
@@ -1478,16 +1466,14 @@ const TeamsHomePage: React.FC = () => {
                 <Button
                   onClick={() =>
                     history.push(
-                      buildStudioRoute({
+                      buildStudioWorkflowWorkspaceRoute({
                         scopeId,
-                        intent: "create-member",
-                        tab: "studio",
                       }),
                     )
                   }
                   type="primary"
                 >
-                  进入 Studio 创建 Team
+                  打开 Studio
                 </Button>
               </Empty>
             )}

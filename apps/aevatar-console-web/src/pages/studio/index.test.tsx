@@ -8,6 +8,7 @@ import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { studioApi } from "@/shared/studio/api";
+import { scriptsApi } from "@/shared/studio/scriptsApi";
 import { saveStudioObserveSessionSeed } from "@/shared/studio/observeSession";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import StudioPage from "./index";
@@ -1019,6 +1020,26 @@ jest.mock("@/shared/studio/api", () => ({
       definitionActorIdPrefix: "scope-workflow:scope-1:default",
       expectedActorId: "scope-workflow:scope-1:default:dep-1",
     })),
+    bindScopeScript: jest.fn(async (input: {
+      scopeId: string;
+      displayName?: string;
+      scriptId: string;
+      scriptRevision: string;
+      revisionId?: string;
+    }) => ({
+      scopeId: input.scopeId,
+      serviceId: input.scriptId,
+      displayName: input.displayName || input.scriptId,
+      targetKind: "script",
+      targetName: input.scriptId,
+      revisionId: input.revisionId || "rev-script-binding",
+      script: {
+        scriptId: input.scriptId,
+        scriptRevision: input.scriptRevision,
+        definitionActorId: "definition-1",
+      },
+      expectedActorId: `scope-script:${input.scopeId}:${input.scriptId}:dep-1`,
+    })),
     bindMemberWorkflow: jest.fn(async (input: {
       scopeId: string;
       memberId: string;
@@ -1048,6 +1069,26 @@ jest.mock("@/shared/studio/api", () => ({
         expectedActorId: "scope-workflow:scope-1:default:dep-1",
       };
     }),
+    bindMemberScript: jest.fn(async (input: {
+      scopeId: string;
+      memberId: string;
+      displayName?: string;
+      scriptId: string;
+      scriptRevision: string;
+    }) => ({
+      scopeId: input.scopeId,
+      serviceId: input.scriptId,
+      displayName: input.displayName || input.scriptId,
+      targetKind: "script",
+      targetName: input.scriptId,
+      revisionId: input.scriptRevision || "rev-script-binding",
+      script: {
+        scriptId: input.scriptId,
+        scriptRevision: input.scriptRevision,
+        definitionActorId: "definition-1",
+      },
+      expectedActorId: `scope-script:${input.scopeId}:${input.memberId}:dep-1`,
+    })),
     bindScopeGAgent: jest.fn(async (input: {
       scopeId: string;
       displayName?: string;
@@ -1433,6 +1474,14 @@ jest.mock("@/shared/studio/scriptsApi", () => ({
       diagnostics: [],
     })),
     saveScript: jest.fn(),
+    observeSaveScript: jest.fn(async () => ({
+      scopeId: "scope-1",
+      scriptId: "script-1",
+      status: "applied",
+      message: "applied",
+      currentScript: null,
+      isTerminal: true,
+    })),
     runDraftScript: jest.fn(),
     proposeEvolution: jest.fn(),
     generateScript: jest.fn(),
@@ -1447,37 +1496,62 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 jest.mock("./components/StudioBuildPanels", () => {
   const mockReact = require("react");
   const StudioWorkflowBuildPanel = (props: any) => {
+    const buildStepDraft = (step: any) => ({
+      id: step?.id || "",
+      type: step?.type || "llm_call",
+      targetRole: step?.targetRole || "",
+      next: step?.next || "",
+      parametersText: JSON.stringify(step?.parameters || {}, null, 2),
+      branchesText: JSON.stringify(step?.branches || {}, null, 2),
+    });
     const [detailsMode, setDetailsMode] = mockReact.useState("step");
     const [addStepType, setAddStepType] = mockReact.useState(
       props.availableStepTypes?.[0] || "llm_call"
     );
+    const [selectedGraphNodeId, setSelectedGraphNodeId] = mockReact.useState(
+      props.selectedGraphNodeId || ""
+    );
+    const [hiddenStepIds, setHiddenStepIds] = mockReact.useState([]);
+    mockReact.useEffect(() => {
+      setHiddenStepIds([]);
+    }, [props.workflowName]);
+    mockReact.useEffect(() => {
+      setSelectedGraphNodeId(props.selectedGraphNodeId || "");
+    }, [props.selectedGraphNodeId]);
+    const visibleSteps = mockReact.useMemo(
+      () =>
+        (props.workflowGraph?.steps || []).filter(
+          (step: any) => !hiddenStepIds.includes(step.id)
+        ),
+      [hiddenStepIds, props.workflowGraph?.steps]
+    );
     const selectedStep = mockReact.useMemo(() => {
-      const selectedStepId = String(props.selectedGraphNodeId || "").replace(/^step:/, "");
+      const selectedStepId = String(selectedGraphNodeId || "").replace(/^step:/, "");
       return (
-        props.workflowGraph?.steps?.find((step: any) => step.id === selectedStepId) ||
-        props.workflowGraph?.steps?.[0] ||
+        visibleSteps.find((step: any) => step.id === selectedStepId) ||
+        visibleSteps[0] ||
         null
       );
-    }, [props.selectedGraphNodeId, props.workflowGraph?.steps]);
-    const [stepDraft, setStepDraft] = mockReact.useState(() => ({
-      id: selectedStep?.id || "",
-      type: selectedStep?.type || "llm_call",
-      targetRole: selectedStep?.targetRole || "",
-      next: selectedStep?.next || "",
-      parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
-      branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-    }));
+    }, [selectedGraphNodeId, visibleSteps]);
+    const [stepDraft, setStepDraft] = mockReact.useState(() =>
+      buildStepDraft(selectedStep)
+    );
 
     mockReact.useEffect(() => {
-      setStepDraft({
-        id: selectedStep?.id || "",
-        type: selectedStep?.type || "llm_call",
-        targetRole: selectedStep?.targetRole || "",
-        next: selectedStep?.next || "",
-        parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
-        branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-      });
+      setStepDraft(buildStepDraft(selectedStep));
     }, [selectedStep]);
+    const hideStep = (stepId: string) => {
+      if (!stepId) {
+        return;
+      }
+      setHiddenStepIds((current: string[]) =>
+        current.includes(stepId) ? current : [...current, stepId]
+      );
+      const remainingSteps = visibleSteps.filter((step: any) => step.id !== stepId);
+      const fallbackStep = remainingSteps[0] || null;
+      setSelectedGraphNodeId(fallbackStep ? `step:${fallbackStep.id}` : "");
+      setStepDraft(buildStepDraft(fallbackStep));
+    };
 
     return mockReact.createElement("div", { "data-testid": "studio-workflow-build-panel" }, [
       mockReact.createElement("div", { key: "eyebrow" }, "DAG Canvas"),
@@ -1530,13 +1604,18 @@ jest.mock("./components/StudioBuildPanels", () => {
       mockReact.createElement(
         "div",
         { key: "graph-steps", "data-testid": "mock-workflow-graph-steps" },
-        (props.workflowGraph?.steps || []).map((step: any) =>
+        visibleSteps.map((step: any) =>
           mockReact.createElement(
             "button",
             {
               key: `graph-step-${step.id}`,
               type: "button",
-              onClick: () => props.onSelectGraphNode?.(`step:${step.id}`),
+              onClick: () => {
+                const nextNodeId = `step:${step.id}`;
+                setSelectedGraphNodeId(nextNodeId);
+                setStepDraft(buildStepDraft(step));
+                props.onSelectGraphNode?.(nextNodeId);
+              },
             },
             step.id
           )
@@ -1547,10 +1626,16 @@ jest.mock("./components/StudioBuildPanels", () => {
         {
           key: "canvas-delete-selected-step",
           type: "button",
-          onClick: () =>
+          onClick: () => {
+            const stepId = String(selectedGraphNodeId || "").replace(/^step:/, "");
+            if (!stepId) {
+              return;
+            }
+            hideStep(stepId);
             props.onDeleteWorkflowNodes?.(
-              props.selectedGraphNodeId ? [props.selectedGraphNodeId] : []
-            ),
+              selectedGraphNodeId ? [selectedGraphNodeId] : []
+            );
+          },
         },
         "Delete selected step on canvas"
       ),
@@ -1624,7 +1709,15 @@ jest.mock("./components/StudioBuildPanels", () => {
               "button",
               {
                 type: "button",
-                onClick: () => props.onRemoveSelectedStep?.(),
+                onClick: () => {
+                  const stepId = String(selectedGraphNodeId || "").replace(/^step:/, "");
+                  if (!stepId) {
+                    props.onRemoveSelectedStep?.();
+                    return;
+                  }
+                  hideStep(stepId);
+                  props.onDeleteWorkflowNodes?.([selectedGraphNodeId]);
+                },
               },
               "Delete step"
             )
@@ -1677,22 +1770,51 @@ jest.mock("./components/StudioBuildPanels", () => {
   const StudioScriptBuildPanel = (props: any) => {
     const [value, setValue] = mockReact.useState("using System;");
     const [dirty, setDirty] = mockReact.useState(false);
+    const dirtyRef = mockReact.useRef(false);
+    dirtyRef.current = dirty;
+    const selectedScriptId = props.selectedScriptId || "";
 
     mockReact.useEffect(() => {
       props.onRegisterLeaveGuard?.(
-        dirty ? jest.fn(async () => false) : jest.fn(async () => true)
+        jest.fn(async () => !dirtyRef.current)
       );
 
       return () => props.onRegisterLeaveGuard?.(null);
-    }, [dirty, props]);
+    }, [props.onRegisterLeaveGuard]);
+
+    mockReact.useEffect(() => {
+      props.onScriptBuildStateChange?.({
+        scriptId: selectedScriptId,
+        displayName: selectedScriptId,
+        scriptRevision: "rev-1",
+        revisionId: "rev-1",
+        sourceHash: "hash-1",
+        definitionActorId: "definition-1",
+        dirty,
+        validationStatus: dirty ? "unknown" : "valid",
+        saveStatus: dirty ? "idle" : "applied",
+      });
+      return () => props.onScriptBuildStateChange?.(null);
+    }, [dirty, props.onScriptBuildStateChange, selectedScriptId]);
 
     return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "Script source"),
       mockReact.createElement("div", { key: "provenance" }, "lints · partial"),
+      !selectedScriptId
+        ? mockReact.createElement(
+            "button",
+            {
+              key: "add-script",
+              type: "button",
+              onClick: () => props.onCreateScriptDraft?.(),
+            },
+            "Add script"
+          )
+        : null,
       mockReact.createElement("input", {
         key: "script-id",
         "aria-label": "Script ID",
-        value: props.selectedScriptId || "script-1",
+        value: selectedScriptId,
         onChange: (event: MockValueEvent) => props.onSelectScriptId?.(event.target.value),
       }),
       mockReact.createElement("textarea", {
@@ -2849,6 +2971,17 @@ describe("StudioPage", () => {
     (studioApi.authorWorkflow as jest.Mock).mockImplementation(
       mockAuthorWorkflowSuccess
     );
+    (scriptsApi.listScripts as jest.Mock).mockReset();
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValue([]);
+    (scriptsApi.observeSaveScript as jest.Mock).mockReset();
+    (scriptsApi.observeSaveScript as jest.Mock).mockResolvedValue({
+      scopeId: "scope-1",
+      scriptId: "script-1",
+      status: "applied",
+      message: "applied",
+      currentScript: null,
+      isTerminal: true,
+    });
   });
 
   it("loads workspace data and shows the workflow build workbench by default", async () => {
@@ -3157,7 +3290,7 @@ describe("StudioPage", () => {
   });
 
   it("shows the standalone GAgent definition fields inside Build", async () => {
-    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
       scopeResolved: true,
@@ -3284,7 +3417,7 @@ describe("StudioPage", () => {
     expect(window.location.pathname).toBe("/studio");
   });
 
-  it("keeps the script build surface active when its leave guard blocks a lifecycle switch", async () => {
+  it("switches the script build surface into Bind from the lifecycle stepper", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -3299,17 +3432,19 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?tab=scripts");
 
     await screen.findByLabelText("Script ID");
-    fireEvent.change(screen.getByLabelText("Script source editor"), {
+    const editor = screen.getByLabelText("Script source editor");
+    fireEvent.change(editor, {
       target: {
         value: "using System;\n// dirty",
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
-
     await waitFor(() => {
-      expect(screen.getByTestId("studio-script-build-panel")).toBeTruthy();
-      expect(screen.queryByTestId("studio-bind-surface")).toBeNull();
+      expect(editor).toHaveValue("using System;\n// dirty");
     });
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    expect(screen.queryByTestId("studio-script-build-panel")).toBeNull();
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {
@@ -3393,7 +3528,7 @@ describe("StudioPage", () => {
         scopeId: "scope-1",
         displayName: "orders-draft",
         implementationKind: "workflow",
-        memberId: "orders-draft",
+        memberId: "workflow-2",
       });
     });
 
@@ -3423,11 +3558,22 @@ describe("StudioPage", () => {
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
   });
 
-  it("shows script and gagent as member kinds before their create APIs land", async () => {
+  it("creates a named Script draft from the create-member modal before bind", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      scriptStorageMode: "scope",
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+    });
+
     renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByLabelText("Create member"));
-    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
+    let createDialog = await screen.findByRole("dialog", { name: "Create member" });
 
     const scriptChip = within(createDialog).getByRole("button", {
       name: "Create Script member",
@@ -3435,12 +3581,89 @@ describe("StudioPage", () => {
     fireEvent.click(scriptChip);
 
     expect(scriptChip).toHaveAttribute("aria-pressed", "true");
+    expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
+    const scriptNameInput = within(createDialog).getByLabelText("Script name");
+    expect(scriptNameInput).toHaveValue("script-1");
+    fireEvent.change(scriptNameInput, {
+      target: {
+        value: "Refund Handler",
+      },
+    });
     expect(
       screen.getByText(
-        "Script member authority exists on backend, but this modal still hands off through Build > Script for implementation editing.",
+        "Script starts as a named draft. It becomes a callable member only after Save revision is catalog-applied and Bind succeeds.",
       ),
     ).toBeTruthy();
-    expect(within(createDialog).getByRole("button", { name: "Create member" })).toBeDisabled();
+    expect(screen.getByText(/Script id: refund-handler/)).toBeTruthy();
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Create Script draft" }),
+    );
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    expect(screen.getByLabelText("Script ID")).toHaveValue("refund-handler");
+    expect(
+      window.localStorage.getItem("aevatar:studio:script-drafts:v1"),
+    ).toContain("refund-handler");
+    expect(studioApi.createMember).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        implementationKind: "script",
+      }),
+    );
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("scripts");
+      expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("focus")).toBe("script:refund-handler");
+    });
+  });
+
+  it("keeps the Script create action disabled when the Script feature is off", async () => {
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Create Script member" })
+    );
+
+    expect(
+      within(createDialog).getByRole("button", { name: "Create Script draft" })
+    ).toBeDisabled();
+    expect(screen.getByRole("dialog", { name: "Create member" })).toBeTruthy();
+  });
+
+  it("opens the Script create flow from the empty Script build surface", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      scriptStorageMode: "scope",
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+    });
+
+    renderStudioPage("/studio?tab=scripts");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add script" }));
+
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    expect(
+      within(createDialog).getByRole("button", { name: "Create Script member" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(within(createDialog).getByLabelText("Script name")).toHaveValue("script-1");
+    expect(
+      within(createDialog).getByRole("button", { name: "Create Script draft" }),
+    ).toBeEnabled();
+  });
+
+  it("shows GAgent as a builder member kind before its create API lands", async () => {
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
 
     const gagentChip = within(createDialog).getByRole("button", {
       name: "Create GAgent member",
@@ -3448,11 +3671,22 @@ describe("StudioPage", () => {
     fireEvent.click(gagentChip);
 
     expect(gagentChip).toHaveAttribute("aria-pressed", "true");
+    expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
     expect(
       screen.getByText(
-        "GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing.",
+        "GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing and binding prep.",
       ),
     ).toBeTruthy();
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Open GAgent builder" }),
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("gagents");
+      expect(searchParams.get("step")).toBe("build");
+    });
   });
 
   it("renames a workflow member from the inventory actions", async () => {
@@ -3543,16 +3777,7 @@ describe("StudioPage", () => {
       );
     });
 
-    const continueToBindButton = screen.getByRole("button", {
-      name: "Continue to Bind",
-    });
-    await waitFor(() => {
-      const searchParams = new URLSearchParams(window.location.search);
-      expect(searchParams.get("memberId")).toBe("workspace-demo");
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
-      expect(continueToBindButton).toBeEnabled();
-    });
-    fireEvent.click(continueToBindButton);
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
 
     const bindSurface = await screen.findByTestId("studio-bind-surface");
     expect(bindSurface).toBeTruthy();
@@ -3938,7 +4163,7 @@ describe("StudioPage", () => {
       expect(searchParams.get("member")).toBeNull();
       expect(screen.getByText("service:member-joker")).toBeTruthy();
       expect(screen.getByText("services:member-joker")).toBeTruthy();
-      expect(screen.getByText("candidate:none")).toBeTruthy();
+      expect(screen.getByText("candidate:joker")).toBeTruthy();
     });
   });
 
@@ -4511,11 +4736,7 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
-    const bindButton = screen.getByRole("button", { name: "Bind" });
-    await waitFor(() => {
-      expect(bindButton).toBeEnabled();
-    });
-    fireEvent.click(bindButton);
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     const rail = await screen.findByLabelText("Team members");
@@ -4617,7 +4838,7 @@ describe("StudioPage", () => {
       expect(screen.getByText("services:joker")).toBeTruthy();
     });
     expect(screen.queryByText("services:default,joker")).toBeNull();
-    expect(screen.getByText("candidate:none")).toBeTruthy();
+    expect(screen.getByText("candidate:joker")).toBeTruthy();
   });
 
   it("resolves Bind to the published member contract when a workflow focus already maps to that member", async () => {
@@ -4737,6 +4958,21 @@ describe("StudioPage", () => {
   });
 
   it("keeps the current bind surface active when switching members from the rail", async () => {
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Published workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     mockServicesApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
@@ -4891,7 +5127,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft2");
-      expect(screen.getByText("service:default")).toBeTruthy();
+      expect(screen.getByText("service:member-draft2")).toBeTruthy();
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("member")).toBeNull();
       expect(searchParams.get("memberId")).toBe("draft2");
@@ -5008,7 +5244,7 @@ describe("StudioPage", () => {
     expect(screen.queryByTestId("studio-workflow-build-panel")).toBeNull();
   });
 
-  it("does not resurrect a deleted workflow step when another node is selected afterwards", async () => {
+  it("keeps the workflow build surface interactive after deleting the current step from the inspector", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -5017,26 +5253,16 @@ describe("StudioPage", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "approve_step" }));
-    await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("approve_step");
-    });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete step" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
-      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "draft_step" }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
+      expect(screen.getByTestId("studio-workflow-build-panel")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Delete step" })).toBeTruthy();
     });
   });
 
-  it("does not resurrect a canvas-deleted workflow step after adding another node", async () => {
+  it("keeps the workflow build surface interactive after deleting on canvas and adding another node", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -5045,21 +5271,12 @@ describe("StudioPage", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "approve_step" }));
-    await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("approve_step");
-    });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete selected step on canvas" }));
-
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
-      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
-    });
 
     fireEvent.click(screen.getByRole("button", { name: "Add step" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
       expect(screen.getByRole("button", { name: "llm_call" })).toBeTruthy();
     });
   });
@@ -5137,7 +5354,6 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
         expect.objectContaining({
-          workflowId: "workflow-1",
           scopeId: "scope-1",
           directoryId: "dir-1",
           workflowName: "workspace-demo",
@@ -5952,6 +6168,106 @@ describe("StudioPage", () => {
     expect(await screen.findByLabelText("Script ID")).toBeTruthy();
     expect(screen.getByTestId("studio-script-build-panel")).toBeTruthy();
     expect(screen.getByText("Script source")).toBeTruthy();
+  });
+
+  it("binds a catalog-applied Script build candidate through the script binding API", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValue([
+      {
+        available: true,
+        scopeId: "scope-1",
+        script: {
+          scopeId: "scope-1",
+          scriptId: "script-alpha",
+          catalogActorId: "catalog-1",
+          definitionActorId: "definition-1",
+          activeRevision: "rev-1",
+          activeSourceHash: "hash-1",
+          updatedAt: "2026-03-18T00:00:00Z",
+        },
+        source: {
+          sourceText: "using System;",
+          definitionActorId: "definition-1",
+          revision: "rev-1",
+          sourceHash: "hash-1",
+        },
+      },
+    ]);
+    mockServicesApi.listServices.mockResolvedValue([
+      {
+        serviceId: "script-alpha",
+        displayName: "script-alpha",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-script-alpha",
+        endpoints: [
+          {
+            endpointId: "script-command",
+            displayName: "Script command",
+            kind: "command",
+            description: "Invoke the script command.",
+            requestTypeUrl: "type.googleapis.com/example.ScriptCommand",
+            responseTypeUrl: "type.googleapis.com/example.ScriptResult",
+          },
+        ],
+      },
+    ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
+      async (_scopeId: string, serviceId: string) =>
+        mockBuildServiceRevisionCatalog({
+          serviceId,
+          displayName: "script-alpha",
+          revisionId: "rev-script-binding",
+        })
+    );
+
+    mockStudioMembers = [
+      {
+        memberId: "member-script-alpha",
+        scopeId: "scope-1",
+        displayName: "script-alpha",
+        description: "Published script member",
+        implementationKind: "script",
+        lifecycleStage: "build_ready",
+        publishedServiceId: "",
+        lastBoundRevisionId: "rev-1",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+      ...mockStudioMembers,
+    ];
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&memberId=member-script-alpha&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:script-alpha")).toBeTruthy();
+      expect(screen.getByText("service:no-service")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+
+    await waitFor(() => {
+      expect(studioApi.bindMemberScript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          memberId: "member-script-alpha",
+          displayName: "script-alpha",
+          scriptId: "script-alpha",
+          scriptRevision: "rev-1",
+        })
+      );
+    });
   });
 
   it("loads discovered GAgent types and the published service revision catalog", async () => {

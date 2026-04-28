@@ -1406,14 +1406,7 @@ const TeamDetailPage: React.FC = () => {
     }),
     [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
   );
-  const selectedStudioMemberId =
-    currentMemberId ||
-    trimText(runtimeServiceId) ||
-    trimText(serviceRevisionsQuery.data?.serviceId) ||
-    trimText(preferredServiceId) ||
-    trimText(servicesQuery.data?.[0]?.serviceId) ||
-    trimText(activeWorkflowSummary?.serviceKey).split(":").pop()?.trim() ||
-    "";
+  const selectedStudioMemberId = currentMemberId;
   const selectedStudioMemberKey =
     trimText(activeWorkflowSummary?.workflowId).length > 0
       ? buildStudioWorkflowMemberKey({

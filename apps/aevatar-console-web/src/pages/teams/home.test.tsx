@@ -318,7 +318,7 @@ describe("TeamsHomePage", () => {
 
     expect(
       await screen.findByText(
-        "当前 Scope 下还没有创建任何 team。进入 Studio 创建 team 后，再到 team 里添加 member。",
+        "当前 Scope 下还没有创建任何 member。进入 Studio 创建成员后，这里会按成员逐个展示。",
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
@@ -408,7 +408,7 @@ describe("TeamsHomePage", () => {
     expect(studioApi.listMembers).not.toHaveBeenCalled();
   });
 
-  it("opens Studio member creation from the empty team roster state without a workflow focus", async () => {
+  it("opens Studio from the empty member roster state", async () => {
     (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
       members: [],
@@ -417,9 +417,7 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "进入 Studio 创建 Team" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "打开 Studio" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/studio");
@@ -428,38 +426,5 @@ describe("TeamsHomePage", () => {
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-a");
     expect(params.get("tab")).toBe("studio");
-    expect(params.get("intent")).toBe("create-member");
-    expect(params.get("focus")).toBeNull();
-  });
-
-  it("opens Studio member creation from the pending-binding banner without a workflow focus", async () => {
-    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
-      scopeId: "scope-a",
-      members: [
-        {
-          ...defaultMembers[0],
-          lastBoundRevisionId: "",
-          publishedServiceId: "",
-        },
-      ],
-      nextPageToken: null,
-    });
-    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
-
-    renderWithQueryClient(React.createElement(TeamsHomePage));
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "进入 Studio 创建 Team" }),
-    );
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
-    });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("intent")).toBe("create-member");
-    expect(params.get("focus")).toBeNull();
   });
 });
