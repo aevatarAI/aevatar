@@ -62,12 +62,16 @@ describe("runtimeGAgentApi", () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => [
-        {
-          gAgentType: "Tests.OrdersGAgent",
-          actorIds: ["orders-1", "orders-2"],
-        },
-      ],
+      json: async () => ({
+        scopeId: "scope-1",
+        stateVersion: 42,
+        groups: [
+          {
+            gAgentType: "Tests.OrdersGAgent",
+            actorIds: ["orders-1", "orders-2"],
+          },
+        ],
+      }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
@@ -80,6 +84,27 @@ describe("runtimeGAgentApi", () => {
 
     const [input] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
     expect(input).toBe("/api/scopes/scope-1/gagent-actors");
+  });
+
+  it("keeps compatibility with legacy saved actor arrays", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          gAgentType: "Tests.OrdersGAgent",
+          actorIds: ["orders-1"],
+        },
+      ],
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(runtimeGAgentApi.listActors("scope-1")).resolves.toEqual([
+      {
+        gAgentType: "Tests.OrdersGAgent",
+        actorIds: ["orders-1"],
+      },
+    ]);
   });
 
   it("persists a saved actor for the current scope", async () => {

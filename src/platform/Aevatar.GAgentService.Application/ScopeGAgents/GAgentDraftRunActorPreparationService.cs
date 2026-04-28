@@ -67,10 +67,10 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         try
         {
             createdActor = await _actorRuntime.CreateAsync(actorType, actorId, ct);
-            registrationAttempted = true;
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, actorTypeName, actorId),
                 ct);
+            registrationAttempted = true;
             if (!receipt.IsAdmissionVisible)
             {
                 await RollbackCreatedActorAsync(scopeId, actorTypeName, actorId, registrationAttempted, CancellationToken.None);

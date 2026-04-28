@@ -81,10 +81,10 @@ public static class StreamingProxyEndpoints
             };
             await actor.HandleEventAsync(envelope, ct);
 
-            registrationAttempted = true;
             var receipt = await registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
                 ct);
+            registrationAttempted = true;
             if (!receipt.IsAdmissionVisible)
             {
                 await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger, registrationAttempted);

@@ -167,18 +167,23 @@ public class NyxIdChatEndpointsCoverageTests
         var actorStore = new StubGAgentActorStore
         {
             AddActorException = new InvalidOperationException("registry unavailable"),
+            RemoveActorException = new InvalidOperationException("registry unregister unavailable"),
         };
+        var runtime = new StubActorRuntime();
 
         var act = async () => await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
             actorStore,
-            new StubActorRuntime(),
+            runtime,
             CancellationToken.None);
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("registry unavailable");
+        actorStore.AddedActors.Should().BeEmpty();
+        actorStore.RemovedActors.Should().BeEmpty();
+        runtime.DestroyCalls.Should().ContainSingle();
     }
 
     [Fact]

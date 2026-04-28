@@ -94,10 +94,10 @@ public static partial class NyxIdChatEndpoints
         var registrationAttempted = false;
         try
         {
-            registrationAttempted = true;
             var receipt = await registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
                 ct);
+            registrationAttempted = true;
             if (!receipt.IsAdmissionVisible)
             {
                 await TryRollbackConversationCreationAsync(
