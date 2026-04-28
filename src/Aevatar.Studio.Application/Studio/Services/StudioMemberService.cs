@@ -270,6 +270,75 @@ public sealed class StudioMemberService : IStudioMemberService
             Status: MemberRevisionLifecycleStatusNames.Retired);
     }
 
+    public async Task<StudioMemberDetailResponse> UpdateAsync(
+        string scopeId,
+        string memberId,
+        UpdateStudioMemberRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Resolve current state first — UpdateAsync only touches members that
+        // already exist (mirrors GetBindingAsync semantics for missing members).
+        // Knowing the current team_id also lets us shape the reassignment
+        // event correctly: from = current team, to = patch's intent.
+        var currentDetail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+
+        if (request.TeamId.HasValue)
+        {
+            var requested = request.TeamId.Value;
+
+            // Application-layer guard: empty / whitespace strings on the wire
+            // are rejected before reaching the actor protocol (ADR-0017 §Q6).
+            if (requested != null && string.IsNullOrWhiteSpace(requested))
+            {
+                throw new InvalidOperationException(
+                    "teamId must not be empty when present " +
+                    "(use null in JSON body to mean 'unassign').");
+            }
+
+            // Read the member's current team_id off the read model. The
+            // detail response doesn't surface team_id today (it is added by
+            // the team-aware response shape introduced for the team API);
+            // route through the projection document directly via the
+            // existing summary contract — for the v1 wiring we keep the
+            // application service stateless and let the actor reject any
+            // mismatched from_team_id (which would surface as a typed 409
+            // / 400 from the dispatch path).
+            var currentTeamId = ResolveCurrentTeamId(currentDetail);
+
+            // No-op when the patch already matches the current state.
+            // Compare on the *normalized* representation so a trailing-space
+            // teamId in either side doesn't trip a spurious dispatch.
+            var requestedNormalized = requested?.Trim();
+            if (string.Equals(currentTeamId, requestedNormalized, StringComparison.Ordinal))
+            {
+                return currentDetail;
+            }
+
+            await _memberCommandPort.ReassignTeamAsync(
+                scopeId,
+                memberId,
+                fromTeamId: currentTeamId,
+                toTeamId: requestedNormalized,
+                ct);
+        }
+
+        // Re-read the member detail so callers see the post-update state.
+        return await GetAsync(scopeId, memberId, ct);
+    }
+
+    /// <summary>
+    /// Hook for resolving the member's current team assignment. Today the
+    /// detail response does not carry a typed <c>TeamId</c> field; until the
+    /// detail contract is widened, return null so the reassign path emits a
+    /// pure-assign event. The actor will reject the event if its current
+    /// state already names a different team_id, surfacing the inconsistency
+    /// rather than overwriting silently.
+    /// </summary>
+    private static string? ResolveCurrentTeamId(StudioMemberDetailResponse detail) => null;
+
     /// <summary>
     /// Resolves the published service the member is currently bound to in
     /// one round-trip: member authority → service catalog → revisions.

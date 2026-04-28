@@ -305,6 +305,14 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
+        public Task ReassignTeamAsync(
+            string scopeId, string memberId, string? fromTeamId, string? toTeamId,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("ReassignTeam");
+            return Task.CompletedTask;
+        }
+
         public sealed record RecordedBinding(
             string ScopeId,
             string MemberId,

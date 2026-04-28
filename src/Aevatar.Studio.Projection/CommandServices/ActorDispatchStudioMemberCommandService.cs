@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.Mapping;
@@ -68,6 +69,25 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
 
         await DispatchAsync(normalizedScopeId, memberId, evt, ct);
 
+        // Two-event create-with-team protocol (ADR-0017 §Locked Rule 3 +
+        // §Cutover Order step 4). When the request carries a non-empty
+        // teamId, immediately dispatch a Reassigned event to the same
+        // actor. The serial actor processing guarantees Created lands
+        // before Reassigned even if the inbox interleaves with other
+        // commands. The team's roster is updated through the same
+        // ReassignTeamAsync dispatch (idempotent set ops) so a partial
+        // outcome cannot leave the team's count drifting.
+        if (!string.IsNullOrEmpty(request.TeamId))
+        {
+            var initialTeamId = StudioTeamConventions.NormalizeTeamId(request.TeamId);
+            await ReassignTeamInternalAsync(
+                normalizedScopeId,
+                memberId,
+                fromTeamIdNormalized: null,
+                toTeamIdNormalized: initialTeamId,
+                ct);
+        }
+
         return new StudioMemberSummaryResponse(
             MemberId: memberId,
             ScopeId: normalizedScopeId,
@@ -79,6 +99,103 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
             UpdatedAt: createdAt);
+    }
+
+    public Task ReassignTeamAsync(
+        string scopeId,
+        string memberId,
+        string? fromTeamId,
+        string? toTeamId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+
+        // At least one side must be present (ADR-0017 §Locked Rule 4). Wire
+        // values arrive here already shaped — null means absent.
+        if (fromTeamId == null && toTeamId == null)
+        {
+            throw new InvalidOperationException(
+                "reassign requires at least one of fromTeamId / toTeamId.");
+        }
+
+        // Both present and equal is rejected — that's a no-op move that
+        // never appears as a wire event.
+        if (fromTeamId != null && toTeamId != null
+            && string.Equals(fromTeamId, toTeamId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "fromTeamId and toTeamId must differ when both are present.");
+        }
+
+        var fromNormalized = fromTeamId == null
+            ? null
+            : StudioTeamConventions.NormalizeTeamId(fromTeamId);
+        var toNormalized = toTeamId == null
+            ? null
+            : StudioTeamConventions.NormalizeTeamId(toTeamId);
+
+        return ReassignTeamInternalAsync(
+            normalizedScopeId, normalizedMemberId, fromNormalized, toNormalized, ct);
+    }
+
+    private async Task ReassignTeamInternalAsync(
+        string normalizedScopeId,
+        string normalizedMemberId,
+        string? fromTeamIdNormalized,
+        string? toTeamIdNormalized,
+        CancellationToken ct)
+    {
+        var reassignedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new StudioMemberReassignedEvent
+        {
+            MemberId = normalizedMemberId,
+            ScopeId = normalizedScopeId,
+            ReassignedAtUtc = reassignedAt,
+        };
+        if (fromTeamIdNormalized != null)
+            evt.FromTeamId = fromTeamIdNormalized;
+        if (toTeamIdNormalized != null)
+            evt.ToTeamId = toTeamIdNormalized;
+
+        // Step 1: dispatch the authority change to the member actor.
+        // MemberGAgent owns the team_id fact and rejects events whose
+        // from_team_id disagrees with the member's current state.
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+
+        // Step 2: fan out the same event to the affected TeamGAgents.
+        // Each team applies an idempotent set operation to its roster —
+        // duplicate deliveries collapse to NOOP by construction. Cross-
+        // actor consistency relies on the idempotency, not on transactional
+        // delivery: a re-run of this method (e.g. retry after a transient
+        // failure) lands on a NOOP for already-applied sides.
+        if (fromTeamIdNormalized != null)
+        {
+            await DispatchToTeamAsync(normalizedScopeId, fromTeamIdNormalized, evt, ct);
+        }
+        if (toTeamIdNormalized != null)
+        {
+            await DispatchToTeamAsync(normalizedScopeId, toTeamIdNormalized, evt, ct);
+        }
+    }
+
+    private async Task DispatchToTeamAsync(
+        string scopeId, string teamId, IMessage payload, CancellationToken ct)
+    {
+        const string TeamDirectRoute = "aevatar.studio.projection.studio-team";
+        var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);
+        var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect(TeamDirectRoute, actor.Id),
+        };
+
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
     public async Task UpdateImplementationAsync(
