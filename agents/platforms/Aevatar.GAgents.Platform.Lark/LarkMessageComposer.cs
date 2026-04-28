@@ -102,12 +102,23 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             });
         }
 
-        foreach (var card in intent.Cards)
+        for (var i = 0; i < intent.Cards.Count; i++)
         {
+            var card = intent.Cards[i];
+            // The first card's Title is consumed by the Lark card header (see ResolveHeaderTitle),
+            // so render its body markdown without the title to avoid header/body duplication.
+            // Form mode already does this; non-form mode used to leak the title twice and made
+            // every single-card response (e.g. /agents, /agent-status) look like it had a redundant
+            // bold title row right under the header.
+            var skipTitle = i == 0;
+            var markdown = BuildCardMarkdown(card, skipTitle);
+            if (string.IsNullOrWhiteSpace(markdown))
+                continue;
+
             elements.Add(new
             {
                 tag = "markdown",
-                content = BuildCardMarkdown(card),
+                content = markdown,
             });
         }
 

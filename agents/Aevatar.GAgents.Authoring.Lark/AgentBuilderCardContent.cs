@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Scheduled;
@@ -13,6 +14,10 @@ public static class AgentBuilderCardContent
 {
     private const string DailyReportAction = "create_daily_report";
     private const string SocialMediaAction = "create_social_media";
+    private const string OpenDailyReportFormAction = "open_daily_report_form";
+    private const string OpenSocialMediaFormAction = "open_social_media_form";
+    private const string ListTemplatesAction = "list_templates";
+    private const string ListAgentsAction = "list_agents";
     private const string DefaultScheduleTime = "09:00";
 
     public static MessageContent BuildDailyReportForm(string? preferredGithubUsername) =>
@@ -183,6 +188,131 @@ public static class AgentBuilderCardContent
         lines.Add($"Next commands: /agents, /agent-status {agentId}, /run-agent {agentId}");
 
         return TextContent(string.Join('\n', lines));
+    }
+
+    /// <summary>
+    /// Renders <c>/agents</c> as a single consolidated card. The earlier design produced one
+    /// <see cref="CardBlock"/> per agent plus per-agent "Status: …" buttons; in Lark that compiled
+    /// into many stacked markdown blocks followed by a long button row, which users perceived as a
+    /// text list mixed with a separate status card (issue #476). The unified design surfaces one
+    /// card with a structured agent list in the body and a small footer of global actions, while
+    /// per-agent operations stay accessible through the documented slash commands listed inline.
+    /// </summary>
+    /// <param name="root">The list-agents tool result JSON root element.</param>
+    /// <param name="noticeMarkdown">
+    /// Optional headline to prepend to the body, e.g. a "Deleted agent X" notice when the same
+    /// renderer is reused as the post-delete acknowledgment so the user sees the updated registry
+    /// without a second card hop.
+    /// </param>
+    public static MessageContent FormatListAgentsResult(JsonElement root, string? noticeMarkdown = null)
+    {
+        if (TryReadError(root, out var error))
+            return TextContent($"List agents failed: {error}");
+
+        var content = new MessageContent();
+        var notice = NormalizeOptionalMarkdown(noticeMarkdown);
+
+        if (!root.TryGetProperty("agents", out var agentsElement) ||
+            agentsElement.ValueKind != JsonValueKind.Array ||
+            agentsElement.GetArrayLength() == 0)
+        {
+            var emptyBody = new StringBuilder();
+            if (notice is not null)
+            {
+                emptyBody.Append(notice);
+                emptyBody.Append("\n\n");
+            }
+            emptyBody.Append("No agents yet. Create one to get started:\n");
+            emptyBody.Append("- `/daily` — daily GitHub report\n");
+            emptyBody.Append("- `/social-media` — social-media drafter\n\n");
+            emptyBody.Append("Run `/templates` to browse all available templates.");
+
+            content.Cards.Add(new CardBlock
+            {
+                Kind = CardBlockKind.Section,
+                BlockId = "agents_empty",
+                Title = "Your Agents",
+                Text = emptyBody.ToString(),
+            });
+            content.Actions.Add(BuildAction("Create Daily Report", OpenDailyReportFormAction, isPrimary: true));
+            content.Actions.Add(BuildAction("Create Social Media", OpenSocialMediaFormAction, isPrimary: false));
+            content.Actions.Add(BuildAction("Templates", ListTemplatesAction, isPrimary: false));
+            return content;
+        }
+
+        var totalCount = agentsElement.GetArrayLength();
+        var bodyBuilder = new StringBuilder();
+        if (notice is not null)
+        {
+            bodyBuilder.Append(notice);
+            bodyBuilder.Append("\n\n");
+        }
+
+        var index = 0;
+        foreach (var agent in agentsElement.EnumerateArray())
+        {
+            index++;
+            var agentId = TryReadString(agent, "agent_id") ?? "unknown-agent";
+            var template = TryReadString(agent, "template") ?? "unknown-template";
+            var status = TryReadString(agent, "status") ?? "unknown";
+            var nextRun = TryReadString(agent, "next_scheduled_run") ?? "pending";
+            var lastRun = TryReadOptional(agent, "last_run_at");
+
+            if (index > 1)
+                bodyBuilder.Append("\n\n");
+
+            bodyBuilder.Append($"**{index}. `{template}`** · {status}\n");
+            bodyBuilder.Append($"- Agent ID: `{agentId}`\n");
+            bodyBuilder.Append($"- Next run: `{nextRun}`");
+            if (lastRun is not null)
+            {
+                bodyBuilder.Append('\n');
+                bodyBuilder.Append($"- Last run: `{lastRun}`");
+            }
+        }
+
+        bodyBuilder.Append("\n\n**Manage agents** with these commands:\n");
+        bodyBuilder.Append("- `/agent-status <id>` — view full details\n");
+        bodyBuilder.Append("- `/run-agent <id>` — trigger immediately\n");
+        bodyBuilder.Append("- `/disable-agent <id>` · `/enable-agent <id>` — toggle scheduling\n");
+        bodyBuilder.Append("- `/delete-agent <id> confirm` — remove the agent");
+
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = "agents_list",
+            Title = $"Your Agents ({totalCount})",
+            Text = bodyBuilder.ToString(),
+        });
+
+        // Footer is intentionally limited to discovery / creation shortcuts. Per-agent actions
+        // (status, run, disable, enable, delete) deliberately stay off this card to avoid the
+        // visual "list + status panel" duplication called out in issue #476; the inline command
+        // hints in the body cover the same ground without the layout noise.
+        content.Actions.Add(BuildAction("Refresh", ListAgentsAction, isPrimary: false));
+        content.Actions.Add(BuildAction("Templates", ListTemplatesAction, isPrimary: false));
+        content.Actions.Add(BuildAction("Create Daily Report", OpenDailyReportFormAction, isPrimary: false));
+        content.Actions.Add(BuildAction("Create Social Media", OpenSocialMediaFormAction, isPrimary: false));
+        return content;
+    }
+
+    private static string? NormalizeOptionalMarkdown(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private static ActionElement BuildAction(string label, string agentBuilderAction, bool isPrimary)
+    {
+        var button = new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = agentBuilderAction,
+            Label = label,
+            IsPrimary = isPrimary,
+        };
+        button.Arguments["agent_builder_action"] = agentBuilderAction;
+        return button;
     }
 
     private static MessageContent BuildDailyReportCredentialsCard(JsonElement root, string status)
