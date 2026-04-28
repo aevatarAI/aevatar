@@ -15,6 +15,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [/daily Command Pipeline — Test Reference](canon/daily-command-pipeline.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
+- [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
@@ -59,6 +60,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-04-09-scripting-authority-write-path-cqrs-closure](history/2026-04/2026-04-09-scripting-authority-write-path-cqrs-closure.md)
 - [2026-04-17-issue-204-agui-sse-projection-session-design](history/2026-04/2026-04-17-issue-204-agui-sse-projection-session-design.md)
 - [2026-04-17-nyxid-chat-registry-lifecycle](history/2026-04/2026-04-17-nyxid-chat-registry-lifecycle.md)
+- [2026-04-27-registry-ownership-ports-design](history/2026-04/2026-04-27-registry-ownership-ports-design.md)
 - [claude-code-architecture-learnings](history/2026-04/claude-code-architecture-learnings.md)
 - [nyxid-chat-console-design](history/2026-04/nyxid-chat-console-design.md)
 

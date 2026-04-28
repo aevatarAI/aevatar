@@ -90,8 +90,7 @@ export default function GAgentTab(props: { scopeId: string }) {
           if (evt.type === 'RUN_STARTED' && evt.threadId) {
             const actorId = evt.threadId as string;
             setLastActorId(actorId);
-            // Auto-persist actor ID
-            api.gagent.addActor(props.scopeId, selectedType, actorId).then(() => loadActors()).catch(() => {});
+            loadActors();
           }
           if (evt.type === 'RUN_ERROR') {
             setError((evt.message as string) || 'Run error');

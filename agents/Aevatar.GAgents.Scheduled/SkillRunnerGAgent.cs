@@ -188,7 +188,12 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         try
         {
             var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
-            await SendOutputAsync(output, CancellationToken.None);
+            // Streaming-edit delivery happens in-line during ExecuteSkillAsync via the
+            // SkillRunnerStreamingReplySink (POST initial + PUT each delta — Lark's text-edit
+            // verb; PATCH on the same path is reserved for cards). When streaming can't be
+            // configured (no NyxID client, missing outbound config) ExecuteSkillAsync falls
+            // back to a one-shot SendOutputAsync at finalize, so we never need a second
+            // outbound call here. Persist the run as completed using the buffered final text.
             await PersistDomainEventAsync(new SkillRunnerExecutionCompletedEvent
             {
                 CompletedAt = Timestamp.FromDateTimeOffset(now),
@@ -295,16 +300,104 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
-        await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+        var sink = TryCreateStreamingSink();
+        try
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+            {
+                if (string.IsNullOrEmpty(chunk.DeltaContent))
+                    continue;
                 content.Append(chunk.DeltaContent);
+                if (sink is not null)
+                    // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
+                    // turn. Acceptable for daily-report-sized output (≤30 KB capped, and the
+                    // sink dedupes against `_lastEmittedText` so most allocations don't even
+                    // make it onto the wire). If a future skill produces materially longer
+                    // output, switch the sink contract to `(StringBuilder, Range)` snapshots
+                    // or a `ReadOnlyMemory<char>` view so the accumulator isn't re-stringified
+                    // every delta.
+                    await sink.OnDeltaAsync(content.ToString(), ct);
+            }
+
+            var output = content.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(output))
+                output = "No update generated.";
+
+            EnsureToolStatusAllowsCompletion(_toolFailureCounter.FailureCount, _toolFailureCounter.SuccessCount);
+
+            if (sink is not null)
+                await sink.FinalizeAsync(output, ct);
+            else
+                // No streaming sink (no NyxID client, missing outbound config, or
+                // tests injecting a null client). Fall back to a one-shot send so the
+                // user still receives the report and tests that don't construct a sink
+                // keep working.
+                await SendOutputAsync(output, ct);
+
+            return output;
+        }
+        finally
+        {
+            sink?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Constructs the streaming-edit sink for this run, or returns null when streaming cannot be
+    /// configured. The sink writes the first non-empty delta as a Lark
+    /// <c>POST /open-apis/im/v1/messages</c> (capturing the returned <c>message_id</c>) and edits
+    /// the same message via <c>PUT /open-apis/im/v1/messages/{id}</c> for every later delta —
+    /// so the user sees the daily report land and grow in place rather than receiving one wall of
+    /// text after the LLM finishes. PUT is the correct verb for editing text/post messages;
+    /// <c>PATCH</c> on the same path is reserved for editing interactive cards (see
+    /// <c>SkillRunnerStreamingReplySink.EditAsync</c> for the verb-split rationale).
+    /// </summary>
+    private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
+    {
+        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
+        if (client is null)
+        {
+            // Tests and very early bootstrap can run without an injected NyxID client; falling
+            // back to one-shot SendOutputAsync is correct, but a log line makes the degradation
+            // visible (otherwise streaming-edit silently never engages and the only symptom is
+            // the wall-of-text UX users complained about in #423).
+            Logger.LogWarning(
+                "Skill runner {ActorId} has no NyxIdApiClient registered; streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                Id);
+            return null;
         }
 
-        var output = content.ToString().Trim();
-        var normalized = string.IsNullOrWhiteSpace(output) ? "No update generated." : output;
-        EnsureToolStatusAllowsCompletion(_toolFailureCounter.FailureCount, _toolFailureCounter.SuccessCount);
-        return normalized;
+        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} has incomplete outbound config (NyxApiKey/NyxProviderSlug/ConversationId); streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                Id);
+            return null;
+        }
+
+        var primary = LarkConversationTargets.Resolve(
+            State.OutboundConfig.LarkReceiveId,
+            State.OutboundConfig.LarkReceiveIdType,
+            State.OutboundConfig.ConversationId);
+
+        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
+        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
+        LarkReceiveTarget? fallback = null;
+        if (!string.IsNullOrEmpty(fallbackId) && !string.IsNullOrEmpty(fallbackType))
+            fallback = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
+
+        return new SkillRunnerStreamingReplySink(
+            client,
+            State.OutboundConfig.NyxApiKey,
+            State.OutboundConfig.NyxProviderSlug,
+            primary,
+            fallback,
+            BuildLarkRejectionMessage,
+            SkillRunnerDefaults.StreamingEditThrottle,
+            TimeProvider.System,
+            Logger);
     }
 
     /// <summary>
@@ -512,14 +605,20 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
     {
+#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
+        var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
+        var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
+        var ownerScope = State.OutboundConfig?.OwnerScope
+                         ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = ResolvePlatform(State.OutboundConfig?.Platform),
+            Platform = legacyPlatform,
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty,
+            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = SkillRunnerDefaults.AgentType,
             TemplateName = State.TemplateName ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -532,6 +631,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
+#pragma warning restore CS0612
+
+        if (ownerScope is not null)
+            command.OwnerScope = ownerScope;
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
         await UpdateRegistryExecutionAsync(status, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, ct);
