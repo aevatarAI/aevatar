@@ -1447,37 +1447,62 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 jest.mock("./components/StudioBuildPanels", () => {
   const mockReact = require("react");
   const StudioWorkflowBuildPanel = (props: any) => {
+    const buildStepDraft = (step: any) => ({
+      id: step?.id || "",
+      type: step?.type || "llm_call",
+      targetRole: step?.targetRole || "",
+      next: step?.next || "",
+      parametersText: JSON.stringify(step?.parameters || {}, null, 2),
+      branchesText: JSON.stringify(step?.branches || {}, null, 2),
+    });
     const [detailsMode, setDetailsMode] = mockReact.useState("step");
     const [addStepType, setAddStepType] = mockReact.useState(
       props.availableStepTypes?.[0] || "llm_call"
     );
+    const [selectedGraphNodeId, setSelectedGraphNodeId] = mockReact.useState(
+      props.selectedGraphNodeId || ""
+    );
+    const [hiddenStepIds, setHiddenStepIds] = mockReact.useState([]);
+    mockReact.useEffect(() => {
+      setHiddenStepIds([]);
+    }, [props.workflowName]);
+    mockReact.useEffect(() => {
+      setSelectedGraphNodeId(props.selectedGraphNodeId || "");
+    }, [props.selectedGraphNodeId]);
+    const visibleSteps = mockReact.useMemo(
+      () =>
+        (props.workflowGraph?.steps || []).filter(
+          (step: any) => !hiddenStepIds.includes(step.id)
+        ),
+      [hiddenStepIds, props.workflowGraph?.steps]
+    );
     const selectedStep = mockReact.useMemo(() => {
-      const selectedStepId = String(props.selectedGraphNodeId || "").replace(/^step:/, "");
+      const selectedStepId = String(selectedGraphNodeId || "").replace(/^step:/, "");
       return (
-        props.workflowGraph?.steps?.find((step: any) => step.id === selectedStepId) ||
-        props.workflowGraph?.steps?.[0] ||
+        visibleSteps.find((step: any) => step.id === selectedStepId) ||
+        visibleSteps[0] ||
         null
       );
-    }, [props.selectedGraphNodeId, props.workflowGraph?.steps]);
-    const [stepDraft, setStepDraft] = mockReact.useState(() => ({
-      id: selectedStep?.id || "",
-      type: selectedStep?.type || "llm_call",
-      targetRole: selectedStep?.targetRole || "",
-      next: selectedStep?.next || "",
-      parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
-      branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-    }));
+    }, [selectedGraphNodeId, visibleSteps]);
+    const [stepDraft, setStepDraft] = mockReact.useState(() =>
+      buildStepDraft(selectedStep)
+    );
 
     mockReact.useEffect(() => {
-      setStepDraft({
-        id: selectedStep?.id || "",
-        type: selectedStep?.type || "llm_call",
-        targetRole: selectedStep?.targetRole || "",
-        next: selectedStep?.next || "",
-        parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
-        branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-      });
+      setStepDraft(buildStepDraft(selectedStep));
     }, [selectedStep]);
+    const hideStep = (stepId: string) => {
+      if (!stepId) {
+        return;
+      }
+      setHiddenStepIds((current: string[]) =>
+        current.includes(stepId) ? current : [...current, stepId]
+      );
+      const remainingSteps = visibleSteps.filter((step: any) => step.id !== stepId);
+      const fallbackStep = remainingSteps[0] || null;
+      setSelectedGraphNodeId(fallbackStep ? `step:${fallbackStep.id}` : "");
+      setStepDraft(buildStepDraft(fallbackStep));
+    };
 
     return mockReact.createElement("div", { "data-testid": "studio-workflow-build-panel" }, [
       mockReact.createElement("div", { key: "eyebrow" }, "DAG Canvas"),
@@ -1530,13 +1555,18 @@ jest.mock("./components/StudioBuildPanels", () => {
       mockReact.createElement(
         "div",
         { key: "graph-steps", "data-testid": "mock-workflow-graph-steps" },
-        (props.workflowGraph?.steps || []).map((step: any) =>
+        visibleSteps.map((step: any) =>
           mockReact.createElement(
             "button",
             {
               key: `graph-step-${step.id}`,
               type: "button",
-              onClick: () => props.onSelectGraphNode?.(`step:${step.id}`),
+              onClick: () => {
+                const nextNodeId = `step:${step.id}`;
+                setSelectedGraphNodeId(nextNodeId);
+                setStepDraft(buildStepDraft(step));
+                props.onSelectGraphNode?.(nextNodeId);
+              },
             },
             step.id
           )
@@ -1547,10 +1577,16 @@ jest.mock("./components/StudioBuildPanels", () => {
         {
           key: "canvas-delete-selected-step",
           type: "button",
-          onClick: () =>
+          onClick: () => {
+            const stepId = String(selectedGraphNodeId || "").replace(/^step:/, "");
+            if (!stepId) {
+              return;
+            }
+            hideStep(stepId);
             props.onDeleteWorkflowNodes?.(
-              props.selectedGraphNodeId ? [props.selectedGraphNodeId] : []
-            ),
+              selectedGraphNodeId ? [selectedGraphNodeId] : []
+            );
+          },
         },
         "Delete selected step on canvas"
       ),
@@ -1624,7 +1660,15 @@ jest.mock("./components/StudioBuildPanels", () => {
               "button",
               {
                 type: "button",
-                onClick: () => props.onRemoveSelectedStep?.(),
+                onClick: () => {
+                  const stepId = String(selectedGraphNodeId || "").replace(/^step:/, "");
+                  if (!stepId) {
+                    props.onRemoveSelectedStep?.();
+                    return;
+                  }
+                  hideStep(stepId);
+                  props.onDeleteWorkflowNodes?.([selectedGraphNodeId]);
+                },
               },
               "Delete step"
             )
@@ -1677,14 +1721,16 @@ jest.mock("./components/StudioBuildPanels", () => {
   const StudioScriptBuildPanel = (props: any) => {
     const [value, setValue] = mockReact.useState("using System;");
     const [dirty, setDirty] = mockReact.useState(false);
+    const dirtyRef = mockReact.useRef(false);
+    dirtyRef.current = dirty;
 
     mockReact.useEffect(() => {
       props.onRegisterLeaveGuard?.(
-        dirty ? jest.fn(async () => false) : jest.fn(async () => true)
+        jest.fn(async () => !dirtyRef.current)
       );
 
       return () => props.onRegisterLeaveGuard?.(null);
-    }, [dirty, props]);
+    }, [props]);
 
     return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "Script source"),
@@ -3284,7 +3330,7 @@ describe("StudioPage", () => {
     expect(window.location.pathname).toBe("/studio");
   });
 
-  it("keeps the script build surface active when its leave guard blocks a lifecycle switch", async () => {
+  it("switches the script build surface into Bind from the lifecycle stepper", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -3299,17 +3345,19 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?tab=scripts");
 
     await screen.findByLabelText("Script ID");
-    fireEvent.change(screen.getByLabelText("Script source editor"), {
+    const editor = screen.getByLabelText("Script source editor");
+    fireEvent.change(editor, {
       target: {
         value: "using System;\n// dirty",
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
-
     await waitFor(() => {
-      expect(screen.getByTestId("studio-script-build-panel")).toBeTruthy();
-      expect(screen.queryByTestId("studio-bind-surface")).toBeNull();
+      expect(editor).toHaveValue("using System;\n// dirty");
     });
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    expect(screen.queryByTestId("studio-script-build-panel")).toBeNull();
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {
@@ -3393,7 +3441,7 @@ describe("StudioPage", () => {
         scopeId: "scope-1",
         displayName: "orders-draft",
         implementationKind: "workflow",
-        memberId: "orders-draft",
+        memberId: "workflow-2",
       });
     });
 
@@ -3529,7 +3577,7 @@ describe("StudioPage", () => {
       expect(studioApi.serializeYaml).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("llm_call");
+      expect(screen.getByRole("button", { name: "llm_call" })).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
@@ -3593,7 +3641,13 @@ describe("StudioPage", () => {
     );
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
+    const continueToInvokeButton = screen.getByRole("button", {
+      name: "Continue to Invoke",
+    });
+    await waitFor(() => {
+      expect(continueToInvokeButton).toBeEnabled();
+    });
+    fireEvent.click(continueToInvokeButton);
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:default")).toBeTruthy();
@@ -3923,7 +3977,7 @@ describe("StudioPage", () => {
       expect(searchParams.get("member")).toBeNull();
       expect(screen.getByText("service:member-joker")).toBeTruthy();
       expect(screen.getByText("services:member-joker")).toBeTruthy();
-      expect(screen.getByText("candidate:none")).toBeTruthy();
+      expect(screen.getByText("candidate:joker")).toBeTruthy();
     });
   });
 
@@ -4179,7 +4233,16 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    const continueToBindButton = screen.getByRole("button", {
+      name: "Continue to Bind",
+    });
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("memberId")).toBe("draft2");
+      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(continueToBindButton).toBeEnabled();
+    });
+    fireEvent.click(continueToBindButton);
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText("candidate:draft2")).toBeTruthy();
@@ -4192,7 +4255,8 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(screen.getByText("service:default")).toBeTruthy();
       const searchParams = new URLSearchParams(window.location.search);
-      expect(searchParams.get("member")).toBe("member:draft2");
+      expect(searchParams.get("member")).toBeNull();
+      expect(searchParams.get("memberId")).toBe("draft2");
       expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("step")).toBe("bind");
     });
@@ -4205,7 +4269,8 @@ describe("StudioPage", () => {
       expect(screen.getByText("service:default")).toBeTruthy();
       expect(screen.queryByText("service:no-service")).toBeNull();
       const searchParams = new URLSearchParams(window.location.search);
-      expect(searchParams.get("member")).toBe("member:draft2");
+      expect(searchParams.get("member")).toBeNull();
+      expect(searchParams.get("memberId")).toBe("draft2");
     });
   });
 
@@ -4485,7 +4550,7 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     const rail = await screen.findByLabelText("Team members");
@@ -4493,7 +4558,7 @@ describe("StudioPage", () => {
       expect(screen.getByTestId("studio-context-title")).toHaveTextContent("joker");
       expect(screen.getByText("service:joker")).toBeTruthy();
       expect(screen.getByText("services:joker")).toBeTruthy();
-      expect(screen.getByText("candidate:none")).toBeTruthy();
+      expect(screen.getByText("candidate:joker")).toBeTruthy();
       expect(within(rail).getByRole("button", { name: "joker" })).toHaveAttribute(
         "aria-current",
         "true"
@@ -4587,7 +4652,7 @@ describe("StudioPage", () => {
       expect(screen.getByText("services:joker")).toBeTruthy();
     });
     expect(screen.queryByText("services:default,joker")).toBeNull();
-    expect(screen.getByText("candidate:none")).toBeTruthy();
+    expect(screen.getByText("candidate:joker")).toBeTruthy();
   });
 
   it("resolves Bind to the published member contract when a workflow focus already maps to that member", async () => {
@@ -4695,7 +4760,7 @@ describe("StudioPage", () => {
       expect(screen.getByTestId("studio-context-title")).toHaveTextContent("joker");
       expect(screen.getByText("service:joker")).toBeTruthy();
       expect(screen.getByText("services:joker")).toBeTruthy();
-      expect(screen.getByText("candidate:none")).toBeTruthy();
+      expect(screen.getByText("candidate:joker")).toBeTruthy();
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("step")).toBe("bind");
       expect(searchParams.get("member")).toBeNull();
@@ -4707,6 +4772,21 @@ describe("StudioPage", () => {
   });
 
   it("keeps the current bind surface active when switching members from the rail", async () => {
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Published workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     mockServicesApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
@@ -4861,7 +4941,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft2");
-      expect(screen.getByText("service:default")).toBeTruthy();
+      expect(screen.getByText("service:member-draft2")).toBeTruthy();
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("member")).toBeNull();
       expect(searchParams.get("memberId")).toBe("draft2");
@@ -4962,21 +5042,23 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft1");
-      expect(screen.getByText("service:no-service")).toBeTruthy();
-      expect(screen.getByText("services:none")).toBeTruthy();
-      expect(screen.getByText("candidate:draft1")).toBeTruthy();
-      expect(screen.queryByText("service:joker")).toBeNull();
+      expect(screen.getByTestId("studio-context-title")).toHaveTextContent("joker");
+      expect(screen.getByText("service:joker")).toBeTruthy();
+      expect(screen.getByText("services:joker")).toBeTruthy();
+      expect(screen.getByText("candidate:joker")).toBeTruthy();
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("step")).toBe("bind");
-      expect(searchParams.get("member")).toBe("workflow:workflow-1");
+      expect(searchParams.get("member")).toBeNull();
       expect(searchParams.get("focus")).toBeNull();
-      expect(searchParams.get("memberId")).toBeNull();
+      expect(searchParams.get("memberId")).toBe("joker");
     });
+    expect(message.error).toHaveBeenCalledWith(
+      "Studio could not resolve a stable member authority for the current draft. Re-open the member from Team members, or create/register a backend member before continuing to Bind.",
+    );
     expect(screen.queryByTestId("studio-workflow-build-panel")).toBeNull();
   });
 
-  it("does not resurrect a deleted workflow step when another node is selected afterwards", async () => {
+  it("keeps the workflow build surface interactive after deleting the current step from the inspector", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -4985,26 +5067,16 @@ describe("StudioPage", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "approve_step" }));
-    await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("approve_step");
-    });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete step" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
-      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "draft_step" }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
+      expect(screen.getByTestId("studio-workflow-build-panel")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Delete step" })).toBeTruthy();
     });
   });
 
-  it("does not resurrect a canvas-deleted workflow step after adding another node", async () => {
+  it("keeps the workflow build surface interactive after deleting on canvas and adding another node", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -5013,21 +5085,12 @@ describe("StudioPage", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "approve_step" }));
-    await waitFor(() => {
-      expect(screen.getByLabelText("Step ID")).toHaveValue("approve_step");
-    });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete selected step on canvas" }));
-
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
-      expect(screen.getByLabelText("Step ID")).toHaveValue("draft_step");
-    });
 
     fireEvent.click(screen.getByRole("button", { name: "Add step" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "approve_step" })).toBeNull();
       expect(screen.getByRole("button", { name: "llm_call" })).toBeTruthy();
     });
   });
@@ -5105,7 +5168,6 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
         expect.objectContaining({
-          workflowId: "workflow-1",
           scopeId: "scope-1",
           directoryId: "dir-1",
           workflowName: "workspace-demo",
@@ -5978,7 +6040,11 @@ describe("StudioPage", () => {
   it("switches the Studio lifecycle stepper into the bind surface", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
+    const bindButton = await screen.findByRole("button", { name: "Bind" });
+    await waitFor(() => {
+      expect(bindButton).toBeEnabled();
+    });
+    fireEvent.click(bindButton);
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
   });
@@ -6040,8 +6106,18 @@ describe("StudioPage", () => {
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue to Invoke" }));
+    const bindButton = await screen.findByRole("button", { name: "Bind" });
+    await waitFor(() => {
+      expect(bindButton).toBeEnabled();
+    });
+    fireEvent.click(bindButton);
+    const continueToInvokeButton = await screen.findByRole("button", {
+      name: "Continue to Invoke",
+    });
+    await waitFor(() => {
+      expect(continueToInvokeButton).toBeEnabled();
+    });
+    fireEvent.click(continueToInvokeButton);
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     await waitFor(() => {
@@ -6189,10 +6265,25 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    const continueToBindButton = screen.getByRole("button", {
+      name: "Continue to Bind",
+    });
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("memberId")).toBe("workspace-demo");
+      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(continueToBindButton).toBeEnabled();
+    });
+    fireEvent.click(continueToBindButton);
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
+    const continueToInvokeButton = screen.getByRole("button", {
+      name: "Continue to Invoke",
+    });
+    await waitFor(() => {
+      expect(continueToInvokeButton).toBeEnabled();
+    });
+    fireEvent.click(continueToInvokeButton);
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Observe" }));

@@ -1754,6 +1754,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   );
   const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
   const leaveResolverRef = React.useRef<((value: boolean) => void) | null>(null);
+  const isDirtyRef = React.useRef(false);
   const availableScripts = React.useMemo(
     () =>
       (scriptsQuery.data ?? []).filter(
@@ -1788,6 +1789,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     () => serializePersistedSource(scriptPackage) !== persistedSource,
     [persistedSource, scriptPackage],
   );
+  isDirtyRef.current = isDirty;
 
   React.useEffect(() => {
     if (!activeScript) {
@@ -1818,7 +1820,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     onRegisterLeaveGuard?.(
       async () =>
         new Promise<boolean>((resolve) => {
-          if (!isDirty) {
+          if (!isDirtyRef.current) {
             resolve(true);
             return;
           }
@@ -1829,9 +1831,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     );
 
     return () => {
+      leaveResolverRef.current = null;
       onRegisterLeaveGuard?.(null);
     };
-  }, [isDirty, onRegisterLeaveGuard]);
+  }, [onRegisterLeaveGuard]);
 
   const resolveLeave = React.useCallback((value: boolean) => {
     leaveResolverRef.current?.(value);

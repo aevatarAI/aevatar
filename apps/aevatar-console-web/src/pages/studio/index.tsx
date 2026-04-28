@@ -2354,6 +2354,7 @@ const StudioPage: React.FC = () => {
   const handledLocationSnapshotRef = useRef(locationSnapshot);
   const invalidLifecycleRouteSnapshotRef = useRef('');
   const lifecycleNavigationMemberIdRef = useRef('');
+  const selectedLifecycleMemberIdRef = useRef('');
   const handledCreateMemberIntentSnapshotRef = useRef('');
   const executionLogsWindowRef = useRef<Window | null>(null);
   const [logsDetached, setLogsDetached] = useState(false);
@@ -5398,12 +5399,19 @@ const StudioPage: React.FC = () => {
   );
   const applyStudioTarget = React.useCallback(
     (nextStudioSurface: StudioSurface, nextBuildSurface?: BuildSurface) => {
+      const effectiveLifecycleMemberId = trimOptional(
+        lifecycleNavigationMemberIdRef.current ||
+          selectedLifecycleMemberIdRef.current,
+      );
       if (
         nextStudioSurface !== 'build' &&
-        !trimOptional(lifecycleNavigationMemberIdRef.current)
+        !effectiveLifecycleMemberId
       ) {
         reportLifecycleMemberAuthorityError(nextStudioSurface);
         return;
+      }
+      if (nextStudioSurface !== 'build') {
+        lifecycleNavigationMemberIdRef.current = effectiveLifecycleMemberId;
       }
       const resolvedBuildSurface = nextBuildSurface ?? buildSurface;
       if (nextStudioSurface === 'build' && resolvedBuildSurface === 'editor') {
@@ -5891,9 +5899,7 @@ const StudioPage: React.FC = () => {
   );
   const currentFocusMemberKey =
     studioSurface === 'build' ? buildSurfaceMemberKey : lifecycleSurfaceMemberKey;
-  React.useLayoutEffect(() => {
-    lifecycleNavigationMemberIdRef.current = resolvedLifecycleMemberId;
-  }, [resolvedLifecycleMemberId]);
+  lifecycleNavigationMemberIdRef.current = resolvedLifecycleMemberId;
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -5933,10 +5939,15 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    const effectiveLifecycleMemberId = trimOptional(
+      resolvedLifecycleMemberId ||
+        lifecycleNavigationMemberIdRef.current ||
+        selectedLifecycleMemberIdRef.current,
+    );
     const lifecycleRouteAuthorityMissing =
       studioSurface !== 'build' &&
       lifecycleSelectionIsBuildScoped &&
-      !trimOptional(resolvedLifecycleMemberId);
+      !effectiveLifecycleMemberId;
     if (lifecycleRouteAuthorityMissing) {
       if (invalidLifecycleRouteSnapshotRef.current !== locationSnapshot) {
         invalidLifecycleRouteSnapshotRef.current = locationSnapshot;
@@ -6027,7 +6038,11 @@ const StudioPage: React.FC = () => {
     const persistedMemberKey =
       studioSurface === 'build'
         ? trimOptional(persistableBuildMemberKey) || undefined
-        : trimOptional(lifecycleSurfaceMemberKey) || undefined;
+        : trimOptional(lifecycleSurfaceMemberKey) ||
+            (effectiveLifecycleMemberId
+              ? `member:${effectiveLifecycleMemberId}`
+              : '') ||
+            undefined;
     const persistedFocus =
       persistBuildFocusRoute &&
       trimOptional(activeBuildFocusKey) !== trimOptional(persistedMemberKey)
@@ -6736,6 +6751,11 @@ const StudioPage: React.FC = () => {
 
     return matches.length === 1 ? trimOptional(matches[0]?.memberId) : '';
   }, [currentMemberLabel, selectedBindMemberId, studioScopeMembers]);
+  useEffect(() => {
+    selectedLifecycleMemberIdRef.current = trimOptional(
+      selectedBindMemberId || fallbackSelectedBindMemberId,
+    );
+  }, [fallbackSelectedBindMemberId, selectedBindMemberId]);
   const bindCandidateDisplayName = trimOptional(
     selectedMemberAuthoritySummary?.displayName ||
       routeSelectedMemberAuthoritySummary?.displayName ||
@@ -7674,13 +7694,12 @@ const StudioPage: React.FC = () => {
   ]);
   const selectedMemberCanBind = Boolean(
     resolvedStudioScopeId &&
-      (
-        selectedRailMemberKey ||
+      trimOptional(
         selectedBindMemberId ||
-        fallbackSelectedBindMemberId ||
-        selectedMemberAuthoritySummary?.memberId ||
-        routeSelectedMemberAuthoritySummary?.memberId ||
-        workbenchMemberKey
+          fallbackSelectedBindMemberId ||
+          workbenchStudioMemberId ||
+          selectedMemberAuthoritySummary?.memberId ||
+          routeSelectedMemberAuthoritySummary?.memberId,
       ),
   );
   const selectedMemberCanInvoke =

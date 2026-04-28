@@ -172,8 +172,9 @@ describe("TeamsHomePage", () => {
 
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("member")).toBe("member:member-alpha");
+    expect(params.get("memberId")).toBe("member-alpha");
     expect(params.get("tab")).toBe("studio");
+    expect(params.get("focus")).toBeNull();
   });
 
   it("routes Create Team directly into Studio member creation", async () => {
