@@ -8,6 +8,14 @@ public static class ChannelMetadataKeys
 {
     public const string Platform = "channel.platform";
     public const string SenderId = "channel.sender_id";
+    /// <summary>
+    /// The bot's registration scope id (per-NyxID-account; one bot = one scope). Carries
+    /// the inbound channel registration's scope so caller-scope resolution and tools can
+    /// route per-bot operations consistently. The literal "scope_id" string was used
+    /// historically across multiple call sites; this typed constant exists so future
+    /// renames don't have to chase string literals (issue #466 review).
+    /// </summary>
+    public const string RegistrationScopeId = "scope_id";
     public const string SenderName = "channel.sender_name";
     public const string ConversationId = "channel.conversation_id";
     public const string MessageId = "channel.message_id";

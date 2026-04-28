@@ -435,14 +435,20 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
     {
+#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
+        var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
+        var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
+        var ownerScope = State.OutboundConfig?.OwnerScope
+                         ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = ResolvePlatform(State.OutboundConfig?.Platform),
+            Platform = legacyPlatform,
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty,
+            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = SkillRunnerDefaults.AgentType,
             TemplateName = State.TemplateName ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -455,6 +461,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
+#pragma warning restore CS0612
+
+        if (ownerScope is not null)
+            command.OwnerScope = ownerScope;
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
         await UpdateRegistryExecutionAsync(status, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, ct);

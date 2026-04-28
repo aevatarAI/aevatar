@@ -31,14 +31,19 @@ public sealed class UserAgentCatalogProjector
         UserAgentCatalogEntry entry,
         UserAgentCatalogMaterializationContext context,
         StateEvent stateEvent,
-        DateTimeOffset updatedAt) =>
-        new()
+        DateTimeOffset updatedAt)
+    {
+        var document = new UserAgentCatalogDocument
         {
             Id = entry.AgentId,
+#pragma warning disable CS0612 // legacy fields kept for backward read compat (issue #466 migration)
             Platform = entry.Platform ?? string.Empty,
+#pragma warning restore CS0612
             ConversationId = entry.ConversationId ?? string.Empty,
             NyxProviderSlug = entry.NyxProviderSlug ?? string.Empty,
+#pragma warning disable CS0612
             OwnerNyxUserId = entry.OwnerNyxUserId ?? string.Empty,
+#pragma warning restore CS0612
             AgentType = entry.AgentType ?? string.Empty,
             TemplateName = entry.TemplateName ?? string.Empty,
             ScopeId = entry.ScopeId ?? string.Empty,
@@ -61,4 +66,16 @@ public sealed class UserAgentCatalogProjector
             LarkReceiveIdFallback = entry.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = entry.LarkReceiveIdTypeFallback ?? string.Empty,
         };
+
+        // Project owner_scope verbatim from the upserted entry. Per issue #466 the entry
+        // is the authoritative source for ownership; the projector materializes it for
+        // the caller-scoped readmodel filter rather than recomputing or inferring it.
+#pragma warning disable CS0612
+        var entryScope = entry.OwnerScope ?? OwnerScope.FromLegacyFields(entry.OwnerNyxUserId, entry.Platform);
+#pragma warning restore CS0612
+        if (entryScope is not null)
+            document.OwnerScope = entryScope;
+
+        return document;
+    }
 }
