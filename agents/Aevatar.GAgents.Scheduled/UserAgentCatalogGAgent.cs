@@ -98,7 +98,13 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 
         if (State.Entries.All(x => !string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal)))
         {
-            Logger.LogWarning("Cannot update execution state for missing user agent catalog entry: {AgentId}", command.AgentId);
+            // Caller contract: an Upsert must land before the first ExecutionUpdate (the
+            // SkillRunner / WorkflowAgent UpsertRegistryAsync sequence guarantees this when
+            // dispatch goes through IActorDispatchPort). If we ever drop here in production
+            // it means LastRunAt / NextRunAt are silently being lost from the catalog and
+            // the agent's /agent-status will read stale fields. Logged at Error so it
+            // surfaces in dashboards instead of being buried as a routine warning.
+            Logger.LogError("Cannot update execution state for missing user agent catalog entry: {AgentId}", command.AgentId);
             return;
         }
 

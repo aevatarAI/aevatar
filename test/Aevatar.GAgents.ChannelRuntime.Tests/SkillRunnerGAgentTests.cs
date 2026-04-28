@@ -90,6 +90,94 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_DispatchedToRealCatalog_ShouldPropagateScheduleAndNextRunAt()
+    {
+        // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via
+        // OrleansActor.HandleEventAsync, which produced to a stream (fire-and-forget).
+        // Two dispatches from the same SkillRunner turn (post-init Upsert + post-trigger
+        // ExecutionUpdate) could arrive at the catalog grain out of order; the
+        // ExecutionUpdate would land first, hit the missing-entry guard in
+        // UserAgentCatalogGAgent.HandleExecutionUpdateAsync, and be silently dropped —
+        // leaving /agent-status reporting LastRun/NextRun as n/a. PR #451 wired dispatch
+        // through IActorDispatchPort which delivers synchronously. This test wires a
+        // real catalog behind a synchronous dispatch port so any regression that breaks
+        // ExecutionUpdate ordering against Upsert (or returns to fire-and-forget
+        // semantics) fails here instead of in production.
+
+        var scheduler = Substitute.For<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
+        scheduler
+            .ScheduleTimeoutAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var req = call.Arg<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>();
+                return Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+                    req.ActorId, req.CallbackId, 1L,
+                    Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+            });
+        scheduler.CancelAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var catalogProxy = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogProxy));
+
+        // Real catalog wired behind a synchronous dispatch fake. Re-using the SkillRunner's
+        // service provider keeps both agents on the same IEventStore so we don't have to
+        // reason about per-agent persistence boundaries — agent IDs already isolate state.
+        UserAgentCatalogGAgent? catalog = null;
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => catalog!.HandleEventAsync(
+                call.Arg<EventEnvelope>(), call.Arg<CancellationToken>()));
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+                services.AddSingleton(scheduler);
+            });
+
+        catalog = new UserAgentCatalogGAgent
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
+        };
+        AssignActorId(catalog, UserAgentCatalogGAgent.WellKnownId);
+        await catalog.ActivateAsync();
+
+        var agent = CreateAgent("skill-runner-440-regression", provider);
+        await agent.ActivateAsync();
+
+        var init = CreateInitializeCommand();
+        init.ScheduleCron = "0 9 * * *";
+        init.ScheduleTimezone = "UTC";
+
+        await agent.HandleInitializeAsync(init);
+
+        catalog.State.Entries.Should().ContainSingle();
+        var entry = catalog.State.Entries[0];
+        entry.AgentId.Should().Be("skill-runner-440-regression");
+        entry.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
+        entry.ScheduleCron.Should().Be("0 9 * * *");
+        entry.NextRunAt.Should()
+            .NotBeNull(
+                "init's post-Upsert ExecutionUpdate must land at the catalog so /agent-status shows Next run; "
+                + "regressing to fire-and-forget dispatch would let the ExecutionUpdate race ahead of the Upsert "
+                + "and be dropped by the missing-entry guard in HandleExecutionUpdateAsync");
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
     {
         var catalogActor = Substitute.For<IActor>();
