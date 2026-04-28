@@ -22,6 +22,11 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
+    // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
+    // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
+    // #439 — see EnsureToolStatusAllowsCompletion.
+    private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
     private ChannelScheduleRunner? _scheduler;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
 
@@ -33,9 +38,51 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
+        : this(
+            BuildToolMiddlewareChain(toolMiddlewares),
+            llmProviderFactory,
+            additionalHooks,
+            agentMiddlewares,
+            llmMiddlewares,
+            toolSources,
+            nyxIdApiClient)
+    {
+    }
+
+    private SkillRunnerGAgent(
+        ToolMiddlewareChain toolMiddlewareChain,
+        ILLMProviderFactory? llmProviderFactory,
+        IEnumerable<IAIGAgentExecutionHook>? additionalHooks,
+        IEnumerable<IAgentRunMiddleware>? agentMiddlewares,
+        IEnumerable<ILLMCallMiddleware>? llmMiddlewares,
+        IEnumerable<IAgentToolSource>? toolSources,
+        NyxIdApiClient? nyxIdApiClient)
+        : base(
+            llmProviderFactory,
+            additionalHooks,
+            agentMiddlewares,
+            toolMiddlewareChain.Middlewares,
+            llmMiddlewares,
+            toolSources)
     {
         _nyxIdApiClient = nyxIdApiClient;
+        _toolFailureCounter = toolMiddlewareChain.Counter;
+    }
+
+    private readonly record struct ToolMiddlewareChain(
+        IReadOnlyList<IToolCallMiddleware> Middlewares,
+        SkillRunnerToolFailureCounter Counter);
+
+    /// <summary>Test-only accessor for the per-run nyxid_proxy counter.</summary>
+    internal SkillRunnerToolFailureCounter ToolFailureCounterForTesting => _toolFailureCounter;
+
+    private static ToolMiddlewareChain BuildToolMiddlewareChain(
+        IEnumerable<IToolCallMiddleware>? input)
+    {
+        var counter = new SkillRunnerToolFailureCounter();
+        var combined = (input ?? Array.Empty<IToolCallMiddleware>()).ToList();
+        combined.Add(new NyxIdProxyToolFailureCountingMiddleware(counter));
+        return new ToolMiddlewareChain(combined, counter);
     }
 
     private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
@@ -243,6 +290,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
     {
+        // Reset before each run so retries / scheduled triggers each see a clean slate.
+        // The counter is populated by NyxIdProxyToolFailureCountingMiddleware as the LLM
+        // fans out nyxid_proxy calls inside the ChatStreamAsync loop.
+        _toolFailureCounter.Reset();
+
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = BuildExecutionMetadata();
         var requestId = Guid.NewGuid().ToString("N");
@@ -270,6 +322,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             var output = content.ToString().Trim();
             if (string.IsNullOrWhiteSpace(output))
                 output = "No update generated.";
+
+            EnsureToolStatusAllowsCompletion(_toolFailureCounter.FailureCount, _toolFailureCounter.SuccessCount);
 
             if (sink is not null)
                 await sink.FinalizeAsync(output, ct);
@@ -344,6 +398,29 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             SkillRunnerDefaults.StreamingEditThrottle,
             TimeProvider.System,
             Logger);
+    }
+
+    /// <summary>
+    /// Runner-layer safety net for issue #439: when every nyxid_proxy call in a run failed,
+    /// the LLM's plain-text output is structurally indistinguishable from a real "no
+    /// activity" report — the prompt-layer §9 Source health footer can be silently dropped
+    /// by a weaker model, and the runner has no other way to tell. Throwing here routes
+    /// through HandleTriggerAsync's existing catch path, which preserves the retry budget
+    /// and (after retries are exhausted) persists SkillRunnerExecutionFailedEvent so
+    /// <c>/agent-status</c> reports a non-zero <c>error_count</c> with a meaningful
+    /// <c>last_error</c> instead of a fake-success run.
+    /// Mixed runs (any successful nyxid_proxy call) still complete normally — partial data
+    /// is more useful to the user than a blanket failure, and the prompt-layer Source
+    /// health footer surfaces the failed queries.
+    /// </summary>
+    internal static void EnsureToolStatusAllowsCompletion(int failureCount, int successCount)
+    {
+        if (failureCount > 0 && successCount == 0)
+        {
+            throw new InvalidOperationException(
+                $"All {failureCount} nyxid_proxy tool call(s) in this run failed; refusing to record an empty-day report as a successful execution. " +
+                "Inspect the previous attempt's tool output for the underlying NyxID/upstream error envelope.");
+        }
     }
 
     private async Task SendOutputAsync(string output, CancellationToken ct)
