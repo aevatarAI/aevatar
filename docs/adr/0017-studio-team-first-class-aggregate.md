@@ -87,13 +87,13 @@ Rationale:
   independent of any team's lifecycle. A member can be unassigned, reassigned,
   or exist without a team.
 - "Single owner" rule: the assignment fact has one authoritative owner — the
-  Member actor. The Team's roster and `memberCount` are *derived* from this
+  Member actor. The Team's roster and `member_count` are *derived* from this
   fact via projection.
 - Reading "which team is this member in" is local to the Member actor / its
   read model.
 
 The Team's view of "who are my members" is **not** an independent fact — it is
-the projection of all `MemberAssignedToTeam` events filtered by `team_id`. See
+the projection of all `StudioMemberReassignedEvent` events filtered by `team_id`. See
 Q3.
 
 ### Q3. How does `TeamGAgent` maintain aggregate facts (`member_count`, etc.) safely?
