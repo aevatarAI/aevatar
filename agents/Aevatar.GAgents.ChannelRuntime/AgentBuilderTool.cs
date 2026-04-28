@@ -1877,9 +1877,14 @@ public sealed class AgentBuilderTool : IAgentTool
         // Cheap read-only endpoint; succeeds with the default `users.read` scope, fails with
         // 401 when no OAuth grant is bound to the user behind the api-key, and 403 when the
         // bound token's scope set is too narrow.
+        //
+        // PR #461 review (commit d9f6df81 follow-up): probe the *configured* publish slug so
+        // a caller-overridden `publish_provider_slug` is the slug we actually validate. The
+        // earlier hardcoded `"api-twitter"` would silently green-light a custom slug at
+        // create-time only to surface a runtime 4xx on the first publish.
         var probe = await nyxClient.ProxyRequestAsync(
             apiKey,
-            "api-twitter",
+            nyxProviderSlug,
             "/users/me",
             "GET",
             body: null,

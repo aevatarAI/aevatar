@@ -117,10 +117,16 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
         string proxyResponse;
         try
         {
+            // PR #461 review (commit 781c5bda follow-up): NyxID's `api-twitter` provider seed
+            // sets `base_url: "https://api.x.com/2"` (provider_service.rs:1728) — the API
+            // version is already baked into the base URL. Adding `/2/` to the path here would
+            // produce `https://api.x.com/2/2/tweets` and 404 every publish call in production.
+            // Mirror what the preflight does (`/users/me`, AgentBuilderTool.cs:1877): use the
+            // bare resource path. NyxIdServiceApiHints.cs:58 documents this invariant.
             proxyResponse = await nyxClient.ProxyRequestAsync(
                 apiKeyValue!,
                 publishSlug,
-                "/2/tweets",
+                "/tweets",
                 "POST",
                 tweetBody,
                 extraHeaders: null,

@@ -2986,6 +2986,137 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CreateAgent_SocialMedia_PreflightProbesConfiguredPublishSlug_NotHardcodedApiTwitter()
+    {
+        // PR #461 review (commit d9f6df81 follow-up): when a caller passes a custom
+        // `publish_provider_slug` (e.g. a tenant-staged Twitter mirror like `api-x-staging`),
+        // the preflight must validate THAT slug — not the hardcoded `"api-twitter"` default.
+        // Otherwise we mint a key for the custom slug, generate workflow YAML pointing at the
+        // custom slug, but green-light the create flow against an unrelated proxy (or 404 on
+        // the unmocked default route). Pin that the GET probe lands on the configured slug's
+        // path so this regresses loudly if anyone reverts to a literal "api-twitter".
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+        queryPort.GetAsync("workflow-agent-custom-slug", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "workflow-agent-custom-slug",
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+                Status = WorkflowAgentDefaults.StatusRunning,
+            }));
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-custom-slug");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("workflow-agent-custom-slug").Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<WorkflowAgentGAgent>("workflow-agent-custom-slug", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(workflowAgentActor));
+
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+        workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ScopeWorkflowUpsertResult(
+                new ScopeWorkflowSummary(
+                    "scope-1",
+                    "social-media-workflow-agent-custom-slug",
+                    "Social Media Approval workflow-agent-custom-slug",
+                    "service-key",
+                    "social_media_workflow_agent_custom_slug",
+                    "workflow-actor-1",
+                    "rev-1",
+                    "deploy-1",
+                    "active",
+                    DateTimeOffset.UtcNow),
+                "rev-1",
+                "workflow-actor-prefix",
+                "workflow-actor-1")));
+
+        var activationService = Substitute.For<IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease>>();
+        activationService.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogMaterializationRuntimeLease(new UserAgentCatalogMaterializationContext
+            {
+                RootActorId = UserAgentCatalogGAgent.WellKnownId,
+                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+            })));
+        var projectionPort = new UserAgentCatalogProjectionPort(activationService);
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-x-staging","slug":"api-x-staging","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-custom","full_key":"full-key-custom"}""");
+        // Mock ONLY the configured slug's preflight path. The default `api-twitter` path
+        // is intentionally NOT mocked — RoutingJsonHandler returns 404 for unknown routes,
+        // which would land in the preflight's "non-401/403 → success" branch and silently
+        // green-light the create. The successful response below proves we hit the right slug.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-x-staging/users/me",
+            """{"data":{"id":"123456","name":"Alice","username":"alice"}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        services.AddSingleton(workflowCommandPort);
+        services.AddSingleton(nyxClient);
+        services.AddSingleton(projectionPort);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "social_media",
+                  "agent_id": "workflow-agent-custom-slug",
+                  "topic": "Launch update",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "publish_provider_slug": "api-x-staging"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().BeOneOf("created", "accepted");
+
+            // The preflight must fire against the configured slug, NOT the default api-twitter.
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Get &&
+                r.Path == "/api/v1/proxy/s/api-x-staging/users/me");
+            handler.Requests.Should().NotContain(r =>
+                r.Method == HttpMethod.Get &&
+                r.Path == "/api/v1/proxy/s/api-twitter/users/me");
+
+            // Workflow YAML must reference the custom slug end-to-end (not just at preflight).
+            await workflowCommandPort.Received(1).UpsertAsync(
+                Arg.Is<ScopeWorkflowUpsertRequest>(request =>
+                    request.WorkflowYaml.Contains("publish_provider_slug: \"api-x-staging\"", StringComparison.Ordinal)),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ToolSource_Always_ReturnsTool()
     {
         var source = new AgentBuilderToolSource(new ServiceCollection().BuildServiceProvider());
