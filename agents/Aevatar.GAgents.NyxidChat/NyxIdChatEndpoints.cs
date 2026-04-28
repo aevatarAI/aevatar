@@ -91,13 +91,11 @@ public static partial class NyxIdChatEndpoints
         // degraded mode where a conversation can run without being registered.
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
         await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-        var registrationAttempted = false;
         try
         {
             var receipt = await registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
                 ct);
-            registrationAttempted = true;
             if (!receipt.IsAdmissionVisible)
             {
                 await TryRollbackConversationCreationAsync(
@@ -105,8 +103,7 @@ public static partial class NyxIdChatEndpoints
                     scopeId,
                     actorId,
                     registryCommandPort,
-                    actorRuntime,
-                    registrationAttempted);
+                    actorRuntime);
                 return Results.Json(
                     new { error = "Conversation registration is not admission-visible" },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -119,8 +116,7 @@ public static partial class NyxIdChatEndpoints
                 scopeId,
                 actorId,
                 registryCommandPort,
-                actorRuntime,
-                registrationAttempted);
+                actorRuntime);
             throw;
         }
 
@@ -132,29 +128,25 @@ public static partial class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         IGAgentActorRegistryCommandPort registryCommandPort,
-        IActorRuntime actorRuntime,
-        bool registrationAttempted)
+        IActorRuntime actorRuntime)
     {
         var logger = http.RequestServices?.GetService<ILoggerFactory>()
             ?.CreateLogger("Aevatar.NyxId.Chat.CreateConversation");
 
-        if (registrationAttempted)
+        try
         {
-            try
-            {
-                await registryCommandPort.UnregisterActorAsync(
-                    new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
-                    CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(
-                    ex,
-                    "Failed to unregister NyxId chat conversation during create rollback: scope={ScopeId}, actor={ActorId}",
-                    scopeId,
-                    actorId);
-                return;
-            }
+            await registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to unregister NyxId chat conversation during create rollback: scope={ScopeId}, actor={ActorId}",
+                scopeId,
+                actorId);
+            return;
         }
 
         try
@@ -173,33 +165,19 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         CancellationToken ct)
     {
-        try
+        var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
+        var actorIds = snapshot.Groups
+            .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
+            ?.ActorIds
+            ?? [];
+        return Results.Ok(new
         {
-            var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
-            var actorIds = snapshot.Groups
-                .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
-                ?.ActorIds
-                ?? [];
-            return Results.Ok(new
-            {
-                snapshot.ScopeId,
-                snapshot.StateVersion,
-                snapshot.UpdatedAt,
-                snapshot.ObservedAt,
-                Conversations = actorIds.Select(actorId => new { actorId }),
-            });
-        }
-        catch (InvalidOperationException)
-        {
-            return Results.Ok(new
-            {
-                ScopeId = scopeId,
-                StateVersion = 0L,
-                UpdatedAt = DateTimeOffset.MinValue,
-                ObservedAt = DateTimeOffset.UtcNow,
-                Conversations = Array.Empty<object>(),
-            });
-        }
+            snapshot.ScopeId,
+            snapshot.StateVersion,
+            snapshot.UpdatedAt,
+            snapshot.ObservedAt,
+            Conversations = actorIds.Select(actorId => new { actorId }),
+        });
     }
 
     private static async Task<IResult> HandleDeleteConversationAsync(

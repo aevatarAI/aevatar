@@ -182,8 +182,35 @@ public class NyxIdChatEndpointsCoverageTests
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("registry unavailable");
         actorStore.AddedActors.Should().BeEmpty();
-        actorStore.RemovedActors.Should().BeEmpty();
-        runtime.DestroyCalls.Should().ContainSingle();
+        actorStore.RemovedActors.Should().ContainSingle();
+        runtime.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldUnregister_WhenRegistrationThrowsAfterCommit()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            AddActorExceptionAfterCommit = new OperationCanceledException("cancelled during admission verification"),
+        };
+        var runtime = new StubActorRuntime();
+
+        var act = async () => await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            runtime,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        actorStore.AddedActors.Should().ContainSingle();
+        var actorId = actorStore.AddedActors.Single().ActorId;
+        actorStore.RemovedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == actorId);
+        runtime.DestroyCalls.Should().ContainSingle(actorId);
     }
 
     [Fact]
@@ -235,7 +262,7 @@ public class NyxIdChatEndpointsCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         actorStore.AddedActors.Should().ContainSingle();
-        actorStore.RemovedActors.Should().BeEmpty();
+        actorStore.RemovedActors.Should().ContainSingle();
         runtime.DestroyCalls.Should().BeEmpty();
     }
 
@@ -266,6 +293,25 @@ public class NyxIdChatEndpointsCoverageTests
         conversations[0].GetProperty("actorId").GetString().Should().Be("actor-1");
         conversations[0].TryGetProperty("createdAt", out _).Should().BeFalse();
         actorStore.LastRequestedScopeId.Should().Be("scope-a");
+    }
+
+    [Fact]
+    public async Task HandleListConversationsAsync_ShouldBubbleRegistryReadFailure()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            ListActorsException = new InvalidOperationException("registry read failed"),
+        };
+
+        var act = async () => await InvokeResultAsync(
+            "HandleListConversationsAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("registry read failed");
     }
 
     [Fact]
@@ -2060,7 +2106,9 @@ public class NyxIdChatEndpointsCoverageTests
         IScopeResourceAdmissionPort
     {
         public IReadOnlyList<GAgentActorGroup> GroupsToReturn { get; init; } = [];
+        public Exception? ListActorsException { get; init; }
         public Exception? AddActorException { get; init; }
+        public Exception? AddActorExceptionAfterCommit { get; init; }
         public Exception? RemoveActorException { get; init; }
         public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
             GAgentActorRegistryCommandStage.AdmissionVisible;
@@ -2073,6 +2121,9 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken cancellationToken = default)
         {
             LastRequestedScopeId = scopeId;
+            if (ListActorsException is not null)
+                throw ListActorsException;
+
             return Task.FromResult(new GAgentActorRegistrySnapshot(
                 scopeId,
                 GroupsToReturn,
@@ -2088,6 +2139,9 @@ public class NyxIdChatEndpointsCoverageTests
             if (AddActorException is not null)
                 throw AddActorException;
             AddedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            if (AddActorExceptionAfterCommit is not null)
+                throw AddActorExceptionAfterCommit;
+
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 RegisterStage));
@@ -2097,9 +2151,9 @@ public class NyxIdChatEndpointsCoverageTests
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
+            RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             if (RemoveActorException is not null)
                 throw RemoveActorException;
-            RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));

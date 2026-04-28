@@ -62,7 +62,6 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
                     RequiresRollbackOnFailure: false));
         }
 
-        var registrationAttempted = false;
         IActor? createdActor = null;
         try
         {
@@ -70,17 +69,16 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, actorTypeName, actorId),
                 ct);
-            registrationAttempted = true;
             if (!receipt.IsAdmissionVisible)
             {
-                await RollbackCreatedActorAsync(scopeId, actorTypeName, actorId, registrationAttempted, CancellationToken.None);
+                await RollbackCreatedActorAsync(scopeId, actorTypeName, actorId, CancellationToken.None);
                 return GAgentDraftRunPreparationResult.Failure(GAgentDraftRunStartError.ActorTypeMismatch);
             }
         }
         catch
         {
             if (createdActor is not null)
-                await RollbackCreatedActorAsync(scopeId, actorTypeName, actorId, registrationAttempted, CancellationToken.None);
+                await RollbackCreatedActorAsync(scopeId, actorTypeName, actorId, CancellationToken.None);
             throw;
         }
 
@@ -123,11 +121,9 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         string scopeId,
         string actorTypeName,
         string actorId,
-        bool unregisterFromRegistry,
         CancellationToken ct)
     {
-        if (unregisterFromRegistry &&
-            !await TryUnregisterDraftRunActorAsync(scopeId, actorTypeName, actorId, ct))
+        if (!await TryUnregisterDraftRunActorAsync(scopeId, actorTypeName, actorId, ct))
             return;
 
         try

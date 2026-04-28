@@ -65,7 +65,6 @@ public static class StreamingProxyEndpoints
 
         var roomId = StreamingProxyDefaults.GenerateRoomId();
         var targetCreated = false;
-        var registrationAttempted = false;
         try
         {
             var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(roomId, ct);
@@ -84,10 +83,9 @@ public static class StreamingProxyEndpoints
             var receipt = await registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
                 ct);
-            registrationAttempted = true;
             if (!receipt.IsAdmissionVisible)
             {
-                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger, registrationAttempted);
+                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger);
                 return Results.Json(
                     new { error = "Failed to create room" },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -96,14 +94,14 @@ public static class StreamingProxyEndpoints
         catch (OperationCanceledException)
         {
             if (targetCreated)
-                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger, registrationAttempted);
+                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger);
             throw;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to create room {RoomId}", roomId);
             if (targetCreated)
-                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger, registrationAttempted);
+                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger);
             return Results.Json(
                 new { error = "Failed to create room" },
                 statusCode: StatusCodes.Status500InternalServerError);
@@ -944,25 +942,21 @@ public static class StreamingProxyEndpoints
         string roomId,
         IGAgentActorRegistryCommandPort registryCommandPort,
         IActorRuntime actorRuntime,
-        ILogger logger,
-        bool unregisterFromRegistry)
+        ILogger logger)
     {
-        if (unregisterFromRegistry)
+        try
         {
-            try
-            {
-                await registryCommandPort.UnregisterActorAsync(
-                    new GAgentActorRegistration(
-                        scopeId,
-                        StreamingProxyDefaults.GAgentTypeName,
-                        roomId),
-                    CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to unregister room {RoomId} from registry during rollback", roomId);
-                return;
-            }
+            await registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(
+                    scopeId,
+                    StreamingProxyDefaults.GAgentTypeName,
+                    roomId),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to unregister room {RoomId} from registry during rollback", roomId);
+            return;
         }
 
         try

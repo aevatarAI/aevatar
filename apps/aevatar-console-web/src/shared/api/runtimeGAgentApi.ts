@@ -388,31 +388,6 @@ export const runtimeGAgentApi = {
     return this.retireScopeBindingRevision(scopeId, revisionId);
   },
 
-  async addActor(
-    scopeId: string,
-    gAgentType: string,
-    actorId: string
-  ): Promise<void> {
-    const response = await authFetch(
-      `/api/scopes/${encodeURIComponent(scopeId)}/gagent-actors`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          gagentType: gAgentType.trim(),
-          actorId: actorId.trim(),
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(await readResponseError(response));
-    }
-  },
-
   async removeActor(
     scopeId: string,
     gAgentType: string,

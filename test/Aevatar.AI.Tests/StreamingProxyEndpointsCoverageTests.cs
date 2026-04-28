@@ -115,16 +115,17 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         runtime.DestroyedActorIds.Should().ContainSingle(actorStore.AddedActors.Single().ActorId);
-        actorStore.RemovedActors.Should().BeEmpty();
+        actorStore.RemovedActors.Should().ContainSingle();
         operations.Should().ContainInOrder(
             $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
             $"actor:init:{actorStore.AddedActors.Single().ActorId}",
             $"store:add:{actorStore.AddedActors.Single().ActorId}",
+            $"store:remove:{actorStore.AddedActors.Single().ActorId}",
             $"runtime:destroy:{actorStore.AddedActors.Single().ActorId}");
     }
 
     [Fact]
-    public async Task HandleCreateRoomAsync_ShouldDestroyCreatedRoom_WhenRegistrationFailsBeforeAck()
+    public async Task HandleCreateRoomAsync_ShouldNotDestroyCreatedRoom_WhenRollbackUnregisterFails()
     {
         var operations = new List<string>();
         var actor = new RecordingActor("created-room", operations);
@@ -149,13 +150,13 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
         statusCode.Should().Be(StatusCodes.Status500InternalServerError);
         body.Should().Contain("Failed to create room");
-        actorStore.RemovedActors.Should().BeEmpty();
-        runtime.DestroyedActorIds.Should().ContainSingle(actorStore.AddedActors.Single().ActorId);
+        actorStore.RemovedActors.Should().ContainSingle();
+        runtime.DestroyedActorIds.Should().BeEmpty();
         operations.Should().ContainInOrder(
             $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
             $"actor:init:{actorStore.AddedActors.Single().ActorId}",
             $"store:add:{actorStore.AddedActors.Single().ActorId}",
-            $"runtime:destroy:{actorStore.AddedActors.Single().ActorId}");
+            $"store:remove:{actorStore.AddedActors.Single().ActorId}");
     }
 
     [Fact]

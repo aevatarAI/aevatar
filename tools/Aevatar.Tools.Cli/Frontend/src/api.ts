@@ -861,13 +861,6 @@ export const gagent = {
     request<unknown>(`/scopes/${enc(scopeId)}/gagent-actors`)
       .then(decodeGAgentActorGroupList),
 
-  /** POST /api/scopes/{scopeId}/gagent-actors — persist a new actor ID entry */
-  addActor: (scopeId: string, gagentType: string, actorId: string) =>
-    request<void>(`/scopes/${enc(scopeId)}/gagent-actors`, {
-      method: 'POST',
-      body: JSON.stringify({ gagentType, actorId }),
-    }),
-
   /** DELETE /api/scopes/{scopeId}/gagent-actors/{actorId} — remove an actor entry */
   removeActor: (scopeId: string, gagentType: string, actorId: string) =>
     request<void>(`/scopes/${enc(scopeId)}/gagent-actors/${enc(actorId)}?gagentType=${enc(gagentType)}`, {

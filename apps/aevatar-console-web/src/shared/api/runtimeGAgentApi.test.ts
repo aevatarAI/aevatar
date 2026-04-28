@@ -107,31 +107,8 @@ describe("runtimeGAgentApi", () => {
     ]);
   });
 
-  it("persists a saved actor for the current scope", async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => "",
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await expect(
-      runtimeGAgentApi.addActor("scope-1", "Tests.OrdersGAgent", "orders-3")
-    ).resolves.toBeUndefined();
-
-    const [input, init] = fetchMock.mock.calls[0] as [
-      string,
-      RequestInit | undefined,
-    ];
-    expect(input).toBe("/api/scopes/scope-1/gagent-actors");
-    expect(init?.method).toBe("POST");
-    expect(new Headers(init?.headers).get("Authorization")).toBe(
-      "Bearer access-token"
-    );
-    expect(JSON.parse(String(init?.body))).toEqual({
-      gagentType: "Tests.OrdersGAgent",
-      actorId: "orders-3",
-    });
+  it("does not expose direct actor registration", () => {
+    expect("addActor" in runtimeGAgentApi).toBe(false);
   });
 
   it("removes a saved actor for the current scope", async () => {

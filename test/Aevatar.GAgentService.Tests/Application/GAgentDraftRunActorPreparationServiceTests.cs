@@ -135,15 +135,16 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         runtime.DestroyedActorIds.Should().ContainSingle("draft-actor");
-        commandPort.UnregisteredActors.Should().BeEmpty();
+        commandPort.UnregisteredActors.Should().ContainSingle().Which.ActorId.Should().Be("draft-actor");
         operations.Should().ContainInOrder(
             "runtime:create:draft-actor",
             "registry:add:draft-actor",
+            "registry:remove:draft-actor",
             "runtime:destroy:draft-actor");
     }
 
     [Fact]
-    public async Task PrepareAsync_ShouldDestroyCreatedActor_WhenRegistrationFailsBeforeAck()
+    public async Task PrepareAsync_ShouldNotDestroyCreatedActor_WhenRollbackUnregisterFails()
     {
         var operations = new List<string>();
         var runtime = new StubActorRuntime(_ => null, operations);
@@ -166,12 +167,12 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("registry unavailable");
-        runtime.DestroyedActorIds.Should().ContainSingle("draft-actor");
-        commandPort.UnregisteredActors.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        commandPort.UnregisteredActors.Should().ContainSingle().Which.ActorId.Should().Be("draft-actor");
         operations.Should().ContainInOrder(
             "runtime:create:draft-actor",
             "registry:add:draft-actor",
-            "runtime:destroy:draft-actor");
+            "registry:remove:draft-actor");
     }
 
     [Fact]

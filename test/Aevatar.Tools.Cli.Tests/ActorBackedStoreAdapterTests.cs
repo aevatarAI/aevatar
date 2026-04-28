@@ -537,6 +537,29 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
+    public async Task GAgentRegistryCommandPort_RegisterActorAsync_WithEmptyScope_Throws()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ambient-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime),
+            runtime,
+            new StatefulRegistryDispatchPort(runtime),
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        var act = async () => await store.RegisterActorAsync(
+            new GAgentActorRegistration(" ", "MyGAgent", "actor-789"));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*ScopeId is required*");
+        runtime.Actors.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GAgentRegistryCommandPort_UnregisterActorAsync_SendsActorUnregisteredEvent()
     {
         var runtime = new FakeActorRuntime();

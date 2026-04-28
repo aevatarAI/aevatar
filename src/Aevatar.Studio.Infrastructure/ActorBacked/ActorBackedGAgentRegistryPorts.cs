@@ -18,7 +18,6 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IAppScopeResolver _scopeResolver;
     private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedGAgentRegistryPorts> _logger;
 
@@ -33,7 +32,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+        _ = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -164,7 +163,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         }
     }
 
-    private string ResolveWriteActorId(string? scopeId = null) =>
+    private static string ResolveWriteActorId(string? scopeId) =>
         WriteActorIdPrefix + NormalizeScopeId(scopeId);
 
     private Task<IActor> EnsureWriteActorAsync(string? scopeId, CancellationToken ct) =>
@@ -201,10 +200,8 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         }
     }
 
-    private string NormalizeScopeId(string? scopeId) =>
-        string.IsNullOrWhiteSpace(scopeId)
-            ? _scopeResolver.ResolveScopeIdOrDefault()
-            : scopeId.Trim();
+    private static string NormalizeScopeId(string? scopeId) =>
+        NormalizeRequired(scopeId ?? string.Empty, "ScopeId");
 
     private GAgentActorRegistration NormalizeRegistration(GAgentActorRegistration registration)
     {
