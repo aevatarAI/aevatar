@@ -112,6 +112,62 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ListServicesAsync_WhenAuthenticatedScopeMatchesQuery_ShouldUseScopeRequestContext()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.QueryPort.ListServicesResult =
+        [
+            new ServiceCatalogSnapshot(
+                "scope-1/default/default/orders",
+                "scope-1",
+                "default",
+                "default",
+                "orders",
+                "Orders",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                [],
+                [],
+                DateTimeOffset.UtcNow),
+        ];
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/services?tenantId=scope-1&appId=default&namespace=default");
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Scope-Id", "scope-1");
+
+        var response = await host.Client.SendAsync(request);
+        var result = await response.Content.ReadFromJsonAsync<List<ServiceCatalogSnapshot>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        result.Should().ContainSingle();
+        host.QueryPort.LastListServicesTenantId.Should().Be("scope-1");
+        host.QueryPort.LastListServicesAppId.Should().Be("default");
+        host.QueryPort.LastListServicesNamespace.Should().Be("default");
+    }
+
+    [Fact]
+    public async Task ListServicesAsync_WhenAuthenticatedScopeConflictsWithQuery_ShouldReturnForbidden()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/services?tenantId=scope-2&appId=default&namespace=default");
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Scope-Id", "scope-1");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        host.QueryPort.LastListServicesTenantId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CreateRevisionAsync_ShouldMapStaticImplementation()
     {
         await using var host = await EndpointTestHost.StartAsync();
@@ -1237,6 +1293,7 @@ public sealed class ServiceEndpointsTests
                     AddClaims(http, "X-Test-Tenant-Id", AevatarStandardClaimTypes.TenantId, claims);
                     AddClaims(http, "X-Test-App-Id", AevatarStandardClaimTypes.AppId, claims);
                     AddClaims(http, "X-Test-Namespace", AevatarStandardClaimTypes.Namespace, claims);
+                    AddClaims(http, "X-Test-Scope-Id", AevatarStandardClaimTypes.ScopeId, claims);
                     http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
                 }
 
@@ -1429,6 +1486,12 @@ public sealed class ServiceEndpointsTests
 
         public int LastListServicesTake { get; private set; }
 
+        public string? LastListServicesTenantId { get; private set; }
+
+        public string? LastListServicesAppId { get; private set; }
+
+        public string? LastListServicesNamespace { get; private set; }
+
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             LastGetServiceIdentity = identity;
@@ -1443,6 +1506,9 @@ public sealed class ServiceEndpointsTests
             CancellationToken ct = default)
         {
             LastListServicesTake = take;
+            LastListServicesTenantId = tenantId;
+            LastListServicesAppId = appId;
+            LastListServicesNamespace = @namespace;
             return Task.FromResult(ListServicesResult);
         }
 

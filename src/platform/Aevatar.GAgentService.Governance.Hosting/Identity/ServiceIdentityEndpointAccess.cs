@@ -9,12 +9,19 @@ namespace Aevatar.GAgentService.Governance.Hosting.Identity;
 public sealed class DefaultServiceIdentityContextResolver : IServiceIdentityContextResolver
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private const string WorkflowScopeClaimType = "workflow.scope_id";
 
     private static readonly (string ClaimType, string DisplayName)[] IdentityClaims =
     [
         (AevatarStandardClaimTypes.TenantId, nameof(AevatarStandardClaimTypes.TenantId)),
         (AevatarStandardClaimTypes.AppId, nameof(AevatarStandardClaimTypes.AppId)),
         (AevatarStandardClaimTypes.Namespace, nameof(AevatarStandardClaimTypes.Namespace)),
+    ];
+
+    private static readonly string[] ScopeClaimTypes =
+    [
+        AevatarStandardClaimTypes.ScopeId,
+        WorkflowScopeClaimType,
     ];
 
     public DefaultServiceIdentityContextResolver(IHttpContextAccessor httpContextAccessor)
@@ -40,6 +47,49 @@ public sealed class DefaultServiceIdentityContextResolver : IServiceIdentityCont
             appId,
             @namespace,
             $"claims:{AevatarStandardClaimTypes.TenantId}/{AevatarStandardClaimTypes.AppId}/{AevatarStandardClaimTypes.Namespace}");
+    }
+
+    public bool TryResolveAuthenticatedScopeRequestContext(
+        string? fallbackTenantId,
+        string? fallbackAppId,
+        string? fallbackNamespace,
+        out ServiceIdentityContext context,
+        out string? failure)
+    {
+        context = new ServiceIdentityContext(string.Empty, string.Empty, string.Empty, "scope-fallback-denied");
+        failure = null;
+
+        var user = _httpContextAccessor.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true)
+            return false;
+
+        if (!TryGetSingleScopeValue(user, out var scopeId, out failure))
+            return false;
+
+        var tenantId = fallbackTenantId?.Trim() ?? string.Empty;
+        var appId = fallbackAppId?.Trim() ?? string.Empty;
+        var @namespace = fallbackNamespace?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(tenantId) ||
+            string.IsNullOrWhiteSpace(appId) ||
+            string.IsNullOrWhiteSpace(@namespace))
+        {
+            failure = "Authenticated scope requests must provide tenantId, appId, and namespace when service identity claims are absent.";
+            return false;
+        }
+
+        if (!string.Equals(scopeId, tenantId, StringComparison.Ordinal))
+        {
+            failure = "Authenticated scope does not match requested tenantId.";
+            return false;
+        }
+
+        context = new ServiceIdentityContext(
+            tenantId,
+            appId,
+            @namespace,
+            $"claims:{AevatarStandardClaimTypes.ScopeId}+request");
+        failure = null;
+        return true;
     }
 
     public bool TryGetAuthenticatedIdentityFailure(out string message)
@@ -89,6 +139,34 @@ public sealed class DefaultServiceIdentityContextResolver : IServiceIdentityCont
             : $"Authenticated service identity claim '{claimType}' is ambiguous.";
         return false;
     }
+
+    private static bool TryGetSingleScopeValue(
+        ClaimsPrincipal user,
+        out string value,
+        out string? failure)
+    {
+        value = string.Empty;
+        failure = null;
+
+        var values = user.Claims
+            .Where(claim => ScopeClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase))
+            .Select(static claim => claim.Value?.Trim())
+            .Where(static claimValue => !string.IsNullOrWhiteSpace(claimValue))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (values.Length == 0)
+            return false;
+
+        if (values.Length == 1)
+        {
+            value = values[0]!;
+            return true;
+        }
+
+        failure = "Authenticated scope is ambiguous.";
+        return false;
+    }
 }
 
 public static class ServiceIdentityEndpointAccess
@@ -98,9 +176,11 @@ public static class ServiceIdentityEndpointAccess
     /// supplied (the caller already invoked <c>resolver.Resolve()</c>), claim resolution is
     /// reused — avoiding the double-Resolve cost when the handler also needs the authenticated
     /// context for validation (e.g., <c>TryValidateOwnerIdentity</c>). Pass <c>null</c> to fall
-    /// through to the original behaviour: when authenticated but claims are missing/ambiguous,
-    /// returns <c>403 SERVICE_IDENTITY_ACCESS_DENIED</c>; when unauthenticated, falls back to
-    /// the request's tenant/app/namespace fields.
+    /// through to the original behaviour: when authenticated but service identity claims are
+    /// missing, a scope-authenticated browser caller may still reuse the request's
+    /// tenant/app/namespace fields if the requested tenantId matches its canonical scope_id;
+    /// otherwise returns <c>403 SERVICE_IDENTITY_ACCESS_DENIED</c>. When unauthenticated, falls
+    /// back to the request's tenant/app/namespace fields.
     /// </summary>
     public static bool TryResolveContext(
         IServiceIdentityContextResolver resolver,
@@ -116,6 +196,31 @@ public static class ServiceIdentityEndpointAccess
             context = resolved;
             denied = Results.Empty;
             return true;
+        }
+
+        if (resolver.TryResolveAuthenticatedScopeRequestContext(
+                fallbackTenantId,
+                fallbackAppId,
+                fallbackNamespace,
+                out var scopeContext,
+                out var scopeFailure))
+        {
+            context = scopeContext;
+            denied = Results.Empty;
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(scopeFailure))
+        {
+            context = new ServiceIdentityContext(string.Empty, string.Empty, string.Empty, "denied");
+            denied = Results.Json(
+                new
+                {
+                    code = "SERVICE_IDENTITY_ACCESS_DENIED",
+                    message = scopeFailure,
+                },
+                statusCode: StatusCodes.Status403Forbidden);
+            return false;
         }
 
         if (resolver.TryGetAuthenticatedIdentityFailure(out var failure))
