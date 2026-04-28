@@ -10,13 +10,13 @@ cd "${REPO_ROOT}"
 # device registration proto must carry a tombstone marker field.
 #
 # Two naming conventions are accepted:
-#   - `bool is_deleted` — used in the new dotted Aevatar.GAgents.Channel.*
+#   - `bool is_deleted` — used by the dotted Aevatar.GAgents.Channel.*
 #     abstractions tree (agents/Aevatar.GAgents.Channel.Runtime/protos/**).
-#   - `bool tombstoned` — used in the legacy Aevatar.GAgents.ChannelRuntime
-#     tree and the Channel RFC §7.1.1 projector watermark coordination
-#     pattern. Implementations on that side also carry
-#     `int64 tombstone_state_version`, but only the boolean is enforced
-#     here.
+#   - `bool tombstoned` — used by the per-package proto trees split out of
+#     the original ChannelRuntime megamodule (Aevatar.GAgents.{Channel.Runtime,
+#     Scheduled,Device}) following Channel RFC §7.1.1 projector watermark
+#     coordination. Implementations on that side also carry
+#     `int64 tombstone_state_version`, but only the boolean is enforced here.
 #
 # Scope: every .proto file under agents/. Issue #265 item 1.4 enforces the
 # tombstone contract without carve-outs.

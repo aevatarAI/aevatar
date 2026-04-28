@@ -1,5 +1,5 @@
 using System.Reflection;
-using Aevatar.GAgents.ChannelRuntime;
+using Aevatar.GAgents.Scheduled;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;

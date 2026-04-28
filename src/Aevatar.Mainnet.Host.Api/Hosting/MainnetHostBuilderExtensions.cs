@@ -1,3 +1,6 @@
+using Aevatar.AI.ToolProviders.AgentCatalog;
+using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -6,9 +9,15 @@ using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.GAgents.ChannelRuntime;
+using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChatbotClassifier;
+using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Platform.Telegram;
+using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -42,6 +51,11 @@ public static class MainnetHostBuilderExtensions
             options.ServiceName = "Aevatar.Mainnet.Host.Api";
             options.EnableWebSockets = true;
             configureHost?.Invoke(options);
+            // Mainnet invariant — enforced after the caller's configureHost so
+            // user callbacks cannot re-enable the local file secrets store.
+            // Secrets must come from AEVATAR_-prefixed environment variables;
+            // Set/Remove on the secrets store will throw at the call site.
+            options.AllowLocalFileSecretsStore = false;
         });
         builder.AddMainnetDistributedOrleansHost();
         builder.AddAevatarPlatform(options =>
@@ -58,6 +72,15 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddChannelRuntime(builder.Configuration);
+        builder.Services.AddDeviceRegistration(builder.Configuration);
+        builder.Services.AddScheduledAgents(builder.Configuration);
+        builder.Services.AddLarkAgentAuthoring();
+        builder.Services.AddNyxIdRelayChannel();
+        builder.Services.AddLarkPlatform();
+        builder.Services.AddTelegramPlatform();
+        builder.Services.AddChannelInteractiveReplyTools();
+        builder.Services.AddChannelAdminTools();
+        builder.Services.AddAgentCatalogTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
         builder.Services.AddNyxIdTools(o =>
