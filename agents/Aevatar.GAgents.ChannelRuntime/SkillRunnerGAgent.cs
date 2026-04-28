@@ -139,7 +139,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         try
         {
             var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
-            await SendOutputAsync(output, CancellationToken.None);
+            // Streaming-edit delivery happens in-line during ExecuteSkillAsync via the
+            // SkillRunnerStreamingReplySink (POST initial + PATCH each delta). When streaming
+            // can't be configured (no NyxID client, missing outbound config) ExecuteSkillAsync
+            // falls back to a one-shot SendOutputAsync at finalize, so we never need a second
+            // outbound call here. Persist the run as completed using the buffered final text.
             await PersistDomainEventAsync(new SkillRunnerExecutionCompletedEvent
             {
                 CompletedAt = Timestamp.FromDateTimeOffset(now),
@@ -241,14 +245,81 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
-        await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+        var sink = TryCreateStreamingSink();
+        try
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+            {
+                if (string.IsNullOrEmpty(chunk.DeltaContent))
+                    continue;
                 content.Append(chunk.DeltaContent);
+                if (sink is not null)
+                    await sink.OnDeltaAsync(content.ToString(), ct);
+            }
+
+            var output = content.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(output))
+                output = "No update generated.";
+
+            if (sink is not null)
+                await sink.FinalizeAsync(output, ct);
+            else
+                // No streaming sink (no NyxID client, missing outbound config, or
+                // tests injecting a null client). Fall back to a one-shot send so the
+                // user still receives the report and tests that don't construct a sink
+                // keep working.
+                await SendOutputAsync(output, ct);
+
+            return output;
+        }
+        finally
+        {
+            sink?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Constructs the streaming-edit sink for this run, or returns null when streaming cannot be
+    /// configured. The sink writes the first non-empty delta as a Lark
+    /// <c>POST /open-apis/im/v1/messages</c> (capturing the returned <c>message_id</c>) and edits
+    /// the same message via <c>PATCH /open-apis/im/v1/messages/{id}</c> for every later delta —
+    /// so the user sees the daily report land and grow in place rather than receiving one wall of
+    /// text after the LLM finishes.
+    /// </summary>
+    private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
+    {
+        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
+        if (client is null)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
+        {
+            return null;
         }
 
-        var output = content.ToString().Trim();
-        return string.IsNullOrWhiteSpace(output) ? "No update generated." : output;
+        var primary = LarkConversationTargets.Resolve(
+            State.OutboundConfig.LarkReceiveId,
+            State.OutboundConfig.LarkReceiveIdType,
+            State.OutboundConfig.ConversationId);
+
+        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
+        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
+        LarkReceiveTarget? fallback = null;
+        if (!string.IsNullOrEmpty(fallbackId) && !string.IsNullOrEmpty(fallbackType))
+            fallback = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
+
+        return new SkillRunnerStreamingReplySink(
+            client,
+            State.OutboundConfig.NyxApiKey,
+            State.OutboundConfig.NyxProviderSlug,
+            primary,
+            fallback,
+            BuildLarkRejectionMessage,
+            SkillRunnerDefaults.StreamingEditThrottle,
+            TimeProvider.System,
+            Logger);
     }
 
     private async Task SendOutputAsync(string output, CancellationToken ct)
