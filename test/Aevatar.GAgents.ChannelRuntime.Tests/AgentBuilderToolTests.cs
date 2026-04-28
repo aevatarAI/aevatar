@@ -55,6 +55,133 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public void TryBuildDailyReportSpec_SkillContent_PinsStructuredSectionSchema_AndOmitWhenEmptyRule()
+    {
+        // Pinning test for issue #423: the daily prompt is treated as a fetch-and-summarize
+        // SPEC, not a freeform brief. This test fails fast on copy edits that would silently
+        // regress the multi-section schema, the per-section line budgets, the "omit empty
+        // section" rule, or the "no measurable activity" empty-day fallback.
+        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+            githubUsername: "alice",
+            repositories: null,
+            out var spec,
+            out var error);
+
+        ok.Should().BeTrue();
+        error.Should().BeNull();
+        spec.Should().NotBeNull();
+
+        var skillContent = spec!.SkillContent;
+
+        // All nine section slots must be pinned in order — the section position itself is
+        // load-bearing for the LLM's emission order, even when section 7 (Trend) is optional
+        // and section 9 (Source health) is conditional. Skipping any number here would let
+        // copy edits silently drop or reorder a section.
+        skillContent.Should().Contain("# Output sections");
+        skillContent.Should().Contain("1. Title");
+        skillContent.Should().Contain("2. Shipped");
+        skillContent.Should().Contain("3. In flight");
+        skillContent.Should().Contain("4. Reviews");
+        skillContent.Should().Contain("5. Issues");
+        skillContent.Should().Contain("6. CI");
+        skillContent.Should().Contain("7. Trend");
+        skillContent.Should().Contain("8. Blockers");
+        skillContent.Should().Contain("9. Source health");
+
+        // Empty-handling rules — the bug we're guarding against is the LLM padding sections
+        // with "no activity in this area" boilerplate when sources are silent.
+        skillContent.Should().Contain("OMIT THE SECTION ENTIRELY");
+        skillContent.Should().Contain("No measurable activity in the last 24h.");
+        skillContent.Should().Contain("Do not invent activity.");
+
+        // Section ordering must be unambiguous when both §8 Blockers and §9 Source health are
+        // present (eanzhao P2 review of PR #458, second pass): the previous "always last"
+        // qualifier on §8 conflicted with "Source health at the very bottom after Blockers".
+        // Promote §9 to a real schema slot and pin §8 as position-locked at slot 8 with §9
+        // as the only section permitted below.
+        skillContent.Should().Contain("Position-locked at slot 8");
+        skillContent.Should().Contain("the only section that may sit below it is the §9 Source health footer");
+        // The empty-day fallback must explicitly forbid both §8 Blockers AND §9 Source health
+        // emission, so a weaker model cannot synthesize a footer onto a genuine empty day.
+        skillContent.Should().Contain("do NOT emit Blockers or Source health");
+
+        // Source-health distinction (eanzhao P1 review of PR #458, refs issue #439):
+        // collapsing 4xx/5xx/error-shaped tool results into "zero data" silently masks
+        // revoked OAuth grants and proxy outages as healthy empty-day reports. Pin the
+        // 2xx-empty vs source-failure distinction AND the rule that the empty-day fallback
+        // only applies when every source returned 2xx, so a copy edit cannot regress this
+        // back to the original "4xx/5xx/empty → treat as zero" wording.
+        skillContent.Should().Contain("2xx with an empty list");
+        skillContent.Should().Contain("Source health:");
+        skillContent.Should().Contain("ONLY valid when EVERY source returned 2xx");
+        skillContent.Should().NotContain("4xx, 5xx, or empty, treat that source as zero");
+
+        // Substitution-variable documentation must be present and tied to the actual
+        // username; otherwise the LLM may emit literal `{username}` placeholders in URLs.
+        skillContent.Should().Contain("`{username}` → `alice`");
+        skillContent.Should().Contain("`{iso_date}` → start of the 24h window");
+
+        // Username substitution must remain intact (other tests check it under the saved-user
+        // / derived-user paths; this assertion guards the no-args path).
+        skillContent.Should().Contain("Primary GitHub username: alice");
+
+        // No-repo mode must include a commit query (Shipped section claims to cover commits)
+        // and must explicitly skip the CI section (no global Actions run endpoint exists).
+        skillContent.Should().Contain("/search/commits?q=author:{username}+author-date:>={iso_date}");
+        skillContent.Should().Contain("CI section is omitted in no-repo mode");
+    }
+
+    [Fact]
+    public void TryBuildDailyReportSpec_RepoAllowlist_SwitchesToPerRepoQueryGuidance()
+    {
+        // Per issue #423: when `repositories=` is provided, the prompt must steer the LLM toward
+        // per-repo searches and explicitly refuse the collapsed-allowlist global query. PR #458
+        // review further required: shipped PRs must filter by author + merge time (search-API
+        // form, not /pulls?state=closed which is keyed on update time and ignores author),
+        // commit shipping must have its own source, repo-scoped issues must include the
+        // commenter case, and the CI query must not embed a {default_branch} placeholder.
+        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+            githubUsername: "alice",
+            repositories: "acme/api, acme/web",
+            out var spec,
+            out var error);
+
+        ok.Should().BeTrue();
+        error.Should().BeNull();
+        spec.Should().NotBeNull();
+
+        var skillContent = spec!.SkillContent;
+        skillContent.Should().Contain("Repository scope: acme/api, acme/web");
+        skillContent.Should().Contain("Repository allowlist provided");
+        skillContent.Should().Contain("do NOT collapse into one global query");
+
+        // Shipped PRs in repo mode: search-API form keyed on author + merge time. The previous
+        // /repos/{owner}/{repo}/pulls?state=closed shape (a) returned closed-but-unmerged PRs
+        // and (b) had no reliable pagination across active repos — codex P1 + eanzhao inline
+        // both flagged this. Guard against regression.
+        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+author:{username}+is:pr+is:merged+merged:>={iso_date}");
+        skillContent.Should().NotContain("/repos/{owner}/{repo}/pulls?state=closed");
+
+        // Shipped commits in repo mode (Shipped section schema includes commits).
+        skillContent.Should().Contain("/search/commits?q=repo:{owner}/{repo}+author:{username}+author-date:>={iso_date}");
+
+        // Issues commented on in repo mode (codex P2: schema says "opened, closed, or
+        // commented on" but author-only query drops the commenter case).
+        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+commenter:{username}+is:issue+updated:>={iso_date}");
+
+        // CI query must NOT embed a {default_branch} placeholder (the LLM has no way to fill
+        // it without an extra round-trip and a literal `{default_branch}` would land in the
+        // outbound URL). Filter conclusion + created_at client-side instead.
+        skillContent.Should().NotContain("{default_branch}");
+        skillContent.Should().Contain("/repos/{owner}/{repo}/actions/runs?per_page=10");
+
+        // The execution prompt is what the runner sends per-trigger; it must echo the
+        // per-repo constraint so the LLM sees it on every run, not only at agent-create time.
+        spec.ExecutionPrompt.Should().Contain("acme/api, acme/web");
+        spec.ExecutionPrompt.Should().Contain("one pass per repo");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CreateAgent_RejectsGroupChats()
     {
         var services = new ServiceCollection();

@@ -9,6 +9,7 @@ type TeamDetailTab =
 
 type QueryValue = string | undefined;
 type TeamDetailRouteState = {
+  readonly memberId: string;
   readonly runId: string;
   readonly scopeId: string;
   readonly serviceId: string;
@@ -87,6 +88,7 @@ export function buildTeamCreateHref(options?: {
 }
 
 export function buildTeamDetailHref(options: {
+  memberId?: string;
   scopeId: string;
   tab?: TeamDetailTab;
   serviceId?: string;
@@ -99,6 +101,7 @@ export function buildTeamDetailHref(options: {
   }
 
   return buildHref(`/teams/${encodeURIComponent(scopeId)}`, {
+    memberId: options.memberId,
     workflowId: options.workflowId,
     tab: options.tab,
     serviceId: options.serviceId,
@@ -119,6 +122,7 @@ export function readTeamDetailRouteState(
   const defaultTab: TeamDetailTab = 'overview';
 
   return {
+    memberId: trimOptional(params.get('memberId')),
     runId: trimOptional(params.get('runId')),
     scopeId: trimOptional(params.get('scopeId')) || scopeIdFromPath,
     serviceId: trimOptional(params.get('serviceId')),

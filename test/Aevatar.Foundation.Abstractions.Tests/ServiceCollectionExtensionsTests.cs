@@ -1,5 +1,6 @@
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 
@@ -24,6 +25,52 @@ public sealed class ServiceCollectionExtensionsTests
             .ShouldBeTrue();
         Directory.Exists(Path.Combine(tempRoot, "agents")).ShouldBeTrue();
         Directory.Exists(Path.Combine(tempRoot, "skills")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AddAevatarConfig_ByDefault_ShouldRegisterFileBackedSecretsStore()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"aevatar-config-tests-{Guid.NewGuid():N}");
+        using var scope = new EnvironmentVariableScope(AevatarPaths.HomeEnv, tempRoot);
+        var services = new ServiceCollection();
+
+        services.AddAevatarConfig();
+
+        services.Any(d =>
+                d.ServiceType == typeof(IAevatarSecretsStore) &&
+                d.ImplementationType == typeof(AevatarSecretsStore))
+            .ShouldBeTrue();
+        services.Any(d => d.ImplementationType == typeof(EnvironmentSecretsStore))
+            .ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AddAevatarConfig_WhenLocalFileStoreDisabled_ShouldRegisterEnvironmentSecretsStore()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"aevatar-config-tests-{Guid.NewGuid():N}");
+        using var scope = new EnvironmentVariableScope(AevatarPaths.HomeEnv, tempRoot);
+        var services = new ServiceCollection();
+
+        services.AddAevatarConfig(allowLocalFileStore: false);
+
+        services.Any(d =>
+                d.ServiceType == typeof(IAevatarSecretsStore) &&
+                d.ImplementationType == typeof(EnvironmentSecretsStore))
+            .ShouldBeTrue();
+        services.Any(d => d.ImplementationType == typeof(AevatarSecretsStore))
+            .ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AddAevatarConfig_WhenLocalFileStoreDisabled_ShouldNotCreateLocalDirectoryTree()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"aevatar-config-tests-{Guid.NewGuid():N}");
+        using var scope = new EnvironmentVariableScope(AevatarPaths.HomeEnv, tempRoot);
+        var services = new ServiceCollection();
+
+        services.AddAevatarConfig(allowLocalFileStore: false);
+
+        Directory.Exists(tempRoot).ShouldBeFalse();
     }
 
     private sealed class EnvironmentVariableScope : IDisposable

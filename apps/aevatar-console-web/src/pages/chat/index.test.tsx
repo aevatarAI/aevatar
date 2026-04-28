@@ -84,6 +84,11 @@ jest.mock("@/shared/studio/api", () => ({
         scopeId: "scope-a",
         serviceId: "support-service",
       })),
+      getDefaultRouteTarget: jest.fn(async () => ({
+        available: true,
+        scopeId: "scope-a",
+        serviceId: "support-service",
+      })),
       getUserConfig: jest.fn(async () => ({
         defaultModel: "",
         preferredLlmRoute: "",

@@ -101,10 +101,6 @@ function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
     return options.tab.trim() as StudioTab;
   }
 
-  if (options?.step === 'bind') {
-    return 'bindings';
-  }
-
   if (options?.step === 'invoke') {
     return 'invoke';
   }
@@ -222,7 +218,6 @@ export function buildStudioBindingWorkspaceRoute(options?: {
   return buildStudioRoute({
     ...options,
     step: 'bind',
-    tab: 'bindings',
   });
 }
 
