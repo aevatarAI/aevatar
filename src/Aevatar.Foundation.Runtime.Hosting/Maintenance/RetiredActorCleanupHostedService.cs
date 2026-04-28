@@ -1,9 +1,11 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -40,6 +42,7 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
     private readonly IStreamProvider _streamProvider;
     private readonly IEventStore _eventStore;
     private readonly IEventStoreMaintenance _eventStoreMaintenance;
+    private readonly IStreamPubSubMaintenance? _streamPubSubMaintenance;
     private readonly IServiceProvider _services;
     private readonly RetiredActorCleanupOptions _options;
     private readonly ILogger<RetiredActorCleanupHostedService> _logger;
@@ -62,6 +65,9 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         _eventStore = eventStore ?? throw new ArgumentNullException(nameof(eventStore));
         _eventStoreMaintenance = eventStoreMaintenance ?? throw new ArgumentNullException(nameof(eventStoreMaintenance));
         _services = services ?? throw new ArgumentNullException(nameof(services));
+        // Pub/sub maintenance is optional — backends without persistent
+        // rendezvous state (in-memory streams) don't register an implementation.
+        _streamPubSubMaintenance = services.GetService<IStreamPubSubMaintenance>();
         _options = RetiredActorCleanupOptions.FromConfiguration(configuration);
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -179,6 +185,11 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         if (_options.ResetEventStreams)
             await _eventStoreMaintenance.ResetStreamAsync(target.ActorId, ct).ConfigureAwait(false);
 
+        // Reset stream pub/sub rendezvous state AFTER the actor + event stream
+        // are gone so the next silo wave's stream-producer registration does
+        // not collide with stale etag from the previous incarnation.
+        await CleanupStreamPubSubBestEffortAsync(spec, target.ActorId, ct).ConfigureAwait(false);
+
         _logger.LogInformation(
             "Retired actor cleaned. specId={SpecId} actorId={ActorId} runtimeType={RuntimeType} cleanupReason={CleanupReason}",
             spec.SpecId,
@@ -253,6 +264,29 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
             _logger.LogWarning(
                 ex,
                 "Retired actor read-model cleanup failed and will be skipped. specId={SpecId} actorId={ActorId}",
+                spec.SpecId,
+                actorId);
+        }
+    }
+
+    private async Task CleanupStreamPubSubBestEffortAsync(IRetiredActorSpec spec, string actorId, CancellationToken ct)
+    {
+        if (_streamPubSubMaintenance == null)
+            return;
+
+        try
+        {
+            await _streamPubSubMaintenance.ResetActorStreamPubSubAsync(actorId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Retired actor stream pub/sub state reset failed and will be skipped. specId={SpecId} actorId={ActorId}",
                 spec.SpecId,
                 actorId);
         }

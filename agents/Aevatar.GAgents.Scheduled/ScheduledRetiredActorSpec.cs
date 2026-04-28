@@ -46,7 +46,20 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
             ],
             CleanupReadModels: true),
         new(
-            $"projection.durable.scope:agent-registry:{UserAgentCatalogGAgent.WellKnownId}",
+            $"projection.durable.scope:{UserAgentCatalogStorageContracts.LegacyDurableProjectionKind}:{UserAgentCatalogGAgent.WellKnownId}",
+            [
+                "Aevatar.GAgents.ChannelRuntime.UserAgentCatalogMaterializationContext",
+                "Aevatar.GAgents.ChannelRuntime.AgentRegistryMaterializationContext",
+            ],
+            SourceStreamId: UserAgentCatalogGAgent.WellKnownId),
+        // Mid-migration deploys may have created the durable projection scope at
+        // the new scope key (DurableProjectionKind) while still bound to the old
+        // ChannelRuntime materialization context type, leaving the new
+        // Aevatar.GAgents.Scheduled scope unable to recreate. Cover that case
+        // explicitly so retired cleanup wipes the actor + its stream pub/sub
+        // rendezvous state on next startup.
+        new(
+            $"projection.durable.scope:{UserAgentCatalogStorageContracts.DurableProjectionKind}:{UserAgentCatalogGAgent.WellKnownId}",
             [
                 "Aevatar.GAgents.ChannelRuntime.UserAgentCatalogMaterializationContext",
                 "Aevatar.GAgents.ChannelRuntime.AgentRegistryMaterializationContext",

@@ -48,6 +48,12 @@ public static class ServiceCollectionExtensions
             {
                 garnetOptions.ConnectionString = options.GarnetConnectionString;
             });
+
+            // Garnet hosts both the event store and Orleans's PubSubStore (see
+            // EnsurePersistentStreamPubSubStorage). Stale rendezvous state from
+            // an earlier silo wave / retired actor type can otherwise block
+            // RegisterAsStreamProducer with InconsistentStateException.
+            services.TryAddSingleton<IStreamPubSubMaintenance, OrleansRedisStreamPubSubMaintenance>();
         }
         else
         {
