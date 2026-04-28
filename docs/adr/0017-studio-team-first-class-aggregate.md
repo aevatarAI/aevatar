@@ -517,11 +517,11 @@ message StudioMemberReassignedEvent {
 > the leave-old / join-new ordering hazard called out in the line-298 review.
 
 > **Note on first-time assignment via member create.** When `POST /api/scopes/{scopeId}/members`
-> is invoked with a non-empty `teamId`, the receiving `StudioMemberGAgent`
-> commits two events in the same actor turn:
+> is invoked with a non-empty `teamId`, the application command port dispatches
+> two events sequentially to `StudioMemberGAgent`:
 >
 > 1. `StudioMemberCreatedEvent` (no `team_id` field — created event keeps a
->    single responsibility), and immediately
+>    single responsibility), then
 > 2. `StudioMemberReassignedEvent { from_team_id absent, to_team_id = T }`.
 >
 > The two events are dispatched sequentially by the application command port.
@@ -651,11 +651,11 @@ would otherwise need its own consistency contract.
    `StudioMemberReassignedEvent` (with `optional string from_team_id` /
    `to_team_id`). Reject empty-string `team_id` at the application layer.
    `StudioMemberCreatedEvent` is **not** extended with a `team_id` field.
-4. Wire `StudioMemberGAgent` so that `POST /members` with a non-empty `teamId`
-   commits two events in the same actor turn — first
+4. Wire the application command port so that `POST /members` with a non-empty
+   `teamId` dispatches two events sequentially — first
    `StudioMemberCreatedEvent`, then `StudioMemberReassignedEvent
-   { from_team_id absent, to_team_id = T }` — providing atomicity via serial
-   actor processing.
+   { from_team_id absent, to_team_id = T }`. Member-side ordering is
+   guaranteed; team roster update is eventually consistent.
 5. Wire `StudioTeamGAgent` to subscribe to committed
    `StudioMemberReassignedEvent` and apply idempotent set operations to
    `member_ids`, emitting `StudioTeamMemberRosterChangedEvent` with the

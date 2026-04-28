@@ -21,7 +21,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
 
-        await service.CreateAsync(
+        var summary = await service.CreateAsync(
             ScopeId,
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
@@ -29,6 +29,8 @@ public sealed class ActorDispatchStudioMemberReassignTests
                 MemberId: "m-1",
                 TeamId: "t-1"),
             CancellationToken.None);
+
+        summary.TeamId.Should().Be("t-1");
 
         dispatch.Dispatches.Should().HaveCount(3);
 
@@ -52,13 +54,15 @@ public sealed class ActorDispatchStudioMemberReassignTests
         var service = new ActorDispatchStudioMemberCommandService(
             new RecordingBootstrap(), dispatch);
 
-        await service.CreateAsync(
+        var summary = await service.CreateAsync(
             ScopeId,
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
                 ImplementationKind: MemberImplementationKindNames.Workflow,
                 MemberId: "m-1"),
             CancellationToken.None);
+
+        summary.TeamId.Should().BeNull();
 
         dispatch.Dispatches.Should().ContainSingle();
         dispatch.Dispatches[0].Envelope.Payload.Is(StudioMemberCreatedEvent.Descriptor).Should().BeTrue();

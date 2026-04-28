@@ -87,6 +87,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                 ct);
         }
 
+        var responseTeamId = string.IsNullOrEmpty(request.TeamId)
+            ? null
+            : StudioTeamConventions.NormalizeTeamId(request.TeamId);
+
         return new StudioMemberSummaryResponse(
             MemberId: memberId,
             ScopeId: normalizedScopeId,
@@ -97,7 +101,8 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             PublishedServiceId: publishedServiceId,
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
-            UpdatedAt: createdAt);
+            UpdatedAt: createdAt)
+        { TeamId = responseTeamId };
     }
 
     public Task ReassignTeamAsync(
