@@ -1706,7 +1706,7 @@ jest.mock("./components/StudioBuildPanels", () => {
   const StudioScriptBuildPanel = (props: any) => {
     const [value, setValue] = mockReact.useState("using System;");
     const [dirty, setDirty] = mockReact.useState(false);
-    const selectedScriptId = props.selectedScriptId || "script-1";
+    const selectedScriptId = props.selectedScriptId || "";
 
     mockReact.useEffect(() => {
       props.onRegisterLeaveGuard?.(
@@ -1733,6 +1733,17 @@ jest.mock("./components/StudioBuildPanels", () => {
     return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "Script source"),
       mockReact.createElement("div", { key: "provenance" }, "lints · partial"),
+      !selectedScriptId
+        ? mockReact.createElement(
+            "button",
+            {
+              key: "add-script",
+              type: "button",
+              onClick: () => props.onCreateScriptDraft?.(),
+            },
+            "Add script"
+          )
+        : null,
       mockReact.createElement("input", {
         key: "script-id",
         "aria-label": "Script ID",
@@ -3438,7 +3449,7 @@ describe("StudioPage", () => {
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
   });
 
-  it("shows script and gagent as member kinds before their create APIs land", async () => {
+  it("creates a named Script draft from the create-member modal before bind", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -3462,24 +3473,72 @@ describe("StudioPage", () => {
 
     expect(scriptChip).toHaveAttribute("aria-pressed", "true");
     expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
+    const scriptNameInput = within(createDialog).getByLabelText("Script name");
+    expect(scriptNameInput).toHaveValue("script-1");
+    fireEvent.change(scriptNameInput, {
+      target: {
+        value: "Refund Handler",
+      },
+    });
     expect(
       screen.getByText(
-        "Script member authority exists on backend, but this modal still hands off through Build > Script for implementation editing and binding prep.",
+        "Script starts as a named draft. It becomes a callable member only after Save revision is catalog-applied and Bind succeeds.",
       ),
     ).toBeTruthy();
+    expect(screen.getByText(/Script id: refund-handler/)).toBeTruthy();
     fireEvent.click(
-      within(createDialog).getByRole("button", { name: "Open Script builder" }),
+      within(createDialog).getByRole("button", { name: "Create Script draft" }),
     );
 
     expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    expect(screen.getByLabelText("Script ID")).toHaveValue("refund-handler");
+    expect(
+      window.localStorage.getItem("aevatar:studio:script-drafts:v1"),
+    ).toContain("refund-handler");
+    expect(studioApi.createMember).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        implementationKind: "script",
+      }),
+    );
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("scripts");
       expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("focus")).toBe("script:refund-handler");
+    });
+  });
+
+  it("opens the Script create flow from the empty Script build surface", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      scriptStorageMode: "scope",
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
     });
 
+    renderStudioPage("/studio?tab=scripts");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add script" }));
+
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    expect(
+      within(createDialog).getByRole("button", { name: "Create Script member" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(within(createDialog).getByLabelText("Script name")).toHaveValue("script-1");
+    expect(
+      within(createDialog).getByRole("button", { name: "Create Script draft" }),
+    ).toBeEnabled();
+  });
+
+  it("shows GAgent as a builder member kind before its create API lands", async () => {
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
     fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
-    createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
 
     const gagentChip = within(createDialog).getByRole("button", {
       name: "Create GAgent member",

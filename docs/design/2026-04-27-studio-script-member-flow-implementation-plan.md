@@ -12,12 +12,12 @@ Studio already exposes parts of the Script implementation workflow, but the user
 
 Today a user can edit and draft-run a Script in Build. They cannot yet trust Studio to move that Script through the same member loop as Workflow: save, observe applied revision, bind as a service, invoke through the bound endpoint contract, and observe runtime facts.
 
-There is also a smaller UX problem in the Create member modal. Script and GAgent are shown as member types, but the modal currently makes their `Member name` input look meaningful even though their direct member create APIs are not available yet.
+There is also a smaller UX problem in the Create member modal. Script and GAgent are shown as member types, but the modal currently makes the creation step ambiguous. For Script, the user needs to name the script draft before entering Build; otherwise Build can show starter source while still blocking every meaningful action behind `Select Script`.
 
 ## Goals
 
 - Keep Script and GAgent visible as member type choices.
-- Make Create member honest: only Workflow creates a member immediately.
+- Make Create member honest: Workflow creates a member immediately; Script creates a named local Script draft identity, not a bound member.
 - Treat Script as a first-class member lifecycle participant once a saved revision is observed as applied.
 - Preserve Draft-run as a Build-only action.
 - Bind only catalog-observed Script revisions.
@@ -39,7 +39,8 @@ Script should read as a member implementation workbench, not as a loose code edi
 ```text
 Create member
   -> choose Script
-  -> Open Script builder
+  -> enter Script name
+  -> Create Script draft
   -> Build > Script
   -> validate source
   -> optional draft-run
@@ -53,10 +54,12 @@ Create member
 The Create member modal stays small and honest:
 
 - Workflow is the only type that asks for `Member name` and creates a draft member immediately.
-- Script and GAgent are visible member types, but they act as builder entries until their member APIs are available.
-- Script action label is `Open Script builder`.
+- Script asks for `Script name` and creates a local draft identity. This identity can be validated, draft-run, and saved as a Script revision, but it is not a callable member until Bind succeeds.
+- GAgent is visible as a member type, but it acts as a builder entry until its member API is available.
+- Script action label is `Create Script draft`.
 - GAgent action label is `Open GAgent builder`.
 - The modal should not imply that a Script or GAgent member has been created before the builder and binding lifecycle actually completes.
+- Script draft naming should use a slug preview. The persisted script id should be stable, readable, and editable before creation.
 
 Build > Script should have a stable three-part layout:
 
@@ -84,7 +87,8 @@ Primary actions should be state-driven:
 
 | State | Primary action | Bind availability |
 | --- | --- | --- |
-| No script selected | Select Script | Hidden |
+| No script identity | Create or select Script | Hidden |
+| Draft identity exists, source unknown | Validate | Hidden |
 | Dirty or unknown | Validate | Hidden |
 | Validation clean | Save revision | Hidden |
 | Save accepted | Waiting for catalog | Hidden |
@@ -95,9 +99,33 @@ Key UX rules:
 
 - `Continue to Bind` is not a generic footer action. It appears only after Studio observes the applied Script revision through the catalog or equivalent read model state.
 - Draft-run is explicitly labeled as testing the current editor source. It must not imply that the Script is saved, catalog-applied, or callable as a member service.
+- The Script selector is backed by the scope Script catalog. It should not be the only way to start when the scope has no saved scripts.
 - Bind shows Script as a pending candidate only when the applied revision is clean and not dirty.
 - Invoke is contract-first. If the bound Script exposes a chat-compatible endpoint, Studio can show chat-style invocation. Otherwise it should show the endpoint contract or a clear unsupported state.
 - Observe should prioritize member facts: selected Script revision, binding status, service id, endpoint, actor ids, and latest observed version. Runtime debug details can remain secondary or collapsible.
+
+## CLI Frontend Parity Audit
+
+The CLI frontend already behaves more like a complete Script workbench. Studio Console does not need to copy every feature in this branch, but it should copy the lifecycle shape.
+
+Reference surface:
+
+- `tools/Aevatar.Tools.Cli/Frontend/src/ScriptsStudio.tsx`
+- `tools/Aevatar.Tools.Cli/Frontend/src/scripts-studio/models.ts`
+- `tools/Aevatar.Tools.Cli/Frontend/src/scripts-studio/package.ts`
+
+Console gaps found against the CLI implementation:
+
+| Priority | Gap | Console decision |
+| --- | --- | --- |
+| P0 | Script identity can be edited before save. CLI has a Script ID title input and local draft model. | Add `Script name` to Create member modal and create a draft identity before Build. |
+| P0 | Empty scope is not a dead end. CLI starts from a local draft. | Build > Script must allow starter source with a draft script id, not only existing catalog selection. |
+| P0 | Save uses the chosen identity, then observes catalog application. | `Save revision` must save with the draft `scriptId`, refetch catalog, and only then allow Bind. |
+| P1 | Diagnostics are navigable. CLI surfaces validation messages and editor markers. | Implemented in Console: validation diagnostics render below the editor and click through to the matching file/line. |
+| P1 | Runtime read model is visible after draft-run. | Implemented in Console: dry-run now shows structured run facts next to the raw output. |
+| P2 | Multi-file package tree, entry point management, and proto file handling. | Implemented in Console: Build > Script can add, rename, remove, select files, set entry source, and edit entry behavior type. |
+| P2 | Ask AI and promotion/evolution history. | Promotion/evolution proposal and session decision history are implemented. Ask AI remains intentionally out of this slice. |
+| P2 | Typed invoke form for non-chat endpoints. | Implemented in Invoke: endpoint request/response type URLs are visible, protobuf base64 input is explicit, and JSON is only a scratchpad. |
 
 ## Delivery Slices
 
@@ -119,15 +147,21 @@ Create member
   -> blank workflow draft opens in Build
 ```
 
-Script and GAgent become builder entry points:
+Script creates a named draft identity and opens the builder:
 
 ```text
 Create member
   -> select Script
-  -> Member name is hidden
-  -> Open Script builder
+  -> enter Script name
+  -> review generated script id slug
+  -> Create Script draft
   -> Build > Script
+  -> starter source is available under that script id
+```
 
+GAgent remains a builder entry point until its direct member creation API exists:
+
+```text
 Create member
   -> select GAgent
   -> Member name is hidden
@@ -141,19 +175,62 @@ Implementation scope:
 - Keep the existing `Create member` modal.
 - Change modal OK text by selected kind:
   - Workflow: `Create member`
-  - Script: `Open Script builder`
+  - Script: `Create Script draft`
   - GAgent: `Open GAgent builder`
 - Render `Member name` and `Workflow directory` only for Workflow.
-- On Script, close the modal and navigate to Build > Script.
+- Render `Script name` only for Script.
+- Generate a slug-style `scriptId` preview from `Script name`.
+- On Script, create a page-local Script draft identity, close the modal, and navigate to Build > Script with that draft selected.
 - On GAgent, close the modal and navigate to Build > GAgent.
 - Respect the existing Script leave guard before changing build surfaces.
 - If Script is disabled by workspace features, show a clear warning instead of navigating.
+- Do not call the member create API for Script. The Script becomes a member only after save, catalog application, and bind.
+
+Script draft creation contract:
+
+```ts
+type PendingScriptDraft = {
+  scriptId: string;
+  displayName: string;
+  source: string;
+  createdFrom: 'create-member-modal';
+};
+```
+
+The draft is frontend-local until `Save revision` calls the Script save API. If the generated `scriptId` collides with an existing catalog script, the modal should either block with a clear error or ask the user to choose the existing script explicitly.
+
+Current catalog selector data source remains:
+
+```text
+scriptsApi.listScripts(scopeId, true)
+  -> GET /api/scopes/{scopeId}/scripts?includeSource=true
+```
+
+The selector should list saved scope scripts. A newly named draft can appear in the editor before it appears in that catalog response, but the UI must label it as a draft and avoid presenting it as catalog-applied.
+
+P1 follow-through:
+
+- Script drafts created from the modal are stored in local browser storage by scope and script id, so refresh can restore the draft identity and source.
+- Build > Script now shows a lifecycle status strip covering identity, validation, save observation, and revision.
+- Pending save observation stays honest: the UI says catalog is still pending and offers a catalog refresh action instead of enabling Bind.
+- Dry-run results expose structured facts (`runId`, `runtimeActorId`, `definitionActorId`, `sourceHash`, `readModelUrl`) before the raw output.
+- Validation diagnostics are listed with severity, location, code, and message; selecting one focuses the editor on that diagnostic.
+
+P2 follow-through:
+
+- Build > Script now exposes a package tree for C# and proto files.
+- Entry source and entry behavior type are editable from the Script build surface.
+- Promotion/evolution uses the existing `proposeEvolution` API and shows the current session's decisions without inventing a separate read model.
+- Invoke for non-chat endpoints is contract-aware: it shows endpoint kind plus request/response type URLs and requires a protobuf `payloadBase64`.
+- JSON in Invoke is a scratchpad only. Studio does not convert arbitrary JSON into protobuf bytes unless a typed encoder is introduced later.
 
 Tests:
 
 - Workflow create still calls the existing workflow save path.
-- Script selection hides `Member name`.
-- Script action opens the Script build panel.
+- Script selection shows `Script name`.
+- Script name can be edited before creation.
+- Script action creates a draft identity and opens the Script build panel.
+- Script starter source is available under the draft `scriptId`.
 - GAgent selection hides `Member name`.
 - GAgent action opens the GAgent build panel.
 
@@ -359,8 +436,9 @@ Target file:
 Required cases:
 
 - Workflow create path remains unchanged.
-- Script create entry hides `Member name`.
-- Script create action opens Build > Script.
+- Script create entry shows `Script name`, not `Member name`.
+- Script create action creates a local draft identity and opens Build > Script.
+- Script draft can be validated and saved with the draft `scriptId`.
 - GAgent create entry hides `Member name`.
 - GAgent create action opens Build > GAgent.
 - Dirty Script source does not create a bind candidate.
@@ -412,8 +490,10 @@ Recommended order:
 
 ## Acceptance Criteria
 
-- Create member modal does not ask for Script/GAgent member names until those APIs exist.
+- Create member modal asks Workflow for `Member name`, Script for `Script name`, and GAgent for no name until the GAgent API exists.
 - Workflow create behavior is unchanged.
+- Script creation from the modal produces a named local draft identity and opens Build > Script.
+- Empty Script catalogs do not dead-end the user at a disabled selector.
 - Script Build can produce a parent-visible applied revision state.
 - Script Bind is gated on catalog-applied revision.
 - Script Bind uses `studioApi.bindScopeScript`.
