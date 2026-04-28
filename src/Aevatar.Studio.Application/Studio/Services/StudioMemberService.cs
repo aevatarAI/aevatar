@@ -330,14 +330,13 @@ public sealed class StudioMemberService : IStudioMemberService
     }
 
     /// <summary>
-    /// Hook for resolving the member's current team assignment. Today the
-    /// detail response does not carry a typed <c>TeamId</c> field; until the
-    /// detail contract is widened, return null so the reassign path emits a
-    /// pure-assign event. The actor will reject the event if its current
-    /// state already names a different team_id, surfacing the inconsistency
-    /// rather than overwriting silently.
+    /// Resolves the member's current team assignment from the summary
+    /// (ADR-0017). The query port populates <c>TeamId</c> from the read
+    /// model document; null means the member is currently unassigned and
+    /// the reassignment event should carry an absent <c>from_team_id</c>.
     /// </summary>
-    private static string? ResolveCurrentTeamId(StudioMemberDetailResponse detail) => null;
+    private static string? ResolveCurrentTeamId(StudioMemberDetailResponse detail) =>
+        detail.Summary.TeamId;
 
     /// <summary>
     /// Resolves the published service the member is currently bound to in

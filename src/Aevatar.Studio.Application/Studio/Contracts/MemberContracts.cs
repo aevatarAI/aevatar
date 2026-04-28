@@ -60,7 +60,17 @@ public sealed record StudioMemberSummaryResponse(
     string PublishedServiceId,
     string? LastBoundRevisionId,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    /// <summary>
+    /// Optional team assignment (ADR-0017). Null means the member is not
+    /// currently in any team. Added as a non-positional <c>init</c> property
+    /// so existing callers that construct the record positionally are not
+    /// broken; the query port populates it from the read model document and
+    /// the create/patch flows pass it through unchanged.
+    /// </summary>
+    public string? TeamId { get; init; }
+}
 
 public sealed record StudioMemberDetailResponse(
     StudioMemberSummaryResponse Summary,
