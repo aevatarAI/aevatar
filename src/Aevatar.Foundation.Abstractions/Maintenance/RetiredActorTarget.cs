@@ -13,4 +13,48 @@ public sealed record RetiredActorTarget(
     IReadOnlyList<string> RetiredTypeTokens,
     string? SourceStreamId = null,
     bool CleanupReadModels = false,
-    bool ResetWhenRuntimeTypeUnavailable = true);
+    bool ResetWhenRuntimeTypeUnavailable = true)
+{
+    /// <summary>
+    /// True when <paramref name="runtimeTypeName"/> contains any retired token as a
+    /// whole CLR-type-name segment (boundary-aware so substrings such as
+    /// <c>...GAgentProxy</c> do not accidentally match <c>...GAgent</c>).
+    /// </summary>
+    public bool MatchesRuntimeType(string? runtimeTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(runtimeTypeName))
+            return false;
+
+        foreach (var token in RetiredTypeTokens)
+        {
+            if (ContainsTypeNameToken(runtimeTypeName, token))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsTypeNameToken(string runtimeTypeName, string token)
+    {
+        var startIndex = 0;
+        while (startIndex < runtimeTypeName.Length)
+        {
+            var index = runtimeTypeName.IndexOf(token, startIndex, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var beforeOk = index == 0 || IsTypeNameBoundary(runtimeTypeName[index - 1]);
+            var afterIndex = index + token.Length;
+            var afterOk = afterIndex == runtimeTypeName.Length || IsTypeNameBoundary(runtimeTypeName[afterIndex]);
+            if (beforeOk && afterOk)
+                return true;
+
+            startIndex = index + token.Length;
+        }
+
+        return false;
+    }
+
+    private static bool IsTypeNameBoundary(char value) =>
+        value is '[' or ']' or ',' or ' ';
+}

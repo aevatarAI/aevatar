@@ -1,6 +1,9 @@
 using System.Runtime.CompilerServices;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.Compatibility;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,14 +13,24 @@ namespace Aevatar.GAgents.Scheduled;
 /// <summary>
 /// Retired-actor declaration for the user-agent catalog and the generated
 /// skill-runner / workflow-agent actors previously hosted by the deleted
-/// <c>Aevatar.GAgents.ChannelRuntime</c> assembly. Reads the catalog event
-/// stream to discover the dynamic generated-actor ids before the catalog
-/// itself is destroyed.
+/// <c>Aevatar.GAgents.ChannelRuntime</c> assembly.
+///
+/// Dynamic discovery is gated on the catalog itself looking retired
+/// (matches a retired runtime-type token, or runtime type unavailable but
+/// stream still has events). On a fully-migrated cluster this gate keeps
+/// the catalog walk a no-op even though the cleanup runs every startup.
+///
+/// When the gate fires, generated agent ids are read from the
+/// <see cref="UserAgentCatalogDocument"/> read model first (survives event
+/// stream snapshot+compaction), and merged with any catalog upsert events
+/// not yet projected. Without the read-model path, snapshotted entries
+/// would be silently dropped after compaction.
 /// </summary>
 public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
 {
     private const string RetiredSkillRunnerType = "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent";
     private const string RetiredWorkflowAgentType = "Aevatar.GAgents.ChannelRuntime.WorkflowAgentGAgent";
+    private const int ReadModelPageSize = 500;
 
     public override string SpecId => "scheduled";
 
@@ -43,8 +56,20 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         IServiceProvider services,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        var typeProbe = services.GetRequiredService<IActorTypeProbe>();
         var eventStore = services.GetRequiredService<IEventStore>();
-        var agentIds = await DiscoverCatalogUserAgentIdsAsync(eventStore, ct).ConfigureAwait(false);
+
+        if (!await ShouldDiscoverFromCatalogAsync(typeProbe, eventStore, ct).ConfigureAwait(false))
+            yield break;
+
+        var agentIds = new HashSet<string>(StringComparer.Ordinal);
+
+        await foreach (var actorId in DiscoverFromReadModelAsync(services, ct).ConfigureAwait(false))
+            agentIds.Add(actorId);
+
+        foreach (var actorId in await DiscoverFromCatalogEventsAsync(eventStore, ct).ConfigureAwait(false))
+            agentIds.Add(actorId);
+
         foreach (var actorId in agentIds)
         {
             yield return new RetiredActorTarget(
@@ -67,7 +92,71 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
             .ConfigureAwait(false);
     }
 
-    private static async Task<IReadOnlyList<string>> DiscoverCatalogUserAgentIdsAsync(
+    private async Task<bool> ShouldDiscoverFromCatalogAsync(
+        IActorTypeProbe typeProbe,
+        IEventStore eventStore,
+        CancellationToken ct)
+    {
+        var catalogTarget = Targets.First(static target =>
+            target.ActorId == UserAgentCatalogGAgent.WellKnownId);
+
+        var runtimeTypeName = await typeProbe
+            .GetRuntimeAgentTypeNameAsync(UserAgentCatalogGAgent.WellKnownId, ct)
+            .ConfigureAwait(false);
+
+        if (catalogTarget.MatchesRuntimeType(runtimeTypeName))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(runtimeTypeName))
+        {
+            var version = await eventStore
+                .GetVersionAsync(UserAgentCatalogGAgent.WellKnownId, ct)
+                .ConfigureAwait(false);
+            return version > 0;
+        }
+
+        return false;
+    }
+
+    private static async IAsyncEnumerable<string> DiscoverFromReadModelAsync(
+        IServiceProvider services,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var reader = services.GetService<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        if (reader == null)
+            yield break;
+
+        string? cursor = null;
+        do
+        {
+            var result = await reader.QueryAsync(
+                new ProjectionDocumentQuery
+                {
+                    Cursor = cursor,
+                    Take = ReadModelPageSize,
+                    Filters =
+                    [
+                        new ProjectionDocumentFilter
+                        {
+                            FieldPath = nameof(IProjectionReadModel.ActorId),
+                            Operator = ProjectionDocumentFilterOperator.Eq,
+                            Value = ProjectionDocumentValue.FromString(UserAgentCatalogGAgent.WellKnownId),
+                        },
+                    ],
+                },
+                ct).ConfigureAwait(false);
+
+            foreach (var doc in result.Items)
+            {
+                if (IsGeneratedUserAgent(doc.Id, doc.AgentType))
+                    yield return doc.Id.Trim();
+            }
+
+            cursor = result.NextCursor;
+        } while (!string.IsNullOrWhiteSpace(cursor));
+    }
+
+    private static async Task<IReadOnlyList<string>> DiscoverFromCatalogEventsAsync(
         IEventStore eventStore,
         CancellationToken ct)
     {

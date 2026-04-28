@@ -136,7 +136,7 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         var runtimeTypeName = await _typeProbe
             .GetRuntimeAgentTypeNameAsync(target.ActorId, ct)
             .ConfigureAwait(false);
-        var matchesRetiredRuntimeType = MatchesRetiredType(target, runtimeTypeName);
+        var matchesRetiredRuntimeType = target.MatchesRuntimeType(runtimeTypeName);
         var shouldContinueReset = false;
         if (!matchesRetiredRuntimeType)
         {
@@ -352,39 +352,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
 
     private static bool IsStale(MarkerRecord marker, TimeSpan timeout) =>
         DateTimeOffset.UtcNow - marker.Timestamp > timeout;
-
-    private static bool MatchesRetiredType(RetiredActorTarget target, string? runtimeTypeName)
-    {
-        if (string.IsNullOrWhiteSpace(runtimeTypeName))
-            return false;
-
-        return target.RetiredTypeTokens.Any(token =>
-            ContainsTypeNameToken(runtimeTypeName, token));
-    }
-
-    private static bool ContainsTypeNameToken(string runtimeTypeName, string token)
-    {
-        var startIndex = 0;
-        while (startIndex < runtimeTypeName.Length)
-        {
-            var index = runtimeTypeName.IndexOf(token, startIndex, StringComparison.Ordinal);
-            if (index < 0)
-                return false;
-
-            var beforeOk = index == 0 || IsTypeNameBoundary(runtimeTypeName[index - 1]);
-            var afterIndex = index + token.Length;
-            var afterOk = afterIndex == runtimeTypeName.Length || IsTypeNameBoundary(runtimeTypeName[afterIndex]);
-            if (beforeOk && afterOk)
-                return true;
-
-            startIndex = index + token.Length;
-        }
-
-        return false;
-    }
-
-    private static bool IsTypeNameBoundary(char value) =>
-        value is '[' or ']' or ',' or ' ';
 
     private static string MarkerStreamId(string specId) =>
         $"__maintenance:retired-actor-cleanup:{specId}";

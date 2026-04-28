@@ -41,9 +41,14 @@ A spec declares:
 - `Targets` — well-known retired actor ids and the CLR type name tokens that
   identify them as retired.
 - `DiscoverDynamicTargetsAsync` — optional. The Scheduled spec uses this to read
-  the user-agent catalog event stream and surface generated `skill-runner-*` /
+  the user-agent catalog and surface generated `skill-runner-*` /
   `workflow-agent-*` actor ids that need cleaning before the catalog itself is
-  destroyed.
+  destroyed. Discovery is gated on the catalog runtime type still looking
+  retired (or the catalog state being cleared but its event stream still having
+  events) so warm clusters do not pay the catalog walk on every startup.
+  When the gate fires, ids are read from the `UserAgentCatalogDocument` read
+  model first (survives event-stream snapshot+compaction), then merged with
+  any catalog upsert events not yet projected.
 - `DeleteReadModelsForActorAsync` — optional. Each module deletes its own typed
   `IProjectionDocumentReader` / `IProjectionWriteDispatcher` documents (no
   cross-module document knowledge).
