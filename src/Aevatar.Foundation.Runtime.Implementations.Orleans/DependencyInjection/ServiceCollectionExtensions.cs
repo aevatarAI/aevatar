@@ -52,6 +52,8 @@ public static class ServiceCollectionExtensions
         else
         {
             services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+            services.TryAddSingleton<IEventStoreMaintenance>(sp =>
+                (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
         }
 
         services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
