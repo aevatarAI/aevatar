@@ -144,7 +144,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
         var nyxClient = _serviceProvider.GetService<NyxIdApiClient>();
-        var skillRunnerPort = _serviceProvider.GetService<ISkillRunnerCommandPort>();
+        var skillRunnerPort = _serviceProvider.GetService<ISkillDefinitionCommandPort>();
         var workflowAgentPort = _serviceProvider.GetService<IWorkflowAgentCommandPort>();
         var catalogCommandPort = _serviceProvider.GetService<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = _serviceProvider.GetService<ICallerScopeResolver>();
@@ -188,7 +188,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> CreateAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
+        ISkillDefinitionCommandPort skillRunnerPort,
         IWorkflowAgentCommandPort workflowAgentPort,
         NyxIdApiClient nyxClient,
         string token,
@@ -214,7 +214,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> CreateDailyReportAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
+        ISkillDefinitionCommandPort skillRunnerPort,
         NyxIdApiClient nyxClient,
         string token,
         OwnerScope caller,
@@ -250,7 +250,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(scheduleCron))
             return """{"error":"schedule_cron is required for create_agent"}""";
 
-        var scheduleTimezone = args.Str("schedule_timezone") ?? SkillRunnerDefaults.DefaultTimezone;
+        var scheduleTimezone = args.Str("schedule_timezone") ?? SkillDefinitionDefaults.DefaultTimezone;
         if (!ChannelScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
             return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
 
@@ -288,7 +288,7 @@ public sealed class AgentBuilderTool : IAgentTool
             serviceResolution.EligibleIdBySlug);
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
-            ? SkillRunnerDefaults.GenerateActorId()
+            ? SkillDefinitionDefaults.GenerateActorId()
             : args.Str("agent_id")!.Trim();
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
@@ -349,7 +349,7 @@ public sealed class AgentBuilderTool : IAgentTool
         };
 #pragma warning restore CS0612
 
-        var initialize = new InitializeSkillRunnerCommand
+        var initialize = new InitializeSkillDefinitionCommand
         {
             SkillName = templateSpec.SkillName,
             TemplateName = templateSpec.TemplateName,
@@ -359,9 +359,9 @@ public sealed class AgentBuilderTool : IAgentTool
             ScheduleTimezone = scheduleTimezone.Trim(),
             Enabled = true,
             ScopeId = configScopeId,
-            ProviderName = SkillRunnerDefaults.DefaultProviderName,
-            MaxToolRounds = SkillRunnerDefaults.DefaultMaxToolRounds,
-            MaxHistoryMessages = SkillRunnerDefaults.DefaultMaxHistoryMessages,
+            ProviderName = SkillDefinitionDefaults.DefaultProviderName,
+            MaxToolRounds = SkillDefinitionDefaults.DefaultMaxToolRounds,
+            MaxHistoryMessages = SkillDefinitionDefaults.DefaultMaxHistoryMessages,
             OutboundConfig = outboundConfig,
         };
 
@@ -373,7 +373,7 @@ public sealed class AgentBuilderTool : IAgentTool
             agentId,
             caller,
             versionBefore,
-            entry => string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
+            entry => string.Equals(entry.AgentType, SkillDefinitionDefaults.AgentType, StringComparison.Ordinal) &&
                      string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
             ct,
             maxAttempts: runImmediatelyRequested ? 20 : 10);
@@ -389,7 +389,7 @@ public sealed class AgentBuilderTool : IAgentTool
         {
             status = confirmed ? "created" : "accepted",
             agent_id = agentId,
-            agent_type = SkillRunnerDefaults.AgentType,
+            agent_type = SkillDefinitionDefaults.AgentType,
             template = templateSpec.TemplateName,
             github_username = githubUsernameResolution.GithubUsername,
             github_username_preference_saved = preferenceSaved,
@@ -602,7 +602,7 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
-        ISkillRunnerCommandPort skillRunnerPort,
+        ISkillDefinitionCommandPort skillRunnerPort,
         IWorkflowAgentCommandPort workflowAgentPort,
         NyxIdApiClient nyxClient,
         string token,
@@ -674,7 +674,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> RunAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
+        ISkillDefinitionCommandPort skillRunnerPort,
         IWorkflowAgentCommandPort workflowAgentPort,
         OwnerScope caller,
         CancellationToken ct)
@@ -690,7 +690,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!SupportsManagedLifecycle(entry.AgentType))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
 
-        if (string.Equals(entry.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal) ||
+        if (string.Equals(entry.Status, SkillDefinitionDefaults.StatusDisabled, StringComparison.Ordinal) ||
             string.Equals(entry.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' is disabled. Enable it before running." });
 
@@ -713,7 +713,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> DisableAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
+        ISkillDefinitionCommandPort skillRunnerPort,
         IWorkflowAgentCommandPort workflowAgentPort,
         OwnerScope caller,
         CancellationToken ct)
@@ -722,7 +722,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal) ||
+        if (string.Equals(entry.value!.Status, SkillDefinitionDefaults.StatusDisabled, StringComparison.Ordinal) ||
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
@@ -737,7 +737,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillRunnerDefaults.StatusDisabled, ct);
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillDefinitionDefaults.StatusDisabled, ct);
         if (observation.Confirmed)
             return SerializeAgentStatus(observation.Entry!, "Agent disabled. Scheduling paused.");
 
@@ -751,7 +751,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> EnableAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
+        ISkillDefinitionCommandPort skillRunnerPort,
         IWorkflowAgentCommandPort workflowAgentPort,
         OwnerScope caller,
         CancellationToken ct)
@@ -760,7 +760,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal) ||
+        if (string.Equals(entry.value!.Status, SkillDefinitionDefaults.StatusRunning, StringComparison.Ordinal) ||
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
 
@@ -772,7 +772,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (dispatch.error != null)
             return dispatch.error;
 
-        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillRunnerDefaults.StatusRunning, ct);
+        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillDefinitionDefaults.StatusRunning, ct);
         if (observation.Confirmed)
             return SerializeAgentStatus(observation.Entry!, "Agent enabled. Scheduling resumed.");
 
@@ -967,11 +967,11 @@ public sealed class AgentBuilderTool : IAgentTool
         string reason,
         LifecycleAction action,
         string? revisionFeedback,
-        ISkillRunnerCommandPort skillRunnerPort,
+        ISkillDefinitionCommandPort skillRunnerPort,
         IWorkflowAgentCommandPort workflowAgentPort,
         CancellationToken ct)
     {
-        if (string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
+        if (string.Equals(entry.AgentType, SkillDefinitionDefaults.AgentType, StringComparison.Ordinal))
         {
             switch (action)
             {
@@ -1013,7 +1013,7 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     private static bool SupportsManagedLifecycle(string? agentType) =>
-        string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) ||
+        string.Equals(agentType, SkillDefinitionDefaults.AgentType, StringComparison.Ordinal) ||
         string.Equals(agentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal);
 
     private async Task<string?> ResolveCurrentUserIdAsync(NyxIdApiClient client, string token, CancellationToken ct)

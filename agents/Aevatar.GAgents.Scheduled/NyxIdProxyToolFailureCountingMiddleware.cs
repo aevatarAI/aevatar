@@ -5,7 +5,7 @@ namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Tool-call middleware that classifies <c>nyxid_proxy</c> results and increments the
-/// per-run counter so <see cref="SkillRunnerGAgent.EnsureToolStatusAllowsCompletion"/> can
+/// per-run counter so <see cref="SkillExecutionGAgent.EnsureToolStatusAllowsCompletion"/> can
 /// downgrade an all-failures run to <c>SkillRunnerExecutionFailedEvent</c> instead of
 /// letting the LLM's plain-text fallback land as a clean success (issue #439).
 /// </summary>

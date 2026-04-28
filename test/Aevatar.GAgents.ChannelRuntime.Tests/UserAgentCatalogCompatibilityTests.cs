@@ -27,7 +27,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                 new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
                 },
             },
@@ -106,7 +106,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                     Entry = new UserAgentCatalogEntry
                     {
                         AgentId = "agent-compat-3",
-                        AgentType = SkillRunnerDefaults.AgentType,
+                        AgentType = SkillDefinitionDefaults.AgentType,
                         TemplateName = "daily_report",
                         Status = "running",
                     },

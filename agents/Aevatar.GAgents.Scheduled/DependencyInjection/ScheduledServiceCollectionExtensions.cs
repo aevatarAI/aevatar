@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled.WorkflowModules;
 using Microsoft.Extensions.Configuration;
@@ -36,6 +37,9 @@ public static class ScheduledServiceCollectionExtensions
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
             configuration,
             storeName: "ScheduledAgents");
+
+        services.AddAevatarAgentKindRegistry(builder =>
+            builder.ScanAssemblies(typeof(SkillDefinitionGAgent).Assembly));
 
         // ─── Retired-actor cleanup contribution ───
         services.TryAddEnumerable(
@@ -70,7 +74,7 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<IUserAgentDeliveryTargetReader, UserAgentDeliveryTargetReader>();
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
-        services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
+        services.TryAddSingleton<ISkillDefinitionCommandPort, SkillDefinitionCommandPort>();
         services.TryAddSingleton<IWorkflowAgentCommandPort, WorkflowAgentCommandPort>();
         // Caller-scope resolver chain (issue #466 §B). Channel resolver runs first so
         // a request with channel metadata produces the per-sender scope rather than

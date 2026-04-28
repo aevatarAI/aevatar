@@ -15,11 +15,11 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 ///
 ///   - <see cref="SkillRunnerToolFailureCounter"/>: state primitive
 ///   - <see cref="NyxIdProxyToolFailureCountingMiddleware"/>: classification + counting
-///   - <see cref="SkillRunnerGAgent.EnsureToolStatusAllowsCompletion"/>: failure policy
+///   - <see cref="SkillExecutionGAgent.EnsureToolStatusAllowsCompletion"/>: failure policy
 ///   - End-to-end wiring: middleware registered on the agent feeds the agent's counter
 ///
 /// We deliberately don't drive the full LLM loop in these tests — see the existing
-/// SkillRunnerGAgentTests pattern: ChatStreamAsync requires a live LLM provider, and the
+/// SkillDefinitionGAgentTests pattern: ChatStreamAsync requires a live LLM provider, and the
 /// production behaviour is fully determined by the four-piece pipeline above.
 /// </summary>
 public class SkillRunnerToolFailureSafetyNetTests
@@ -249,7 +249,7 @@ public class SkillRunnerToolFailureSafetyNetTests
         // InvalidOperationException is what HandleTriggerAsync catches and converts into
         // SkillRunnerExecutionFailedEvent (after the retry budget is exhausted), so
         // /agent-status reports a meaningful error_count and last_error.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 3, successCount: 0);
+        var act = () => SkillExecutionGAgent.EnsureToolStatusAllowsCompletion(failureCount: 3, successCount: 0);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*All 3 nyxid_proxy tool call(s)*failed*");
@@ -261,7 +261,7 @@ public class SkillRunnerToolFailureSafetyNetTests
         // (b) mixed case: partial data is more useful than a blanket failure. The
         // prompt-layer §9 Source health footer surfaces which queries failed; the runner
         // simply lets the run complete normally.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 2, successCount: 4);
+        var act = () => SkillExecutionGAgent.EnsureToolStatusAllowsCompletion(failureCount: 2, successCount: 4);
 
         act.Should().NotThrow();
     }
@@ -272,7 +272,7 @@ public class SkillRunnerToolFailureSafetyNetTests
         // (c) genuine empty-day case: every nyxid_proxy call returned 2xx with no matching
         // items, so the runner records the LLM's "No measurable activity" output as a
         // legitimate success.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 0, successCount: 7);
+        var act = () => SkillExecutionGAgent.EnsureToolStatusAllowsCompletion(failureCount: 0, successCount: 7);
 
         act.Should().NotThrow();
     }
@@ -286,7 +286,7 @@ public class SkillRunnerToolFailureSafetyNetTests
         // flagged this for the daily-report skill specifically; addressing "expected tool
         // never called" is out of scope for this PR — it would need per-skill policy that
         // doesn't generalize to other scheduled skills.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 0, successCount: 0);
+        var act = () => SkillExecutionGAgent.EnsureToolStatusAllowsCompletion(failureCount: 0, successCount: 0);
 
         act.Should().NotThrow();
     }
@@ -302,9 +302,9 @@ public class SkillRunnerToolFailureSafetyNetTests
         // EnsureToolStatusAllowsCompletion gets incremented. This catches regressions in
         // BuildToolMiddlewareChain where the counter could be detached from the
         // middleware that the chat loop runs.
-        var agent = new SkillRunnerGAgent();
+        var agent = new SkillExecutionGAgent();
 
-        var registeredField = typeof(AIGAgentBase<SkillRunnerState>).GetField(
+        var registeredField = typeof(AIGAgentBase<SkillExecutionState>).GetField(
             "_toolMiddlewares", BindingFlags.Instance | BindingFlags.NonPublic);
         registeredField.Should().NotBeNull();
         var registered = (IReadOnlyList<IToolCallMiddleware>?)registeredField!.GetValue(agent);
@@ -328,9 +328,9 @@ public class SkillRunnerToolFailureSafetyNetTests
         // counting middleware must be appended, not overwrite — otherwise wiring this
         // safety net into a DI graph would silently drop existing middleware behaviour.
         var injected = new RecordingMiddleware();
-        var agent = new SkillRunnerGAgent(toolMiddlewares: new IToolCallMiddleware[] { injected });
+        var agent = new SkillExecutionGAgent(toolMiddlewares: new IToolCallMiddleware[] { injected });
 
-        var registeredField = typeof(AIGAgentBase<SkillRunnerState>).GetField(
+        var registeredField = typeof(AIGAgentBase<SkillExecutionState>).GetField(
             "_toolMiddlewares", BindingFlags.Instance | BindingFlags.NonPublic);
         var registered = (IReadOnlyList<IToolCallMiddleware>?)registeredField!.GetValue(agent);
 

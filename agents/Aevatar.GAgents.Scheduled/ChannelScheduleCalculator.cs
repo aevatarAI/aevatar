@@ -57,7 +57,7 @@ public static class ChannelScheduleCalculator
     {
         error = null;
         var normalized = string.IsNullOrWhiteSpace(timeZoneId)
-            ? SkillRunnerDefaults.DefaultTimezone
+            ? SkillDefinitionDefaults.DefaultTimezone
             : timeZoneId.Trim();
 
         try

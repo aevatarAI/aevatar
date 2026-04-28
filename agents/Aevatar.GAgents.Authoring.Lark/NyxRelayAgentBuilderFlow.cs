@@ -386,8 +386,8 @@ public static class NyxRelayAgentBuilderFlow
         // are both shown so the user can flip status either direction without typing; the click
         // handler enforces the invariants. Delete is marked danger so Lark renders it red and the
         // user has a final visual confirm before submitting.
-        var isRunning = string.Equals(status, SkillRunnerDefaults.StatusRunning, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(status, SkillRunnerDefaults.StatusError, StringComparison.OrdinalIgnoreCase);
+        var isRunning = string.Equals(status, SkillDefinitionDefaults.StatusRunning, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(status, SkillDefinitionDefaults.StatusError, StringComparison.OrdinalIgnoreCase);
         content.Actions.Add(BuildAgentScopedButton("Run Now", "run_agent", agentId, isPrimary: isRunning));
         content.Actions.Add(BuildAgentScopedButton("Disable", "disable_agent", agentId, isPrimary: false));
         content.Actions.Add(BuildAgentScopedButton("Enable", "enable_agent", agentId, isPrimary: false));
@@ -474,7 +474,7 @@ public static class NyxRelayAgentBuilderFlow
         scheduleCron = null;
         error = null;
 
-        scheduleTimezone = GetOptional(args, "schedule_timezone") ?? SkillRunnerDefaults.DefaultTimezone;
+        scheduleTimezone = GetOptional(args, "schedule_timezone") ?? SkillDefinitionDefaults.DefaultTimezone;
         var rawCron = GetOptional(args, "schedule_cron");
         if (!string.IsNullOrWhiteSpace(rawCron))
         {

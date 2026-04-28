@@ -7,20 +7,20 @@ using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class SkillRunnerCommandPortTests
+public sealed class SkillDefinitionCommandPortTests
 {
     private const string AgentId = "skill-runner-test-1";
-    private const string ExpectedPublisher = "scheduled.skill-runner";
+    private const string ExpectedPublisher = "scheduled.skill-definition";
 
     [Fact]
     public async Task InitializeAsync_WhenRunImmediatelyFalse_DispatchesSingleEnvelope_AndCreatesActor_AndPrimesProjection()
     {
         var fixture = new Fixture();
         fixture.Runtime.GetAsync(AgentId).Returns(Task.FromResult<IActor?>(null));
-        fixture.Runtime.CreateAsync<SkillRunnerGAgent>(AgentId, Arg.Any<CancellationToken>())
+        fixture.Runtime.CreateAsync<SkillDefinitionGAgent>(AgentId, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Substitute.For<IActor>()));
 
-        var command = new InitializeSkillRunnerCommand
+        var command = new InitializeSkillDefinitionCommand
         {
             SkillName = "demo",
             ScheduleCron = "0 */1 * * *",
@@ -29,7 +29,7 @@ public sealed class SkillRunnerCommandPortTests
         await fixture.Port.InitializeAsync(AgentId, command, runImmediately: false, CancellationToken.None);
 
         await fixture.Runtime.Received(1).GetAsync(AgentId);
-        await fixture.Runtime.Received(1).CreateAsync<SkillRunnerGAgent>(AgentId, Arg.Any<CancellationToken>());
+        await fixture.Runtime.Received(1).CreateAsync<SkillDefinitionGAgent>(AgentId, Arg.Any<CancellationToken>());
         await fixture.Activation.Received(1).EnsureAsync(
             Arg.Is<ProjectionScopeStartRequest>(r =>
                 r.RootActorId == UserAgentCatalogGAgent.WellKnownId &&
@@ -38,7 +38,7 @@ public sealed class SkillRunnerCommandPortTests
 
         fixture.Captured.Should().HaveCount(1);
         var envelope = fixture.Captured[0];
-        envelope.Payload.Is(InitializeSkillRunnerCommand.Descriptor).Should().BeTrue();
+        envelope.Payload.Is(InitializeSkillDefinitionCommand.Descriptor).Should().BeTrue();
         envelope.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         envelope.Route.Direct.TargetActorId.Should().Be(AgentId);
     }
@@ -49,18 +49,18 @@ public sealed class SkillRunnerCommandPortTests
         var fixture = new Fixture();
         fixture.Runtime.GetAsync(AgentId).Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
 
-        var command = new InitializeSkillRunnerCommand { SkillName = "demo" };
+        var command = new InitializeSkillDefinitionCommand { SkillName = "demo" };
         await fixture.Port.InitializeAsync(AgentId, command, runImmediately: true, CancellationToken.None);
 
         fixture.Captured.Should().HaveCount(2);
-        fixture.Captured[0].Payload.Is(InitializeSkillRunnerCommand.Descriptor).Should().BeTrue();
-        fixture.Captured[1].Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor).Should().BeTrue();
-        fixture.Captured[1].Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason.Should().Be("create_agent");
+        fixture.Captured[0].Payload.Is(InitializeSkillDefinitionCommand.Descriptor).Should().BeTrue();
+        fixture.Captured[1].Payload.Is(TriggerSkillDefinitionCommand.Descriptor).Should().BeTrue();
+        fixture.Captured[1].Payload.Unpack<TriggerSkillDefinitionCommand>().Reason.Should().Be("create_agent");
         fixture.Captured[1].Route.PublisherActorId.Should().Be(ExpectedPublisher);
         fixture.Captured[1].Route.Direct.TargetActorId.Should().Be(AgentId);
 
         // Actor already existed → CreateAsync should not be invoked.
-        await fixture.Runtime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await fixture.Runtime.DidNotReceive().CreateAsync<SkillDefinitionGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -73,8 +73,8 @@ public sealed class SkillRunnerCommandPortTests
 
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
-        env.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor).Should().BeTrue();
-        env.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason.Should().Be("manual_run");
+        env.Payload.Is(TriggerSkillDefinitionCommand.Descriptor).Should().BeTrue();
+        env.Payload.Unpack<TriggerSkillDefinitionCommand>().Reason.Should().Be("manual_run");
         env.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         env.Route.Direct.TargetActorId.Should().Be(AgentId);
     }
@@ -88,7 +88,7 @@ public sealed class SkillRunnerCommandPortTests
         await fixture.Port.TriggerAsync(AgentId, null!, CancellationToken.None);
 
         fixture.Captured.Should().ContainSingle();
-        fixture.Captured[0].Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason.Should().Be(string.Empty);
+        fixture.Captured[0].Payload.Unpack<TriggerSkillDefinitionCommand>().Reason.Should().Be(string.Empty);
     }
 
     [Fact]
@@ -101,8 +101,8 @@ public sealed class SkillRunnerCommandPortTests
 
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
-        env.Payload.Is(DisableSkillRunnerCommand.Descriptor).Should().BeTrue();
-        env.Payload.Unpack<DisableSkillRunnerCommand>().Reason.Should().Be("operator_off");
+        env.Payload.Is(DisableSkillDefinitionCommand.Descriptor).Should().BeTrue();
+        env.Payload.Unpack<DisableSkillDefinitionCommand>().Reason.Should().Be("operator_off");
         env.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         env.Route.Direct.TargetActorId.Should().Be(AgentId);
     }
@@ -117,8 +117,8 @@ public sealed class SkillRunnerCommandPortTests
 
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
-        env.Payload.Is(EnableSkillRunnerCommand.Descriptor).Should().BeTrue();
-        env.Payload.Unpack<EnableSkillRunnerCommand>().Reason.Should().Be("operator_on");
+        env.Payload.Is(EnableSkillDefinitionCommand.Descriptor).Should().BeTrue();
+        env.Payload.Unpack<EnableSkillDefinitionCommand>().Reason.Should().Be("operator_on");
         env.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         env.Route.Direct.TargetActorId.Should().Be(AgentId);
     }
@@ -130,7 +130,7 @@ public sealed class SkillRunnerCommandPortTests
     public async Task InitializeAsync_WithInvalidAgentId_Throws(string? agentId)
     {
         var fixture = new Fixture();
-        var command = new InitializeSkillRunnerCommand();
+        var command = new InitializeSkillDefinitionCommand();
         var act = () => fixture.Port.InitializeAsync(agentId!, command, runImmediately: false, CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentException>();
     }
@@ -183,9 +183,9 @@ public sealed class SkillRunnerCommandPortTests
         var runtime = Substitute.For<IActorRuntime>();
         var projection = Fixture.CreateProjectionPort(out _, out _);
 
-        Action ctor1 = () => new SkillRunnerCommandPort(null!, dispatch, projection);
-        Action ctor2 = () => new SkillRunnerCommandPort(runtime, null!, projection);
-        Action ctor3 = () => new SkillRunnerCommandPort(runtime, dispatch, null!);
+        Action ctor1 = () => new SkillDefinitionCommandPort(null!, dispatch, projection);
+        Action ctor2 = () => new SkillDefinitionCommandPort(runtime, null!, projection);
+        Action ctor3 = () => new SkillDefinitionCommandPort(runtime, dispatch, null!);
         ctor1.Should().Throw<ArgumentNullException>();
         ctor2.Should().Throw<ArgumentNullException>();
         ctor3.Should().Throw<ArgumentNullException>();
@@ -198,7 +198,7 @@ public sealed class SkillRunnerCommandPortTests
         public UserAgentCatalogProjectionPort Projection { get; }
         public IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> Activation { get; }
         public List<EventEnvelope> Captured { get; } = new();
-        public SkillRunnerCommandPort Port { get; }
+        public SkillDefinitionCommandPort Port { get; }
 
         public Fixture()
         {
@@ -208,7 +208,7 @@ public sealed class SkillRunnerCommandPortTests
             Activation = activation;
             Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
                 .Returns(Task.CompletedTask);
-            Port = new SkillRunnerCommandPort(Runtime, Dispatch, Projection);
+            Port = new SkillDefinitionCommandPort(Runtime, Dispatch, Projection);
         }
 
         public static UserAgentCatalogProjectionPort CreateProjectionPort(

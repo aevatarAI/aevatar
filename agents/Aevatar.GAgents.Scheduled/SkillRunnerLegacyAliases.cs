@@ -6,7 +6,10 @@ internal static class SkillRunnerLegacyAliases
 {
     private const string ProtoPrefix = "aevatar.gagents.channelruntime.";
     private const string ClrPrefix = "Aevatar.GAgents.ChannelRuntime.";
+    private const string ScheduledProtoPrefix = "aevatar.gagents.scheduled.";
+    private const string ScheduledClrPrefix = "Aevatar.GAgents.Scheduled.";
 
+    // Legacy proto full names from the channelruntime era.
     internal const string OutboundConfigProto = ProtoPrefix + "SkillRunnerOutboundConfig";
     internal const string StateProto = ProtoPrefix + "SkillRunnerState";
     internal const string InitializeCommandProto = ProtoPrefix + "InitializeSkillRunnerCommand";
@@ -21,7 +24,18 @@ internal static class SkillRunnerLegacyAliases
     internal const string EnabledEventProto = ProtoPrefix + "SkillRunnerEnabledEvent";
 
     internal const string StateClr = ClrPrefix + "SkillRunnerState";
+
+    // Legacy runtime actor implementation CLR name persisted before the
+    // SkillDefinition/SkillExecution split.
+    internal const string ImplementationClr = ScheduledClrPrefix + "SkillRunnerGAgent";
+
+    // Legacy CLR type name for SkillDefinitionState (migration from SkillRunnerState).
+    internal const string DefinitionStateLegacyClr = ScheduledClrPrefix + "SkillRunnerState";
+    // Legacy proto full name for SkillDefinitionState.
+    internal const string DefinitionStateLegacyProto = ScheduledProtoPrefix + "SkillRunnerState";
 }
+
+// ─── Old SkillRunner* types: keep legacy aliases for persisted event deserialization ───
 
 [LegacyProtoFullName(SkillRunnerLegacyAliases.OutboundConfigProto)]
 public sealed partial class SkillRunnerOutboundConfig;
@@ -59,3 +73,9 @@ public sealed partial class SkillRunnerDisabledEvent;
 
 [LegacyProtoFullName(SkillRunnerLegacyAliases.EnabledEventProto)]
 public sealed partial class SkillRunnerEnabledEvent;
+
+// ─── New SkillDefinition* types: legacy alias for migration from SkillRunnerState ───
+
+[LegacyProtoFullName(SkillRunnerLegacyAliases.DefinitionStateLegacyProto)]
+[LegacyClrTypeName(SkillRunnerLegacyAliases.DefinitionStateLegacyClr)]
+public sealed partial class SkillDefinitionState;

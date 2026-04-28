@@ -327,9 +327,9 @@ public static class AgentBuilderCardFlow
 
         var scheduleTimezone = (evt.Extra.TryGetValue("schedule_timezone", out var rawTimezone)
                 ? rawTimezone
-                : null) ?? SkillRunnerDefaults.DefaultTimezone;
+                : null) ?? SkillDefinitionDefaults.DefaultTimezone;
         scheduleTimezone = string.IsNullOrWhiteSpace(scheduleTimezone)
-            ? SkillRunnerDefaults.DefaultTimezone
+            ? SkillDefinitionDefaults.DefaultTimezone
             : scheduleTimezone.Trim();
 
         var repositories = evt.Extra.TryGetValue("repositories", out var rawRepositories)
@@ -373,9 +373,9 @@ public static class AgentBuilderCardFlow
 
         var scheduleTimezone = (evt.Extra.TryGetValue("schedule_timezone", out var rawTimezone)
                 ? rawTimezone
-                : null) ?? SkillRunnerDefaults.DefaultTimezone;
+                : null) ?? SkillDefinitionDefaults.DefaultTimezone;
         scheduleTimezone = string.IsNullOrWhiteSpace(scheduleTimezone)
-            ? SkillRunnerDefaults.DefaultTimezone
+            ? SkillDefinitionDefaults.DefaultTimezone
             : scheduleTimezone.Trim();
 
         var audience = evt.Extra.TryGetValue("audience", out var rawAudience)
@@ -790,7 +790,7 @@ public static class AgentBuilderCardFlow
 
         var isDisabled = string.Equals(
             status,
-            SkillRunnerDefaults.StatusDisabled,
+            SkillDefinitionDefaults.StatusDisabled,
             StringComparison.OrdinalIgnoreCase);
         content.Actions.Add(BuildAgentScopedCardAction("Refresh Status", AgentStatusAction, agentId, isPrimary: false));
         if (isDisabled)
