@@ -42,6 +42,17 @@ public sealed class GarnetEventStoreIntegrationTests
 
         var afterAppend = await store.GetEventsAsync(agentId);
         afterAppend.Select(x => x.Version).Should().Equal(3, 4, 5);
+
+        var maintenance = provider.GetRequiredService<IEventStoreMaintenance>();
+        (await maintenance.ResetStreamAsync(agentId)).Should().BeTrue();
+        (await store.GetVersionAsync(agentId)).Should().Be(0);
+        (await store.GetEventsAsync(agentId)).Should().BeEmpty();
+
+        var afterReset = await store.AppendAsync(
+            agentId,
+            CreateEvents(agentId, startVersion: 1, count: 1),
+            expectedVersion: 0);
+        afterReset.LatestVersion.Should().Be(1);
     }
 
     [GarnetIntegrationFact]

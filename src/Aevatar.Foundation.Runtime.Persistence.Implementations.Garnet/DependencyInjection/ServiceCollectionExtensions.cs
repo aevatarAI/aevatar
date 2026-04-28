@@ -29,6 +29,8 @@ public static class ServiceCollectionExtensions
             return ConnectionMultiplexer.Connect(connectionOptions);
         });
         services.Replace(ServiceDescriptor.Singleton<IEventStore, GarnetEventStore>());
+        services.Replace(ServiceDescriptor.Singleton<IEventStoreMaintenance>(sp =>
+            (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>()));
         return services;
     }
 
