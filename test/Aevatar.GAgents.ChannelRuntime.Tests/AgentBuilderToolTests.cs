@@ -945,9 +945,9 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_CrossUserIsolation_UserBDoesNotSeeUserASavedPreference()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-bob-1", Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync("skill-runner-bob-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-bob-1", Arg.Any<CancellationToken>())
+        queryPort.GetForCallerAsync("skill-runner-bob-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-bob-1",
@@ -956,13 +956,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-bob-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-bob-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-bob-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         // User A (ou_alice) has a saved preference; User B (ou_bob) does not.
         // Bot scope carries a sentinel to catch regressions that fall back to shared state.
@@ -1006,9 +1002,15 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(userConfigQueryPort);
         services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         // Simulate User B (ou_bob) sending /daily in a separate p2p chat.
@@ -1044,12 +1046,12 @@ public sealed class AgentBuilderToolTests
                 "User B has no saved preference; the system should fall through to the NyxID proxy, " +
                 "not leak User A's saved github_username from a different per-user scope.");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: bob-gh-from-nyx", StringComparison.Ordinal) &&
-                    !e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("alice-gh", StringComparison.Ordinal)),
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-bob-1",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    c.SkillContent.Contains("Primary GitHub username: bob-gh-from-nyx", StringComparison.Ordinal) &&
+                    !c.SkillContent.Contains("alice-gh", StringComparison.Ordinal)),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
             // User B's scope was queried, NOT User A's or the bot scope.
