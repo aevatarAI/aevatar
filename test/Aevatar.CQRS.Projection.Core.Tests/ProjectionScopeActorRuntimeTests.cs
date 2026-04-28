@@ -12,7 +12,8 @@ public sealed class ProjectionScopeActorRuntimeTests
     [Fact]
     public async Task EnsureExistsAsync_ShouldCreate_WhenActorMissing()
     {
-        var runtime = new RecordingRuntime();
+        var operationLog = new List<string>();
+        var runtime = new RecordingRuntime(operationLog);
         var dispatchPort = new NoopDispatchPort();
         var verifier = new StubAgentTypeVerifier(_ => true);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
@@ -41,7 +42,8 @@ public sealed class ProjectionScopeActorRuntimeTests
             "agent-registry-store",
             "user-agent-catalog-read-model",
             ProjectionRuntimeMode.DurableMaterialization));
-        var runtime = new RecordingRuntime();
+        var operationLog = new List<string>();
+        var runtime = new RecordingRuntime(operationLog);
         runtime.SeedExisting(actorId);
         var verifier = new StubAgentTypeVerifier(_ => true);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
@@ -75,10 +77,11 @@ public sealed class ProjectionScopeActorRuntimeTests
             "user-agent-catalog-read-model",
             ProjectionRuntimeMode.DurableMaterialization);
         var actorId = ProjectionScopeActorId.Build(scopeKey);
-        var runtime = new RecordingRuntime();
+        var operationLog = new List<string>();
+        var runtime = new RecordingRuntime(operationLog);
         runtime.SeedExisting(actorId);
         var verifier = new StubAgentTypeVerifier(_ => false);
-        var pubSub = new RecordingPubSubMaintenance();
+        var pubSub = new RecordingPubSubMaintenance(operationLog);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
             runtime,
             new NoopDispatchPort(),
@@ -88,13 +91,43 @@ public sealed class ProjectionScopeActorRuntimeTests
 
         await sut.EnsureExistsAsync(scopeKey, CancellationToken.None);
 
-        runtime.DestroyedActorIds.Should().Equal(actorId);
-        pubSub.ResetActorIds.Should().Equal(actorId);
-        runtime.CreatedActorIds.Should().Equal(actorId);
-        // Order matters: destroy → pub/sub reset → recreate. Otherwise the
-        // recreated actor's RegisterAsStreamProducer would still see the stale
-        // etag from the previous incarnation.
-        runtime.OperationLog.Should().Equal("destroy:" + actorId, "create:" + actorId);
+        // Order matters across all three operations: destroy → pub/sub reset →
+        // recreate. Reordering pub/sub reset to before destroy or after create
+        // leaves the recreated actor's RegisterAsStreamProducer hitting the
+        // stale etag from the previous incarnation.
+        operationLog.Should().Equal(
+            "destroy:" + actorId,
+            "pubsub-reset:" + actorId,
+            "create:" + actorId);
+    }
+
+    [Fact]
+    public async Task EnsureExistsAsync_ShouldStillRecreate_WhenPubSubResetThrows()
+    {
+        // Pub/sub reset is best-effort. Once we've destroyed the stale actor,
+        // a maintenance impl that throws must not block the recreate — failing
+        // here would leave the cluster strictly worse than the pre-self-heal
+        // state (the type mismatch at least had an actor).
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "agent-registry-store",
+            "user-agent-catalog-read-model",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        var operationLog = new List<string>();
+        var runtime = new RecordingRuntime(operationLog);
+        runtime.SeedExisting(actorId);
+        var verifier = new StubAgentTypeVerifier(_ => false);
+        var pubSub = new ThrowingPubSubMaintenance();
+        var sut = new ProjectionScopeActorRuntime<DummyAgent>(
+            runtime,
+            new NoopDispatchPort(),
+            verifier,
+            pubSub,
+            NullLogger<ProjectionScopeActorRuntime<DummyAgent>>.Instance);
+
+        await sut.EnsureExistsAsync(scopeKey, CancellationToken.None);
+
+        operationLog.Should().Equal("destroy:" + actorId, "create:" + actorId);
     }
 
     [Fact]
@@ -105,7 +138,8 @@ public sealed class ProjectionScopeActorRuntimeTests
             "user-agent-catalog-read-model",
             ProjectionRuntimeMode.DurableMaterialization);
         var actorId = ProjectionScopeActorId.Build(scopeKey);
-        var runtime = new RecordingRuntime();
+        var operationLog = new List<string>();
+        var runtime = new RecordingRuntime(operationLog);
         runtime.SeedExisting(actorId);
         var verifier = new StubAgentTypeVerifier(_ => false);
         var sut = new ProjectionScopeActorRuntime<DummyAgent>(
@@ -117,8 +151,7 @@ public sealed class ProjectionScopeActorRuntimeTests
 
         await sut.EnsureExistsAsync(scopeKey, CancellationToken.None);
 
-        runtime.DestroyedActorIds.Should().Equal(actorId);
-        runtime.CreatedActorIds.Should().Equal(actorId);
+        operationLog.Should().Equal("destroy:" + actorId, "create:" + actorId);
     }
 
     private sealed class DummyAgent : IAgent
@@ -132,13 +165,13 @@ public sealed class ProjectionScopeActorRuntimeTests
             Task.FromResult<IReadOnlyList<Type>>([]);
     }
 
-    private sealed class RecordingRuntime : IActorRuntime
+    private sealed class RecordingRuntime(List<string> operationLog) : IActorRuntime
     {
         private readonly HashSet<string> _existing = new(StringComparer.Ordinal);
+        private readonly List<string> _operationLog = operationLog;
 
         public List<string> CreatedActorIds { get; } = [];
         public List<string> DestroyedActorIds { get; } = [];
-        public List<string> OperationLog { get; } = [];
 
         public void SeedExisting(string actorId) => _existing.Add(actorId);
 
@@ -147,7 +180,7 @@ public sealed class ProjectionScopeActorRuntimeTests
         {
             ArgumentNullException.ThrowIfNull(id);
             CreatedActorIds.Add(id);
-            OperationLog.Add("create:" + id);
+            _operationLog.Add("create:" + id);
             _existing.Add(id);
             return Task.FromResult<IActor>(new StubActor(id));
         }
@@ -158,7 +191,7 @@ public sealed class ProjectionScopeActorRuntimeTests
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             DestroyedActorIds.Add(id);
-            OperationLog.Add("destroy:" + id);
+            _operationLog.Add("destroy:" + id);
             _existing.Remove(id);
             return Task.CompletedTask;
         }
@@ -187,15 +220,21 @@ public sealed class ProjectionScopeActorRuntimeTests
             Task.FromResult(matcher(actorId));
     }
 
-    private sealed class RecordingPubSubMaintenance : IStreamPubSubMaintenance
+    private sealed class RecordingPubSubMaintenance(List<string> operationLog) : IStreamPubSubMaintenance
     {
-        public List<string> ResetActorIds { get; } = [];
+        private readonly List<string> _operationLog = operationLog;
 
         public Task<bool> ResetActorStreamPubSubAsync(string actorId, CancellationToken ct = default)
         {
-            ResetActorIds.Add(actorId);
+            _operationLog.Add("pubsub-reset:" + actorId);
             return Task.FromResult(true);
         }
+    }
+
+    private sealed class ThrowingPubSubMaintenance : IStreamPubSubMaintenance
+    {
+        public Task<bool> ResetActorStreamPubSubAsync(string actorId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("pub/sub backend offline");
     }
 
     private sealed class NoopDispatchPort : IActorDispatchPort

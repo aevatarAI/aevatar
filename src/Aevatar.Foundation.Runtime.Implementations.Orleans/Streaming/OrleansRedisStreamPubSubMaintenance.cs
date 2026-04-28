@@ -59,6 +59,12 @@ internal sealed class OrleansRedisStreamPubSubMaintenance : IStreamPubSubMainten
         // PubSubRendezvousGrain id format is:
         //   "pubsubrendezvous/{streamProvider}/{streamNamespace}/{streamKey}"
         // and an actor self-stream uses the actor id as the streamKey.
+        //
+        // CAUTION: Both the "pubsubrendezvous" grain type token and the
+        // "{grainId}/{serviceId}" key format are Orleans-internal. Bumping
+        // Microsoft.Orleans.Persistence.Redis must re-verify both — the
+        // OrleansRedisStreamPubSubMaintenanceTests reflection guard pins the
+        // format and will fail loudly when Orleans changes either.
         var grainId =
             $"pubsubrendezvous/{_options.StreamProviderName}/{_options.ActorEventNamespace}/{actorId}";
         var redisKey = (RedisKey)$"{grainId}/{_serviceId}";

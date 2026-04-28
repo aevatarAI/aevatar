@@ -55,8 +55,32 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
             typeof(TScopeAgent).FullName);
 
         await _runtime.DestroyAsync(actorId, ct).ConfigureAwait(false);
+
+        // Pub/sub reset is best-effort: at this point the old actor is already
+        // destroyed, so a future IStreamPubSubMaintenance impl that throws must
+        // not block the recreate — failing here would leave us strictly worse
+        // than the pre-self-heal state (the type mismatch at least had an actor).
+        // Matches RetiredActorCleanupHostedService.CleanupStreamPubSubBestEffortAsync.
         if (_streamPubSubMaintenance != null)
-            await _streamPubSubMaintenance.ResetActorStreamPubSubAsync(actorId, ct).ConfigureAwait(false);
+        {
+            try
+            {
+                await _streamPubSubMaintenance
+                    .ResetActorStreamPubSubAsync(actorId, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Stream pub/sub state reset failed during projection scope self-heal for {ActorId}; proceeding with recreate.",
+                    actorId);
+            }
+        }
 
         _ = await _runtime.CreateAsync<TScopeAgent>(actorId, ct).ConfigureAwait(false);
     }
