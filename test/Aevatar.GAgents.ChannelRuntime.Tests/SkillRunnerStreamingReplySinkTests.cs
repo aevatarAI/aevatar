@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -206,9 +208,9 @@ public sealed class SkillRunnerStreamingReplySinkTests
     [Fact]
     public async Task FinalEdit_LarkRejection_ThrowsRejectionMessage()
     {
-        // Mid-stream PATCH errors are swallowed (transient: rate-limit, timeout). The FINAL edit
-        // is the contract for the run — if it fails the user never sees the complete daily, so
-        // we throw and HandleTriggerAsync persists Failed.
+        // Mid-stream edit (PUT) errors are swallowed (transient: rate-limit, timeout). The
+        // FINAL edit is the contract for the run — if it fails the user never sees the complete
+        // daily, so we throw and HandleTriggerAsync persists Failed.
         var handler = new SequencedHandler(
             OkSendResponse,
             """{"code":230002,"msg":"Bot is not in the chat"}""");
@@ -225,8 +227,8 @@ public sealed class SkillRunnerStreamingReplySinkTests
     [Fact]
     public async Task MidStreamEditRejection_DoesNotThrow_NextDeltaRetries()
     {
-        // Transient PATCH failures (rate-limit, single-edit blip) must not abort the run. The
-        // sink logs and continues; the next delta retries against the same message_id.
+        // Transient edit (PUT) failures (rate-limit, single-edit blip) must not abort the run.
+        // The sink logs and continues; the next delta retries against the same message_id.
         var handler = new SequencedHandler(
             OkSendResponse,
             """{"code":230020,"msg":"transient rate limit"}""",

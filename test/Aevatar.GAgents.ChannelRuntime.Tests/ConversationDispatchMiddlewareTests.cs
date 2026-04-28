@@ -73,7 +73,7 @@ public sealed class ConversationDispatchMiddlewareTests
         nextCalls.Should().Be(1);
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
         public RecordingActor Actor { get; } = new("channel-conversation:lark:dm:user-2");
         public List<string?> CreatedActorIds { get; } = [];
@@ -93,6 +93,9 @@ public sealed class ConversationDispatchMiddlewareTests
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Actor.HandleEventAsync(envelope, ct);
 
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();

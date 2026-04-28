@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -18,6 +20,7 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdChatStreamRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -43,8 +46,21 @@ public static partial class NyxIdChatEndpoints
                 return;
             }
 
-            actor = await actorRuntime.GetAsync(actorId)
-                    ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+            if (!await TryAuthorizeConversationAsync(
+                    http,
+                    admissionPort,
+                    scopeId,
+                    actorId,
+                    ScopeResourceOperation.Stream,
+                    ct))
+                return;
+
+            actor = await actorRuntime.GetAsync(actorId);
+            if (actor == null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -189,6 +205,7 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdApprovalRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -210,6 +227,15 @@ public static partial class NyxIdChatEndpoints
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
             }
+
+            if (!await TryAuthorizeConversationAsync(
+                    http,
+                    admissionPort,
+                    scopeId,
+                    actorId,
+                    ScopeResourceOperation.Approve,
+                    ct))
+                return;
 
             actor = await actorRuntime.GetAsync(actorId);
             if (actor == null)
