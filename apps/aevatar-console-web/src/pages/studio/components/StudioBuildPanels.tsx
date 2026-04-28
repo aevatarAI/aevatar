@@ -37,10 +37,17 @@ import {
 } from '@/shared/models/runtime/gagents';
 import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
+  addPackageFile,
+  createSingleSourcePackage,
   deserializePersistedSource,
+  getPackageEntries,
   getSelectedPackageEntry,
+  removePackageFile,
+  renamePackageFile,
   serializePersistedSource,
+  setEntrySourcePath,
   updatePackageFileContent,
+  updateEntryBehaviorTypeName,
 } from '@/shared/studio/scriptPackage';
 import {
   createStepInspectorDraft,
@@ -49,7 +56,12 @@ import {
 } from '@/shared/studio/document';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type {
+  DraftRunResult,
   ScopedScriptDetail,
+  ScopedScriptSummary,
+  ScopeScriptAcceptedSummary,
+  ScopeScriptUpsertAcceptedResponse,
+  ScriptPromotionDecision,
   ScriptValidationDiagnostic,
   ScriptValidationResult,
 } from '@/shared/studio/scriptsModels';
@@ -61,6 +73,7 @@ import {
   joinInteractiveClassNames,
 } from '@/shared/ui/interactionStandards';
 import ScriptCodeEditor, {
+  type ScriptEditorFocusTarget,
   type ScriptEditorMarker,
 } from '@/modules/studio/scripts/ScriptCodeEditor';
 
@@ -89,6 +102,66 @@ const workflowWorkbenchLayoutStyle: React.CSSProperties = {
 };
 
 const workflowEditingSurfaceHeight = 'clamp(560px, calc(100vh - 320px), 760px)';
+const SCRIPT_SAVE_OBSERVATION_POLL_DELAYS_MS = [
+  1000,
+  2000,
+  3000,
+  5000,
+  5000,
+  5000,
+] as const;
+
+const SCRIPT_STARTER_SOURCE = `using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Studio.Application.Scripts.Contracts;
+
+public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScriptReadModel>
+{
+    protected override void Configure(IScriptBehaviorBuilder<AppScriptReadModel, AppScriptReadModel> builder)
+    {
+        builder
+            .OnCommand<AppScriptCommand>(HandleAsync)
+            .OnEvent<AppScriptUpdated>(
+                apply: static (_, evt, _) => evt.Current?.Clone() ?? new AppScriptReadModel())
+            .ProjectState(static (state, _) => state?.Clone() ?? new AppScriptReadModel());
+    }
+
+    private static Task HandleAsync(
+        AppScriptCommand input,
+        ScriptCommandContext<AppScriptReadModel> context,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var commandId = context.CommandId ?? input?.CommandId ?? string.Empty;
+        var rawInput = input?.Input ?? string.Empty;
+        var normalized = rawInput.Trim();
+        var current = new AppScriptReadModel
+        {
+            Input = rawInput,
+            Output = normalized.ToUpperInvariant(),
+            Status = normalized.Length == 0 ? "empty" : "ok",
+            LastCommandId = commandId,
+        };
+
+        current.Notes.Add(normalized.Length == 0 ? "no-input" : "trimmed");
+        current.Notes.Add("uppercased");
+
+        context.Emit(new AppScriptUpdated
+        {
+            Current = current,
+        });
+
+        return Task.CompletedTask;
+    }
+}`;
+
+function createScriptStarterPackage() {
+  return createSingleSourcePackage(SCRIPT_STARTER_SOURCE);
+}
 
 const workflowWorkspaceRowStyle: React.CSSProperties = {
   alignItems: 'stretch',
@@ -681,6 +754,37 @@ function mapScriptMarkers(
       code: diagnostic.code || undefined,
       source: diagnostic.origin || undefined,
     }));
+}
+
+function formatScriptDiagnosticLocation(diagnostic: ScriptValidationDiagnostic): string {
+  const filePath = diagnostic.filePath || 'source';
+  if (!diagnostic.startLine || !diagnostic.startColumn) {
+    return filePath;
+  }
+
+  return `${filePath}:${diagnostic.startLine}:${diagnostic.startColumn}`;
+}
+
+function buildScriptDiagnosticFocusTarget(
+  diagnostic: ScriptValidationDiagnostic,
+  token: string,
+): ScriptEditorFocusTarget {
+  const startLineNumber = Math.max(diagnostic.startLine || 1, 1);
+  const startColumn = Math.max(diagnostic.startColumn || 1, 1);
+  return {
+    filePath: diagnostic.filePath || 'Behavior.cs',
+    startLineNumber,
+    startColumn,
+    endLineNumber: Math.max(
+      diagnostic.endLine || diagnostic.startLine || 1,
+      startLineNumber,
+    ),
+    endColumn: Math.max(
+      diagnostic.endColumn || (diagnostic.startColumn || 1) + 1,
+      startColumn + 1,
+    ),
+    token,
+  };
 }
 
 function ScriptLeaveDialog(props: {
@@ -1713,19 +1817,105 @@ export type StudioScriptBuildPanelProps = {
   };
   readonly selectedScriptId: string;
   readonly onSelectScriptId: (scriptId: string) => void;
+  readonly onCreateScriptDraft?: () => void;
   readonly onRefreshScripts?: () => Promise<unknown> | unknown;
   readonly onContinueToBind: () => void;
   readonly onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
+  readonly onScriptBuildStateChange?: (state: StudioScriptBuildState | null) => void;
+  readonly pendingScriptDraft?: StudioPendingScriptDraft | null;
+  readonly onPendingScriptDraftChange?: (draft: StudioPendingScriptDraft | null) => void;
+  readonly onScriptDraftSaved?: (scriptId: string) => void;
 };
+
+export type StudioScriptBuildState = {
+  readonly scriptId: string;
+  readonly displayName: string;
+  readonly scriptRevision: string;
+  readonly revisionId?: string;
+  readonly sourceHash?: string;
+  readonly definitionActorId?: string;
+  readonly dirty: boolean;
+  readonly validationStatus: 'unknown' | 'valid' | 'invalid';
+  readonly saveStatus: 'idle' | 'accepted' | 'applied' | 'failed';
+};
+
+export type StudioPendingScriptDraft = {
+  readonly scriptId: string;
+  readonly displayName: string;
+  readonly sourceText?: string;
+};
+
+function buildPendingScriptDetail(
+  draft: StudioPendingScriptDraft | null | undefined,
+  scopeId?: string,
+): ScopedScriptDetail | null {
+  if (!draft?.scriptId) {
+    return null;
+  }
+
+  return {
+    available: true,
+    scopeId: scopeId || '',
+    script: {
+      scopeId: scopeId || '',
+      scriptId: draft.scriptId,
+      catalogActorId: '',
+      definitionActorId: '',
+      activeRevision: '',
+      activeSourceHash: '',
+      updatedAt: '',
+    },
+    source: {
+      sourceText: draft.sourceText || '',
+      definitionActorId: '',
+      revision: '',
+      sourceHash: '',
+    },
+  };
+}
+
+function buildAppliedScriptDetail(
+  scopeId: string,
+  acceptedScript: ScopeScriptAcceptedSummary,
+  sourceText: string,
+  currentScript?: ScopedScriptSummary | null,
+): ScopedScriptDetail {
+  const summary: ScopedScriptSummary = currentScript || {
+    scopeId,
+    scriptId: acceptedScript.scriptId,
+    catalogActorId: acceptedScript.catalogActorId || '',
+    definitionActorId: acceptedScript.definitionActorId,
+    activeRevision: acceptedScript.revisionId,
+    activeSourceHash: acceptedScript.sourceHash,
+    updatedAt: acceptedScript.acceptedAt,
+  };
+
+  return {
+    available: true,
+    scopeId,
+    script: summary,
+    source: {
+      sourceText,
+      definitionActorId: summary.definitionActorId || acceptedScript.definitionActorId,
+      revision: summary.activeRevision || acceptedScript.revisionId,
+      sourceHash: summary.activeSourceHash || acceptedScript.sourceHash,
+    },
+  };
+}
 
 export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   scopeId,
   scriptsQuery,
   selectedScriptId,
   onSelectScriptId,
+  onCreateScriptDraft,
   onRefreshScripts,
   onContinueToBind,
   onRegisterLeaveGuard,
+  onScriptBuildStateChange,
+  pendingScriptDraft,
+  onPendingScriptDraftChange,
+  onScriptDraftSaved,
 }) => {
   const [scriptPackage, setScriptPackage] = React.useState(() =>
     deserializePersistedSource(''),
@@ -1737,6 +1927,21 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const [validationError, setValidationError] = React.useState('');
   const [savePending, setSavePending] = React.useState(false);
   const [saveNotice, setSaveNotice] = React.useState('');
+  const [saveObservationStatus, setSaveObservationStatus] = React.useState<
+    'idle' | 'accepted' | 'applied' | 'pending' | 'rejected' | 'failed'
+  >('idle');
+  const [saveStatus, setSaveStatus] =
+    React.useState<StudioScriptBuildState['saveStatus']>('idle');
+  const [observedAppliedScript, setObservedAppliedScript] =
+    React.useState<ScopedScriptDetail | null>(null);
+  const [focusedDiagnostic, setFocusedDiagnostic] =
+    React.useState<ScriptEditorFocusTarget | null>(null);
+  const [promotionReason, setPromotionReason] = React.useState('');
+  const [promotionPending, setPromotionPending] = React.useState(false);
+  const [promotionNotice, setPromotionNotice] = React.useState('');
+  const [promotionHistory, setPromotionHistory] = React.useState<
+    ScriptPromotionDecision[]
+  >([]);
   const [runPending, setRunPending] = React.useState(false);
   const [runInput, setRunInput] = React.useState(
     JSON.stringify(
@@ -1752,8 +1957,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const [runOutput, setRunOutput] = React.useState(
     'Run the current script draft to inspect the draft-run result here.',
   );
+  const [lastRunResult, setLastRunResult] = React.useState<DraftRunResult | null>(null);
   const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
   const leaveResolverRef = React.useRef<((value: boolean) => void) | null>(null);
+  const saveObservationTimerRef = React.useRef<number | null>(null);
+  const saveObservationTokenRef = React.useRef(0);
+  const activeScriptIdRef = React.useRef('');
   const availableScripts = React.useMemo(
     () =>
       (scriptsQuery.data ?? []).filter(
@@ -1761,10 +1970,36 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       ),
     [scriptsQuery.data],
   );
+  const pendingScriptDetail = React.useMemo(
+    () =>
+      pendingScriptDraft?.scriptId === selectedScriptId
+        ? buildPendingScriptDetail(pendingScriptDraft, scopeId)
+        : null,
+    [pendingScriptDraft, scopeId, selectedScriptId],
+  );
+  const selectedCatalogScript = React.useMemo(
+    () => availableScripts.find((detail) => detail.script?.scriptId === selectedScriptId) || null,
+    [availableScripts, selectedScriptId],
+  );
+  const selectedObservedAppliedScript = React.useMemo(
+    () =>
+      !selectedCatalogScript &&
+      observedAppliedScript?.script?.scriptId === selectedScriptId
+        ? observedAppliedScript
+        : null,
+    [observedAppliedScript, selectedCatalogScript, selectedScriptId],
+  );
   const activeScript =
-    availableScripts.find((detail) => detail.script?.scriptId === selectedScriptId) ||
+    selectedCatalogScript ||
+    selectedObservedAppliedScript ||
+    pendingScriptDetail ||
     availableScripts[0] ||
     null;
+  activeScriptIdRef.current = activeScript?.script?.scriptId || '';
+  const activeScriptIsDraft = Boolean(pendingScriptDetail && activeScript === pendingScriptDetail);
+  const activeScriptIsObserved = Boolean(
+    selectedObservedAppliedScript && activeScript === selectedObservedAppliedScript,
+  );
   const persistedSource = React.useMemo(
     () => activeScript?.source?.sourceText || '',
     [activeScript?.source?.sourceText],
@@ -1784,6 +2019,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     () => mapScriptMarkers(validationResult?.diagnostics, selectedPackageEntry?.path || ''),
     [selectedPackageEntry?.path, validationResult?.diagnostics],
   );
+  const packageEntries = React.useMemo(
+    () => getPackageEntries(scriptPackage),
+    [scriptPackage],
+  );
   const isDirty = React.useMemo(
     () => serializePersistedSource(scriptPackage) !== persistedSource,
     [persistedSource, scriptPackage],
@@ -1794,7 +2033,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       return;
     }
 
-    const nextPackage = deserializePersistedSource(activeScript.source?.sourceText || '');
+    const nextPackage = activeScriptIsDraft && !activeScript.source?.sourceText
+      ? createScriptStarterPackage()
+      : deserializePersistedSource(activeScript.source?.sourceText || '');
     const nextEntry =
       getSelectedPackageEntry(nextPackage, nextPackage.entrySourcePath) ||
       getSelectedPackageEntry(nextPackage, '') ||
@@ -1803,16 +2044,50 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     setSelectedFilePath(nextEntry?.path || nextPackage.entrySourcePath || 'Behavior.cs');
     setValidationResult(null);
     setValidationError('');
-    setSaveNotice('');
-  }, [activeScript?.script?.scriptId, activeScript?.source?.sourceText]);
+    setFocusedDiagnostic(null);
+    if (activeScriptIsObserved) {
+      setSaveObservationStatus('applied');
+      setSaveStatus('applied');
+    } else {
+      setSaveNotice('');
+      setSaveObservationStatus('idle');
+      setSaveStatus('idle');
+    }
+    setLastRunResult(null);
+  }, [
+    activeScript?.script?.scriptId,
+    activeScript?.source?.sourceText,
+    activeScriptIsDraft,
+    activeScriptIsObserved,
+  ]);
 
   React.useEffect(() => {
-    if (selectedScriptId || !availableScripts[0]?.script?.scriptId) {
+    if (selectedScriptId || pendingScriptDraft?.scriptId || !availableScripts[0]?.script?.scriptId) {
       return;
     }
 
     onSelectScriptId(availableScripts[0].script!.scriptId);
-  }, [availableScripts, onSelectScriptId, selectedScriptId]);
+  }, [availableScripts, onSelectScriptId, pendingScriptDraft?.scriptId, selectedScriptId]);
+
+  const cancelSaveObservationPoll = React.useCallback(() => {
+    saveObservationTokenRef.current += 1;
+    if (saveObservationTimerRef.current) {
+      window.clearTimeout(saveObservationTimerRef.current);
+      saveObservationTimerRef.current = null;
+    }
+  }, []);
+
+  React.useEffect(
+    () => () => {
+      cancelSaveObservationPoll();
+      onScriptBuildStateChange?.(null);
+    },
+    [cancelSaveObservationPoll, onScriptBuildStateChange],
+  );
+
+  React.useEffect(() => {
+    cancelSaveObservationPoll();
+  }, [activeScript?.script?.scriptId, cancelSaveObservationPoll]);
 
   React.useEffect(() => {
     onRegisterLeaveGuard?.(
@@ -1833,11 +2108,160 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     };
   }, [isDirty, onRegisterLeaveGuard]);
 
+  const validationStatus: StudioScriptBuildState['validationStatus'] =
+    validationResult
+      ? validationResult.success
+        ? 'valid'
+        : 'invalid'
+      : validationError
+        ? 'invalid'
+        : 'unknown';
+  const effectiveSaveStatus: StudioScriptBuildState['saveStatus'] =
+    isDirty
+      ? saveStatus === 'failed'
+        ? 'failed'
+        : 'idle'
+      : saveStatus === 'accepted' || saveStatus === 'failed'
+        ? saveStatus
+        : activeScript?.script?.activeRevision
+          ? 'applied'
+          : saveStatus;
+  const scriptReadyToBind = Boolean(
+    activeScript?.script?.scriptId &&
+      !isDirty &&
+      effectiveSaveStatus === 'applied',
+  );
+  const hasActiveScript = Boolean(activeScript?.script?.scriptId);
+  const lifecycleStatus = !activeScript?.script?.scriptId
+    ? 'No script'
+    : isDirty && effectiveSaveStatus !== 'failed'
+        ? 'Unsaved edits'
+        : saveObservationStatus === 'accepted' || effectiveSaveStatus === 'accepted'
+          ? 'Save accepted'
+          : saveObservationStatus === 'pending'
+            ? 'Waiting for catalog'
+            : effectiveSaveStatus === 'failed'
+              ? 'Save needs attention'
+              : activeScriptIsDraft
+                ? 'Draft'
+                : scriptReadyToBind
+                  ? 'Catalog applied'
+                  : 'Catalog script';
+  const lifecycleStatusColor =
+    lifecycleStatus === 'Catalog applied'
+      ? 'green'
+      : lifecycleStatus === 'Save needs attention'
+        ? 'red'
+        : lifecycleStatus === 'Waiting for catalog' || lifecycleStatus === 'Save accepted'
+          ? 'gold'
+          : activeScriptIsDraft
+            ? 'blue'
+            : 'default';
+  const bindReadinessLabel =
+    !activeScript?.script?.scriptId
+      ? 'Create or select a script'
+      : validationStatus === 'invalid'
+        ? 'Fix validation errors'
+        : isDirty && validationStatus !== 'valid'
+          ? 'Validate current source'
+          : isDirty
+            ? 'Save revision'
+        : effectiveSaveStatus === 'accepted'
+          ? 'Waiting for catalog'
+          : scriptReadyToBind
+            ? 'Ready to bind'
+            : 'Save revision';
+  const saveObservationInFlight =
+    saveObservationStatus === 'accepted' || saveObservationStatus === 'pending';
+  const saveNoticeType =
+    saveObservationStatus === 'applied'
+      ? 'success'
+      : saveObservationStatus === 'accepted'
+        ? 'info'
+        : saveObservationStatus === 'failed'
+          ? 'error'
+          : 'warning';
+  const saveDisabled = Boolean(
+    !activeScript?.script?.scriptId ||
+      validationPending ||
+      saveObservationInFlight ||
+      validationStatus === 'invalid' ||
+      (isDirty && validationStatus !== 'valid'),
+  );
+
+  React.useEffect(() => {
+    if (!activeScript?.script?.scriptId) {
+      onScriptBuildStateChange?.(null);
+      return;
+    }
+
+    onScriptBuildStateChange?.({
+      scriptId: activeScript.script.scriptId,
+      displayName: pendingScriptDraft?.displayName || activeScript.script.scriptId,
+      scriptRevision:
+        activeScript.source?.revision ||
+        activeScript.script.activeRevision ||
+        currentRevision,
+      revisionId:
+        activeScript.source?.revision ||
+        activeScript.script.activeRevision ||
+        currentRevision,
+      sourceHash:
+        activeScript.source?.sourceHash ||
+        activeScript.script.activeSourceHash ||
+        '',
+      definitionActorId:
+        activeScript.source?.definitionActorId ||
+        activeScript.script.definitionActorId ||
+        '',
+      dirty: isDirty,
+      validationStatus,
+      saveStatus: effectiveSaveStatus,
+    });
+  }, [
+    activeScript?.script?.activeRevision,
+    activeScript?.script?.activeSourceHash,
+    activeScript?.script?.definitionActorId,
+    activeScript?.script?.scriptId,
+    activeScript?.source?.definitionActorId,
+    activeScript?.source?.revision,
+    activeScript?.source?.sourceHash,
+    currentRevision,
+    effectiveSaveStatus,
+    isDirty,
+    onScriptBuildStateChange,
+    pendingScriptDraft?.displayName,
+    validationStatus,
+  ]);
+
   const resolveLeave = React.useCallback((value: boolean) => {
     leaveResolverRef.current?.(value);
     leaveResolverRef.current = null;
     setLeaveDialogOpen(false);
   }, []);
+
+  const commitScriptPackage = React.useCallback(
+    (nextPackage: typeof scriptPackage, nextSelectedFilePath?: string) => {
+      cancelSaveObservationPoll();
+      setScriptPackage(nextPackage);
+      if (nextSelectedFilePath) {
+        setSelectedFilePath(nextSelectedFilePath);
+      }
+      setValidationResult(null);
+      setValidationError('');
+      setFocusedDiagnostic(null);
+      setSaveNotice('');
+      setSaveObservationStatus('idle');
+      setSaveStatus('idle');
+      if (activeScriptIsDraft && pendingScriptDraft) {
+        onPendingScriptDraftChange?.({
+          ...pendingScriptDraft,
+          sourceText: serializePersistedSource(nextPackage),
+        });
+      }
+    },
+    [activeScriptIsDraft, cancelSaveObservationPoll, onPendingScriptDraftChange, pendingScriptDraft],
+  );
 
   const handleValidate = React.useCallback(async () => {
     if (!activeScript?.script?.scriptId) {
@@ -1854,13 +2278,134 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         package: scriptPackage,
       });
       setValidationResult(result);
+      setFocusedDiagnostic(null);
+      if (result.success && isDirty) {
+        setSaveStatus('idle');
+      }
     } catch (error) {
       setValidationError(describeError(error));
       setValidationResult(null);
+      setFocusedDiagnostic(null);
     } finally {
       setValidationPending(false);
     }
-  }, [activeScript?.script?.scriptId, currentRevision, scriptPackage]);
+  }, [activeScript?.script?.scriptId, currentRevision, isDirty, scriptPackage]);
+
+  const markSaveObservationApplied = React.useCallback(
+    async (
+      accepted: ScopeScriptUpsertAcceptedResponse,
+      savedSourceText: string,
+      currentScript: ScopedScriptSummary | null | undefined,
+    ) => {
+      setObservedAppliedScript(
+        buildAppliedScriptDetail(
+          scopeId || '',
+          accepted.acceptedScript,
+          savedSourceText,
+          currentScript,
+        ),
+      );
+      onScriptDraftSaved?.(accepted.acceptedScript.scriptId);
+      await onRefreshScripts?.();
+      setSaveObservationStatus('applied');
+      setSaveStatus('applied');
+      setSaveNotice(
+        `Save applied for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+      );
+    },
+    [onRefreshScripts, onScriptDraftSaved, scopeId],
+  );
+
+  const pollSaveObservation = React.useCallback(
+    async (
+      accepted: ScopeScriptUpsertAcceptedResponse,
+      savedSourceText: string,
+      attemptIndex: number,
+      token: number,
+    ) => {
+      if (!scopeId) {
+        return;
+      }
+      const observedScriptId = accepted.acceptedScript.scriptId;
+
+      try {
+        const observation = await scriptsApi.observeSaveScript(
+          scopeId,
+          observedScriptId,
+          {
+            revisionId: accepted.acceptedScript.revisionId,
+            definitionActorId: accepted.acceptedScript.definitionActorId,
+            sourceHash: accepted.acceptedScript.sourceHash,
+            proposalId: accepted.acceptedScript.proposalId,
+            expectedBaseRevision: accepted.acceptedScript.expectedBaseRevision,
+            acceptedAt: accepted.acceptedScript.acceptedAt,
+          },
+        );
+        if (
+          saveObservationTokenRef.current !== token ||
+          activeScriptIdRef.current !== observedScriptId
+        ) {
+          return;
+        }
+
+        if (observation.status === 'applied') {
+          saveObservationTimerRef.current = null;
+          await markSaveObservationApplied(
+            accepted,
+            savedSourceText,
+            observation.currentScript,
+          );
+          return;
+        }
+
+        if (observation.status === 'rejected') {
+          saveObservationTimerRef.current = null;
+          await onRefreshScripts?.();
+          setSaveObservationStatus('rejected');
+          setSaveStatus('failed');
+          setSaveNotice(
+            observation.message ||
+              `Save rejected for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+          );
+          return;
+        }
+
+        setSaveObservationStatus('pending');
+        const nextDelay = SCRIPT_SAVE_OBSERVATION_POLL_DELAYS_MS[attemptIndex];
+        if (nextDelay == null) {
+          saveObservationTimerRef.current = null;
+          setSaveNotice(
+            `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Still waiting for catalog; use Refresh catalog to check again.`,
+          );
+          return;
+        }
+
+        setSaveNotice(
+          `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Waiting for catalog; checking again in ${Math.round(nextDelay / 1000)}s.`,
+        );
+        saveObservationTimerRef.current = window.setTimeout(() => {
+          void pollSaveObservation(
+            accepted,
+            savedSourceText,
+            attemptIndex + 1,
+            token,
+          );
+        }, nextDelay);
+      } catch (error) {
+        if (
+          saveObservationTokenRef.current !== token ||
+          activeScriptIdRef.current !== observedScriptId
+        ) {
+          return;
+        }
+        saveObservationTimerRef.current = null;
+        setSaveObservationStatus('failed');
+        setSaveStatus('failed');
+        setSaveNotice(describeError(error));
+      }
+    },
+    [markSaveObservationApplied, onRefreshScripts, scopeId],
+  );
 
   const handleSave = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
@@ -1868,31 +2413,142 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       return;
     }
 
+    cancelSaveObservationPoll();
+    const savingScriptId = activeScript.script.scriptId;
     setSavePending(true);
     setSaveNotice('');
     try {
       const accepted = await scriptsApi.saveScript(scopeId, {
-        scriptId: activeScript.script.scriptId,
+        scriptId: savingScriptId,
         revisionId: currentRevision,
-        expectedBaseRevision: activeScript.script.activeRevision || undefined,
+        expectedBaseRevision: activeScriptIsDraft
+          ? undefined
+          : activeScript.script.activeRevision || undefined,
         sourceText: serializePersistedSource(scriptPackage),
       });
-      await onRefreshScripts?.();
-      setSaveNotice(
-        `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
-      );
+      setSaveStatus('accepted');
+      setSaveObservationStatus('accepted');
+      const savedSourceText = serializePersistedSource(scriptPackage);
+      const token = saveObservationTokenRef.current;
+      await pollSaveObservation(accepted, savedSourceText, 0, token);
     } catch (error) {
+      if (activeScriptIdRef.current !== savingScriptId) {
+        return;
+      }
+      setSaveObservationStatus('failed');
+      setSaveStatus('failed');
       setSaveNotice(describeError(error));
     } finally {
-      setSavePending(false);
+      if (activeScriptIdRef.current === savingScriptId) {
+        setSavePending(false);
+      }
+    }
+  }, [
+    activeScript?.script?.activeRevision,
+    activeScript?.script?.scriptId,
+    activeScriptIsDraft,
+    cancelSaveObservationPoll,
+    currentRevision,
+    pollSaveObservation,
+    scopeId,
+    scriptPackage,
+  ]);
+
+  const handleAddPackageFile = React.useCallback(
+    (kind: 'csharp' | 'proto') => {
+      const fallbackPath = kind === 'csharp' ? 'Behavior.cs' : 'schema.proto';
+      const nextPath = window.prompt(
+        kind === 'csharp' ? 'C# source path' : 'Proto file path',
+        fallbackPath,
+      );
+      if (!nextPath?.trim()) {
+        return;
+      }
+
+      const nextPackage = addPackageFile(scriptPackage, kind, nextPath.trim());
+      commitScriptPackage(nextPackage, nextPath.trim());
+    },
+    [commitScriptPackage, scriptPackage],
+  );
+
+  const handleRenamePackageFile = React.useCallback(() => {
+    if (!selectedPackageEntry) {
+      return;
+    }
+
+    const nextPath = window.prompt('Rename file', selectedPackageEntry.path);
+    if (!nextPath?.trim() || nextPath.trim() === selectedPackageEntry.path) {
+      return;
+    }
+
+    const nextPackage = renamePackageFile(
+      scriptPackage,
+      selectedPackageEntry.path,
+      nextPath.trim(),
+    );
+    commitScriptPackage(nextPackage, nextPath.trim());
+  }, [commitScriptPackage, scriptPackage, selectedPackageEntry]);
+
+  const handleRemovePackageFile = React.useCallback(() => {
+    if (!selectedPackageEntry || packageEntries.length <= 1) {
+      return;
+    }
+
+    const nextPackage = removePackageFile(scriptPackage, selectedPackageEntry.path);
+    const nextEntry =
+      getSelectedPackageEntry(nextPackage, nextPackage.entrySourcePath) ||
+      getSelectedPackageEntry(nextPackage, '');
+    commitScriptPackage(nextPackage, nextEntry?.path);
+  }, [commitScriptPackage, packageEntries.length, scriptPackage, selectedPackageEntry]);
+
+  const handleSetEntrySource = React.useCallback(() => {
+    if (!selectedPackageEntry || selectedPackageEntry.kind !== 'csharp') {
+      return;
+    }
+
+    commitScriptPackage(
+      setEntrySourcePath(scriptPackage, selectedPackageEntry.path),
+      selectedPackageEntry.path,
+    );
+  }, [commitScriptPackage, scriptPackage, selectedPackageEntry]);
+
+  const handlePromoteEvolution = React.useCallback(async () => {
+    if (!scopeId || !activeScript?.script?.scriptId) {
+      setPromotionNotice('Resolve the current scope and script before proposing evolution.');
+      return;
+    }
+
+    setPromotionPending(true);
+    setPromotionNotice('');
+    try {
+      const decision = await scriptsApi.proposeEvolution(
+        scopeId,
+        activeScript.script.scriptId,
+        {
+          baseRevision: activeScript.script.activeRevision || undefined,
+          candidateRevision: currentRevision,
+          candidateSource: serializePersistedSource(scriptPackage),
+          reason: promotionReason.trim() || undefined,
+        },
+      );
+      setPromotionHistory((current) => [decision, ...current].slice(0, 6));
+      setPromotionNotice(
+        decision.accepted
+          ? `Promotion accepted: ${decision.candidateRevision || decision.proposalId}.`
+          : decision.failureReason || `Promotion ${decision.status || 'not accepted'}.`,
+      );
+    } catch (error) {
+      setPromotionNotice(describeError(error));
+    } finally {
+      setPromotionPending(false);
     }
   }, [
     activeScript?.script?.activeRevision,
     activeScript?.script?.scriptId,
     currentRevision,
+    promotionReason,
     scopeId,
     scriptPackage,
-    onRefreshScripts,
   ]);
 
   const handleRun = React.useCallback(async () => {
@@ -1915,8 +2571,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           undefined,
         package: scriptPackage,
       });
+      setLastRunResult(result);
       setRunOutput(JSON.stringify(result, null, 2));
     } catch (error) {
+      setLastRunResult(null);
       setRunOutput(describeError(error));
     } finally {
       setRunPending(false);
@@ -1965,21 +2623,53 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
-              <Tag color="gold">lints · partial</Tag>
+              {hasActiveScript ? (
+                <>
+                  <Tag color={lifecycleStatusColor}>{lifecycleStatus}</Tag>
+                  <Tag color={scriptReadyToBind ? 'green' : 'default'}>
+                    {bindReadinessLabel}
+                  </Tag>
+                </>
+              ) : null}
               <Select
                 aria-label="Script ID"
                 style={{ minWidth: 220 }}
+                placeholder="Create or select a script"
                 value={activeScript?.script?.scriptId || undefined}
                 onChange={onSelectScriptId}
-                options={availableScripts.map((detail) => ({
-                  label: detail.script?.scriptId || 'script',
-                  value: detail.script?.scriptId || '',
-                }))}
+                options={[
+                  ...(pendingScriptDraft?.scriptId
+                    ? [
+                        {
+                          label: `${pendingScriptDraft.scriptId} (draft)`,
+                          value: pendingScriptDraft.scriptId,
+                        },
+                      ]
+                    : []),
+                  ...(observedAppliedScript?.script?.scriptId &&
+                  !pendingScriptDraft?.scriptId &&
+                  !availableScripts.some(
+                    (detail) =>
+                      detail.script?.scriptId === observedAppliedScript.script?.scriptId,
+                  )
+                    ? [
+                        {
+                          label: `${observedAppliedScript.script.scriptId} (applied)`,
+                          value: observedAppliedScript.script.scriptId,
+                        },
+                      ]
+                    : []),
+                  ...availableScripts.map((detail) => ({
+                    label: detail.script?.scriptId || 'script',
+                    value: detail.script?.scriptId || '',
+                  })),
+                ]}
               />
             </Space>
             <Space wrap size={[8, 8]}>
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={!activeScript?.script?.scriptId || validationPending}
                 loading={validationPending}
                 onClick={() => void handleValidate()}
               >
@@ -1987,11 +2677,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               </Button>
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={saveDisabled}
                 icon={<CheckCircleOutlined />}
                 loading={savePending}
                 onClick={() => void handleSave()}
               >
-                Save draft
+                Save revision
               </Button>
             </Space>
           </div>
@@ -1999,62 +2690,181 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             <Alert
               message={saveNotice}
               showIcon
-              type={saveNotice.startsWith('Save accepted') ? 'success' : 'warning'}
+              type={saveNoticeType}
+              action={
+                saveObservationStatus === 'pending' ? (
+                  <Button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                    size="small"
+                    onClick={() => void onRefreshScripts?.()}
+                  >
+                    Refresh catalog
+                  </Button>
+                ) : undefined
+              }
             />
+          ) : null}
+          {hasActiveScript ? (
+            <div
+              aria-label="Script lifecycle status"
+              style={{
+                alignItems: 'center',
+                color: '#667085',
+                display: 'flex',
+                flexWrap: 'wrap',
+                fontSize: 12,
+                gap: 8,
+                lineHeight: '18px',
+              }}
+            >
+              <Typography.Text type="secondary">
+                {activeScript?.script?.scriptId || '-'} · {lifecycleStatus} · validation{' '}
+                {validationStatus} · save {saveObservationStatus} · rev {currentRevision}
+              </Typography.Text>
+            </div>
           ) : null}
           {validationError ? (
             <Alert message={validationError} showIcon type="error" />
           ) : null}
-          {selectedPackageEntry ? (
+          {hasActiveScript && selectedPackageEntry ? (
             <div style={{ display: 'grid', gap: 12 }}>
-              <div
+              <details
+                aria-label="Script package tree"
                 style={{
-                  alignItems: 'center',
-                  background: '#faf8f3',
                   border: '1px solid #efe7da',
                   borderRadius: 16,
-                  display: 'flex',
-                  gap: 10,
-                  justifyContent: 'space-between',
-                  padding: '12px 14px',
+                  padding: 12,
                 }}
               >
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={sectionEyebrowStyle}>Editor</div>
-                  <Typography.Text strong>{selectedPackageEntry.path}</Typography.Text>
+                <summary
+                  style={{
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    justifyContent: 'space-between',
+                    listStyle: 'none',
+                  }}
+                >
+                  <span style={sectionEyebrowStyle}>Advanced package</span>
+                  <Typography.Text type="secondary">
+                    {packageEntries.length} file{packageEntries.length === 1 ? '' : 's'} ·{' '}
+                    {scriptPackage.entrySourcePath || 'no entry'} entry
+                  </Typography.Text>
+                </summary>
+                <div
+                  style={{
+                    alignItems: 'center',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    justifyContent: 'space-between',
+                    marginTop: 12,
+                  }}
+                >
+                  <div>
+                    <div style={sectionEyebrowStyle}>Package</div>
+                    <Typography.Text type="secondary">
+                      Entry: {scriptPackage.entrySourcePath || '-'} · Behavior:{' '}
+                      {scriptPackage.entryBehaviorTypeName || '-'}
+                    </Typography.Text>
+                  </div>
+                  <Space wrap size={[8, 8]}>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      size="small"
+                      onClick={() => handleAddPackageFile('csharp')}
+                    >
+                      Add C#
+                    </Button>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      size="small"
+                      onClick={() => handleAddPackageFile('proto')}
+                    >
+                      Add proto
+                    </Button>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      size="small"
+                      onClick={handleRenamePackageFile}
+                    >
+                      Rename
+                    </Button>
+                    <Button
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      disabled={packageEntries.length <= 1}
+                      size="small"
+                      onClick={handleRemovePackageFile}
+                    >
+                      Remove
+                    </Button>
+                  </Space>
                 </div>
-                <Space wrap size={[8, 8]}>
-                  {validationResult ? (
-                    <Tag color={validationResult.success ? 'green' : 'red'}>
-                      {validationResult.errorCount > 0
-                        ? `${validationResult.errorCount} errors`
-                        : validationResult.warningCount > 0
-                          ? `${validationResult.warningCount} warnings`
-                          : 'Clean'}
-                    </Tag>
-                  ) : null}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {packageEntries.map((entry) => (
+                    <button
+                      key={entry.path}
+                      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                      type="button"
+                      onClick={() => setSelectedFilePath(entry.path)}
+                      style={{
+                        background:
+                          entry.path === selectedPackageEntry.path ? '#111827' : '#fffdf8',
+                        border: '1px solid #efe7da',
+                        borderRadius: 999,
+                        color:
+                          entry.path === selectedPackageEntry.path ? '#fffdf8' : '#374151',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        padding: '6px 10px',
+                      }}
+                    >
+                      {entry.kind === 'csharp' ? 'C#' : 'proto'} · {entry.path}
+                      {entry.path === scriptPackage.entrySourcePath ? ' · entry' : ''}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(0, 1fr) auto' }}>
+                  <Input
+                    aria-label="Entry behavior type"
+                    placeholder="Entry behavior type, for example DraftBehavior"
+                    value={scriptPackage.entryBehaviorTypeName}
+                    onChange={(event) =>
+                      commitScriptPackage(
+                        updateEntryBehaviorTypeName(scriptPackage, event.target.value),
+                        selectedPackageEntry.path,
+                      )
+                    }
+                  />
                   <Button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                    icon={<PlayCircleOutlined />}
-                    loading={runPending}
-                    type="primary"
-                    onClick={() => void handleRun()}
+                    disabled={selectedPackageEntry.kind !== 'csharp'}
+                    onClick={handleSetEntrySource}
                   >
-                    Dry-run
+                    Set entry source
                   </Button>
-                </Space>
-              </div>
+                </div>
+              </details>
               <div style={{ minHeight: 520 }}>
                 <ScriptCodeEditor
                   filePath={selectedPackageEntry.path}
                   language={selectedPackageEntry.kind === 'csharp' ? 'csharp' : 'plaintext'}
                   markers={editorMarkers}
                   value={selectedPackageEntry.content}
-                  onChange={(value) =>
-                    setScriptPackage((current) =>
-                      updatePackageFileContent(current, selectedPackageEntry.path, value),
-                    )
-                  }
+                  onChange={(value) => {
+                    commitScriptPackage(
+                      updatePackageFileContent(
+                        scriptPackage,
+                        selectedPackageEntry.path,
+                        value,
+                      ),
+                      selectedPackageEntry.path,
+                    );
+                  }}
+                  focusTarget={focusedDiagnostic}
                 />
               </div>
               <div
@@ -2089,18 +2899,97 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                   )}
                 </Space>
               </div>
+              {validationResult?.diagnostics?.length ? (
+                <div
+                  aria-label="Script validation diagnostics"
+                  style={{
+                    border: '1px solid #efe7da',
+                    borderRadius: 16,
+                    display: 'grid',
+                    gap: 8,
+                    padding: 12,
+                  }}
+                >
+                  <div style={sectionEyebrowStyle}>Diagnostics</div>
+                  {validationResult.diagnostics.map((diagnostic, index) => {
+                    const diagnosticKey = `${diagnostic.filePath || 'source'}:${diagnostic.startLine || 0}:${diagnostic.startColumn || 0}:${diagnostic.code || index}`;
+                    const severityColor =
+                      diagnostic.severity === 'error'
+                        ? '#b42318'
+                        : diagnostic.severity === 'warning'
+                          ? '#ad6800'
+                          : '#2563eb';
+                    return (
+                      <button
+                        key={diagnosticKey}
+                        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                        type="button"
+                        onClick={() => {
+                          const focusTarget = buildScriptDiagnosticFocusTarget(
+                            diagnostic,
+                            `${diagnosticKey}:${Date.now()}`,
+                          );
+                          setSelectedFilePath(focusTarget.filePath);
+                          setFocusedDiagnostic(focusTarget);
+                        }}
+                        style={{
+                          background: '#fffdf8',
+                          border: '1px solid #efe7da',
+                          borderRadius: 12,
+                          color: '#1f2937',
+                          cursor: 'pointer',
+                          display: 'grid',
+                          gap: 4,
+                          padding: '10px 12px',
+                          textAlign: 'left',
+                        }}
+                      >
+                        <span style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
+                          <Tag color={diagnostic.severity === 'error' ? 'red' : diagnostic.severity === 'warning' ? 'gold' : 'blue'}>
+                            {diagnostic.severity}
+                          </Tag>
+                          <span style={{ color: '#6b5d4a', fontSize: 12 }}>
+                            {formatScriptDiagnosticLocation(diagnostic)}
+                          </span>
+                          {diagnostic.code ? (
+                            <span style={{ color: severityColor, fontSize: 12 }}>
+                              {diagnostic.code}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span style={{ color: '#374151', fontSize: 13, lineHeight: '18px' }}>
+                          {diagnostic.message}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           ) : (
-            <Empty description="No script source is available in this scope yet." />
+            <Empty
+              description="Create a Script draft or select a saved scope script to start editing."
+            >
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                onClick={onCreateScriptDraft}
+                type="primary"
+              >
+                Add script
+              </Button>
+            </Empty>
           )}
         </section>
 
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
           <Typography.Text type="secondary">
-            Script Build keeps code editing here. Service rollout still moves to Bind.
+            {scriptReadyToBind
+              ? 'Script revision is catalog-applied. Continue to Bind to publish the callable member contract.'
+              : `Script Build keeps code editing here. ${bindReadinessLabel}.`}
           </Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            disabled={!scriptReadyToBind}
             type="primary"
             onClick={onContinueToBind}
           >
@@ -2131,6 +3020,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         <Input.TextArea
           aria-label="Script dry run input"
           autoSize={{ minRows: 6, maxRows: 10 }}
+          disabled={!hasActiveScript}
           value={runInput}
           onChange={(event) => setRunInput(event.target.value)}
         />
@@ -2138,6 +3028,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             icon={<PlayCircleOutlined />}
+            disabled={!hasActiveScript}
             loading={runPending}
             type="primary"
             onClick={() => void handleRun()}
@@ -2164,9 +3055,112 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           </Button>
         </Space>
         <div>
+          {lastRunResult ? (
+            <div
+              aria-label="Script dry run facts"
+              style={{
+                border: '1px solid #efe7da',
+                borderRadius: 14,
+                display: 'grid',
+                gap: 6,
+                marginBottom: 12,
+                padding: 12,
+              }}
+            >
+              <div style={sectionEyebrowStyle}>Run facts</div>
+              {[
+                ['Run', lastRunResult.runId],
+                ['Runtime', lastRunResult.runtimeActorId],
+                ['Definition', lastRunResult.definitionActorId],
+                ['Source hash', lastRunResult.sourceHash],
+                ['Read model', lastRunResult.readModelUrl],
+              ].map(([label, value]) => (
+                <div key={label} style={{ display: 'grid', gap: 2 }}>
+                  <span style={{ color: '#8b7b63', fontSize: 11, fontWeight: 700 }}>
+                    {label}
+                  </span>
+                  <Typography.Text copyable={Boolean(value)} ellipsis style={{ fontSize: 12 }}>
+                    {value || '-'}
+                  </Typography.Text>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div style={sectionEyebrowStyle}>Output</div>
           <pre style={dryRunOutputStyle}>{runOutput}</pre>
         </div>
+        {hasActiveScript ? (
+          <details
+            aria-label="Script promotion history"
+            style={{
+              border: '1px solid #efe7da',
+              borderRadius: 14,
+              padding: 12,
+            }}
+          >
+            <summary style={{ ...sectionEyebrowStyle, cursor: 'pointer' }}>
+              Promotion
+            </summary>
+            <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+              <Input.TextArea
+                aria-label="Promotion reason"
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                placeholder="Why is this revision ready to promote?"
+                value={promotionReason}
+                onChange={(event) => setPromotionReason(event.target.value)}
+              />
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                disabled={promotionPending}
+                loading={promotionPending}
+                onClick={() => void handlePromoteEvolution()}
+              >
+                Propose evolution
+              </Button>
+              {promotionNotice ? (
+                <Alert
+                  showIcon
+                  message={promotionNotice}
+                  type={promotionNotice.startsWith('Promotion accepted') ? 'success' : 'warning'}
+                />
+              ) : null}
+              {promotionHistory.length > 0 ? (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {promotionHistory.map((decision) => (
+                    <div
+                      key={decision.proposalId || `${decision.scriptId}:${decision.candidateRevision}`}
+                      style={{
+                        background: '#fffdf8',
+                        border: '1px solid #efe7da',
+                        borderRadius: 12,
+                        display: 'grid',
+                        gap: 4,
+                        padding: 10,
+                      }}
+                    >
+                      <Typography.Text strong>
+                        {decision.accepted ? 'Accepted' : decision.status || 'Decision'}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        {decision.scriptId} · {decision.baseRevision || '-'} →{' '}
+                        {decision.candidateRevision || '-'}
+                      </Typography.Text>
+                      {decision.failureReason ? (
+                        <Typography.Text type="danger">
+                          {decision.failureReason}
+                        </Typography.Text>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Typography.Text type="secondary">
+                  No promotion decisions in this session.
+                </Typography.Text>
+              )}
+            </div>
+          </details>
+        ) : null}
       </aside>
     </div>
   );
