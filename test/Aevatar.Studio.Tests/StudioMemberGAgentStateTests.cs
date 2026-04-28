@@ -99,6 +99,127 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public void Reassigned_PureAssign_ShouldSetTeamId()
+    {
+        // Pure assign: from_team_id absent, to_team_id = "T".
+        // Member starts unassigned (no team_id field set).
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        created.HasTeamId.Should().BeFalse();
+
+        var reassignedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1));
+        var assigned = _agent.Apply(created, new StudioMemberReassignedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            ToTeamId = "team-1",
+            ReassignedAtUtc = reassignedAt,
+        });
+
+        assigned.HasTeamId.Should().BeTrue();
+        assigned.TeamId.Should().Be("team-1");
+        assigned.UpdatedAtUtc.Should().Be(reassignedAt);
+    }
+
+    [Fact]
+    public void Reassigned_PureUnassign_ShouldClearTeamId()
+    {
+        // Pure unassign: from_team_id = "T1", to_team_id absent.
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var assigned = _agent.Apply(created, new StudioMemberReassignedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            ToTeamId = "team-1",
+            ReassignedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        var unassigned = _agent.Apply(assigned, new StudioMemberReassignedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            FromTeamId = "team-1",
+            ReassignedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+        });
+
+        unassigned.HasTeamId.Should().BeFalse();
+        unassigned.TeamId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Reassigned_Move_ShouldSetTeamIdToDestination()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var inTeam1 = _agent.Apply(created, new StudioMemberReassignedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            ToTeamId = "team-1",
+            ReassignedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        var moved = _agent.Apply(inTeam1, new StudioMemberReassignedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            FromTeamId = "team-1",
+            ToTeamId = "team-2",
+            ReassignedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+        });
+
+        moved.TeamId.Should().Be("team-2");
+    }
+
+    [Fact]
+    public void Reassigned_ShouldNotTouchPublishedServiceId()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        var assigned = _agent.Apply(created, new StudioMemberReassignedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            ToTeamId = "team-1",
+            ReassignedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        // Composing on top of ADR-0016: team membership must never disturb
+        // the rename-safe published_service_id contract.
+        assigned.PublishedServiceId.Should().Be(created.PublishedServiceId);
+    }
+
+    [Fact]
     public void Bound_ShouldCaptureLastBindingAndAdvanceLifecycle()
     {
         var withImpl = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent

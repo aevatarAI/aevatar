@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxyParticipant\Aevatar.GAgents.StreamingProxyParticipant.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioMember\Aevatar.GAgents.StudioMember.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioTeam\Aevatar.GAgents.StudioTeam.csproj" />
   </ItemGroup>
 
   <ItemGroup>

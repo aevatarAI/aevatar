@@ -48,6 +48,16 @@ public interface IConversationTurnRunner
         string? currentPlatformMessageId,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct);
+
+    /// <summary>
+    /// Post-reply hook invoked once the user-visible reply has landed via a path the runner does
+    /// not orchestrate end-to-end — currently the streaming completion path in
+    /// <see cref="ConversationGAgent"/> finalizes its own reply through <c>RunStreamChunkAsync</c>
+    /// + persistence, never touching <see cref="RunLlmReplyAsync"/>. Implementations use this hook
+    /// to do platform-specific post-reply housekeeping (e.g. swap the Lark "Typing" reaction to
+    /// "DONE"). Default no-op so adapters that have nothing to do here need no opt-in.
+    /// </summary>
+    Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>

@@ -90,6 +90,141 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
+    {
+        // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via
+        // OrleansActor.HandleEventAsync, which produced to a stream (fire-and-forget).
+        // Two dispatches from the same SkillRunner turn (post-init Upsert + post-trigger
+        // ExecutionUpdate) could arrive at the catalog grain out of order; the
+        // ExecutionUpdate would land first, hit the missing-entry guard, and be silently
+        // dropped — leaving /agent-status reporting Last run / Next run as n/a.
+        //
+        // PR #451 wired dispatch through IActorDispatchPort.DispatchAsync, which awaits
+        // grain.HandleEnvelopeAsync. The contract that protects the catalog is: the
+        // SkillRunner must AWAIT each dispatch before firing the next so the catalog
+        // observes Upsert before ExecutionUpdate. To guard the contract (not the
+        // synchronous shortcut a fake might enable), this test hangs the Upsert dispatch
+        // on a TaskCompletionSource and asserts ExecutionUpdate is not even dispatched
+        // until the gate releases. A regression that drops the await — or anything that
+        // returns control before the catalog observes Upsert — would let ExecutionUpdate
+        // race ahead while Upsert is still hanging, and the assertion catches it.
+
+        var upsertGate = new TaskCompletionSource();
+        var upsertDispatchStarted = new TaskCompletionSource();
+        var executionDispatchStarted = new TaskCompletionSource();
+
+        var scheduler = Substitute.For<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
+        scheduler
+            .ScheduleTimeoutAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var req = call.Arg<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>();
+                return Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+                    req.ActorId, req.CallbackId, 1L,
+                    Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+            });
+        scheduler.CancelAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var catalogProxy = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogProxy));
+
+        UserAgentCatalogGAgent? catalog = null;
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => DispatchGated(
+                call.Arg<EventEnvelope>(),
+                call.Arg<CancellationToken>(),
+                catalog!,
+                upsertGate,
+                upsertDispatchStarted,
+                executionDispatchStarted));
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+                services.AddSingleton(scheduler);
+            });
+
+        catalog = new UserAgentCatalogGAgent
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
+        };
+        AssignActorId(catalog, UserAgentCatalogGAgent.WellKnownId);
+        await catalog.ActivateAsync();
+
+        var agent = CreateAgent("skill-runner-440-regression", provider);
+        await agent.ActivateAsync();
+
+        var init = CreateInitializeCommand();
+        init.ScheduleCron = "0 9 * * *";
+        init.ScheduleTimezone = "UTC";
+
+        // Kick off init in the background. Upsert will hit the gate and yield; control
+        // returns to the test before ExecutionUpdate has a chance to dispatch.
+        var initTask = agent.HandleInitializeAsync(init);
+        await upsertDispatchStarted.Task;
+
+        // Critical assertion: while Upsert is hanging at the gate, ExecutionUpdate must
+        // not have been dispatched. If the SkillRunner regressed to fire-and-forget
+        // (`_ = DispatchAsync(...)` instead of `await DispatchAsync(...)`),
+        // executionDispatchStarted would already be completed here.
+        executionDispatchStarted.Task.IsCompleted.Should().BeFalse(
+            "the SkillRunner must await Upsert's dispatch task before firing ExecutionUpdate; "
+            + "regressing to fire-and-forget would let ExecutionUpdate race ahead of Upsert "
+            + "and be dropped by the missing-entry guard in HandleExecutionUpdateAsync");
+
+        // Release Upsert; ExecutionUpdate must now fire and the catalog must observe both.
+        upsertGate.SetResult();
+        await initTask;
+
+        executionDispatchStarted.Task.IsCompleted.Should().BeTrue(
+            "ExecutionUpdate must dispatch after Upsert completes so /agent-status shows Next run");
+        catalog.State.Entries.Should().ContainSingle();
+        var entry = catalog.State.Entries[0];
+        entry.AgentId.Should().Be("skill-runner-440-regression");
+        entry.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
+        entry.ScheduleCron.Should().Be("0 9 * * *");
+        entry.NextRunAt.Should().NotBeNull(
+            "init's post-Upsert ExecutionUpdate must land at the catalog so /agent-status shows Next run");
+    }
+
+    private static async Task DispatchGated(
+        EventEnvelope envelope,
+        CancellationToken ct,
+        UserAgentCatalogGAgent catalog,
+        TaskCompletionSource upsertGate,
+        TaskCompletionSource upsertDispatchStarted,
+        TaskCompletionSource executionDispatchStarted)
+    {
+        if (envelope.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor))
+        {
+            upsertDispatchStarted.TrySetResult();
+            await upsertGate.Task;
+        }
+        else if (envelope.Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor))
+        {
+            executionDispatchStarted.TrySetResult();
+        }
+
+        await catalog.HandleEventAsync(envelope, ct);
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
     {
         var catalogActor = Substitute.For<IActor>();
