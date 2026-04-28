@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package aevatar.gagents.scheduled;
+
+option csharp_namespace = "Aevatar.GAgents.Scheduled";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Skill Runner (persistent scheduled agent) ───
+
+message SkillRunnerOutboundConfig {
+  string conversation_id = 1;
+  string nyx_provider_slug = 2;
+  string nyx_api_key = 3;
+  string owner_nyx_user_id = 4;
+  string api_key_id = 5;
+  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
+  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
+  string platform = 6;
+  // Authoritative Lark outbound delivery target captured at create time. When
+  // both fields are present, SkillRunnerGAgent.SendOutputAsync uses them
+  // verbatim; conversation_id stays for LLM metadata propagation only.
+  string lark_receive_id = 7;
+  string lark_receive_id_type = 8;
+  // Secondary outbound delivery target. Used by SkillRunnerGAgent.SendOutputAsync
+  // when the primary chat_id-typed send is rejected with Lark `230002 bot not in
+  // chat` — the failure mode for cross-app same-tenant deployments where the
+  // outbound app is not a member of the inbound DM. See
+  // UserAgentCatalogEntry.lark_receive_id_fallback for the recommended pinning.
+  string lark_receive_id_fallback = 9;
+  string lark_receive_id_type_fallback = 10;
+}
+
+message SkillRunnerState {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  google.protobuf.Timestamp last_run_at = 8;
+  google.protobuf.Timestamp next_run_at = 9;
+  int32 error_count = 10;
+  string last_output = 11;
+  string last_error = 12;
+  bool enabled = 13;
+  string scope_id = 14;
+  string provider_name = 15;
+  string model = 16;
+  optional double temperature = 17;
+  optional int32 max_tokens = 18;
+  optional int32 max_tool_rounds = 19;
+  optional int32 max_history_messages = 20;
+}
+
+message InitializeSkillRunnerCommand {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message SkillRunnerInitializedEvent {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message TriggerSkillRunnerExecutionCommand {
+  string reason = 1;
+  // 0 = first attempt, 1 = backoff retry after a failed first attempt.
+  // Bounded by SkillRunnerDefaults.MaxRetryAttempts; retries are event-ified
+  // via ScheduleSelfDurableTimeoutAsync and never block the actor turn.
+  int32 retry_attempt = 2;
+}
+
+message SkillRunnerNextRunScheduledEvent {
+  google.protobuf.Timestamp next_run_at = 1;
+}
+
+message SkillRunnerExecutionCompletedEvent {
+  google.protobuf.Timestamp completed_at = 1;
+  string output = 2;
+}
+
+message SkillRunnerExecutionFailedEvent {
+  google.protobuf.Timestamp failed_at = 1;
+  string error = 2;
+}
+
+message DisableSkillRunnerCommand {
+  string reason = 1;
+}
+
+message EnableSkillRunnerCommand {
+  string reason = 1;
+}
+
+message SkillRunnerDisabledEvent {
+  string reason = 1;
+}
+
+message SkillRunnerEnabledEvent {
+  string reason = 1;
+}

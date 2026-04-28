@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Aevatar.GAgents.ChannelRuntime.WorkflowModules;
+using Aevatar.GAgents.Scheduled.WorkflowModules;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;

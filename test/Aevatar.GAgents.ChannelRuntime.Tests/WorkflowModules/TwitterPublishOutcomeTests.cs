@@ -1,4 +1,4 @@
-using Aevatar.GAgents.ChannelRuntime.WorkflowModules;
+using Aevatar.GAgents.Scheduled.WorkflowModules;
 using FluentAssertions;
 using Xunit;
 

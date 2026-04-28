@@ -1,6 +1,7 @@
 using System.Linq;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Scheduled;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
@@ -75,28 +76,8 @@ public sealed class ChannelRuntimeProtoTests
                 ReplyMessageId = "relay-msg-1",
             },
         };
-        var registration = new ChannelBotRegistrationEntry
-        {
-            TransportBinding = new ChannelTransportBinding
-            {
-                Bot = new ChannelBotDescriptor
-                {
-                    RegistrationId = "bot-reg-1",
-                    Bot = new BotInstanceId { Value = "ops-bot" },
-                    Channel = new ChannelId { Value = "slack" },
-                    ScopeId = "scope-1",
-                },
-                VerificationToken = "verify-me",
-            },
-            WebhookUrl = "https://example.test/callback",
-            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            IsDeleted = true,
-        };
-
         completed.Clone().ShouldBe(completed);
         completed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
-        registration.Clone().ShouldBe(registration);
-        registration.TransportBinding.Bot.RegistrationId.ShouldBe("bot-reg-1");
         var llmRequested = new NeedsLlmReplyEvent
         {
             CorrelationId = "activity-1",
@@ -120,8 +101,6 @@ public sealed class ChannelRuntimeProtoTests
             TerminalState = LlmReplyTerminalState.Completed,
             ReadyAtUnixMs = 43,
         };
-        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("transport_binding")!.FieldNumber.ShouldBe(1);
-        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("is_deleted")!.FieldNumber.ShouldBe(4);
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ConversationTurnCompletedEvent));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
@@ -130,9 +109,9 @@ public sealed class ChannelRuntimeProtoTests
             .ShouldContain(nameof(NeedsLlmReplyEvent));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(LlmReplyReadyEvent));
-        ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+        ChannelBotRegistrationReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(ChannelBotRegistrationEntry));
-        ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
+        UserAgentCatalogReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(UserAgentCatalogEntry));
         SessionStoreReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(LeaseToken));

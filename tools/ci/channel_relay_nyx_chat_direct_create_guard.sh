@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${repo_root}"
 
 if rg -n "CreateAsync<NyxIdChatGAgent>|GetAsync<NyxIdChatGAgent>" \
-  agents/Aevatar.GAgents.ChannelRuntime \
+  agents/Aevatar.GAgents.Channel.Runtime \
   agents/channels
 then
   echo "Channel relay/runtime code must not talk to NyxIdChatGAgent directly. Go through ConversationGAgent + deferred LLM reply pipeline."

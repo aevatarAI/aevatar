@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Persistent State ───
+
+message ChannelBotRegistrationEntry {
+  string id = 1;
+  string platform = 2;
+  string nyx_provider_slug = 3;
+  string scope_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  string webhook_url = 6;  // Full callback URL configured via setWebhook
+  // Soft-delete marker retained for projector watermark coordination
+  // (Channel RFC §7.1.1): the registration stays in state after unregister so
+  // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
+  // .DeleteAsync. Housekeeping cleans watermark-passed entries.
+  bool tombstoned = 7;
+  int64 tombstone_state_version = 8;
+  string nyx_channel_bot_id = 9;
+  string nyx_agent_api_key_id = 10;
+  string nyx_conversation_route_id = 11;
+  reserved 12;
+  reserved "credential_ref";
+}
+
+message ChannelBotRegistrationStoreState {
+  repeated ChannelBotRegistrationEntry registrations = 1;
+}
+
+// Domain events for ChannelBotRegistrationGAgent
+message ChannelBotRegisteredEvent {
+  ChannelBotRegistrationEntry entry = 1;
+}
+
+message ChannelBotUnregisteredEvent {
+  string registration_id = 1;
+  int64 tombstone_state_version = 2;
+}
+
+// Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
+message ChannelBotRegisterCommand {
+  string platform = 1;
+  string nyx_provider_slug = 2;
+  string scope_id = 3;
+  string webhook_url = 4;
+  string requested_id = 5;  // Caller-provided ID; actor uses if non-empty, else generates
+  string nyx_channel_bot_id = 6;
+  string nyx_agent_api_key_id = 7;
+  string nyx_conversation_route_id = 8;
+  reserved 9;
+  reserved "credential_ref";
+}
+
+message ChannelBotUnregisterCommand {
+  string registration_id = 1;
+}
+
+message ChannelBotRebuildProjectionCommand {
+  string reason = 1;
+}
+
+message ChannelBotCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+// Repairs the canonical scope_id of an existing registration without rewriting
+// the rest of the entry. Emitted by the rebuild backfill path so empty-scope
+// entries can be patched in place — preserves created_at and webhook target.
+message ChannelBotRepairScopeIdCommand {
+  string registration_id = 1;
+  string scope_id = 2;
+}
+
+message ChannelBotProjectionRebuildRequestedEvent {
+  string reason = 1;
+  google.protobuf.Timestamp requested_at = 2;
+}
+
+message ChannelBotTombstonesCompactedEvent {
+  repeated string registration_ids = 1;
+  int64 safe_state_version = 2;
+}
+
+// Persisted when the registration store rejects an inbound register command
+// (e.g. missing scope_id). Carries no state transition; lives in the actor
+// event log as a durable diagnostic so upstream contract breaks remain
+// auditable without polluting the registration set.
+message ChannelBotRegistrationRejectedEvent {
+  string reason = 1;
+  string platform = 2;
+  string requested_id = 3;
+  string nyx_agent_api_key_id = 4;
+  google.protobuf.Timestamp rejected_at = 5;
+}
+
+// Emitted when a previously empty-scope entry is repaired in place. Captures
+// the prior scope_id so the audit trail records the rewrite without losing
+// historical context, and the projector picks the new scope_id off state.
+message ChannelBotScopeIdRepairedEvent {
+  string registration_id = 1;
+  string previous_scope_id = 2;
+  string scope_id = 3;
+  google.protobuf.Timestamp repaired_at = 4;
+}
+
+// Projection read model for channel bot registrations
+message ChannelBotRegistrationDocument {
+  string id = 1;                            // Registration ID (= document key)
+  string platform = 2;
+  string nyx_provider_slug = 3;
+  string scope_id = 4;
+  string webhook_url = 5;
+  int64 state_version = 6;
+  string last_event_id = 7;
+  google.protobuf.Timestamp updated_at_utc = 8;
+  string actor_id = 9;                      // Source actor ID
+  string nyx_channel_bot_id = 10;
+  string nyx_agent_api_key_id = 11;
+  string nyx_conversation_route_id = 12;
+  reserved 13;
+  reserved "credential_ref";
+}
+
+// ─── Relay / conversation normalization ───
+
+// Normalized inbound callback payload used by relay-aware channel flows
+// (for example deterministic builder/tool routing in ChannelConversationTurnRunner).
+message ChannelInboundEvent {
+  string text = 1;
+  string sender_id = 2;
+  string sender_name = 3;
+  string conversation_id = 4;
+  string message_id = 5;
+  string chat_type = 6;
+  string platform = 7;
+  string registration_id = 8;
+  string registration_token = 9;      // inbound-scoped token propagated to the LLM provider
+  string registration_scope_id = 10;
+  string nyx_provider_slug = 11;
+  map<string, string> extra = 12;
+}

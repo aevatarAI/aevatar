@@ -1,11 +1,17 @@
+using System.Reflection;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Xunit;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -17,17 +23,8 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        var services = new ServiceCollection();
-        services.AddSingleton<IEventStore, InMemoryEventStore>();
-        services.AddSingleton<EventSourcingRuntimeOptions>();
-        services.AddTransient(
-            typeof(IEventSourcingBehaviorFactory<>),
-            typeof(DefaultEventSourcingBehaviorFactory<>));
-
         _dispatchService = new CapturingWorkflowDispatchService();
-        services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(_dispatchService);
-
-        _serviceProvider = services.BuildServiceProvider();
+        _serviceProvider = BuildServiceProvider(_dispatchService);
         _agent = new WorkflowAgentGAgent
         {
             Services = _serviceProvider,
@@ -73,6 +70,61 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
         _dispatchService.LastCommand.Metadata.Should().Contain(new KeyValuePair<string, string>("scope_id", "scope-1"));
     }
 
+    [Fact]
+    public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var captured = new List<EventEnvelope>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            new CapturingWorkflowDispatchService(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = new WorkflowAgentGAgent
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowAgentState>>(),
+        };
+        AssignActorId(agent, "workflow-agent-dispatch-test");
+        await agent.ActivateAsync();
+
+        await agent.HandleInitializeAsync(new InitializeWorkflowAgentCommand
+        {
+            WorkflowId = "social-media-agent-1",
+            WorkflowName = "social_media_agent_1",
+            WorkflowActorId = "workflow-actor-1",
+            ExecutionPrompt = "Generate the scheduled social media draft for review.",
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key-1",
+            Enabled = true,
+            ScopeId = "scope-1",
+        });
+
+        captured.Should().HaveCount(2);
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        captured[1].Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor).Should().BeTrue();
+        captured.Should().OnlyContain(envelope =>
+            envelope.Route.PublisherActorId == "workflow-agent-dispatch-test" &&
+            envelope.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId);
+        await catalogActor.DidNotReceive()
+            .HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+    }
+
     private sealed class CapturingWorkflowDispatchService
         : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
     {
@@ -90,6 +142,30 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
                     CommandId: "cmd-1",
                     CorrelationId: "corr-1")));
         }
+    }
+
+    private static ServiceProvider BuildServiceProvider(
+        CapturingWorkflowDispatchService dispatchService,
+        Action<IServiceCollection>? configure = null)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IEventStore, InMemoryEventStore>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(
+            typeof(IEventSourcingBehaviorFactory<>),
+            typeof(DefaultEventSourcingBehaviorFactory<>));
+        services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(dispatchService);
+        configure?.Invoke(services);
+        return services.BuildServiceProvider();
+    }
+
+    private static void AssignActorId(GAgentBase agent, string actorId)
+    {
+        var setIdMethod = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        setIdMethod.Should().NotBeNull();
+        setIdMethod!.Invoke(agent, [actorId]);
     }
 
     private sealed class InMemoryEventStore : IEventStore
