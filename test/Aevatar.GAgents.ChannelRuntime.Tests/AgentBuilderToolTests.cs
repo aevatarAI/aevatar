@@ -935,6 +935,139 @@ public sealed class AgentBuilderToolTests
         }
     }
 
+    /// <summary>
+    /// Issue #437: User A binds "alice-gh" via <c>/daily alice-gh</c>; User B runs <c>/daily</c>
+    /// (no username) in a separate p2p chat with the same bot. User B must NOT see "alice-gh" —
+    /// the per-end-user composite scope (<c>{bot}:{platform}:{sender}</c>) isolates each user's
+    /// saved preference. Without isolation, the "last writer wins" on the shared bot scope.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_CrossUserIsolation_UserBDoesNotSeeUserASavedPreference()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync("skill-runner-bob-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetForCallerAsync("skill-runner-bob-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-bob-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        // User A (ou_alice) has a saved preference; User B (ou_bob) does not.
+        // Bot scope carries a sentinel to catch regressions that fall back to shared state.
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-1:lark:ou_alice", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: "alice-gh")));
+        userConfigQueryPort.GetAsync("scope-1:lark:ou_bob", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: null)));
+        userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioUserConfig(string.Empty, GithubUsername: "WRONG-bot-scope-leak")));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {
+                  "provider_id":"provider-github",
+                  "provider_name":"GitHub",
+                  "provider_slug":"github",
+                  "provider_type":"oauth2",
+                  "status":"active"
+                }
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/user", """{"login":"bob-gh-from-nyx"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-bob-1","full_key":"full-key-bob-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(userConfigQueryPort);
+        services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        // Simulate User B (ou_bob) sending /daily in a separate p2p chat.
+        // Same bot (scope-1) but different sender_id.
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_bob",
+            [ChannelMetadataKeys.Platform] = "lark",
+            [ChannelMetadataKeys.SenderId] = "ou_bob",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-bob-1",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            // The agent must use the NyxID-derived username (bob-gh-from-nyx), NOT
+            // alice's saved preference (alice-gh) or the bot-scope sentinel.
+            var resolvedUsername = doc.RootElement.GetProperty("github_username").GetString();
+            resolvedUsername.Should().Be("bob-gh-from-nyx",
+                "User B has no saved preference; the system should fall through to the NyxID proxy, " +
+                "not leak User A's saved github_username from a different per-user scope.");
+
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-bob-1",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    c.SkillContent.Contains("Primary GitHub username: bob-gh-from-nyx", StringComparison.Ordinal) &&
+                    !c.SkillContent.Contains("alice-gh", StringComparison.Ordinal)),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+            // User B's scope was queried, NOT User A's or the bot scope.
+            await userConfigQueryPort.Received(1)
+                .GetAsync("scope-1:lark:ou_bob", Arg.Any<CancellationToken>());
+            await userConfigQueryPort.DidNotReceive()
+                .GetAsync("scope-1:lark:ou_alice", Arg.Any<CancellationToken>());
+            await userConfigQueryPort.DidNotReceive()
+                .GetAsync("scope-1", Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_CreateAgent_DailyReport_DerivesGithubUsername_FromNyxProxy_WhenArgumentAndPreferenceMissing()
     {

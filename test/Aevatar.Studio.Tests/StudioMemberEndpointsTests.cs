@@ -694,6 +694,24 @@ public sealed class StudioMemberEndpointsTests
             if (RetireException != null) throw RetireException;
             return Task.FromResult(RetireResponse!);
         }
+
+        public Task<StudioMemberDetailResponse> UpdateAsync(
+            string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default)
+        {
+            UpdateInvoked = true;
+            UpdateScopeId = scopeId;
+            UpdateMemberId = memberId;
+            UpdateRequest = request;
+            if (UpdateException != null) throw UpdateException;
+            return Task.FromResult(UpdateResponse!);
+        }
+
+        public bool UpdateInvoked { get; set; }
+        public string? UpdateScopeId { get; set; }
+        public string? UpdateMemberId { get; set; }
+        public UpdateStudioMemberRequest? UpdateRequest { get; set; }
+        public StudioMemberDetailResponse? UpdateResponse { get; set; }
+        public Exception? UpdateException { get; set; }
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment
