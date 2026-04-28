@@ -22,6 +22,11 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
+    // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
+    // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
+    // #439 — see EnsureToolStatusAllowsCompletion.
+    private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
     private ChannelScheduleRunner? _scheduler;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
 
@@ -33,9 +38,51 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
+        : this(
+            BuildToolMiddlewareChain(toolMiddlewares),
+            llmProviderFactory,
+            additionalHooks,
+            agentMiddlewares,
+            llmMiddlewares,
+            toolSources,
+            nyxIdApiClient)
+    {
+    }
+
+    private SkillRunnerGAgent(
+        ToolMiddlewareChain toolMiddlewareChain,
+        ILLMProviderFactory? llmProviderFactory,
+        IEnumerable<IAIGAgentExecutionHook>? additionalHooks,
+        IEnumerable<IAgentRunMiddleware>? agentMiddlewares,
+        IEnumerable<ILLMCallMiddleware>? llmMiddlewares,
+        IEnumerable<IAgentToolSource>? toolSources,
+        NyxIdApiClient? nyxIdApiClient)
+        : base(
+            llmProviderFactory,
+            additionalHooks,
+            agentMiddlewares,
+            toolMiddlewareChain.Middlewares,
+            llmMiddlewares,
+            toolSources)
     {
         _nyxIdApiClient = nyxIdApiClient;
+        _toolFailureCounter = toolMiddlewareChain.Counter;
+    }
+
+    private readonly record struct ToolMiddlewareChain(
+        IReadOnlyList<IToolCallMiddleware> Middlewares,
+        SkillRunnerToolFailureCounter Counter);
+
+    /// <summary>Test-only accessor for the per-run nyxid_proxy counter.</summary>
+    internal SkillRunnerToolFailureCounter ToolFailureCounterForTesting => _toolFailureCounter;
+
+    private static ToolMiddlewareChain BuildToolMiddlewareChain(
+        IEnumerable<IToolCallMiddleware>? input)
+    {
+        var counter = new SkillRunnerToolFailureCounter();
+        var combined = (input ?? Array.Empty<IToolCallMiddleware>()).ToList();
+        combined.Add(new NyxIdProxyToolFailureCountingMiddleware(counter));
+        return new ToolMiddlewareChain(combined, counter);
     }
 
     private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
@@ -141,7 +188,12 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         try
         {
             var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
-            await SendOutputAsync(output, CancellationToken.None);
+            // Streaming-edit delivery happens in-line during ExecuteSkillAsync via the
+            // SkillRunnerStreamingReplySink (POST initial + PUT each delta — Lark's text-edit
+            // verb; PATCH on the same path is reserved for cards). When streaming can't be
+            // configured (no NyxID client, missing outbound config) ExecuteSkillAsync falls
+            // back to a one-shot SendOutputAsync at finalize, so we never need a second
+            // outbound call here. Persist the run as completed using the buffered final text.
             await PersistDomainEventAsync(new SkillRunnerExecutionCompletedEvent
             {
                 CompletedAt = Timestamp.FromDateTimeOffset(now),
@@ -238,19 +290,137 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
     {
+        // Reset before each run so retries / scheduled triggers each see a clean slate.
+        // The counter is populated by NyxIdProxyToolFailureCountingMiddleware as the LLM
+        // fans out nyxid_proxy calls inside the ChatStreamAsync loop.
+        _toolFailureCounter.Reset();
+
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = BuildExecutionMetadata();
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
-        await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+        var sink = TryCreateStreamingSink();
+        try
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+            {
+                if (string.IsNullOrEmpty(chunk.DeltaContent))
+                    continue;
                 content.Append(chunk.DeltaContent);
+                if (sink is not null)
+                    // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
+                    // turn. Acceptable for daily-report-sized output (≤30 KB capped, and the
+                    // sink dedupes against `_lastEmittedText` so most allocations don't even
+                    // make it onto the wire). If a future skill produces materially longer
+                    // output, switch the sink contract to `(StringBuilder, Range)` snapshots
+                    // or a `ReadOnlyMemory<char>` view so the accumulator isn't re-stringified
+                    // every delta.
+                    await sink.OnDeltaAsync(content.ToString(), ct);
+            }
+
+            var output = content.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(output))
+                output = "No update generated.";
+
+            EnsureToolStatusAllowsCompletion(_toolFailureCounter.FailureCount, _toolFailureCounter.SuccessCount);
+
+            if (sink is not null)
+                await sink.FinalizeAsync(output, ct);
+            else
+                // No streaming sink (no NyxID client, missing outbound config, or
+                // tests injecting a null client). Fall back to a one-shot send so the
+                // user still receives the report and tests that don't construct a sink
+                // keep working.
+                await SendOutputAsync(output, ct);
+
+            return output;
+        }
+        finally
+        {
+            sink?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Constructs the streaming-edit sink for this run, or returns null when streaming cannot be
+    /// configured. The sink writes the first non-empty delta as a Lark
+    /// <c>POST /open-apis/im/v1/messages</c> (capturing the returned <c>message_id</c>) and edits
+    /// the same message via <c>PUT /open-apis/im/v1/messages/{id}</c> for every later delta —
+    /// so the user sees the daily report land and grow in place rather than receiving one wall of
+    /// text after the LLM finishes. PUT is the correct verb for editing text/post messages;
+    /// <c>PATCH</c> on the same path is reserved for editing interactive cards (see
+    /// <c>SkillRunnerStreamingReplySink.EditAsync</c> for the verb-split rationale).
+    /// </summary>
+    private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
+    {
+        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
+        if (client is null)
+        {
+            // Tests and very early bootstrap can run without an injected NyxID client; falling
+            // back to one-shot SendOutputAsync is correct, but a log line makes the degradation
+            // visible (otherwise streaming-edit silently never engages and the only symptom is
+            // the wall-of-text UX users complained about in #423).
+            Logger.LogWarning(
+                "Skill runner {ActorId} has no NyxIdApiClient registered; streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                Id);
+            return null;
         }
 
-        var output = content.ToString().Trim();
-        return string.IsNullOrWhiteSpace(output) ? "No update generated." : output;
+        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
+            string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} has incomplete outbound config (NyxApiKey/NyxProviderSlug/ConversationId); streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                Id);
+            return null;
+        }
+
+        var primary = LarkConversationTargets.Resolve(
+            State.OutboundConfig.LarkReceiveId,
+            State.OutboundConfig.LarkReceiveIdType,
+            State.OutboundConfig.ConversationId);
+
+        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
+        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
+        LarkReceiveTarget? fallback = null;
+        if (!string.IsNullOrEmpty(fallbackId) && !string.IsNullOrEmpty(fallbackType))
+            fallback = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
+
+        return new SkillRunnerStreamingReplySink(
+            client,
+            State.OutboundConfig.NyxApiKey,
+            State.OutboundConfig.NyxProviderSlug,
+            primary,
+            fallback,
+            BuildLarkRejectionMessage,
+            SkillRunnerDefaults.StreamingEditThrottle,
+            TimeProvider.System,
+            Logger);
+    }
+
+    /// <summary>
+    /// Runner-layer safety net for issue #439: when every nyxid_proxy call in a run failed,
+    /// the LLM's plain-text output is structurally indistinguishable from a real "no
+    /// activity" report — the prompt-layer §9 Source health footer can be silently dropped
+    /// by a weaker model, and the runner has no other way to tell. Throwing here routes
+    /// through HandleTriggerAsync's existing catch path, which preserves the retry budget
+    /// and (after retries are exhausted) persists SkillRunnerExecutionFailedEvent so
+    /// <c>/agent-status</c> reports a non-zero <c>error_count</c> with a meaningful
+    /// <c>last_error</c> instead of a fake-success run.
+    /// Mixed runs (any successful nyxid_proxy call) still complete normally — partial data
+    /// is more useful to the user than a blanket failure, and the prompt-layer Source
+    /// health footer surfaces the failed queries.
+    /// </summary>
+    internal static void EnsureToolStatusAllowsCompletion(int failureCount, int successCount)
+    {
+        if (failureCount > 0 && successCount == 0)
+        {
+            throw new InvalidOperationException(
+                $"All {failureCount} nyxid_proxy tool call(s) in this run failed; refusing to record an empty-day report as a successful execution. " +
+                "Inspect the previous attempt's tool output for the underlying NyxID/upstream error envelope.");
+        }
     }
 
     private async Task SendOutputAsync(string output, CancellationToken ct)
@@ -435,14 +605,20 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
     {
+#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
+        var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
+        var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
+        var ownerScope = State.OutboundConfig?.OwnerScope
+                         ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = ResolvePlatform(State.OutboundConfig?.Platform),
+            Platform = legacyPlatform,
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty,
+            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = SkillRunnerDefaults.AgentType,
             TemplateName = State.TemplateName ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -455,6 +631,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
+#pragma warning restore CS0612
+
+        if (ownerScope is not null)
+            command.OwnerScope = ownerScope;
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
         await UpdateRegistryExecutionAsync(status, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, ct);

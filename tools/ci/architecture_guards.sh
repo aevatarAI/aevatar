@@ -73,6 +73,11 @@ if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver
   exit 1
 fi
 
+if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
+  echo "Legacy GAgent actor store is forbidden. Use registry command/query/admission ports."
+  exit 1
+fi
+
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
@@ -84,6 +89,7 @@ bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
 bash "${SCRIPT_DIR}/channel_inbox_gagent_guard.sh"
 bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
+bash "${SCRIPT_DIR}/agent_tool_delivery_target_reader_guard.sh"
 
 secret_store_scan_roots=()
 while IFS= read -r host_dir; do

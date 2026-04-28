@@ -40,7 +40,6 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
     activateMemberBindingRevision: jest.fn(),
     retireScopeBindingRevision: jest.fn(),
     retireMemberBindingRevision: jest.fn(),
-    addActor: jest.fn(),
     removeActor: jest.fn(),
     streamDraftRun: jest.fn(),
   },
@@ -115,7 +114,6 @@ describe("GAgentsPage", () => {
     activateMemberBindingRevision: jest.Mock;
     retireScopeBindingRevision: jest.Mock;
     retireMemberBindingRevision: jest.Mock;
-    addActor: jest.Mock;
     removeActor: jest.Mock;
     streamDraftRun: jest.Mock;
   };
@@ -206,27 +204,6 @@ describe("GAgentsPage", () => {
           actorIds: [...group.actorIds],
         }))
     );
-    mockedRuntimeGAgentApi.addActor.mockImplementation(
-      async (_scopeId: string, gAgentType: string, actorId: string) => {
-        const existingGroup = actorGroupsState.find(
-          (group) => group.gAgentType === gAgentType
-        );
-        if (existingGroup) {
-          if (!existingGroup.actorIds.includes(actorId)) {
-            existingGroup.actorIds = [...existingGroup.actorIds, actorId];
-          }
-          return;
-        }
-
-        actorGroupsState = [
-          ...actorGroupsState,
-          {
-            gAgentType,
-            actorIds: [actorId],
-          },
-        ];
-      }
-    );
     mockedRuntimeGAgentApi.removeActor.mockImplementation(
       async (_scopeId: string, gAgentType: string, actorId: string) => {
         actorGroupsState = actorGroupsState
@@ -296,7 +273,7 @@ describe("GAgentsPage", () => {
     expect((await screen.findAllByDisplayValue("planner-1")).length).toBeGreaterThan(0);
   });
 
-  it("adds and removes saved actors from the registry", async () => {
+  it("does not expose direct actor registration from the registry drawer", async () => {
     window.history.replaceState(
       {},
       "",
@@ -313,31 +290,21 @@ describe("GAgentsPage", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Manage actors" }));
     expect((await screen.findAllByText("Actor Registry")).length).toBeGreaterThan(0);
-    fireEvent.change(screen.getByLabelText("Registry actor id"), {
-      target: { value: "orders-2" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save actor" }));
 
-    await waitFor(() => {
-      expect(mockedRuntimeGAgentApi.addActor).toHaveBeenCalledWith(
-        "scope-a",
-        "Tests.OrdersGAgent",
-        "orders-2"
-      );
-    });
-    expect(await screen.findByDisplayValue("orders-2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save actor" })).toBeNull();
+    expect(screen.queryByLabelText("Registry actor id")).toBeNull();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[1]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
 
     await waitFor(() => {
       expect(mockedRuntimeGAgentApi.removeActor).toHaveBeenCalledWith(
         "scope-a",
         "Tests.OrdersGAgent",
-        "orders-2"
+        "orders-1"
       );
     });
     await waitFor(() => {
-      expect(screen.queryByDisplayValue("orders-2")).toBeNull();
+      expect(screen.queryByDisplayValue("orders-1")).toBeNull();
     });
   });
 

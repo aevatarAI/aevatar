@@ -306,7 +306,13 @@ public static class ScopeGAgentEndpoints
             if (!interaction.Succeeded)
             {
                 await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
-                await WriteDraftRunStartErrorAsync(http.Response, preparedActor, request.ActorTypeName, interaction.Error, ct);
+                await WriteDraftRunStartErrorAsync(
+                    http.Response,
+                    preparedActor,
+                    request.ActorTypeName,
+                    request.PreferredActorId,
+                    interaction.Error,
+                    ct);
                 return;
             }
 
@@ -329,6 +335,7 @@ public static class ScopeGAgentEndpoints
         catch (OperationCanceledException)
         {
             // Client disconnected.
+            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
         }
         catch (Exception ex)
         {
@@ -394,7 +401,13 @@ public static class ScopeGAgentEndpoints
             ct);
         if (!preparation.Succeeded)
         {
-            await WriteDraftRunStartErrorAsync(response, preparedActor: null, request.ActorTypeName, preparation.Error, ct);
+            await WriteDraftRunStartErrorAsync(
+                response,
+                preparedActor: null,
+                request.ActorTypeName,
+                request.PreferredActorId,
+                preparation.Error,
+                ct);
             return null;
         }
 
@@ -445,6 +458,7 @@ public static class ScopeGAgentEndpoints
         HttpResponse response,
         GAgentDraftRunPreparedActor? preparedActor,
         string requestedActorTypeName,
+        string? requestedActorId,
         GAgentDraftRunStartError error,
         CancellationToken ct)
     {
@@ -458,12 +472,20 @@ public static class ScopeGAgentEndpoints
                     $"GAgent type '{requestedActorTypeName}' could not be resolved.",
                     ct);
                 break;
-            case GAgentDraftRunStartError.ActorTypeMismatch when preparedActor is not null:
+            case GAgentDraftRunStartError.ActorTypeMismatch:
+                var actorId = string.IsNullOrWhiteSpace(preparedActor?.ActorId)
+                    ? requestedActorId?.Trim()
+                    : preparedActor.ActorId;
+                var actorTypeName = string.IsNullOrWhiteSpace(preparedActor?.ActorTypeName)
+                    ? requestedActorTypeName
+                    : preparedActor.ActorTypeName;
                 response.StatusCode = StatusCodes.Status409Conflict;
                 await WriteJsonErrorAsync(
                     response,
                     "GAGENT_ACTOR_TYPE_MISMATCH",
-                    $"Actor '{preparedActor.ActorId}' is not compatible with requested type '{preparedActor.ActorTypeName}'.",
+                    string.IsNullOrWhiteSpace(actorId)
+                        ? $"Requested actor is not compatible with requested type '{actorTypeName}'."
+                        : $"Actor '{actorId}' is not compatible with requested type '{actorTypeName}'.",
                     ct);
                 break;
         }
@@ -520,12 +542,12 @@ public static class ScopeGAgentEndpoints
     private static Google.Protobuf.WellKnownTypes.Struct BuildToolApprovalStruct(Any payload)
         => ScopeGAgentAguiEventMapper.BuildToolApprovalStruct(payload);
 
-    // ─── Actor CRUD (chrono-storage) ───
+    // ─── GAgent Registry ───
 
     private static async Task<IResult> HandleListActorsAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -534,19 +556,26 @@ public static class ScopeGAgentEndpoints
 
         try
         {
-            var groups = await actorStore.GetAsync(scopeId, ct);
-            return Results.Ok(groups);
+            var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
+            return Results.Ok(new
+            {
+                snapshot.ScopeId,
+                snapshot.StateVersion,
+                snapshot.UpdatedAt,
+                snapshot.ObservedAt,
+                snapshot.Groups,
+            });
         }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new { code = "GAGENT_ACTOR_STORE_ERROR", message = ex.Message });
+            return Results.BadRequest(new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = ex.Message });
         }
         catch (Exception ex)
         {
             loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
-                .LogWarning(ex, "Failed to list GAgent actors from storage");
+                .LogWarning(ex, "Failed to list GAgent actors from registry read model");
             return Results.Json(
-                new { code = "GAGENT_ACTOR_STORE_ERROR", message = "Failed to list GAgent actors from storage." },
+                new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = "Failed to list GAgent actors from registry read model." },
                 statusCode: StatusCodes.Status500InternalServerError);
         }
     }
@@ -555,43 +584,25 @@ public static class ScopeGAgentEndpoints
         HttpContext http,
         string scopeId,
         AddGAgentActorHttpRequest request,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
-        try
-        {
-            if (string.IsNullOrWhiteSpace(request.GAgentType) || string.IsNullOrWhiteSpace(request.ActorId))
-                return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType and actorId are required." });
+        _ = request;
+        _ = registryCommandPort;
+        _ = loggerFactory;
+        _ = ct;
 
-            var normalizedTypeName = request.GAgentType.Trim();
-            if (ScopeGAgentActorTypeResolver.Resolve(normalizedTypeName) is null)
+        return Results.Json(
+            new
             {
-                return Results.BadRequest(new
-                {
-                    code = "UNKNOWN_GAGENT_TYPE",
-                    message = $"Unknown GAgent type '{normalizedTypeName}'.",
-                });
-            }
-
-            await actorStore.AddActorAsync(scopeId, normalizedTypeName, request.ActorId.Trim(), ct);
-            return Results.Ok();
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Results.BadRequest(new { code = "GAGENT_ACTOR_STORE_ERROR", message = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
-                .LogWarning(ex, "Failed to persist GAgent actor to storage");
-            return Results.Json(
-                new { code = "GAGENT_ACTOR_STORE_ERROR", message = "Failed to persist GAgent actor to storage." },
-                statusCode: StatusCodes.Status500InternalServerError);
-        }
+                code = "DIRECT_GAGENT_ACTOR_REGISTRATION_UNSUPPORTED",
+                message = "Direct GAgent actor registry registration is not supported. Create the target resource through its capability command endpoint.",
+            },
+            statusCode: StatusCodes.Status405MethodNotAllowed);
     }
 
     private static async Task<IResult> HandleRemoveActorAsync(
@@ -599,7 +610,8 @@ public static class ScopeGAgentEndpoints
         string scopeId,
         string actorId,
         [FromQuery] string? gagentType,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -611,19 +623,46 @@ public static class ScopeGAgentEndpoints
             if (string.IsNullOrWhiteSpace(gagentType))
                 return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType query parameter is required." });
 
-            await actorStore.RemoveActorAsync(scopeId, gagentType.Trim(), actorId.Trim(), ct);
+            var registration = new GAgentActorRegistration(scopeId, gagentType.Trim(), actorId.Trim());
+            var admission = await admissionPort.AuthorizeTargetAsync(
+                new ScopeResourceTarget(
+                    registration.ScopeId,
+                    ScopeResourceKind.GAgentActor,
+                    registration.GAgentType,
+                    registration.ActorId,
+                    ScopeResourceOperation.Delete),
+                ct);
+            if (!admission.IsAllowed)
+            {
+                return admission.Status switch
+                {
+                    ScopeResourceAdmissionStatus.NotFound => Results.NotFound(new
+                    {
+                        code = "GAGENT_ACTOR_NOT_FOUND",
+                        message = "GAgent actor is not registered in this scope.",
+                    }),
+                    ScopeResourceAdmissionStatus.Denied or ScopeResourceAdmissionStatus.ScopeMismatch => Results.Json(
+                        new { code = "SCOPE_FORBIDDEN", message = "Scope access denied." },
+                        statusCode: StatusCodes.Status403Forbidden),
+                    _ => Results.Json(
+                        new { code = "GAGENT_ACTOR_ADMISSION_UNAVAILABLE", message = "GAgent actor ownership could not be verified." },
+                        statusCode: StatusCodes.Status503ServiceUnavailable),
+                };
+            }
+
+            await registryCommandPort.UnregisterActorAsync(registration, ct);
             return Results.Ok();
         }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new { code = "GAGENT_ACTOR_STORE_ERROR", message = ex.Message });
+            return Results.BadRequest(new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = ex.Message });
         }
         catch (Exception ex)
         {
             loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
-                .LogWarning(ex, "Failed to remove GAgent actor from storage");
+                .LogWarning(ex, "Failed to unregister GAgent actor from registry");
             return Results.Json(
-                new { code = "GAGENT_ACTOR_STORE_ERROR", message = "Failed to remove GAgent actor from storage." },
+                new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = "Failed to unregister GAgent actor from registry." },
                 statusCode: StatusCodes.Status500InternalServerError);
         }
     }

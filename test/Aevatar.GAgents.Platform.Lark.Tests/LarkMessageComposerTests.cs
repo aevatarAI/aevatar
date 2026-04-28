@@ -118,6 +118,54 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenSingleCardSuppliesTitle_DoesNotDuplicateInBody()
+    {
+        // The first card's Title is consumed by the Lark card header (see ResolveHeaderTitle).
+        // Form mode already skipped the title in the body markdown, but non-form mode used to
+        // re-emit it as `**Title**` right under the header — every single-card response (e.g.
+        // /agent-status, /agents in its post-fix unified shape) ended up with a redundant bold
+        // title row. Pin the no-duplicate contract here so a refactor cannot regress it.
+        var intent = new MessageContent();
+        intent.Cards.Add(new CardBlock
+        {
+            BlockId = "agents_list",
+            Title = "Your Agents (1)",
+            Text = "1. `daily_report` · running",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "list_agents",
+            Label = "Refresh",
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        // Header title appears exactly once (in the header element).
+        document.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .ShouldBe("Your Agents (1)");
+        var bodyElements = document.RootElement.GetProperty("body").GetProperty("elements");
+        // Two body elements: the card body markdown (without the duplicated title) and the button.
+        bodyElements.GetArrayLength().ShouldBe(2);
+        var cardMarkdown = bodyElements[0].GetProperty("content").GetString();
+        cardMarkdown.ShouldNotBeNull();
+        cardMarkdown.ShouldNotContain("**Your Agents (1)**");
+        cardMarkdown.ShouldContain("daily_report");
+    }
+
+    [Fact]
     public void Compose_WhenFormInputCarriesValue_RendersLarkDefaultValue()
     {
         var intent = new MessageContent();
