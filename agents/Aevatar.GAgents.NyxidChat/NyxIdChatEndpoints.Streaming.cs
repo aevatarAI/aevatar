@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Hosting;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -32,6 +33,9 @@ public static partial class NyxIdChatEndpoints
 
         try
         {
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             accessToken = ExtractBearerToken(http);
             if (string.IsNullOrWhiteSpace(accessToken))
             {
@@ -215,6 +219,9 @@ public static partial class NyxIdChatEndpoints
 
         try
         {
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             var accessToken = ExtractBearerToken(http);
             if (string.IsNullOrWhiteSpace(accessToken))
             {
