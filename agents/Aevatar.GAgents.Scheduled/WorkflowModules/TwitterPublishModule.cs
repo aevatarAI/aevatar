@@ -27,9 +27,10 @@ namespace Aevatar.GAgents.Scheduled.WorkflowModules;
 /// 的草稿发布到 Twitter，并把结果（推文 URL 或分类好的错误文案）回写到原始 Lark 会话。
 /// </summary>
 /// <remarks>
-/// 与 LLM/工具调用路径不同——发布是确定性的：批准的内容直接进入 <c>POST /2/tweets</c>，没有
-/// 模型重写余地。把这一段建在工作流 module 而不是 LLM step 里也更可重入：模型偶尔丢工具调用、
-/// 或返回非结构化文本，但发布行为必须严格 1:1。
+/// 与 LLM/工具调用路径不同——发布是确定性的：批准的内容直接进入 <c>POST /tweets</c>（NyxID 的
+/// <c>api-twitter</c> 代理 base_url 已含 <c>/2</c>，不能再前缀 <c>/2/</c>，详见
+/// <c>NyxIdServiceApiHints.cs</c>），没有模型重写余地。把这一段建在工作流 module 而不是 LLM
+/// step 里也更可重入：模型偶尔丢工具调用、或返回非结构化文本，但发布行为必须严格 1:1。
 /// </remarks>
 public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContext>
 {
@@ -104,7 +105,7 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
         // Twitter v2 endpoint requires `text` payload only for plain-text posts (#216 v1 scope:
         // no media, no thread, no poll). Body is JSON, content-type is set by NyxIdApiClient.
         //
-        // Idempotency caveat (PR #461 review item #1): Twitter v2 `POST /2/tweets` has no
+        // Idempotency caveat (PR #461 review item #1): Twitter v2 `POST /tweets` has no
         // server-side dedup. If this step is retried (e.g. via a `retry` policy on the YAML, or
         // a workflow restart that replays an in-flight `StepRequestEvent`), the same content
         // will be posted twice. The social_media template intentionally does NOT define a
@@ -327,7 +328,9 @@ public sealed class TwitterPublishModule : IEventModule<IWorkflowExecutionContex
     }
 
     /// <summary>
-    /// Classifies a NyxID proxy response from <c>POST /api/v1/proxy/s/api-twitter/2/tweets</c>
+    /// Classifies a NyxID proxy response from <c>POST /api/v1/proxy/s/api-twitter/tweets</c>
+    /// (NyxID's <c>api-twitter</c> base already includes <c>/2</c>, so the path is
+    /// <c>/tweets</c>, not <c>/2/tweets</c> — see the <c>HandleAsync</c> call site comment)
     /// into a publish outcome. Three shapes are recognized:
     /// <list type="bullet">
     /// <item>Twitter 2xx success: <c>{ "data": { "id": "&lt;tweet-id&gt;" } }</c> (NyxID forwards
