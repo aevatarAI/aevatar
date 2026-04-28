@@ -305,6 +305,58 @@ public sealed class AgentBuilderCardFlowTests
     }
 
     [Fact]
+    public async Task TryResolveAsync_DeleteAgentTextCommand_TreatsConfirmTrailerAsExplicitConfirmation()
+    {
+        // Review feedback on PR #483: the shared `/agents` renderer prints the inline command
+        // hint `/delete-agent <id> confirm` (matching the NyxRelay text contract). The direct
+        // CardFlow text-command parser used to take everything after the command as the agent_id,
+        // so following that hint produced an agent_id of `<id> confirm` and the confirmation card
+        // built for a bogus id whose Confirm Delete button then failed the actual delete. This
+        // test pins the new behavior: the trailing `confirm` token is recognized and the parser
+        // dispatches the delete directly (matching NyxRelay's semantics) instead of stuffing it
+        // into the agent_id.
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Text = "/delete-agent skill-runner-1 confirm",
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("delete_agent");
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be("delete_agent");
+        body.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-1");
+        body.RootElement.GetProperty("confirm").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_DeleteAgentTextCommand_WithoutConfirmTrailer_StillShowsConfirmationCard()
+    {
+        // Without the explicit `confirm` trailer the direct CardFlow path keeps the existing
+        // UI-driven confirmation step (the user clicks Confirm Delete) — the new parser must
+        // not change that behavior, only handle the new trailer correctly.
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Text = "/delete-agent skill-runner-1",
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyContent.Should().NotBeNull();
+        decision.ReplyContent!.Cards.Should().ContainSingle(card =>
+            card.BlockId == "delete_confirm:skill-runner-1");
+    }
+
+    [Fact]
     public async Task TryResolveAsync_ConfirmDeleteAgent_ReturnsStructuredCardNotJsonText()
     {
         // Pre-fix this branch returned DirectReply with a Lark card JSON string in ReplyPayload

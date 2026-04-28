@@ -12,18 +12,18 @@ public static class AgentBuilderCardFlow
 {
     private const string PrivateChatType = "p2p";
     private const string CardActionChatType = "card_action";
-    private const string OpenDailyReportFormAction = "open_daily_report_form";
-    private const string OpenSocialMediaFormAction = "open_social_media_form";
-    private const string DailyReportAction = "create_daily_report";
-    private const string SocialMediaAction = "create_social_media";
-    private const string ListTemplatesAction = "list_templates";
-    private const string ListAgentsAction = "list_agents";
-    private const string AgentStatusAction = "agent_status";
-    private const string RunAgentAction = "run_agent";
-    private const string DisableAgentAction = "disable_agent";
-    private const string EnableAgentAction = "enable_agent";
-    private const string ConfirmDeleteAgentAction = "confirm_delete_agent";
-    private const string DeleteAgentAction = "delete_agent";
+    private const string OpenDailyReportFormAction = AgentBuilderActionIds.OpenDailyReportForm;
+    private const string OpenSocialMediaFormAction = AgentBuilderActionIds.OpenSocialMediaForm;
+    private const string DailyReportAction = AgentBuilderActionIds.DailyReport;
+    private const string SocialMediaAction = AgentBuilderActionIds.SocialMedia;
+    private const string ListTemplatesAction = AgentBuilderActionIds.ListTemplates;
+    private const string ListAgentsAction = AgentBuilderActionIds.ListAgents;
+    private const string AgentStatusAction = AgentBuilderActionIds.AgentStatus;
+    private const string RunAgentAction = AgentBuilderActionIds.RunAgent;
+    private const string DisableAgentAction = AgentBuilderActionIds.DisableAgent;
+    private const string EnableAgentAction = AgentBuilderActionIds.EnableAgent;
+    private const string ConfirmDeleteAgentAction = AgentBuilderActionIds.ConfirmDeleteAgent;
+    private const string DeleteAgentAction = AgentBuilderActionIds.DeleteAgent;
     private const string DefaultScheduleTime = "09:00";
     private const string SocialMediaCommand = "/social-media";
     private const string AgentStatusCommand = "/agent-status";
@@ -300,7 +300,7 @@ public static class AgentBuilderCardFlow
         }
     }
 
-    private static MessageContent ToTextContent(string text) => new() { Text = text };
+    private static MessageContent ToTextContent(string text) => AgentBuilderJson.TextContent(text);
 
     public static string ResolveToolChatType(ChannelInboundEvent evt)
     {
@@ -513,19 +513,56 @@ public static class AgentBuilderCardFlow
             return true;
         }
 
-        if (TryParseAgentCommand(normalizedText, DeleteAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
+        if (TryResolveDeleteAgentTextCommand(normalizedText, out decision))
+            return true;
 
-            decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId!, null));
+        return false;
+    }
+
+    /// <summary>
+    /// Parses <c>/delete-agent &lt;agent_id&gt; [confirm]</c>. The optional <c>confirm</c> trailer
+    /// matches the NyxRelay text contract (and the inline command hint surfaced from the shared
+    /// <c>/agents</c> renderer) so a user who follows the printed hint
+    /// <c>/delete-agent &lt;id&gt; confirm</c> in a direct-webhook chat does not end up with
+    /// <c>"&lt;id&gt; confirm"</c> being treated as a single agent_id by the legacy
+    /// <see cref="TryParseAgentCommand"/> parser. Without the trailing keyword we still surface
+    /// the explicit confirmation card; with it we skip the extra step and dispatch the delete
+    /// directly, mirroring the relay path's semantics.
+    /// </summary>
+    private static bool TryResolveDeleteAgentTextCommand(
+        string normalizedText,
+        out AgentBuilderFlowDecision? decision)
+    {
+        decision = null;
+        if (!normalizedText.StartsWith(DeleteAgentCommand, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var tokens = ChannelTextCommandParser.Tokenize(normalizedText);
+        if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
+        {
+            decision = AgentBuilderFlowDecision.DirectReply($"Usage: {DeleteAgentCommand} <agent_id>");
             return true;
         }
 
-        return false;
+        var agentId = tokens[1].Trim();
+        var confirmed = tokens.Count > 2 &&
+                        string.Equals(tokens[2], "confirm", StringComparison.OrdinalIgnoreCase);
+
+        if (confirmed)
+        {
+            decision = AgentBuilderFlowDecision.ToolCall(
+                DeleteAgentAction,
+                JsonSerializer.Serialize(new
+                {
+                    action = DeleteAgentAction,
+                    agent_id = agentId,
+                    confirm = true,
+                }));
+            return true;
+        }
+
+        decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId, null));
+        return true;
     }
 
     private static bool TryParseAgentCommand(
@@ -841,26 +878,11 @@ public static class AgentBuilderCardFlow
         return AgentBuilderCardContent.FormatListAgentsResult(root, string.Join("\n", lines));
     }
 
-    private static bool TryReadError(JsonElement root, out string error)
-    {
-        error = ReadString(root, "error") ?? string.Empty;
-        return error.Length > 0;
-    }
+    private static bool TryReadError(JsonElement root, out string error) =>
+        AgentBuilderJson.TryReadError(root, out error);
 
-    private static string? ReadString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property))
-            return null;
-
-        return property.ValueKind switch
-        {
-            JsonValueKind.String => property.GetString(),
-            JsonValueKind.Number => property.GetRawText(),
-            JsonValueKind.True => bool.TrueString,
-            JsonValueKind.False => bool.FalseString,
-            _ => null,
-        };
-    }
+    private static string? ReadString(JsonElement element, string propertyName) =>
+        AgentBuilderJson.TryReadString(element, propertyName);
 
     private static IReadOnlyList<string> ReadStringArray(JsonElement element, string propertyName)
     {

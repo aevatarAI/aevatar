@@ -12,12 +12,12 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// </summary>
 public static class AgentBuilderCardContent
 {
-    private const string DailyReportAction = "create_daily_report";
-    private const string SocialMediaAction = "create_social_media";
-    private const string OpenDailyReportFormAction = "open_daily_report_form";
-    private const string OpenSocialMediaFormAction = "open_social_media_form";
-    private const string ListTemplatesAction = "list_templates";
-    private const string ListAgentsAction = "list_agents";
+    private const string DailyReportAction = AgentBuilderActionIds.DailyReport;
+    private const string SocialMediaAction = AgentBuilderActionIds.SocialMedia;
+    private const string OpenDailyReportFormAction = AgentBuilderActionIds.OpenDailyReportForm;
+    private const string OpenSocialMediaFormAction = AgentBuilderActionIds.OpenSocialMediaForm;
+    private const string ListTemplatesAction = AgentBuilderActionIds.ListTemplates;
+    private const string ListAgentsAction = AgentBuilderActionIds.ListAgents;
     private const string DefaultScheduleTime = "09:00";
 
     public static MessageContent BuildDailyReportForm(string? preferredGithubUsername) =>
@@ -381,46 +381,17 @@ public static class AgentBuilderCardContent
             IsPrimary = isPrimary,
         };
 
-    private static MessageContent TextContent(string text) => new() { Text = text };
+    private static MessageContent TextContent(string text) => AgentBuilderJson.TextContent(text);
 
-    private static bool TryReadError(JsonElement root, out string error)
-    {
-        error = TryReadString(root, "error") ?? string.Empty;
-        return error.Length > 0;
-    }
+    private static bool TryReadError(JsonElement root, out string error) =>
+        AgentBuilderJson.TryReadError(root, out error);
 
-    private static string? TryReadString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property))
-            return null;
+    private static string? TryReadString(JsonElement element, string propertyName) =>
+        AgentBuilderJson.TryReadString(element, propertyName);
 
-        return property.ValueKind switch
-        {
-            JsonValueKind.String => property.GetString(),
-            JsonValueKind.Number => property.GetRawText(),
-            JsonValueKind.True => bool.TrueString,
-            JsonValueKind.False => bool.FalseString,
-            _ => null,
-        };
-    }
+    private static bool TryReadBool(JsonElement element, string propertyName) =>
+        AgentBuilderJson.TryReadBool(element, propertyName);
 
-    private static bool TryReadBool(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property))
-            return false;
-
-        return property.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.String => bool.TryParse(property.GetString(), out var parsed) && parsed,
-            _ => false,
-        };
-    }
-
-    private static string? TryReadOptional(JsonElement element, string propertyName)
-    {
-        var raw = TryReadString(element, propertyName);
-        return string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
-    }
+    private static string? TryReadOptional(JsonElement element, string propertyName) =>
+        AgentBuilderJson.TryReadOptional(element, propertyName);
 }

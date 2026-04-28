@@ -81,7 +81,7 @@ public static class NyxRelayAgentBuilderFlow
         }
     }
 
-    private static MessageContent TextContent(string text) => new() { Text = text };
+    private static MessageContent TextContent(string text) => AgentBuilderJson.TextContent(text);
 
     private static bool IsKnownCommand(string command) =>
         command is DailyCommand
@@ -337,25 +337,6 @@ public static class NyxRelayAgentBuilderFlow
         return string.Join('\n', lines);
     }
 
-    private static string FormatAgentStatusResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"Agent status failed: {error}";
-
-        var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
-        return BuildTextBlock(
-            "Agent status:",
-            $"Agent ID: {agentId}",
-            $"Template: {ReadString(root, "template") ?? "unknown-template"}",
-            $"Status: {ReadString(root, "status") ?? "unknown"}",
-            $"Schedule: {ReadString(root, "schedule_cron") ?? "n/a"} ({ReadString(root, "schedule_timezone") ?? "n/a"})",
-            $"Last run: {ReadString(root, "last_run_at") ?? "n/a"}",
-            $"Next run: {ReadString(root, "next_scheduled_run") ?? "n/a"}",
-            NormalizeOptional(ReadString(root, "last_error")) is { } lastError ? $"Last error: {lastError}" : null,
-            NormalizeOptional(ReadString(root, "note")),
-            $"Next commands: /run-agent {agentId}, /disable-agent {agentId}, /enable-agent {agentId}, /delete-agent {agentId} confirm");
-    }
-
     /// <summary>
     /// Renders <c>/agent-status &lt;agent_id&gt;</c> as an interactive card with action buttons
     /// (Run, Disable, Enable, Delete). Each button submits the corresponding
@@ -532,26 +513,11 @@ public static class NyxRelayAgentBuilderFlow
         return NormalizeOptional(raw);
     }
 
-    private static bool TryReadError(JsonElement root, out string error)
-    {
-        error = ReadString(root, "error") ?? string.Empty;
-        return error.Length > 0;
-    }
+    private static bool TryReadError(JsonElement root, out string error) =>
+        AgentBuilderJson.TryReadError(root, out error);
 
-    private static string? ReadString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property))
-            return null;
-
-        return property.ValueKind switch
-        {
-            JsonValueKind.String => property.GetString(),
-            JsonValueKind.Number => property.GetRawText(),
-            JsonValueKind.True => bool.TrueString,
-            JsonValueKind.False => bool.FalseString,
-            _ => null,
-        };
-    }
+    private static string? ReadString(JsonElement element, string propertyName) =>
+        AgentBuilderJson.TryReadString(element, propertyName);
 
     private static string BuildDailyReportHelpText() =>
         BuildTextBlock(
