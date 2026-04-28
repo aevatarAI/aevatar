@@ -9,6 +9,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

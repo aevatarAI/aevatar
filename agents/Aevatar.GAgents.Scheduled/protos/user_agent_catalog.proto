@@ -1,0 +1,212 @@
+syntax = "proto3";
+
+package aevatar.gagents.scheduled;
+
+option csharp_namespace = "Aevatar.GAgents.Scheduled";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Owner scope (caller identity tuple) ───
+//
+// Carries the (NyxID user, surface platform, registration scope, channel
+// sender) tuple that uniquely identifies an agent's owner across cli/web/
+// lark/telegram. Replaces the scattered `owner_nyx_user_id` / `platform` /
+// `scope_id` fields scattered across catalog/state/event messages, so a
+// caller-scoped read is a single typed full-tuple equality.
+//
+// `platform` is a closed canonical string set: "nyxid" (native cli/web),
+// "lark", "telegram". Empty is invalid at the resolver output and at command
+// ingress.
+//
+// `registration_scope_id` and `sender_id` are required iff `platform != "nyxid"`
+// (non-native surfaces). For native NyxID surfaces both are empty strings.
+message OwnerScope {
+  string nyx_user_id = 1;
+  string platform = 2;
+  string registration_scope_id = 3;
+  string sender_id = 4;
+}
+
+// ─── User Agent Catalog (actor-backed delivery target store) ───
+
+message UserAgentCatalogEntry {
+  string agent_id = 1;
+  // Deprecated: read-only legacy fallback; new writes leave empty and rely on
+  // owner_scope.platform. Kept on the wire so legacy state without owner_scope
+  // still loads (nyxid surface backfills lazily; lark surface deprecate-and-
+  // recreates per issue #466 migration plan).
+  string platform = 2 [deprecated = true];
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  // Deprecated: secret-bearing field; the public DTO `UserAgentCatalogEntry`
+  // surfaced via `IUserAgentCatalogQueryPort` no longer carries this. The
+  // credential is read through the narrow internal `IUserAgentDeliveryTargetReader`
+  // contract by outbound delivery code only.
+  string nyx_api_key = 5 [deprecated = true];
+  // Deprecated: superseded by owner_scope.nyx_user_id. See platform field.
+  string owner_nyx_user_id = 6 [deprecated = true];
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  bool tombstoned = 9;
+  string agent_type = 10;
+  string template_name = 11;
+  // Deprecated: workflow/skill execution scope (not registration scope). Kept
+  // for the existing semantic. owner_scope.registration_scope_id is a separate
+  // field for the bot/registration scope.
+  string scope_id = 12;
+  string api_key_id = 13;
+  string schedule_cron = 14;
+  string schedule_timezone = 15;
+  string status = 16;
+  google.protobuf.Timestamp last_run_at = 17;
+  google.protobuf.Timestamp next_run_at = 18;
+  int32 error_count = 19;
+  string last_error = 20;
+  int64 tombstone_state_version = 21;
+  // Authoritative Lark outbound delivery target captured at create time. When
+  // both fields are present, outbound senders use them verbatim instead of
+  // inferring receive_id_type from the conversation_id prefix. The creator
+  // pins the chat-scoped `chat_id` (`oc_*`) here when available because it is
+  // the only identifier that survives both cross-app and cross-tenant
+  // boundaries when the same Lark app is on both ends of the relay.
+  string lark_receive_id = 22;
+  string lark_receive_id_type = 23;
+  // Secondary outbound delivery target. The runtime attempts the primary
+  // (`lark_receive_id`/`lark_receive_id_type`) first and falls back to this
+  // pair on a Lark `230002 bot not in chat` rejection — the failure mode
+  // when the outbound app is a different Lark app than the one that received
+  // the inbound DM (cross-app same-tenant deployment). The creator pins
+  // `union_id` (`on_*`) here so the fallback survives a chat_id rejection
+  // without needing a fresh ingress event.
+  string lark_receive_id_fallback = 24;
+  string lark_receive_id_type_fallback = 25;
+  // Caller scope captured at create time. New writes always populate this;
+  // the deprecated platform/owner_nyx_user_id fields are kept readable for
+  // legacy state (issue #466 migration plan).
+  OwnerScope owner_scope = 26;
+}
+
+message UserAgentCatalogState {
+  repeated UserAgentCatalogEntry entries = 1;
+}
+
+message UserAgentCatalogUpsertCommand {
+  string agent_id = 1;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 2 [deprecated = true];
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  string nyx_api_key = 5;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 6 [deprecated = true];
+  string agent_type = 7;
+  string template_name = 8;
+  string scope_id = 9;
+  string api_key_id = 10;
+  string schedule_cron = 11;
+  string schedule_timezone = 12;
+  string status = 13;
+  // See UserAgentCatalogEntry.lark_receive_id for semantics. Empty values
+  // preserve any existing entry value via the merge-non-empty upsert policy.
+  string lark_receive_id = 14;
+  string lark_receive_id_type = 15;
+  // See UserAgentCatalogEntry.lark_receive_id_fallback for semantics.
+  string lark_receive_id_fallback = 16;
+  string lark_receive_id_type_fallback = 17;
+  // Caller scope captured at create time. Required for new writes.
+  OwnerScope owner_scope = 18;
+}
+
+message UserAgentCatalogTombstoneCommand {
+  string agent_id = 1;
+}
+
+message UserAgentCatalogExecutionUpdateCommand {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
+}
+
+message UserAgentCatalogCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+message UserAgentCatalogUpsertedEvent {
+  UserAgentCatalogEntry entry = 1;
+}
+
+message UserAgentCatalogTombstonedEvent {
+  string agent_id = 1;
+  int64 tombstone_state_version = 2;
+}
+
+message UserAgentCatalogExecutionUpdatedEvent {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
+}
+
+message UserAgentCatalogTombstonesCompactedEvent {
+  repeated string agent_ids = 1;
+  int64 safe_state_version = 2;
+}
+
+message UserAgentCatalogDocument {
+  string id = 1;
+  // Deprecated: superseded by owner_scope.platform. Kept for legacy reads.
+  string platform = 2 [deprecated = true];
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  reserved 5;
+  reserved "nyx_api_key";
+  // Deprecated: superseded by owner_scope.nyx_user_id. Kept for legacy reads.
+  string owner_nyx_user_id = 6 [deprecated = true];
+  bool tombstoned = 7;
+  int64 state_version = 8;
+  string last_event_id = 9;
+  google.protobuf.Timestamp updated_at_utc = 10;
+  string actor_id = 11;
+  google.protobuf.Timestamp created_at_utc = 12;
+  string agent_type = 13;
+  string template_name = 14;
+  string scope_id = 15;
+  string api_key_id = 16;
+  string schedule_cron = 17;
+  string schedule_timezone = 18;
+  string status = 19;
+  google.protobuf.Timestamp last_run_at_utc = 20;
+  google.protobuf.Timestamp next_run_at_utc = 21;
+  int32 error_count = 22;
+  string last_error = 23;
+  // Mirrors UserAgentCatalogEntry.lark_receive_id*. Required so catalog-backed
+  // outbound senders (FeishuCardHumanInteractionPort) read the typed target
+  // through the projection rather than re-deriving from conversation_id.
+  string lark_receive_id = 24;
+  string lark_receive_id_type = 25;
+  // Mirrors UserAgentCatalogEntry.lark_receive_id_fallback*. Carried through
+  // the projection so catalog-backed senders see the same primary+fallback
+  // pair as actor-state senders.
+  string lark_receive_id_fallback = 26;
+  string lark_receive_id_type_fallback = 27;
+  // Caller scope materialized from the upserted entry. New rows always carry
+  // this; legacy rows may have only owner_nyx_user_id+platform set, in which
+  // case the caller-scoped query port lazily synthesizes owner_scope on read
+  // for the nyxid surface (issue #466 migration plan).
+  OwnerScope owner_scope = 28;
+}
+
+// Runtime-only Nyx credential read model for delivery-target execution paths.
+message UserAgentCatalogNyxCredentialDocument {
+  string id = 1;
+  string nyx_api_key = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  string actor_id = 6;
+}

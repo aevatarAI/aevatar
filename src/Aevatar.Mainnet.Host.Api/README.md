@@ -72,6 +72,25 @@ bash src/Aevatar.Mainnet.Host.Api/boot.sh
 
 - 这是最一致的单机开发模式：read/write 都是本地临时态。
 - 后端重启后，actor state 与 projection/read model 会一起清空，不会出现“service definition 还在，但 services/read model 已空”的错位。
+- 如需本地不带 token 调试 scope / studio / playground API，必须使用 `ASPNETCORE_ENVIRONMENT=Development` 并显式设置 `Aevatar__Authentication__Enabled=false`。该关闭开关只在 `Development` 环境生效；`PersistentLocal`、`Distributed` 等非 Development 环境会强制保持认证开启。
+
+最小无认证冒烟启动示例：
+
+```bash
+ASPNETCORE_ENVIRONMENT=Development \
+Aevatar__Authentication__Enabled=false \
+GAgentService__Demo__Enabled=false \
+Projection__Document__Providers__Elasticsearch__Enabled=false \
+Projection__Document__Providers__InMemory__Enabled=true \
+Projection__Graph__Providers__Neo4j__Enabled=false \
+Projection__Graph__Providers__InMemory__Enabled=true \
+Projection__Policies__Environment=Development \
+Projection__Policies__DenyInMemoryDocumentReadStore=false \
+Projection__Policies__DenyInMemoryGraphFactStore=false \
+ActorRuntime__OrleansStreamBackend=InMemory \
+ActorRuntime__OrleansPersistenceBackend=InMemory \
+dotnet run --project src/Aevatar.Mainnet.Host.Api --no-build
+```
 
 如果只是想避免本地 scope workflow / actor state 因后端重启而完全丢失，而当前机器又没有 Kafka / Elasticsearch / Neo4j，可以使用仓库内置的 `PersistentLocal` 环境：
 

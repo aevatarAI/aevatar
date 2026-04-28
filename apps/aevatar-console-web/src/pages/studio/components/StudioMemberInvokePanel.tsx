@@ -555,6 +555,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [formError, setFormError] = useState('');
   const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
   const [payloadBase64, setPayloadBase64] = useState('');
+  const [payloadJsonPreview, setPayloadJsonPreview] = useState('');
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
@@ -823,10 +824,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     if (!selectedEndpoint || isChatServiceEndpoint(selectedEndpoint)) {
       setPayloadTypeUrl('');
       setPayloadBase64('');
+      setPayloadJsonPreview('');
       return;
     }
 
     setPayloadTypeUrl(selectedEndpoint.requestTypeUrl || '');
+    setPayloadJsonPreview('');
   }, [selectedEndpoint]);
 
   useEffect(() => {
@@ -846,6 +849,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setExpandedHistoryId('');
     setFormError('');
     setInvokeResult(createIdleResult());
+    setPayloadJsonPreview('');
     setActiveRunCompletedAt(null);
     setConsoleTab('result');
   }, [scopeId, selectedEndpointId, selectedServiceId]);
@@ -1710,9 +1714,35 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               </div>
 
               {!isChatEndpoint ? (
-                <div style={controlsGridStyle}>
+                <div
+                  aria-label="Typed invoke form"
+                  style={{ display: 'grid', gap: 12 }}
+                >
+                  <div style={contractGridStyle}>
+                    <div style={contractFieldStyle}>
+                      <div style={contractLabelStyle}>Request type</div>
+                      <CompactCopyableValue
+                        fallback="未声明"
+                        value={selectedEndpoint?.requestTypeUrl}
+                      />
+                    </div>
+                    <div style={contractFieldStyle}>
+                      <div style={contractLabelStyle}>Response type</div>
+                      <CompactCopyableValue
+                        fallback="未声明"
+                        value={selectedEndpoint?.responseTypeUrl}
+                      />
+                    </div>
+                    <div style={contractFieldStyle}>
+                      <div style={contractLabelStyle}>Endpoint kind</div>
+                      <div style={contractValueStyle}>
+                        {selectedEndpoint?.kind || 'command'}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={controlsGridStyle}>
                   <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
-                    <Typography.Text strong>载荷类型 URL</Typography.Text>
+                    <Typography.Text strong>Request type URL</Typography.Text>
                     <Input
                       placeholder="type.googleapis.com/example.Command"
                       value={payloadTypeUrl}
@@ -1720,13 +1750,26 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                     />
                   </div>
                   <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
-                    <Typography.Text strong>载荷 Base64</Typography.Text>
+                    <Typography.Text strong>Protobuf payload Base64</Typography.Text>
                     <Input.TextArea
                       autoSize={{ minRows: 4, maxRows: 8 }}
-                      placeholder="如需类型化调用，请粘贴预编码的 protobuf payload。"
+                      placeholder="粘贴与 request type 对应的 protobuf payload base64。"
                       value={payloadBase64}
                       onChange={(event) => setPayloadBase64(event.target.value)}
                     />
+                  </div>
+                  </div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    <Typography.Text strong>JSON scratchpad</Typography.Text>
+                    <Input.TextArea
+                      autoSize={{ minRows: 3, maxRows: 7 }}
+                      placeholder="可在这里整理 typed payload 的 JSON 形态；Studio 不会把 JSON 冒充成 protobuf bytes。"
+                      value={payloadJsonPreview}
+                      onChange={(event) => setPayloadJsonPreview(event.target.value)}
+                    />
+                    <Typography.Text style={helperTextStyle} type="secondary">
+                      Invoke still sends protobuf `payloadBase64`; JSON scratchpad is only for composing or reviewing typed input.
+                    </Typography.Text>
                   </div>
                 </div>
               ) : null}

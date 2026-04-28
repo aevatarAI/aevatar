@@ -9,6 +9,7 @@ using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
@@ -98,6 +99,76 @@ public sealed class ActorBackedStoreAdapterTests
                 return actor.HandleEventAsync(envelope, ct);
             }
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingAdmissionDispatchPort : IActorDispatchPort
+    {
+        private readonly FakeActorDispatchPort _inner;
+
+        public ThrowingAdmissionDispatchPort(FakeActorRuntime runtime)
+        {
+            _inner = new FakeActorDispatchPort(runtime);
+        }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            if (envelope.Payload.Is(ScopeResourceAdmissionRequested.Descriptor))
+                throw new GAgentRegistryAdmissionNotFoundException();
+
+            return _inner.DispatchAsync(actorId, envelope, ct);
+        }
+    }
+
+    private sealed class StatefulRegistryDispatchPort : IActorDispatchPort
+    {
+        private readonly FakeActorDispatchPort _inner;
+        private readonly Dictionary<string, GAgentRegistryState> _states = new(StringComparer.Ordinal);
+
+        public StatefulRegistryDispatchPort(FakeActorRuntime runtime)
+        {
+            _inner = new FakeActorDispatchPort(runtime);
+        }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            var state = _states.GetValueOrDefault(actorId) ?? new GAgentRegistryState();
+
+            if (envelope.Payload.Is(ActorRegisteredEvent.Descriptor))
+            {
+                var evt = envelope.Payload.Unpack<ActorRegisteredEvent>();
+                var group = state.Groups.FirstOrDefault(g =>
+                    string.Equals(g.GagentType, evt.GagentType, StringComparison.Ordinal));
+                if (group is null)
+                {
+                    group = new GAgentRegistryEntry { GagentType = evt.GagentType };
+                    state.Groups.Add(group);
+                }
+
+                if (!group.ActorIds.Contains(evt.ActorId))
+                    group.ActorIds.Add(evt.ActorId);
+                _states[actorId] = state;
+            }
+            else if (envelope.Payload.Is(ActorUnregisteredEvent.Descriptor))
+            {
+                var evt = envelope.Payload.Unpack<ActorUnregisteredEvent>();
+                var group = state.Groups.FirstOrDefault(g =>
+                    string.Equals(g.GagentType, evt.GagentType, StringComparison.Ordinal));
+                group?.ActorIds.Remove(evt.ActorId);
+                if (group?.ActorIds.Count == 0)
+                    state.Groups.Remove(group);
+                _states[actorId] = state;
+            }
+            else if (envelope.Payload.Is(ScopeResourceAdmissionRequested.Descriptor))
+            {
+                var request = envelope.Payload.Unpack<ScopeResourceAdmissionRequested>();
+                var group = state.Groups.FirstOrDefault(g =>
+                    string.Equals(g.GagentType, request.GagentType, StringComparison.Ordinal));
+                if (group is null || !group.ActorIds.Contains(request.ActorId))
+                    throw new GAgentRegistryAdmissionNotFoundException();
+            }
+
+            return _inner.DispatchAsync(actorId, envelope, ct);
         }
     }
 
@@ -212,9 +283,17 @@ public sealed class ActorBackedStoreAdapterTests
         public async Task<IActor> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
             where TAgent : IAgent, IProjectedActor
         {
+            EnsureCalls++;
+            if (ThrowOnEnsure)
+                throw new InvalidOperationException("Bootstrap should not be used for this path.");
+
             var existing = await _runtime.GetAsync(actorId);
             return existing ?? await _runtime.CreateAsync<TAgent>(actorId, ct);
         }
+
+        public int EnsureCalls { get; private set; }
+
+        public bool ThrowOnEnsure { get; set; }
     }
 
     private static FakeProjectionDocumentReader<UserMemoryCurrentStateDocument> PackedReader(
@@ -328,26 +407,26 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     // ════════════════════════════════════════════════════════════
-    // GAgentActorStore: scope isolation
+    // GAgent registry ports: scope isolation
     // ════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task GAgentActorStore_GetAsync_NoActor_ReturnsEmptyList()
+    public async Task GAgentRegistryQueryPort_ListActorsAsync_NoActor_ReturnsEmptyList()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "empty-scope" };
-        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
-        var store = new ActorBackedGAgentActorStore(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
-        var groups = await store.GetAsync();
+        var snapshot = await store.ListActorsAsync("empty-scope");
 
-        groups.Should().BeEmpty();
+        snapshot.Groups.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GAgentActorStore_GetAsync_MapsRegistryState()
+    public async Task GAgentRegistryQueryPort_ListActorsAsync_MapsRegistryState()
     {
         var runtime = new FakeActorRuntime();
         var state = new GAgentRegistryState();
@@ -357,47 +436,54 @@ public sealed class ActorBackedStoreAdapterTests
             ActorIds = { "actor-a", "actor-b" },
         });
         var reader = new FakeProjectionDocumentReader<GAgentRegistryCurrentStateDocument>();
+        var updatedAt = new DateTimeOffset(2026, 4, 27, 9, 30, 0, TimeSpan.Zero);
         reader.Set("gagent-registry-scope-1", new GAgentRegistryCurrentStateDocument
         {
             Id = "gagent-registry-scope-1",
             ActorId = "gagent-registry-scope-1",
+            StateVersion = 17,
+            UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
             StateRoot = Any.Pack(state),
         });
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
-        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
-        var store = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+        var store = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
-        var groups = await store.GetAsync();
+        var snapshot = await store.ListActorsAsync("scope-1");
+        var groups = snapshot.Groups;
 
         groups.Should().ContainSingle();
         groups[0].GAgentType.Should().Be("RoleGAgent");
         groups[0].ActorIds.Should().Equal("actor-a", "actor-b");
+        snapshot.StateVersion.Should().Be(17);
+        snapshot.UpdatedAt.Should().Be(updatedAt);
     }
 
     // ════════════════════════════════════════════════════════════
-    // GAgentActorStore: AddActorAsync command construction
+    // GAgent registry command port: command construction
     // ════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task GAgentActorStore_AddActorAsync_SendsActorRegisteredEvent()
+    public async Task GAgentRegistryCommandPort_RegisterActorAsync_SendsActorRegisteredEvent()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "cmd-scope" };
-        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
-        var store = new ActorBackedGAgentActorStore(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime), runtime, new StatefulRegistryDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
-        await store.AddActorAsync("MyGAgent", "actor-123");
+        var receipt = await store.RegisterActorAsync(new GAgentActorRegistration("cmd-scope", "MyGAgent", "actor-123"));
 
         var actorId = "gagent-registry-cmd-scope";
         runtime.Actors.Should().ContainKey(actorId);
 
         var actor = runtime.Actors[actorId];
         actor.ReceivedEnvelopes.Should().HaveCountGreaterThanOrEqualTo(1);
+        receipt.Stage.Should().Be(GAgentActorRegistryCommandStage.AdmissionVisible);
 
-        // The last envelope should be the ActorRegisteredEvent command
-        var envelope = actor.ReceivedEnvelopes.Last();
+        var envelope = actor.ReceivedEnvelopes.First(e =>
+            e.Payload.Is(Aevatar.GAgents.Registry.ActorRegisteredEvent.Descriptor));
         envelope.Payload.Is(Aevatar.GAgents.Registry.ActorRegisteredEvent.Descriptor).Should().BeTrue();
 
         var evt = envelope.Payload.Unpack<Aevatar.GAgents.Registry.ActorRegisteredEvent>();
@@ -406,45 +492,193 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task GAgentActorStore_AddActorAsync_WithExplicitScope_UsesRouteScope()
+    public async Task GAgentRegistryCommandPort_RegisterActorAsync_DowngradesReceipt_WhenAdmissionIsNotVisible()
     {
         var runtime = new FakeActorRuntime();
-        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ambient-scope" };
-        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "cmd-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
-        var store = new ActorBackedGAgentActorStore(
+        var store = new ActorBackedGAgentRegistryPorts(
             new FakeStudioActorBootstrap(runtime),
-            new FakeActorDispatchPort(runtime),
+            runtime,
+            new ThrowingAdmissionDispatchPort(runtime),
             scopeResolver,
             EmptyReader<GAgentRegistryCurrentStateDocument>(),
             logger);
 
-        await store.AddActorAsync("route-scope", "MyGAgent", "actor-789");
+        var receipt = await store.RegisterActorAsync(new GAgentActorRegistration("cmd-scope", "MyGAgent", "actor-123"));
 
+        receipt.Stage.Should().Be(GAgentActorRegistryCommandStage.AcceptedForDispatch);
+        receipt.IsAdmissionVisible.Should().BeFalse();
+        runtime.Actors["gagent-registry-cmd-scope"].ReceivedEnvelopes.Should().Contain(e =>
+            e.Payload.Is(Aevatar.GAgents.Registry.ActorRegisteredEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task GAgentRegistryCommandPort_RegisterActorAsync_WithExplicitScope_UsesRouteScope()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ambient-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime),
+            runtime,
+            new StatefulRegistryDispatchPort(runtime),
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        var receipt = await store.RegisterActorAsync(new GAgentActorRegistration("route-scope", "MyGAgent", "actor-789"));
+
+        receipt.Stage.Should().Be(GAgentActorRegistryCommandStage.AdmissionVisible);
         runtime.Actors.Should().ContainKey("gagent-registry-route-scope");
         runtime.Actors.Should().NotContainKey("gagent-registry-ambient-scope");
     }
 
     [Fact]
-    public async Task GAgentActorStore_RemoveActorAsync_SendsActorUnregisteredEvent()
+    public async Task GAgentRegistryCommandPort_RegisterActorAsync_WithEmptyScope_Throws()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ambient-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime),
+            runtime,
+            new StatefulRegistryDispatchPort(runtime),
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        var act = async () => await store.RegisterActorAsync(
+            new GAgentActorRegistration(" ", "MyGAgent", "actor-789"));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*ScopeId is required*");
+        runtime.Actors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentRegistryCommandPort_UnregisterActorAsync_SendsActorUnregisteredEvent()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "cmd-scope" };
-        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
-        var store = new ActorBackedGAgentActorStore(
-            new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
 
-        await store.RemoveActorAsync("MyGAgent", "actor-456");
+        var receipt = await store.UnregisterActorAsync(new GAgentActorRegistration("cmd-scope", "MyGAgent", "actor-456"));
 
         var actorId = "gagent-registry-cmd-scope";
         var actor = runtime.Actors[actorId];
         var envelope = actor.ReceivedEnvelopes.Last();
         envelope.Payload.Is(Aevatar.GAgents.Registry.ActorUnregisteredEvent.Descriptor).Should().BeTrue();
+        receipt.Stage.Should().Be(GAgentActorRegistryCommandStage.AdmissionRemoved);
+        receipt.IsAdmissionVisible.Should().BeFalse();
 
         var evt = envelope.Payload.Unpack<Aevatar.GAgents.Registry.ActorUnregisteredEvent>();
         evt.GagentType.Should().Be("MyGAgent");
         evt.ActorId.Should().Be("actor-456");
+    }
+
+    [Fact]
+    public async Task ScopeResourceAdmissionPort_AuthorizeTargetAsync_SendsAdmissionCommand()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "admission-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+        await runtime.CreateAsync<GAgentRegistryGAgent>("gagent-registry-admission-scope");
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime),
+            runtime,
+            new FakeActorDispatchPort(runtime),
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        var result = await store.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "admission-scope",
+            ScopeResourceKind.GAgentActor,
+            "MyGAgent",
+            "actor-123",
+            ScopeResourceOperation.Chat));
+
+        result.Status.Should().Be(ScopeResourceAdmissionStatus.Allowed);
+        var envelope = runtime.Actors["gagent-registry-admission-scope"].ReceivedEnvelopes.Last();
+        envelope.Payload.Is(ScopeResourceAdmissionRequested.Descriptor).Should().BeTrue();
+        var request = envelope.Payload.Unpack<ScopeResourceAdmissionRequested>();
+        request.ScopeId.Should().Be("admission-scope");
+        request.GagentType.Should().Be("MyGAgent");
+        request.ActorId.Should().Be("actor-123");
+        request.Operation.Should().Be(GAgentRegistryOperation.Chat);
+    }
+
+    [Fact]
+    public async Task ScopeResourceAdmissionPort_AuthorizeTargetAsync_NotFoundException_ReturnsNotFound()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "admission-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+        await runtime.CreateAsync<GAgentRegistryGAgent>("gagent-registry-admission-scope");
+        var store = new ActorBackedGAgentRegistryPorts(
+            new FakeStudioActorBootstrap(runtime),
+            runtime,
+            new ThrowingAdmissionDispatchPort(runtime),
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        var result = await store.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "admission-scope",
+            ScopeResourceKind.GAgentActor,
+            "MyGAgent",
+            "missing-actor",
+            ScopeResourceOperation.Chat));
+
+        result.Status.Should().Be(ScopeResourceAdmissionStatus.NotFound);
+    }
+
+    [Fact]
+    public async Task ScopeResourceAdmissionPort_AuthorizeTargetAsync_UsesRegistryStateWhenReadModelLags()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "lag-scope" };
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
+        var bootstrap = new FakeStudioActorBootstrap(runtime);
+        var dispatchPort = new StatefulRegistryDispatchPort(runtime);
+        var store = new ActorBackedGAgentRegistryPorts(
+            bootstrap,
+            runtime,
+            dispatchPort,
+            scopeResolver,
+            EmptyReader<GAgentRegistryCurrentStateDocument>(),
+            logger);
+
+        await store.RegisterActorAsync(new GAgentActorRegistration("lag-scope", "MyGAgent", "actor-registered"));
+        var ensureCallsAfterRegister = bootstrap.EnsureCalls;
+        bootstrap.ThrowOnEnsure = true;
+
+        var allowed = await store.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "lag-scope",
+            ScopeResourceKind.GAgentActor,
+            "MyGAgent",
+            "actor-registered",
+            ScopeResourceOperation.Chat));
+        var missing = await store.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "lag-scope",
+            ScopeResourceKind.GAgentActor,
+            "MyGAgent",
+            "actor-missing",
+            ScopeResourceOperation.Chat));
+        var snapshot = await store.ListActorsAsync("lag-scope");
+
+        allowed.Status.Should().Be(ScopeResourceAdmissionStatus.Allowed);
+        missing.Status.Should().Be(ScopeResourceAdmissionStatus.NotFound);
+        snapshot.Groups.Should().BeEmpty("the registry read model can lag behind admission");
+        bootstrap.EnsureCalls.Should().Be(ensureCallsAfterRegister);
+        runtime.Actors.Should().NotContainKey("actor-missing");
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1774,23 +2008,27 @@ public sealed class ActorBackedStoreAdapterTests
     // ════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task GAgentActorStore_DifferentScopes_UseDifferentActors()
+    public async Task GAgentRegistryCommandPort_DifferentScopes_UseDifferentActors()
     {
         var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+        var logger = NullLogger<ActorBackedGAgentRegistryPorts>.Instance;
 
         var scopeA = new FakeScopeResolver { ScopeIdToReturn = "scope-a" };
-        var storeA = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeA, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
-        await storeA.AddActorAsync("MyAgent", "actor-1");
+        var storeA = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeA, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        await storeA.RegisterActorAsync(new GAgentActorRegistration("scope-a", "MyAgent", "actor-1"));
 
         var scopeB = new FakeScopeResolver { ScopeIdToReturn = "scope-b" };
-        var storeB = new ActorBackedGAgentActorStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeB, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
-        await storeB.AddActorAsync("MyAgent", "actor-2");
+        var storeB = new ActorBackedGAgentRegistryPorts(new FakeStudioActorBootstrap(runtime), runtime, new FakeActorDispatchPort(runtime), scopeB, EmptyReader<GAgentRegistryCurrentStateDocument>(), logger);
+        await storeB.RegisterActorAsync(new GAgentActorRegistration("scope-b", "MyAgent", "actor-2"));
 
         runtime.Actors.Should().ContainKey("gagent-registry-scope-a");
         runtime.Actors.Should().ContainKey("gagent-registry-scope-b");
-        runtime.Actors["gagent-registry-scope-a"].ReceivedEnvelopes.Should().HaveCount(1);
-        runtime.Actors["gagent-registry-scope-b"].ReceivedEnvelopes.Should().HaveCount(1);
+        runtime.Actors["gagent-registry-scope-a"].ReceivedEnvelopes.Should().Contain(e =>
+            e.Payload.Is(Aevatar.GAgents.Registry.ActorRegisteredEvent.Descriptor) &&
+            e.Payload.Unpack<Aevatar.GAgents.Registry.ActorRegisteredEvent>().ActorId == "actor-1");
+        runtime.Actors["gagent-registry-scope-b"].ReceivedEnvelopes.Should().Contain(e =>
+            e.Payload.Is(Aevatar.GAgents.Registry.ActorRegisteredEvent.Descriptor) &&
+            e.Payload.Unpack<Aevatar.GAgents.Registry.ActorRegisteredEvent>().ActorId == "actor-2");
     }
 
     // ════════════════════════════════════════════════════════════

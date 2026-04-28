@@ -4,6 +4,7 @@ using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -28,7 +29,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
     public async Task HandleCreateRoomAsync_ShouldRegisterAndInitializeRoomOnSuccess()
     {
         var operations = new List<string>();
-        var actor = new RecordingActor("created-room");
+        var actor = new RecordingActor("created-room", operations);
         var actorStore = new RecordingGAgentActorStore(operations);
         var runtime = new RecordingActorRuntime(operations, actor);
         var loggerFactory = LoggerFactory.Create(_ => { });
@@ -49,10 +50,12 @@ public sealed class StreamingProxyEndpointsCoverageTests
         actorStore.AddedActors[0].ScopeId.Should().Be("scope-a");
         var registeredActorId = actorStore.AddedActors[0].ActorId;
         operations.Should().ContainInOrder(
-            $"store:add:{registeredActorId}",
-            $"runtime:create:{registeredActorId}");
-        actor.ReceivedEnvelopes.Should().ContainSingle();
-        actor.ReceivedEnvelopes[0].Payload.Unpack<GroupChatRoomInitializedEvent>().RoomName.Should().Be("Daily Standup");
+            $"runtime:create:{registeredActorId}",
+            $"actor:init:{registeredActorId}",
+            $"store:add:{registeredActorId}");
+        runtime.LastCreatedActor.Should().NotBeNull();
+        runtime.LastCreatedActor!.ReceivedEnvelopes.Should().ContainSingle();
+        runtime.LastCreatedActor.ReceivedEnvelopes[0].Payload.Unpack<GroupChatRoomInitializedEvent>().RoomName.Should().Be("Daily Standup");
         body.Should().Contain(registeredActorId);
         body.Should().Contain("Daily Standup");
     }
@@ -82,17 +85,112 @@ public sealed class StreamingProxyEndpointsCoverageTests
         var (statusCode, body) = await ExecuteResultAsync(result);
 
         statusCode.Should().Be(StatusCodes.Status500InternalServerError);
-        actorStore.AddedActors.Should().ContainSingle();
-        actorStore.RemovedActors.Should().ContainSingle();
-        actorStore.RemovedActors[0].ScopeId.Should().Be("scope-a");
-        actorStore.RemovedActors[0].ActorId.Should().Be(actorStore.AddedActors[0].ActorId);
-        runtime.DestroyedActorIds.Should().ContainSingle(actorStore.AddedActors[0].ActorId);
-        operations.Should().ContainInOrder(
-            $"store:add:{actorStore.AddedActors[0].ActorId}",
-            $"runtime:create:{actorStore.AddedActors[0].ActorId}",
-            $"runtime:destroy:{actorStore.AddedActors[0].ActorId}",
-            $"store:remove:{actorStore.AddedActors[0].ActorId}");
+        actorStore.AddedActors.Should().BeEmpty();
+        actorStore.RemovedActors.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        operations.Should().ContainSingle(operation => operation.StartsWith("runtime:create:", StringComparison.Ordinal));
         body.Should().Contain("Failed to create room");
+    }
+
+    [Fact]
+    public async Task HandleCreateRoomAsync_ShouldRollbackCreatedRoom_WhenCreationIsCanceled()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("created-room", operations);
+        var actorStore = new RecordingGAgentActorStore(operations)
+        {
+            ThrowOnRegister = new OperationCanceledException("client disconnected before registry ack")
+        };
+        var runtime = new RecordingActorRuntime(operations, actor);
+        var loggerFactory = LoggerFactory.Create(_ => { });
+
+        var act = async () => await InvokeHandleCreateRoomAsync(
+            CreateScopedHttpContext(),
+            "scope-a",
+            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
+            actorStore,
+            runtime,
+            loggerFactory,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        runtime.DestroyedActorIds.Should().ContainSingle(actorStore.AddedActors.Single().ActorId);
+        actorStore.RemovedActors.Should().ContainSingle();
+        operations.Should().ContainInOrder(
+            $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
+            $"actor:init:{actorStore.AddedActors.Single().ActorId}",
+            $"store:add:{actorStore.AddedActors.Single().ActorId}",
+            $"store:remove:{actorStore.AddedActors.Single().ActorId}",
+            $"runtime:destroy:{actorStore.AddedActors.Single().ActorId}");
+    }
+
+    [Fact]
+    public async Task HandleCreateRoomAsync_ShouldNotDestroyCreatedRoom_WhenRollbackUnregisterFails()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("created-room", operations);
+        var actorStore = new RecordingGAgentActorStore(operations)
+        {
+            ThrowOnRegister = new InvalidOperationException("registry unavailable"),
+            ThrowOnUnregister = new InvalidOperationException("registry unregister unavailable")
+        };
+        var runtime = new RecordingActorRuntime(operations, actor);
+        var loggerFactory = LoggerFactory.Create(_ => { });
+
+        var result = await InvokeHandleCreateRoomAsync(
+            CreateScopedHttpContext(),
+            "scope-a",
+            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
+            actorStore,
+            runtime,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        body.Should().Contain("Failed to create room");
+        actorStore.RemovedActors.Should().ContainSingle();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        operations.Should().ContainInOrder(
+            $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
+            $"actor:init:{actorStore.AddedActors.Single().ActorId}",
+            $"store:add:{actorStore.AddedActors.Single().ActorId}",
+            $"store:remove:{actorStore.AddedActors.Single().ActorId}");
+    }
+
+    [Fact]
+    public async Task HandleCreateRoomAsync_ShouldNotDestroyRoom_WhenRollbackCannotUnregister()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("created-room", operations);
+        var actorStore = new RecordingGAgentActorStore(operations)
+        {
+            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
+            ThrowOnUnregister = new InvalidOperationException("registry unavailable")
+        };
+        var runtime = new RecordingActorRuntime(operations, actor);
+        var loggerFactory = LoggerFactory.Create(_ => { });
+
+        var result = await InvokeHandleCreateRoomAsync(
+            CreateScopedHttpContext(),
+            "scope-a",
+            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
+            actorStore,
+            runtime,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("Failed to create room");
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        operations.Should().ContainInOrder(
+            $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
+            $"actor:init:{actorStore.AddedActors.Single().ActorId}",
+            $"store:add:{actorStore.AddedActors.Single().ActorId}",
+            $"store:remove:{actorStore.AddedActors.Single().ActorId}");
     }
 
     [Fact]
@@ -195,7 +293,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         HttpContext context,
         string scopeId,
         StreamingProxyEndpoints.CreateRoomRequest? request,
-        IGAgentActorStore actorStore,
+        IGAgentActorRegistryCommandPort actorStore,
         IActorRuntime actorRuntime,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -215,7 +313,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
     {
         return await (Task<IResult>)HandleListParticipantsAsyncMethod.Invoke(
             null,
-            [context, scopeId, roomId, participantStore, loggerFactory, ct])!;
+            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantStore, loggerFactory, ct])!;
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -251,54 +349,60 @@ public sealed class StreamingProxyEndpointsCoverageTests
         };
     }
 
-    private sealed class RecordingGAgentActorStore(List<string> operations) : IGAgentActorStore
+    private sealed class RecordingGAgentActorStore(List<string> operations) :
+        IGAgentActorRegistryCommandPort,
+        IGAgentActorRegistryQueryPort,
+        IScopeResourceAdmissionPort
     {
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public Exception? ThrowOnRegister { get; init; }
+        public Exception? ThrowOnUnregister { get; init; }
+        public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
+            GAgentActorRegistryCommandStage.AdmissionVisible;
 
-        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
-
-        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+        public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
             string scopeId,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>([]);
+            Task.FromResult(new GAgentActorRegistrySnapshot(
+                scopeId,
+                [],
+                0,
+                DateTimeOffset.MinValue,
+                DateTimeOffset.UtcNow));
 
-        public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
-        {
-            operations.Add($"store:add:{actorId}");
-            AddedActors.Add((string.Empty, gagentType, actorId));
-            return Task.CompletedTask;
-        }
-
-        public Task AddActorAsync(
-            string scopeId,
-            string gagentType,
-            string actorId,
+        public Task<GAgentActorRegistryCommandReceipt> RegisterActorAsync(
+            GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
-            operations.Add($"store:add:{actorId}");
-            AddedActors.Add((scopeId, gagentType, actorId));
-            return Task.CompletedTask;
+            operations.Add($"store:add:{registration.ActorId}");
+            AddedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            if (ThrowOnRegister is not null)
+                throw ThrowOnRegister;
+
+            return Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                RegisterStage));
         }
 
-        public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
-        {
-            operations.Add($"store:remove:{actorId}");
-            RemovedActors.Add((string.Empty, gagentType, actorId));
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveActorAsync(
-            string scopeId,
-            string gagentType,
-            string actorId,
+        public Task<GAgentActorRegistryCommandReceipt> UnregisterActorAsync(
+            GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
-            operations.Add($"store:remove:{actorId}");
-            RemovedActors.Add((scopeId, gagentType, actorId));
-            return Task.CompletedTask;
+            operations.Add($"store:remove:{registration.ActorId}");
+            RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            if (ThrowOnUnregister is not null)
+                throw ThrowOnUnregister;
+
+            return Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
+
+        public Task<ScopeResourceAdmissionResult> AuthorizeTargetAsync(
+            ScopeResourceTarget target,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(ScopeResourceAdmissionResult.Allowed());
     }
 
     private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore
@@ -350,6 +454,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
     {
         public Exception? ThrowOnCreate { get; init; }
         public List<string> DestroyedActorIds { get; } = [];
+        public RecordingActor? LastCreatedActor { get; private set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -365,7 +470,10 @@ public sealed class StreamingProxyEndpointsCoverageTests
             if (ThrowOnCreate is not null)
                 throw ThrowOnCreate;
 
-            return Task.FromResult(actor);
+            LastCreatedActor = actor is RecordingActor recordingActor && recordingActor.Id == actorId
+                ? recordingActor
+                : new RecordingActor(actorId, operations);
+            return Task.FromResult<IActor>(LastCreatedActor);
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
@@ -404,7 +512,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         }
     }
 
-    private sealed class RecordingActor(string id) : IActor
+    private sealed class RecordingActor(string id, List<string>? operations = null) : IActor
     {
         public List<EventEnvelope> ReceivedEnvelopes { get; } = [];
 
@@ -418,6 +526,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
+            operations?.Add($"actor:init:{Id}");
             ReceivedEnvelopes.Add(envelope);
             return Task.CompletedTask;
         }

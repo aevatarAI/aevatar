@@ -9,12 +9,20 @@
     <RootNamespace>Aevatar.GAgents.ChannelRuntime.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Channel\Aevatar.AI.ToolProviders.Channel.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <ProjectReference Include="..\..\agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
+    <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.AgentCatalog\Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Channel\Aevatar.AI.ToolProviders.Channel.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.ChannelAdmin\Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
