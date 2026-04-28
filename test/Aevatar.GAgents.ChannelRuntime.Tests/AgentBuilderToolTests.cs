@@ -623,7 +623,7 @@ public sealed class AgentBuilderToolTests
         // preflight returns the structured `github_search_unauthorized` error, the freshly
         // minted api-key IS revoked, and the runner is NOT initialized.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -671,6 +671,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -737,7 +741,7 @@ public sealed class AgentBuilderToolTests
         // /search/commits — failing fast on the first one alone leaves the commits-only
         // failure undetected at create-time.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -782,6 +786,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -837,9 +845,9 @@ public sealed class AgentBuilderToolTests
         // tests guards against an over-eager classifier that would treat any non-content
         // response as failure.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync("skill-runner-search-empty", Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync("skill-runner-search-empty", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
-        queryPort.GetAsync("skill-runner-search-empty", Arg.Any<CancellationToken>())
+        queryPort.GetForCallerAsync("skill-runner-search-empty", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-search-empty",
@@ -887,6 +895,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -936,7 +948,7 @@ public sealed class AgentBuilderToolTests
         // `ClassifyGitHubSearch422Body` from regression: any future heuristic change that
         // routes unknown 422 bodies to a more specific code by guessing would fail this.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -980,6 +992,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1028,7 +1044,7 @@ public sealed class AgentBuilderToolTests
         // with `github_search_unauthorized`, the github_path label includes the failing
         // repo, and the api-key is revoked.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -1076,6 +1092,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(workflowAgentPort);
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
