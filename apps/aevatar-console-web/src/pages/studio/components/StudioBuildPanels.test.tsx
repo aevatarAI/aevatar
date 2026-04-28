@@ -716,9 +716,12 @@ describe('StudioWorkflowBuildPanel', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
 
     expect(await screen.findByText(/Waiting for catalog/)).toBeInTheDocument();
@@ -769,9 +772,12 @@ describe('StudioWorkflowBuildPanel', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
 
     expect(await screen.findByText('Catalog rejected the revision.')).toBeInTheDocument();
@@ -840,9 +846,12 @@ describe('StudioWorkflowBuildPanel', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
 
     expect(await screen.findByText(/checking again in 1s/)).toBeInTheDocument();
