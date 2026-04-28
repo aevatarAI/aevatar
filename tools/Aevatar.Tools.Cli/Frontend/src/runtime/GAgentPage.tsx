@@ -156,7 +156,7 @@ export default function GAgentPage() {
           if (evt.type === 'RUN_STARTED' && evt.threadId) {
             const actorId = evt.threadId as string;
             setLastActorId(actorId);
-            api.gagent.addActor(scopeId, selectedType.fullName, actorId).then(() => loadActors()).catch(() => {});
+            loadActors();
           }
           if (evt.type === 'RUN_ERROR') {
             setRunError((evt.message as string) || 'Run error');

@@ -9,16 +9,19 @@ namespace Aevatar.GAgentService.Application.ScopeGAgents;
 internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunActorPreparationPort
 {
     private readonly IActorRuntime _actorRuntime;
-    private readonly IGAgentActorStore _actorStore;
+    private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
+    private readonly IScopeResourceAdmissionPort _admissionPort;
     private readonly ILogger<GAgentDraftRunActorPreparationService>? _logger;
 
     public GAgentDraftRunActorPreparationService(
         IActorRuntime actorRuntime,
-        IGAgentActorStore actorStore,
+        IGAgentActorRegistryCommandPort registryCommandPort,
+        IScopeResourceAdmissionPort admissionPort,
         ILogger<GAgentDraftRunActorPreparationService>? logger = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _actorStore = actorStore ?? throw new ArgumentNullException(nameof(actorStore));
+        _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
+        _admissionPort = admissionPort ?? throw new ArgumentNullException(nameof(admissionPort));
         _logger = logger;
     }
 
@@ -40,7 +43,15 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         var existingActor = await _actorRuntime.GetAsync(actorId);
         if (existingActor is not null)
         {
-            if (!await IsRegisteredInScopeAsync(scopeId, actorTypeName, actorId, ct))
+            var admission = await _admissionPort.AuthorizeTargetAsync(
+                new ScopeResourceTarget(
+                    scopeId,
+                    ScopeResourceKind.GAgentActor,
+                    actorTypeName,
+                    actorId,
+                    ScopeResourceOperation.DraftRunReuse),
+                ct);
+            if (!admission.IsAllowed)
                 return GAgentDraftRunPreparationResult.Failure(GAgentDraftRunStartError.ActorTypeMismatch);
 
             return GAgentDraftRunPreparationResult.Success(
@@ -51,7 +62,26 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
                     RequiresRollbackOnFailure: false));
         }
 
-        await _actorStore.AddActorAsync(scopeId, actorTypeName, actorId, ct);
+        IActor? createdActor = null;
+        try
+        {
+            createdActor = await _actorRuntime.CreateAsync(actorType, actorId, ct);
+            var receipt = await _registryCommandPort.RegisterActorAsync(
+                new GAgentActorRegistration(scopeId, actorTypeName, actorId),
+                ct);
+            if (!receipt.IsAdmissionVisible)
+            {
+                await RollbackCreatedActorAsync(scopeId, actorTypeName, actorId, CancellationToken.None);
+                return GAgentDraftRunPreparationResult.Failure(GAgentDraftRunStartError.ActorTypeMismatch);
+            }
+        }
+        catch
+        {
+            if (createdActor is not null)
+                await RollbackCreatedActorAsync(scopeId, actorTypeName, actorId, CancellationToken.None);
+            throw;
+        }
+
         return GAgentDraftRunPreparationResult.Success(
             new GAgentDraftRunPreparedActor(
                 scopeId,
@@ -69,6 +99,13 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
         if (!preparedActor.RequiresRollbackOnFailure)
             return;
 
+        if (!await TryUnregisterDraftRunActorAsync(
+                preparedActor.ScopeId,
+                preparedActor.ActorTypeName,
+                preparedActor.ActorId,
+                ct))
+            return;
+
         try
         {
             await _actorRuntime.DestroyAsync(preparedActor.ActorId, ct);
@@ -78,36 +115,46 @@ internal sealed class GAgentDraftRunActorPreparationService : IGAgentDraftRunAct
             _logger?.LogWarning(ex, "Failed to destroy draft-run actor {ActorId} during rollback", preparedActor.ActorId);
         }
 
-        try
-        {
-            await _actorStore.RemoveActorAsync(
-                preparedActor.ScopeId,
-                preparedActor.ActorTypeName,
-                preparedActor.ActorId,
-                ct);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Failed to remove draft-run actor {ActorId} from registry during rollback", preparedActor.ActorId);
-        }
     }
 
-    private async Task<bool> IsRegisteredInScopeAsync(
+    private async Task RollbackCreatedActorAsync(
         string scopeId,
         string actorTypeName,
         string actorId,
         CancellationToken ct)
     {
-        var groups = await _actorStore.GetAsync(scopeId, ct);
-        foreach (var group in groups)
-        {
-            if (!string.Equals(group.GAgentType, actorTypeName, StringComparison.Ordinal))
-                continue;
+        if (!await TryUnregisterDraftRunActorAsync(scopeId, actorTypeName, actorId, ct))
+            return;
 
-            if (group.ActorIds.Any(candidate => string.Equals(candidate, actorId, StringComparison.Ordinal)))
-                return true;
+        try
+        {
+            await _actorRuntime.DestroyAsync(actorId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to destroy draft-run actor {ActorId} during rollback", actorId);
         }
 
-        return false;
     }
+
+    private async Task<bool> TryUnregisterDraftRunActorAsync(
+        string scopeId,
+        string actorTypeName,
+        string actorId,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(scopeId, actorTypeName, actorId),
+                ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to remove draft-run actor {ActorId} from registry during rollback", actorId);
+            return false;
+        }
+    }
+
 }

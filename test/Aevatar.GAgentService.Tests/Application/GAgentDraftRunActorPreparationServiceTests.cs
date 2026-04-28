@@ -13,7 +13,8 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
     {
         var service = new GAgentDraftRunActorPreparationService(
             new StubActorRuntime(_ => null),
-            new RecordingGAgentActorStore());
+            new RecordingGAgentActorRegistryCommandPort(),
+            new RecordingScopeResourceAdmissionPort());
 
         var result = await service.PrepareAsync(
             new GAgentDraftRunPreparationRequest("scope-a", "Aevatar.IamNotReal, Aevatar.IamNotReal"),
@@ -27,14 +28,12 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
     public async Task PrepareAsync_ShouldReuseExistingActor_WithoutRegisteringAgain()
     {
         var runtime = new StubActorRuntime(id => id == "existing-actor" ? new StubActor(id) : null);
-        var actorStore = new RecordingGAgentActorStore
+        var commandPort = new RecordingGAgentActorRegistryCommandPort();
+        var admissionPort = new RecordingScopeResourceAdmissionPort
         {
-            Actors =
-            [
-                new GAgentActorGroup(typeof(FakeAgent).AssemblyQualifiedName!, ["existing-actor"])
-            ]
+            Result = ScopeResourceAdmissionResult.Allowed()
         };
-        var service = new GAgentDraftRunActorPreparationService(runtime, actorStore);
+        var service = new GAgentDraftRunActorPreparationService(runtime, commandPort, admissionPort);
 
         var result = await service.PrepareAsync(
             new GAgentDraftRunPreparationRequest(
@@ -49,15 +48,25 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
             typeof(FakeAgent).AssemblyQualifiedName!,
             "existing-actor",
             false));
-        actorStore.AddedActors.Should().BeEmpty();
+        commandPort.RegisteredActors.Should().BeEmpty();
+        admissionPort.Targets.Should().ContainSingle().Which.Should().Be(new ScopeResourceTarget(
+            "scope-a",
+            ScopeResourceKind.GAgentActor,
+            typeof(FakeAgent).AssemblyQualifiedName!,
+            "existing-actor",
+            ScopeResourceOperation.DraftRunReuse));
     }
 
     [Fact]
     public async Task PrepareAsync_ShouldRejectExistingActor_WhenItIsNotRegisteredInRequestedScope()
     {
         var runtime = new StubActorRuntime(id => id == "existing-actor" ? new StubActor(id) : null);
-        var actorStore = new RecordingGAgentActorStore();
-        var service = new GAgentDraftRunActorPreparationService(runtime, actorStore);
+        var commandPort = new RecordingGAgentActorRegistryCommandPort();
+        var admissionPort = new RecordingScopeResourceAdmissionPort
+        {
+            Result = ScopeResourceAdmissionResult.ScopeMismatch()
+        };
+        var service = new GAgentDraftRunActorPreparationService(runtime, commandPort, admissionPort);
 
         var result = await service.PrepareAsync(
             new GAgentDraftRunPreparationRequest(
@@ -68,16 +77,19 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
-        actorStore.AddedActors.Should().BeEmpty();
+        commandPort.RegisteredActors.Should().BeEmpty();
+        admissionPort.Targets.Should().ContainSingle();
     }
 
     [Fact]
     public async Task PrepareAsync_ShouldRegisterGeneratedActorId_WhenActorDoesNotExist()
     {
-        var actorStore = new RecordingGAgentActorStore();
+        var operations = new List<string>();
+        var commandPort = new RecordingGAgentActorRegistryCommandPort(operations);
         var service = new GAgentDraftRunActorPreparationService(
-            new StubActorRuntime(_ => null),
-            actorStore);
+            new StubActorRuntime(_ => null, operations),
+            commandPort,
+            new RecordingScopeResourceAdmissionPort());
 
         var result = await service.PrepareAsync(
             new GAgentDraftRunPreparationRequest(
@@ -91,18 +103,120 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
         result.PreparedActor.ActorTypeName.Should().Be(typeof(FakeAgent).AssemblyQualifiedName!);
         result.PreparedActor.ActorId.Should().NotBeNullOrWhiteSpace();
         result.PreparedActor.RequiresRollbackOnFailure.Should().BeTrue();
-        actorStore.AddedActors.Should().ContainSingle();
-        actorStore.AddedActors[0].ScopeId.Should().Be("scope-a");
-        actorStore.AddedActors[0].GAgentType.Should().Be(typeof(FakeAgent).AssemblyQualifiedName!);
-        actorStore.AddedActors[0].ActorId.Should().Be(result.PreparedActor.ActorId);
+        operations.Should().ContainInOrder(
+            $"runtime:create:{result.PreparedActor.ActorId}",
+            $"registry:add:{result.PreparedActor.ActorId}");
+        commandPort.RegisteredActors.Should().ContainSingle();
+        commandPort.RegisteredActors[0].ScopeId.Should().Be("scope-a");
+        commandPort.RegisteredActors[0].GAgentType.Should().Be(typeof(FakeAgent).AssemblyQualifiedName!);
+        commandPort.RegisteredActors[0].ActorId.Should().Be(result.PreparedActor.ActorId);
     }
 
     [Fact]
-    public async Task RollbackAsync_ShouldDestroyActorAndRemoveRegistration_WhenRollbackIsRequired()
+    public async Task PrepareAsync_ShouldDestroyCreatedActor_WhenRegistrationIsCanceled()
     {
-        var runtime = new StubActorRuntime(_ => null);
-        var actorStore = new RecordingGAgentActorStore();
-        var service = new GAgentDraftRunActorPreparationService(runtime, actorStore);
+        var operations = new List<string>();
+        var runtime = new StubActorRuntime(_ => null, operations);
+        var commandPort = new RecordingGAgentActorRegistryCommandPort(operations)
+        {
+            ThrowOnRegister = new OperationCanceledException("cancelled before registry ack")
+        };
+        var service = new GAgentDraftRunActorPreparationService(
+            runtime,
+            commandPort,
+            new RecordingScopeResourceAdmissionPort());
+
+        var act = async () => await service.PrepareAsync(
+            new GAgentDraftRunPreparationRequest(
+                "scope-a",
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "draft-actor"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        runtime.DestroyedActorIds.Should().ContainSingle("draft-actor");
+        commandPort.UnregisteredActors.Should().ContainSingle().Which.ActorId.Should().Be("draft-actor");
+        operations.Should().ContainInOrder(
+            "runtime:create:draft-actor",
+            "registry:add:draft-actor",
+            "registry:remove:draft-actor",
+            "runtime:destroy:draft-actor");
+    }
+
+    [Fact]
+    public async Task PrepareAsync_ShouldNotDestroyCreatedActor_WhenRollbackUnregisterFails()
+    {
+        var operations = new List<string>();
+        var runtime = new StubActorRuntime(_ => null, operations);
+        var commandPort = new RecordingGAgentActorRegistryCommandPort(operations)
+        {
+            ThrowOnRegister = new InvalidOperationException("registry unavailable"),
+            ThrowOnUnregister = new InvalidOperationException("registry unregister unavailable")
+        };
+        var service = new GAgentDraftRunActorPreparationService(
+            runtime,
+            commandPort,
+            new RecordingScopeResourceAdmissionPort());
+
+        var act = async () => await service.PrepareAsync(
+            new GAgentDraftRunPreparationRequest(
+                "scope-a",
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "draft-actor"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("registry unavailable");
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        commandPort.UnregisteredActors.Should().ContainSingle().Which.ActorId.Should().Be("draft-actor");
+        operations.Should().ContainInOrder(
+            "runtime:create:draft-actor",
+            "registry:add:draft-actor",
+            "registry:remove:draft-actor");
+    }
+
+    [Fact]
+    public async Task PrepareAsync_ShouldNotDestroyCreatedActor_WhenRollbackCannotRemoveRegistration()
+    {
+        var operations = new List<string>();
+        var runtime = new StubActorRuntime(_ => null, operations);
+        var commandPort = new RecordingGAgentActorRegistryCommandPort(operations)
+        {
+            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
+            ThrowOnUnregister = new InvalidOperationException("registry unavailable")
+        };
+        var service = new GAgentDraftRunActorPreparationService(
+            runtime,
+            commandPort,
+            new RecordingScopeResourceAdmissionPort());
+
+        var result = await service.PrepareAsync(
+            new GAgentDraftRunPreparationRequest(
+                "scope-a",
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "draft-actor"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        commandPort.UnregisteredActors.Should().ContainSingle().Which.ActorId.Should().Be("draft-actor");
+        operations.Should().ContainInOrder(
+            "runtime:create:draft-actor",
+            "registry:add:draft-actor",
+            "registry:remove:draft-actor");
+    }
+
+    [Fact]
+    public async Task RollbackAsync_ShouldRemoveRegistrationBeforeDestroyingActor_WhenRollbackIsRequired()
+    {
+        var operations = new List<string>();
+        var runtime = new StubActorRuntime(_ => null, operations);
+        var commandPort = new RecordingGAgentActorRegistryCommandPort(operations);
+        var service = new GAgentDraftRunActorPreparationService(
+            runtime,
+            commandPort,
+            new RecordingScopeResourceAdmissionPort());
         var preparedActor = new GAgentDraftRunPreparedActor(
             "scope-a",
             typeof(FakeAgent).AssemblyQualifiedName!,
@@ -112,16 +226,51 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
         await service.RollbackAsync(preparedActor, CancellationToken.None);
 
         runtime.DestroyedActorIds.Should().ContainSingle("generated-actor");
-        actorStore.RemovedActors.Should().ContainSingle();
-        actorStore.RemovedActors[0].Should().Be(("scope-a", typeof(FakeAgent).AssemblyQualifiedName!, "generated-actor"));
+        commandPort.UnregisteredActors.Should().ContainSingle();
+        commandPort.UnregisteredActors[0].Should().Be(new GAgentActorRegistration(
+            "scope-a",
+            typeof(FakeAgent).AssemblyQualifiedName!,
+            "generated-actor"));
+        operations.Should().ContainInOrder(
+            "registry:remove:generated-actor",
+            "runtime:destroy:generated-actor");
+    }
+
+    [Fact]
+    public async Task RollbackAsync_ShouldNotDestroyActor_WhenRegistrationRemovalFails()
+    {
+        var operations = new List<string>();
+        var runtime = new StubActorRuntime(_ => null, operations);
+        var commandPort = new RecordingGAgentActorRegistryCommandPort(operations)
+        {
+            ThrowOnUnregister = new InvalidOperationException("registry unavailable")
+        };
+        var service = new GAgentDraftRunActorPreparationService(
+            runtime,
+            commandPort,
+            new RecordingScopeResourceAdmissionPort());
+        var preparedActor = new GAgentDraftRunPreparedActor(
+            "scope-a",
+            typeof(FakeAgent).AssemblyQualifiedName!,
+            "generated-actor",
+            true);
+
+        await service.RollbackAsync(preparedActor, CancellationToken.None);
+
+        commandPort.UnregisteredActors.Should().ContainSingle();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        operations.Should().ContainSingle("registry:remove:generated-actor");
     }
 
     [Fact]
     public async Task RollbackAsync_ShouldSkipWork_WhenRollbackIsNotRequired()
     {
         var runtime = new StubActorRuntime(_ => null);
-        var actorStore = new RecordingGAgentActorStore();
-        var service = new GAgentDraftRunActorPreparationService(runtime, actorStore);
+        var commandPort = new RecordingGAgentActorRegistryCommandPort();
+        var service = new GAgentDraftRunActorPreparationService(
+            runtime,
+            commandPort,
+            new RecordingScopeResourceAdmissionPort());
 
         await service.RollbackAsync(
             new GAgentDraftRunPreparedActor(
@@ -132,47 +281,62 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
             CancellationToken.None);
 
         runtime.DestroyedActorIds.Should().BeEmpty();
-        actorStore.RemovedActors.Should().BeEmpty();
+        commandPort.UnregisteredActors.Should().BeEmpty();
     }
 
-    private sealed class RecordingGAgentActorStore : IGAgentActorStore
+    private sealed class RecordingGAgentActorRegistryCommandPort(List<string>? operations = null) : IGAgentActorRegistryCommandPort
     {
-        public List<GAgentActorGroup> Actors { get; set; } = [];
-        public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
-        public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public List<GAgentActorRegistration> RegisteredActors { get; } = [];
+        public List<GAgentActorRegistration> UnregisteredActors { get; } = [];
+        public Exception? ThrowOnRegister { get; init; }
+        public Exception? ThrowOnUnregister { get; init; }
+        public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
+            GAgentActorRegistryCommandStage.AdmissionVisible;
 
-        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Actors);
-
-        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(string scopeId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Actors);
-
-        public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
+        public Task<GAgentActorRegistryCommandReceipt> RegisterActorAsync(
+            GAgentActorRegistration registration,
+            CancellationToken cancellationToken = default)
         {
-            AddedActors.Add((string.Empty, gagentType, actorId));
-            return Task.CompletedTask;
+            operations?.Add($"registry:add:{registration.ActorId}");
+            RegisteredActors.Add(registration);
+            if (ThrowOnRegister is not null)
+                throw ThrowOnRegister;
+
+            return Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                RegisterStage));
         }
 
-        public Task AddActorAsync(string scopeId, string gagentType, string actorId, CancellationToken cancellationToken = default)
+        public Task<GAgentActorRegistryCommandReceipt> UnregisterActorAsync(
+            GAgentActorRegistration registration,
+            CancellationToken cancellationToken = default)
         {
-            AddedActors.Add((scopeId, gagentType, actorId));
-            return Task.CompletedTask;
-        }
+            operations?.Add($"registry:remove:{registration.ActorId}");
+            UnregisteredActors.Add(registration);
+            if (ThrowOnUnregister is not null)
+                throw ThrowOnUnregister;
 
-        public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
-        {
-            RemovedActors.Add((string.Empty, gagentType, actorId));
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveActorAsync(string scopeId, string gagentType, string actorId, CancellationToken cancellationToken = default)
-        {
-            RemovedActors.Add((scopeId, gagentType, actorId));
-            return Task.CompletedTask;
+            return Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
     }
 
-    private sealed class StubActorRuntime(Func<string, IActor?> getAsync) : IActorRuntime
+    private sealed class RecordingScopeResourceAdmissionPort : IScopeResourceAdmissionPort
+    {
+        public ScopeResourceAdmissionResult Result { get; init; } = ScopeResourceAdmissionResult.NotFound();
+        public List<ScopeResourceTarget> Targets { get; } = [];
+
+        public Task<ScopeResourceAdmissionResult> AuthorizeTargetAsync(
+            ScopeResourceTarget target,
+            CancellationToken cancellationToken = default)
+        {
+            Targets.Add(target);
+            return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class StubActorRuntime(Func<string, IActor?> getAsync, List<string>? operations = null) : IActorRuntime
     {
         public List<string> DestroyedActorIds { get; } = [];
 
@@ -180,11 +344,17 @@ public sealed class GAgentDraftRunActorPreparationServiceTests
             where TAgent : IAgent =>
             Task.FromResult<IActor>(new StubActor(id ?? "created"));
 
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            Task.FromResult<IActor>(new StubActor(id ?? "created"));
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            _ = agentType;
+            var actorId = id ?? "created";
+            operations?.Add($"runtime:create:{actorId}");
+            return Task.FromResult<IActor>(new StubActor(actorId));
+        }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
+            operations?.Add($"runtime:destroy:{id}");
             DestroyedActorIds.Add(id);
             return Task.CompletedTask;
         }

@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Studio.Infrastructure.ActorBacked;
@@ -32,7 +33,10 @@ public static class ServiceCollectionExtensions
         // chrono-storage blob client retained for media file uploads (ExplorerEndpoints)
         services.AddSingleton<ChronoStorageCatalogBlobClient>();
         // ── Actor-backed stores (replacing ChronoStorage* implementations) ──
-        services.AddSingleton<IGAgentActorStore, ActorBackedGAgentActorStore>();
+        services.AddSingleton<ActorBackedGAgentRegistryPorts>();
+        services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
+        services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
+        services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
         services.AddSingleton<IStreamingProxyParticipantStore, ActorBackedStreamingProxyParticipantStore>();
         services.AddSingleton<INyxIdUserLlmPreferencesStore, ActorBackedNyxIdUserLlmPreferencesStore>();
         services.AddSingleton<IUserMemoryStore, ActorBackedUserMemoryStore>();

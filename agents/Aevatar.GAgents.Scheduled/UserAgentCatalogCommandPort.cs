@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
@@ -9,16 +10,21 @@ namespace Aevatar.GAgents.Scheduled;
 /// Production implementation of <see cref="IUserAgentCatalogCommandPort"/>.
 /// Routes catalog upsert / tombstone through <see cref="IActorDispatchPort"/>
 /// (no direct <c>HandleEventAsync</c> on the actor instance) and polls the
-/// runtime query port for the projected state version so callers can return
-/// honest <see cref="CatalogCommandOutcome.Observed"/> when materialization
-/// catches up within the wait budget, falling back to
+/// projection document store for the projected state version so callers can
+/// return honest <see cref="CatalogCommandOutcome.Observed"/> when
+/// materialization catches up within the wait budget, falling back to
 /// <see cref="CatalogCommandOutcome.Accepted"/> otherwise.
+///
+/// Issue #466: this is an internal infrastructure port (not user-facing). It
+/// reads the projection document directly by id; ownership semantics live on
+/// the public <see cref="IUserAgentCatalogQueryPort"/> (caller-scoped) and are
+/// applied at the LLM tool layer, not here.
 /// </summary>
 internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 {
     private const string PublisherActorId = "scheduled.user-agent-catalog";
 
-    private readonly IUserAgentCatalogRuntimeQueryPort _runtimeQueryPort;
+    private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
     private readonly UserAgentCatalogProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
@@ -26,12 +32,12 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
     private readonly int _projectionWaitDelayMilliseconds;
 
     public UserAgentCatalogCommandPort(
-        IUserAgentCatalogRuntimeQueryPort runtimeQueryPort,
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
         UserAgentCatalogProjectionPort projectionPort,
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort)
         : this(
-            runtimeQueryPort,
+            documentReader,
             projectionPort,
             actorRuntime,
             actorDispatchPort,
@@ -41,14 +47,14 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
     }
 
     internal UserAgentCatalogCommandPort(
-        IUserAgentCatalogRuntimeQueryPort runtimeQueryPort,
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
         UserAgentCatalogProjectionPort projectionPort,
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         int projectionWaitAttempts,
         int projectionWaitDelayMilliseconds)
     {
-        _runtimeQueryPort = runtimeQueryPort ?? throw new ArgumentNullException(nameof(runtimeQueryPort));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -65,7 +71,7 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             throw new ArgumentException("AgentId is required for upsert.", nameof(command));
 
         await _projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
-        var versionBefore = await _runtimeQueryPort.GetStateVersionAsync(command.AgentId, ct) ?? -1;
+        var versionBefore = (await _documentReader.GetAsync(command.AgentId, ct))?.StateVersion ?? -1;
         await EnsureCatalogActorAsync(ct);
 
         var envelope = new EventEnvelope
@@ -82,12 +88,12 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             if (attempt > 0)
                 await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
-            var versionAfter = await _runtimeQueryPort.GetStateVersionAsync(command.AgentId, ct) ?? -1;
+            var after = await _documentReader.GetAsync(command.AgentId, ct);
+            var versionAfter = after?.StateVersion ?? -1;
             if (versionAfter <= versionBefore)
                 continue;
 
-            var after = await _runtimeQueryPort.GetAsync(command.AgentId, ct);
-            if (after is null)
+            if (after is null || after.Tombstoned)
                 continue;
 
             if (Matches(after, command))
@@ -104,11 +110,11 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
         if (string.IsNullOrWhiteSpace(agentId))
             throw new ArgumentException("agentId is required.", nameof(agentId));
 
-        var existing = await _runtimeQueryPort.GetAsync(agentId, ct);
-        if (existing is null)
+        var existing = await _documentReader.GetAsync(agentId, ct);
+        if (existing is null || existing.Tombstoned)
             return new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.NotFound);
 
-        var versionBefore = await _runtimeQueryPort.GetStateVersionAsync(agentId, ct) ?? -1;
+        var versionBefore = existing.StateVersion;
         await _projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
         await EnsureCatalogActorAsync(ct);
 
@@ -126,15 +132,12 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             if (attempt > 0)
                 await Task.Delay(_projectionWaitDelayMilliseconds, ct);
 
-            var versionAfter = await _runtimeQueryPort.GetStateVersionAsync(agentId, ct);
-            if (versionAfter is null)
+            var after = await _documentReader.GetAsync(agentId, ct);
+            if (after is null || after.Tombstoned)
                 return new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed);
 
-            if (versionAfter.Value <= versionBefore)
+            if (after.StateVersion <= versionBefore)
                 continue;
-
-            if (await _runtimeQueryPort.GetAsync(agentId, ct) is null)
-                return new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed);
         }
 
         return new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted);
@@ -146,9 +149,13 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             ?? await _actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
     }
 
-    private static bool Matches(UserAgentCatalogEntry entry, UserAgentCatalogUpsertCommand command) =>
-        string.Equals(entry.Platform, command.Platform, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(entry.ConversationId, command.ConversationId, StringComparison.Ordinal) &&
-        string.Equals(entry.NyxProviderSlug, command.NyxProviderSlug, StringComparison.Ordinal) &&
-        string.Equals(entry.NyxApiKey, command.NyxApiKey, StringComparison.Ordinal);
+#pragma warning disable CS0612 // Platform field deprecated; comparison covers legacy data still on the wire
+    private static bool Matches(UserAgentCatalogDocument doc, UserAgentCatalogUpsertCommand command) =>
+        string.Equals(doc.Platform, command.Platform, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(doc.ConversationId, command.ConversationId, StringComparison.Ordinal) &&
+        string.Equals(doc.NyxProviderSlug, command.NyxProviderSlug, StringComparison.Ordinal);
+    // Note: NyxApiKey is no longer projected to UserAgentCatalogDocument (reserved
+    // field 5); the credential lives in UserAgentCatalogNyxCredentialDocument and
+    // is not part of the upsert observation contract here. Issue #466 §D.
+#pragma warning restore CS0612
 }

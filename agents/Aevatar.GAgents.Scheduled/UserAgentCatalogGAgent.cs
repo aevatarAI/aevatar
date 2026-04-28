@@ -31,6 +31,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 
         var existing = State.Entries.FirstOrDefault(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+#pragma warning disable CS0612 // legacy fields preserved during owner_scope migration
         var entry = new UserAgentCatalogEntry
         {
             AgentId = command.AgentId.Trim(),
@@ -58,6 +59,16 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
             LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
         };
+#pragma warning restore CS0612
+
+        // Issue #466 critical: copy OwnerScope from the command (or inherit existing on
+        // partial upserts like UpdateRegistryExecutionAsync that don't recompute scope).
+        // Without this, every catalog row would land with OwnerScope=null and
+        // DocumentMatchesCaller would fall through to the legacy backfill path — which
+        // returns null for the lark surface, and `/agents` would always be empty.
+        var mergedScope = command.OwnerScope ?? existing?.OwnerScope;
+        if (mergedScope is not null)
+            entry.OwnerScope = mergedScope.Clone();
 
         await PersistDomainEventAsync(new UserAgentCatalogUpsertedEvent
         {
