@@ -409,7 +409,6 @@ const GAgentsPage: React.FC = () => {
       readQueryValue('actorId') ? 'existing' : 'new',
     );
   const [prompt, setPrompt] = useState('');
-  const [registryActorIdInput, setRegistryActorIdInput] = useState('');
   const [registryNotice, setRegistryNotice] = useState<NoticeState | null>(
     null,
   );
@@ -804,43 +803,6 @@ const GAgentsPage: React.FC = () => {
         ...current,
         preferredActorId: nextBindingActorId,
       }));
-    }
-  };
-
-  const handleSaveRegistryActor = async () => {
-    const actorId = registryActorIdInput.trim();
-    if (!normalizedScopeId || !selectedActorStoreTypeName || !actorId) {
-      setRegistryNotice({
-        type: 'error',
-        message:
-          'Select a scope, choose a GAgent type, and enter an actor id before saving.',
-      });
-      return;
-    }
-
-    setRegistryPendingKey(`save:${actorId}`);
-    setRegistryNotice(null);
-    try {
-      await runtimeGAgentApi.addActor(
-        normalizedScopeId,
-        selectedActorStoreTypeName,
-        actorId,
-      );
-      await invalidateActorQueries(normalizedScopeId);
-      setActorReuseMode('existing');
-      setPreferredActorId(actorId);
-      setRegistryActorIdInput('');
-      setRegistryNotice({
-        type: 'success',
-        message: `Saved ${actorId} under ${selectedType?.typeName || selectedActorStoreTypeName}.`,
-      });
-    } catch (error) {
-      setRegistryNotice({
-        type: 'error',
-        message: describeError(error),
-      });
-    } finally {
-      setRegistryPendingKey('');
     }
   };
 
@@ -1768,37 +1730,6 @@ const GAgentsPage: React.FC = () => {
             type={registryNotice.type}
           />
         ) : null}
-
-        <Input
-          aria-label="Registry actor id"
-          disabled={!normalizedScopeId || !selectedActorStoreTypeName}
-          onChange={(event) => setRegistryActorIdInput(event.target.value)}
-          placeholder={
-            selectedType
-              ? `Save actor id for ${selectedType.typeName}`
-              : 'Select a GAgent type before saving an actor'
-          }
-          value={registryActorIdInput}
-        />
-        <Space size={[8, 8]} wrap>
-          <Button
-            disabled={
-              !normalizedScopeId ||
-              !selectedActorStoreTypeName ||
-              !registryActorIdInput.trim()
-            }
-            loading={registryPendingKey.startsWith('save:')}
-            onClick={() => void handleSaveRegistryActor()}
-            type="primary"
-          >
-            Save actor
-          </Button>
-          <Typography.Text type="secondary">
-            {selectedType
-              ? `Saving under ${selectedType.fullName}.`
-              : 'Saved actors follow the currently selected GAgent type.'}
-          </Typography.Text>
-        </Space>
 
         {gAgentActorsQuery.error ? (
           <Alert

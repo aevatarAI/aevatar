@@ -32,6 +32,22 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
         await PersistDomainEventAsync(evt);
     }
 
+    [EventHandler(EndpointName = "authorizeScopeResource")]
+    public Task HandleScopeResourceAdmissionRequested(ScopeResourceAdmissionRequested request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.GagentType) ||
+            string.IsNullOrWhiteSpace(request.ActorId))
+            throw new GAgentRegistryAdmissionNotFoundException();
+
+        var group = State.Groups.FirstOrDefault(g =>
+            string.Equals(g.GagentType, request.GagentType, StringComparison.Ordinal));
+        if (group is null || !group.ActorIds.Contains(request.ActorId))
+            throw new GAgentRegistryAdmissionNotFoundException();
+
+        return Task.CompletedTask;
+    }
+
     [EventHandler(EndpointName = "unregisterActor")]
     public async Task HandleActorUnregistered(ActorUnregisteredEvent evt)
     {
@@ -99,4 +115,12 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
         return next;
     }
 
+}
+
+public sealed class GAgentRegistryAdmissionNotFoundException : Exception
+{
+    public GAgentRegistryAdmissionNotFoundException()
+        : base("Registry target was not found.")
+    {
+    }
 }

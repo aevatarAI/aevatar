@@ -6,11 +6,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.ChannelRuntime.Outbound;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

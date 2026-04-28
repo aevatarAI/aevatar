@@ -707,7 +707,8 @@ export const nyxidChat = {
     request<{ actorId: string }>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`, { method: 'POST' }),
 
   listConversations: (scopeId: string) =>
-    request<Array<{ actorId: string }>>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`),
+    request<unknown>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`)
+      .then(decodeNyxIdConversationList),
 
   streamMessage: (
     scopeId: string,
@@ -803,6 +804,54 @@ export const chatHistory = {
     }),
 };
 
+type GAgentActorGroup = { gAgentType: string; actorIds: string[] };
+type NyxIdConversationSummary = { actorId: string };
+
+function decodeGAgentActorGroupList(value: unknown): GAgentActorGroup[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('GAgent actor registry snapshot must be an object with groups.');
+  }
+
+  const source = (value as { groups?: unknown }).groups;
+  if (!Array.isArray(source)) {
+    throw new Error('GAgent actor registry snapshot groups must be an array.');
+  }
+
+  return source.map((entry) => {
+    const record = entry as {
+      gAgentType?: unknown;
+      GAgentType?: unknown;
+      actorIds?: unknown;
+      ActorIds?: unknown;
+    };
+    const actorIds = Array.isArray(record.actorIds)
+      ? record.actorIds
+      : Array.isArray(record.ActorIds)
+        ? record.ActorIds
+        : [];
+    return {
+      gAgentType: String(record.gAgentType ?? record.GAgentType ?? ''),
+      actorIds: actorIds.map((actorId) => String(actorId)),
+    };
+  });
+}
+
+function decodeNyxIdConversationList(value: unknown): NyxIdConversationSummary[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('NyxID conversation registry snapshot must be an object with conversations.');
+  }
+
+  const source = (value as { conversations?: unknown }).conversations;
+  if (!Array.isArray(source)) {
+    throw new Error('NyxID conversation registry snapshot conversations must be an array.');
+  }
+
+  return source.map((entry) => {
+    const record = entry as { actorId?: unknown; ActorId?: unknown };
+    return { actorId: String(record.actorId ?? record.ActorId ?? '') };
+  });
+}
+
 /* ─── GAgent APIs (runtime) ─── */
 export const gagent = {
   /** GET /api/scopes/gagent-types — list available GAgent types */
@@ -811,14 +860,8 @@ export const gagent = {
 
   /** GET /api/scopes/{scopeId}/gagent-actors — list persisted actor entries */
   listActors: (scopeId: string) =>
-    request<Array<{ gAgentType: string; actorIds: string[] }>>(`/scopes/${enc(scopeId)}/gagent-actors`),
-
-  /** POST /api/scopes/{scopeId}/gagent-actors — persist a new actor ID entry */
-  addActor: (scopeId: string, gagentType: string, actorId: string) =>
-    request<void>(`/scopes/${enc(scopeId)}/gagent-actors`, {
-      method: 'POST',
-      body: JSON.stringify({ gagentType, actorId }),
-    }),
+    request<unknown>(`/scopes/${enc(scopeId)}/gagent-actors`)
+      .then(decodeGAgentActorGroupList),
 
   /** DELETE /api/scopes/{scopeId}/gagent-actors/{actorId} — remove an actor entry */
   removeActor: (scopeId: string, gagentType: string, actorId: string) =>

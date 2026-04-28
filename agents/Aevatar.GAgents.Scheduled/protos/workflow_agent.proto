@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package aevatar.gagents.scheduled;
+
+option csharp_namespace = "Aevatar.GAgents.Scheduled";
+
+import "google/protobuf/timestamp.proto";
+import "user_agent_catalog.proto";
+
+// ─── Workflow Agent (persistent scheduled workflow trigger) ───
+
+message WorkflowAgentState {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
+  string api_key_id = 11;
+  google.protobuf.Timestamp last_run_at = 12;
+  google.protobuf.Timestamp next_run_at = 13;
+  int32 error_count = 14;
+  string last_error = 15;
+  bool enabled = 16;
+  string scope_id = 17;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 18 [deprecated = true];
+  // See UserAgentCatalogEntry.lark_receive_id for semantics; copied verbatim
+  // into the catalog entry on UpsertRegistryAsync so downstream Lark senders
+  // (e.g. FeishuCardHumanInteractionPort) read the typed target.
+  string lark_receive_id = 19;
+  string lark_receive_id_type = 20;
+  // Secondary outbound delivery target. See UserAgentCatalogEntry
+  // .lark_receive_id_fallback for runtime fallback semantics.
+  string lark_receive_id_fallback = 21;
+  string lark_receive_id_type_fallback = 22;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
+  // for new agents; the deprecated scattered fields remain for legacy state.
+  OwnerScope owner_scope = 23;
+}
+
+message InitializeWorkflowAgentCommand {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
+  string api_key_id = 11;
+  bool enabled = 12;
+  string scope_id = 13;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 14 [deprecated = true];
+  string lark_receive_id = 15;
+  string lark_receive_id_type = 16;
+  // Secondary outbound delivery target. See UserAgentCatalogEntry
+  // .lark_receive_id_fallback for runtime fallback semantics.
+  string lark_receive_id_fallback = 17;
+  string lark_receive_id_type_fallback = 18;
+  // Caller scope captured at create time. Required for new commands.
+  OwnerScope owner_scope = 19;
+}
+
+message WorkflowAgentInitializedEvent {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string workflow_actor_id = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  string conversation_id = 7;
+  string nyx_provider_slug = 8;
+  string nyx_api_key = 9;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
+  string api_key_id = 11;
+  bool enabled = 12;
+  string scope_id = 13;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 14 [deprecated = true];
+  string lark_receive_id = 15;
+  string lark_receive_id_type = 16;
+  // Secondary outbound delivery target. See UserAgentCatalogEntry
+  // .lark_receive_id_fallback for runtime fallback semantics.
+  string lark_receive_id_fallback = 17;
+  string lark_receive_id_type_fallback = 18;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform.
+  OwnerScope owner_scope = 19;
+}
+
+message TriggerWorkflowAgentExecutionCommand {
+  string reason = 1;
+  string revision_feedback = 2;
+}
+
+message WorkflowAgentNextRunScheduledEvent {
+  google.protobuf.Timestamp next_run_at = 1;
+}
+
+message WorkflowAgentExecutionDispatchedEvent {
+  google.protobuf.Timestamp dispatched_at = 1;
+  string workflow_run_actor_id = 2;
+  string command_id = 3;
+}
+
+message WorkflowAgentExecutionFailedEvent {
+  google.protobuf.Timestamp failed_at = 1;
+  string error = 2;
+}
+
+message DisableWorkflowAgentCommand {
+  string reason = 1;
+}
+
+message EnableWorkflowAgentCommand {
+  string reason = 1;
+}
+
+message WorkflowAgentDisabledEvent {
+  string reason = 1;
+}
+
+message WorkflowAgentEnabledEvent {
+  string reason = 1;
+}

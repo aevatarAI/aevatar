@@ -71,6 +71,16 @@ function decodeGAgentActorGroup(
   };
 }
 
+function decodeGAgentActorGroupsResponse(value: unknown): RuntimeGAgentActorGroup[] {
+  const record = expectRecord(value, "RuntimeGAgentActorSnapshot");
+  const groups = record.groups;
+  return expectArray(
+    groups,
+    "RuntimeGAgentActorSnapshot.groups",
+    decodeGAgentActorGroup
+  );
+}
+
 function readImplementationKindValue(
   record: Record<string, unknown>,
   label: string
@@ -271,8 +281,7 @@ export const runtimeGAgentApi = {
   listActors(scopeId: string): Promise<RuntimeGAgentActorGroup[]> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/gagent-actors`,
-      (value) =>
-        expectArray(value, "RuntimeGAgentActorGroup[]", decodeGAgentActorGroup)
+      decodeGAgentActorGroupsResponse
     );
   },
 
@@ -369,31 +378,6 @@ export const runtimeGAgentApi = {
     revisionId: string
   ): Promise<RuntimeGAgentBindingRetirementResult> {
     return this.retireScopeBindingRevision(scopeId, revisionId);
-  },
-
-  async addActor(
-    scopeId: string,
-    gAgentType: string,
-    actorId: string
-  ): Promise<void> {
-    const response = await authFetch(
-      `/api/scopes/${encodeURIComponent(scopeId)}/gagent-actors`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          gagentType: gAgentType.trim(),
-          actorId: actorId.trim(),
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(await readResponseError(response));
-    }
   },
 
   async removeActor(

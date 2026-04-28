@@ -15,7 +15,9 @@
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
-    <Project Path="agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
+    <Project Path="agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
+    <Project Path="agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
+    <Project Path="agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
   </Folder>
@@ -43,7 +45,9 @@
   <Folder Name="/src/">
     <Project Path="src/Aevatar.AI.ToolProviders.Binding/Aevatar.AI.ToolProviders.Binding.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.AgentCatalog/Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Channel/Aevatar.AI.ToolProviders.Channel.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.ChannelAdmin/Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Lark/Aevatar.AI.ToolProviders.Lark.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Telegram/Aevatar.AI.ToolProviders.Telegram.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.NyxId/Aevatar.AI.ToolProviders.NyxId.csproj" />

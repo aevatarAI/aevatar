@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Xunit;
+using Aevatar.GAgents.Device;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

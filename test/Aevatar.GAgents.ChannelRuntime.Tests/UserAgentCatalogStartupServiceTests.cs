@@ -5,6 +5,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
 using Xunit;
+using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
