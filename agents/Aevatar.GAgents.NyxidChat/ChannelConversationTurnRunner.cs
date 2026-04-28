@@ -59,7 +59,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
-        _ = TrySendImmediateLarkReactionAsync(activity, registration, ct);
+        // Capture the typing-reaction Task instead of `_ =`-discarding it. The direct-reply
+        // AgentBuilder path can complete fast enough that the swap fires before Lark has
+        // persisted the typing reaction; the swap GET would then find nothing to delete and
+        // leave both Typing + DONE on the message. Threading the task to the swap site lets
+        // the swap await-with-timeout the typing POST first. The deferred-LLM and streaming
+        // paths don't get this task (different invocation), but their natural latency is
+        // orders of magnitude greater than the typing POST so the race cannot fire.
+        var typingReactionTask = TrySendImmediateLarkReactionAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
@@ -67,7 +74,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
 
-        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, ct) is { } agentBuilderResult)
+        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
 
         if (activity.Type == ActivityType.CardAction)
@@ -198,6 +205,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ct);
     }
 
+    public async Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct)
+    {
+        // Streaming-completion path in ConversationGAgent calls this hook because it finalizes
+        // the reply without going through RunLlmReplyAsync (which is where the non-streaming swap
+        // lives). For non-Lark platforms or activities missing the platform message id, the swap
+        // helper short-circuits in ShouldSwapTypingReaction.
+        if (activity is null)
+            return;
+
+        var registration = await ResolveRegistrationAsync(activity, ct);
+        if (registration is null)
+            return;
+
+        var inbound = ToInboundMessage(activity);
+        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+    }
+
     public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
         LlmReplyStreamChunkEvent chunk,
         string? currentPlatformMessageId,
@@ -280,6 +304,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelInboundEvent inboundEvent,
         ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
+        Task typingReactionTask,
         CancellationToken ct)
     {
         AgentBuilderFlowDecision? decision = null;
@@ -328,7 +353,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             runtimeContext,
             ct);
         if (result.Success)
-            _ = TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+            _ = AwaitTypingReactionThenSwapAsync(typingReactionTask, inbound, registration, ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
@@ -1011,6 +1036,42 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 providerSlug,
                 platformMessageId);
         }
+    }
+
+    // Direct-reply paths (TryHandleAgentBuilderAsync) can complete a slash-command reply faster
+    // than the typing POST takes to land in Lark, leaving the swap GET to find no Typing reaction
+    // to delete and the orphaned typing reaction to materialize after DONE was already added —
+    // both reactions on the same message. Awaiting (with a short cap) the typing task before the
+    // GET closes that race. The cap protects against a hung POST stalling the swap forever; if it
+    // expires the swap still proceeds — Lark will at worst end up with both reactions, same as
+    // before this guard. The deferred-LLM and streaming paths skip this guard because their reply
+    // latency dwarfs the typing POST and so cannot race.
+    private async Task AwaitTypingReactionThenSwapAsync(
+        Task typingReactionTask,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        CancellationToken ct)
+    {
+        try
+        {
+            await typingReactionTask.WaitAsync(TimeSpan.FromSeconds(2), ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogDebug(
+                "Lark typing reaction task did not complete within timeout before swap; proceeding anyway");
+        }
+        catch (Exception)
+        {
+            // The typing task already logged its own exception — proceed with the swap so the
+            // user-visible message still ends up with a DONE reaction whenever possible.
+        }
+
+        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
     }
 
     // After a successful reply, replace the bot's "Typing" reaction with a "DONE" reaction so the
