@@ -73,7 +73,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         var orgToken = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdOrgToken);
         if (string.IsNullOrWhiteSpace(token))
-            return """{"error":"No NyxID access token available. User must be authenticated."}""";
+            return AnnotateWithToolStatus("""{"error":"No NyxID access token available. User must be authenticated."}""");
 
         _logger.LogDebug("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
 
@@ -81,7 +81,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (args.HasParseError)
         {
             _logger.LogWarning("[nyxid_proxy] Argument parse failed: {Error}, raw={Raw}", args.ParseError, args.Raw);
-            return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{System.Text.Json.JsonSerializer.Serialize(args.ParseError)},\"received\":{System.Text.Json.JsonSerializer.Serialize(args.Raw)}}}";
+            return AnnotateWithToolStatus($"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{System.Text.Json.JsonSerializer.Serialize(args.ParseError)},\"received\":{System.Text.Json.JsonSerializer.Serialize(args.Raw)}}}");
         }
 
         var slug = args.Str("slug") ?? args.Str("service");
@@ -100,7 +100,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (string.IsNullOrWhiteSpace(path))
         {
             _logger.LogWarning("[nyxid_proxy] Missing path. slug={Slug}, raw={Raw}", slug, args.Raw);
-            return $"{{\"error\":\"'path' is required when 'slug' is provided\",\"received\":{args.Raw}}}";
+            return AnnotateWithToolStatus($"{{\"error\":\"'path' is required when 'slug' is provided\",\"received\":{args.Raw}}}");
         }
 
         // Resolve which token owns the target service: user token first, fallback to org token
@@ -117,8 +117,99 @@ public sealed class NyxIdProxyTool : IAgentTool
                 approvalCode, approvalRequestId);
         }
 
-        return result;
+        // Annotate the response with a structural status marker so downstream consumers
+        // (LLM prompt + tool-call middleware) can distinguish a real 2xx-with-data response
+        // from a NyxID-wrapped 4xx/5xx envelope or an approval-blocked call. Without this,
+        // a transient proxy failure surfaces as JSON the LLM happily folds into its
+        // "no activity" template — see issue #439.
+        return AnnotateWithToolStatus(result);
     }
+
+    /// <summary>
+    /// Field name injected at the top of JSON-object responses to record whether the proxy
+    /// call was a structural success or an error envelope. Consumers (LLM prompt language,
+    /// SkillRunner failure-counting middleware) match on this exact key.
+    /// </summary>
+    public const string ToolStatusFieldName = "_aevatar_tool_status";
+
+    /// <summary>Status assigned to NyxID error envelopes (HTTP non-2xx, approval-blocked, exception).</summary>
+    public const string ToolStatusError = "error";
+
+    /// <summary>Status assigned to plausible 2xx success responses.</summary>
+    public const string ToolStatusOk = "ok";
+
+    /// <summary>
+    /// Inject <see cref="ToolStatusFieldName"/> at the top of a JSON-object response. Returns
+    /// the input unchanged when the body isn't a JSON object (raw text, arrays, etc.) — the
+    /// marker is opportunistic, never destructive. Detection rules:
+    /// - <c>"error"</c> property truthy → error (matches <see cref="NyxIdApiClient.SendAsync"/>'s
+    ///   non-2xx wrapper and exception wrapper)
+    /// - <c>"code"</c> numeric and non-zero → error (matches NyxID approval codes 7000/7001 and
+    ///   any business-error envelope using the same shape)
+    /// </summary>
+    internal static string AnnotateWithToolStatus(string? response)
+    {
+        if (string.IsNullOrEmpty(response))
+            return response ?? string.Empty;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(response);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return response;
+
+            // Don't double-annotate (e.g., when the underlying tool already emitted the marker).
+            if (doc.RootElement.TryGetProperty(ToolStatusFieldName, out _))
+                return response;
+
+            var status = ClassifyToolStatus(doc.RootElement);
+
+            using var stream = new System.IO.MemoryStream();
+            using (var writer = new System.Text.Json.Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                writer.WriteString(ToolStatusFieldName, status);
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                    prop.WriteTo(writer);
+                writer.WriteEndObject();
+            }
+
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Non-JSON body (raw text, partial stream). The marker is opportunistic — leave
+            // the original response intact so existing consumers that depend on the verbatim
+            // payload aren't broken.
+            return response;
+        }
+    }
+
+    private static string ClassifyToolStatus(System.Text.Json.JsonElement root)
+    {
+        if (root.TryGetProperty("error", out var errorProp) && IsTruthyError(errorProp))
+            return ToolStatusError;
+
+        if (root.TryGetProperty("code", out var codeProp)
+            && codeProp.ValueKind == System.Text.Json.JsonValueKind.Number
+            && codeProp.TryGetInt64(out var code)
+            && code != 0)
+        {
+            return ToolStatusError;
+        }
+
+        return ToolStatusOk;
+    }
+
+    private static bool IsTruthyError(System.Text.Json.JsonElement value) => value.ValueKind switch
+    {
+        System.Text.Json.JsonValueKind.True => true,
+        System.Text.Json.JsonValueKind.False => false,
+        System.Text.Json.JsonValueKind.Null => false,
+        // Strings, numbers, objects, arrays under "error" all indicate an error envelope of
+        // some kind — the bare presence of a non-false "error" payload is the signal.
+        _ => true,
+    };
 
     // ─── Dual-token service discovery + routing ───
 
