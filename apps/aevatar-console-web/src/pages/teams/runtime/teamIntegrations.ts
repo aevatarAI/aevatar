@@ -1,12 +1,12 @@
 import type {
   StudioConnectorCatalog,
   StudioConnectorDefinition,
-  StudioScopeBindingImplementationKind,
+  StudioMemberBindingImplementationKind,
   StudioWorkflowDocument,
   StudioWorkflowRoleDocument,
   StudioWorkspaceSettings,
 } from "@/shared/studio/models";
-import { formatStudioScopeBindingImplementationKind } from "@/shared/studio/models";
+import { formatStudioMemberBindingImplementationKind } from "@/shared/studio/models";
 
 export type TeamIntegrationItem = {
   key: string;
@@ -19,7 +19,7 @@ export type TeamIntegrationItem = {
 
 export type TeamIntegrationsSummary = {
   available: boolean;
-  bindingKind: StudioScopeBindingImplementationKind;
+  bindingKind: StudioMemberBindingImplementationKind;
   connectorCount: number;
   directoryCount: number;
   items: TeamIntegrationItem[];
@@ -157,7 +157,7 @@ export function deriveTeamWorkflowRoleBindings(
 }
 
 export function deriveTeamIntegrationsSummary(input: {
-  bindingKind: StudioScopeBindingImplementationKind;
+  bindingKind: StudioMemberBindingImplementationKind;
   connectorCatalog: StudioConnectorCatalog | null;
   teamWorkflowRoles: TeamWorkflowRoleBinding[] | null | undefined;
   workflowDocumentCount?: number;
@@ -239,7 +239,7 @@ export function deriveTeamIntegrationsSummary(input: {
     connectors.length > 0 ||
     teamWorkflowRoles.length > 0;
 
-  const bindingKindLabel = formatStudioScopeBindingImplementationKind(
+  const bindingKindLabel = formatStudioMemberBindingImplementationKind(
     input.bindingKind,
   );
   const teamRoleUsageStatus: TeamIntegrationsSummary["teamRoleUsageStatus"] =

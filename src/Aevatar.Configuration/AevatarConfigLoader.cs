@@ -19,17 +19,29 @@ public static class AevatarConfigLoader
     /// 将 ~/.aevatar/ 下的配置文件添加到 IConfigurationBuilder。
     /// </summary>
     /// <param name="builder">配置构建器。</param>
+    /// <param name="allowLocalFileStore">
+    /// 是否允许加载 <c>~/.aevatar/secrets.json</c>。生产/mainnet 入口必须传
+    /// <c>false</c>，确保 secrets 仅来自部署平台注入的环境变量。其他 host 可
+    /// 保留默认值。<c>config.json</c>、<c>mcp.json</c>、<c>connectors.json</c>
+    /// 等非敏感文件不受此开关影响。
+    /// </param>
     /// <returns>构建器（链式调用）。</returns>
-    public static IConfigurationBuilder AddAevatarConfig(this IConfigurationBuilder builder)
+    public static IConfigurationBuilder AddAevatarConfig(
+        this IConfigurationBuilder builder,
+        bool allowLocalFileStore = true)
     {
-        // 确保目录存在
-        AevatarPaths.EnsureDirectories();
+        // 仅在使用本地文件 store 时创建 ~/.aevatar/ 目录树；
+        // 生产入口（allowLocalFileStore=false）保持零本地文件足迹。
+        if (allowLocalFileStore)
+            AevatarPaths.EnsureDirectories();
 
         // config.json — 非敏感配置（低优先级）
         builder.AddJsonFile(AevatarPaths.ConfigJson, optional: true, reloadOnChange: true);
 
         // secrets.json — 敏感配置（高优先级，覆盖 config.json 的同名 key）
-        builder.AddJsonFile(AevatarPaths.SecretsJson, optional: true, reloadOnChange: false);
+        // 生产入口（mainnet）必须显式禁用：禁止把 secrets 落地到本地文件。
+        if (allowLocalFileStore)
+            builder.AddJsonFile(AevatarPaths.SecretsJson, optional: true, reloadOnChange: false);
 
         // mcp.json — MCP 服务器配置（Cursor 兼容格式）
         builder.AddJsonFile(AevatarPaths.MCPJson, optional: true, reloadOnChange: true);

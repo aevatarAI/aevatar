@@ -376,12 +376,12 @@ public static class ServiceCollectionExtensions
         if (!options.EnableMEAIProviders)
             return;
 
-        var secretsStoreAccessor = CreateSecretsStoreAccessor(options);
         if (options.EnableReloadableProviderFactory)
         {
             var versionProvider = BuildProviderConfigVersionProvider(options);
             services.TryAddSingleton<ILLMProviderFactory>(sp =>
             {
+                var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
                 var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
                 return new ReloadableLLMProviderFactory(
                     () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor),
@@ -391,8 +391,11 @@ public static class ServiceCollectionExtensions
             return;
         }
 
-        var factory = BuildLlmProviderFactory(configuration, options, secretsStoreAccessor);
-        services.TryAddSingleton<ILLMProviderFactory>(factory);
+        services.TryAddSingleton<ILLMProviderFactory>(sp =>
+        {
+            var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
+            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor);
+        });
     }
 
     private static ILLMProviderFactory BuildLlmProviderFactory(
@@ -586,10 +589,20 @@ public static class ServiceCollectionExtensions
         return new ConfiguredProvider("nyxid", "nyxid", model, gatewayEndpoint, string.Empty);
     }
 
-    private static Func<IAevatarSecretsStore> CreateSecretsStoreAccessor(AevatarAIFeatureOptions options)
+    private static Func<IAevatarSecretsStore> CreateSecretsStoreAccessor(
+        AevatarAIFeatureOptions options,
+        IServiceProvider services)
     {
         if (options.SecretsStore != null)
             return () => options.SecretsStore;
+
+        // Prefer the DI-registered store so hosts that opted into the
+        // read-only EnvironmentSecretsStore (e.g. mainnet) are honored
+        // here too. Falling back to a fresh AevatarSecretsStore() would
+        // re-open the local secrets.json on disk.
+        var registered = services.GetService<IAevatarSecretsStore>();
+        if (registered != null)
+            return () => registered;
 
         return static () => new AevatarSecretsStore();
     }

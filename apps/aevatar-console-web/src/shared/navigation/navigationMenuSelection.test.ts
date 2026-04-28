@@ -1,8 +1,8 @@
 import { getNavigationSelectedKeys } from "./navigationMenuSelection";
 
 describe("getNavigationSelectedKeys", () => {
-  it("selects Create Team without keeping My Teams selected", () => {
-    expect(getNavigationSelectedKeys("/teams/new")).toEqual(["/teams/new"]);
+  it("does not select a primary navigation item for the hidden Create Team compatibility route", () => {
+    expect(getNavigationSelectedKeys("/teams/new")).toEqual([]);
   });
 
   it("maps team detail pages back to My Teams", () => {

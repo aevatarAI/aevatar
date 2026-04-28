@@ -124,7 +124,7 @@ const consoleFlows: readonly ConsoleFlow[] = [
   {
     badge: "Recommended first",
     description:
-      "Check the scope binding, published services, deployed workflows, or inspect an actor directly.",
+      "Check the default route target, published services, deployed workflows, or inspect an actor directly.",
     group: "understand",
     id: "query",
     label: "Query",
@@ -702,7 +702,7 @@ export function ChatAdvancedConsole({
       let result: unknown;
       switch (queryTarget) {
         case "binding":
-          result = await studioApi.getScopeBinding(scopeId);
+          result = await studioApi.getDefaultRouteTarget(scopeId);
           break;
         case "services":
           result = await servicesApi.listServices({

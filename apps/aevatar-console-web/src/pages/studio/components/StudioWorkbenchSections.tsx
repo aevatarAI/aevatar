@@ -28,6 +28,7 @@ import type {
 import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioScopeBindingImplementationKind,
   StudioWorkflowSummary,
 } from '@/shared/studio/models';
 import {
@@ -337,6 +338,46 @@ function readExecutionDurationMs(
   return end - start;
 }
 
+function readObserveStepCoverage(
+  execution:
+    | Pick<StudioExecutionSummary, 'completedSteps' | 'totalSteps'>
+    | null
+    | undefined,
+  fallbackCompleted?: number,
+  fallbackTotal?: number,
+): string {
+  const completedSteps =
+    typeof execution?.completedSteps === 'number'
+      ? execution.completedSteps
+      : fallbackCompleted ?? null;
+  const totalSteps =
+    typeof execution?.totalSteps === 'number'
+      ? execution.totalSteps
+      : fallbackTotal ?? null;
+
+  if (completedSteps === null && totalSteps === null) {
+    return 'n/a';
+  }
+
+  return `${completedSteps ?? 0}/${totalSteps ?? 0}`;
+}
+
+function resolveObserveDelta(input: {
+  current: string;
+  baseline: string;
+  regressionWhen?: boolean;
+}): ObserveCompareRow['delta'] {
+  if (!input.baseline || input.baseline === 'n/a') {
+    return 'current-only';
+  }
+
+  if (input.regressionWhen) {
+    return 'regression';
+  }
+
+  return input.current === input.baseline ? 'same' : 'changed';
+}
+
 function buildObserveCompareRows(input: {
   baselineExecution: StudioExecutionSummary | null;
   selectedExecution: StudioExecutionDetail | null | undefined;
@@ -384,53 +425,103 @@ function buildObserveCompareRows(input: {
       'status',
       trimObserveText(selectedExecution.status),
       trimObserveText(baselineExecution?.status),
-      baselineExecution
-        ? selectedExecution.status === baselineExecution.status
-          ? 'same'
-          : selectedExecution.status.toLowerCase().includes('fail')
-            ? 'regression'
-            : 'changed'
-        : 'current-only',
+      resolveObserveDelta({
+        current: trimObserveText(selectedExecution.status),
+        baseline: trimObserveText(baselineExecution?.status),
+        regressionWhen:
+          selectedExecution.status.toLowerCase().includes('fail') ||
+          selectedExecution.status.toLowerCase().includes('stopped'),
+      }),
+    ),
+    compare(
+      'revision',
+      trimObserveText(selectedExecution.revisionId),
+      trimObserveText(baselineExecution?.revisionId),
+      resolveObserveDelta({
+        current: trimObserveText(selectedExecution.revisionId),
+        baseline: trimObserveText(baselineExecution?.revisionId),
+      }),
+    ),
+    compare(
+      'state version',
+      trimObserveText(
+        selectedExecution.stateVersion !== null &&
+          selectedExecution.stateVersion !== undefined
+          ? `v${selectedExecution.stateVersion}`
+          : 'n/a',
+      ),
+      trimObserveText(
+        baselineExecution?.stateVersion !== null &&
+          baselineExecution?.stateVersion !== undefined
+          ? `v${baselineExecution.stateVersion}`
+          : 'n/a',
+      ),
+      resolveObserveDelta({
+        current: trimObserveText(
+          selectedExecution.stateVersion !== null &&
+            selectedExecution.stateVersion !== undefined
+            ? `v${selectedExecution.stateVersion}`
+            : 'n/a',
+        ),
+        baseline: trimObserveText(
+          baselineExecution?.stateVersion !== null &&
+            baselineExecution?.stateVersion !== undefined
+            ? `v${baselineExecution.stateVersion}`
+            : 'n/a',
+        ),
+      }),
     ),
     compare(
       'duration',
       currentDurationLabel,
       baselineDurationLabel,
+      resolveObserveDelta({
+        current: currentDurationLabel,
+        baseline: baselineDurationLabel,
+        regressionWhen:
+          baselineDurationMs > 0 && currentDurationMs > baselineDurationMs,
+      }),
+    ),
+    compare(
+      'steps',
+      `${readObserveStepCoverage(
+        selectedExecution,
+        executedStepCount,
+      )} · ${traceLogCount} logs`,
       baselineExecution
-        ? baselineDurationMs > 0 && currentDurationMs > baselineDurationMs
-          ? 'regression'
-          : currentDurationLabel === baselineDurationLabel
-            ? 'same'
-            : 'changed'
-        : 'current-only',
+        ? `${readObserveStepCoverage(baselineExecution)} · ${
+            baselineExecution.roleReplyCount ?? 0
+          } replies`
+        : 'n/a',
+      resolveObserveDelta({
+        current: `${readObserveStepCoverage(
+          selectedExecution,
+          executedStepCount,
+        )} · ${traceLogCount} logs`,
+        baseline: baselineExecution
+          ? `${readObserveStepCoverage(baselineExecution)} · ${
+              baselineExecution.roleReplyCount ?? 0
+            } replies`
+          : 'n/a',
+      }),
     ),
     compare(
       'actor',
       trimObserveText(selectedExecution.actorId),
       trimObserveText(baselineExecution?.actorId),
-      baselineExecution
-        ? trimObserveText(selectedExecution.actorId) ===
-          trimObserveText(baselineExecution.actorId)
-          ? 'same'
-          : 'changed'
-        : 'current-only',
+      resolveObserveDelta({
+        current: trimObserveText(selectedExecution.actorId),
+        baseline: trimObserveText(baselineExecution?.actorId),
+      }),
     ),
     compare(
-      'input',
-      trimObserveText(selectedExecution.prompt),
-      trimObserveText(baselineExecution?.prompt),
-      baselineExecution
-        ? trimObserveText(selectedExecution.prompt) ===
-          trimObserveText(baselineExecution.prompt)
-          ? 'same'
-          : 'changed'
-        : 'current-only',
-    ),
-    compare(
-      'trace coverage',
-      `${executedStepCount} steps · ${traceLogCount} logs`,
-      baselineExecution ? trimObserveText(baselineExecution.status) : 'n/a',
-      baselineExecution ? 'changed' : 'current-only',
+      'output',
+      trimObserveText(selectedExecution.output),
+      trimObserveText(baselineExecution?.output),
+      resolveObserveDelta({
+        current: trimObserveText(selectedExecution.output),
+        baseline: trimObserveText(baselineExecution?.output),
+      }),
     ),
   ];
 
@@ -457,31 +548,49 @@ function buildObserveCompareRows(input: {
 function buildObserveHealthItems(input: {
   activeExecutionInteraction: ExecutionInteractionState | null;
   executions: readonly StudioExecutionSummary[];
+  baselineExecution: StudioExecutionSummary | null;
   selectedExecution: StudioExecutionDetail | null | undefined;
   traceLogCount: number;
 }): ObserveHealthItem[] {
-  const { activeExecutionInteraction, executions, selectedExecution, traceLogCount } = input;
+  const {
+    activeExecutionInteraction,
+    baselineExecution,
+    executions,
+    selectedExecution,
+    traceLogCount,
+  } = input;
   const recentExecutions = executions.slice(0, 5);
   const failedCount = recentExecutions.filter((item) =>
     String(item.status || '').trim().toLowerCase().includes('fail'),
   ).length;
+  const stoppedCount = recentExecutions.filter((item) =>
+    String(item.status || '').trim().toLowerCase().includes('stop'),
+  ).length;
+  const runtimeStatus = String(selectedExecution?.status || '').trim().toLowerCase();
+  const selectedCoverage = readObserveStepCoverage(selectedExecution);
+  const auditReady = selectedExecution?.auditSource === 'run-audit';
+  const humanGateValue = activeExecutionInteraction
+    ? activeExecutionInteraction.kind === 'human_approval'
+      ? 'awaiting approval'
+      : activeExecutionInteraction.kind === 'wait_signal'
+        ? 'awaiting signal'
+        : 'awaiting input'
+    : 'clear';
 
   return [
     {
       label: 'runtime',
       note: selectedExecution
-        ? `Latest run ${trimObserveText(selectedExecution.executionId)}`
+        ? `Selected run ${trimObserveText(selectedExecution.executionId)} · updated ${formatDateTime(
+            selectedExecution.updatedAtUtc || selectedExecution.startedAtUtc,
+          )}`
         : 'No workflow run selected yet.',
       status: selectedExecution
-        ? String(selectedExecution.status || '')
-            .trim()
-            .toLowerCase()
-            .includes('fail')
+        ? runtimeStatus.includes('fail')
           ? 'blocked'
-          : String(selectedExecution.status || '')
-                .trim()
-                .toLowerCase()
-                .includes('run')
+          : runtimeStatus.includes('stop')
+            ? 'warning'
+            : runtimeStatus.includes('run')
             ? 'active'
             : 'pending'
         : 'pending',
@@ -489,8 +598,10 @@ function buildObserveHealthItems(input: {
     },
     {
       label: 'recent runs',
-      note: `${failedCount} failed in the latest ${recentExecutions.length || 0} runs.`,
-      status: failedCount > 0 ? 'warning' : 'active',
+      note: `${failedCount} failed, ${stoppedCount} stopped in the latest ${
+        recentExecutions.length || 0
+      } runs.`,
+      status: failedCount > 0 || stoppedCount > 0 ? 'warning' : 'active',
       value: recentExecutions.length ? `${recentExecutions.length} tracked` : 'warming up',
     },
     {
@@ -499,20 +610,46 @@ function buildObserveHealthItems(input: {
         ? activeExecutionInteraction.prompt
         : 'No human approval or input is currently blocking this run.',
       status: activeExecutionInteraction ? 'warning' : 'active',
-      value: activeExecutionInteraction
-        ? activeExecutionInteraction.kind === 'human_approval'
-          ? 'awaiting approval'
-          : 'awaiting input'
-        : 'clear',
+      value: humanGateValue,
     },
     {
-      label: 'observability',
+      label: 'audit fidelity',
       note:
-        traceLogCount > 0
-          ? `Execution logs and graph state are available for ${traceLogCount} frames.`
-          : 'No execution frames have been materialized yet.',
-      status: traceLogCount > 0 ? 'active' : 'pending',
-      value: traceLogCount > 0 ? 'live trace' : 'partial',
+        selectedExecution
+          ? auditReady
+            ? `Run audit updated ${formatDateTime(
+                selectedExecution.auditUpdatedAtUtc || selectedExecution.updatedAtUtc,
+              )}.`
+            : 'Only the run summary is available so far.'
+          : 'No run selected yet.',
+      status: selectedExecution ? (auditReady ? 'active' : 'pending') : 'pending',
+      value: auditReady ? 'run audit ready' : 'summary only',
+    },
+    {
+      label: 'coverage',
+      note:
+        selectedExecution
+          ? `${selectedCoverage} steps completed · ${
+              selectedExecution.roleReplyCount ?? 0
+            } role replies · ${traceLogCount} trace logs.`
+          : 'No run selected yet.',
+      status:
+        selectedExecution && traceLogCount > 0
+          ? 'active'
+          : selectedExecution
+            ? 'warning'
+            : 'pending',
+      value: selectedExecution ? selectedCoverage : 'n/a',
+    },
+    {
+      label: 'baseline',
+      note: baselineExecution
+        ? `Comparing against ${trimObserveText(
+            baselineExecution.executionId,
+          )} from the same member service.`
+        : 'Observe becomes more trustworthy after another member run lands and a baseline exists.',
+      status: baselineExecution ? 'active' : 'pending',
+      value: baselineExecution ? 'available' : 'warming up',
     },
   ];
 }
@@ -531,6 +668,8 @@ function buildObservePlaybackEntries(
           log.title.toLowerCase().includes('approved') ||
           log.title.toLowerCase().includes('rejected') ||
           log.title.toLowerCase().includes('input submitted') ||
+          log.title.toLowerCase().includes('signal sent') ||
+          log.title.toLowerCase().includes('waiting for signal') ||
           log.title.toLowerCase().includes('stop requested'),
       ),
     )
@@ -563,6 +702,7 @@ export type StudioExecutionPageProps = {
   readonly activeDirectoryLabel: string;
   readonly selectedMemberLabel?: string;
   readonly currentImplementationLabel?: string;
+  readonly currentImplementationKind?: StudioScopeBindingImplementationKind;
   readonly emptyState?: {
     readonly title: string;
     readonly description: string;
@@ -587,7 +727,7 @@ export type StudioExecutionPageProps = {
   readonly onStartExecution: () => void;
   readonly onResumeExecution: (
     interaction: ExecutionInteractionState,
-    action: 'submit' | 'approve' | 'reject',
+    action: 'submit' | 'approve' | 'reject' | 'signal',
     userInput: string,
   ) => Promise<void>;
   readonly onStopExecution: () => void;
@@ -604,6 +744,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   activeDirectoryLabel,
   selectedMemberLabel,
   currentImplementationLabel,
+  currentImplementationKind = 'unknown',
   emptyState = null,
   runPending,
   canRunWorkflow,
@@ -637,6 +778,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     () => buildExecutionTrace(selectedExecutionDetail),
     [selectedExecutionDetail],
   );
+  const workflowGraphAvailable =
+    currentImplementationKind === 'workflow' && workflowGraph.nodes.length > 0;
 
   React.useEffect(() => {
     setActiveExecutionLogIndex(executionTrace?.defaultLogIndex ?? null);
@@ -684,17 +827,26 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     [activeExecutionLogIndex, executionTrace, workflowGraph.edges, workflowGraph.nodes],
   );
   const executionLogCount = executionTrace?.logs.length ?? 0;
-  const executionExecutedSteps = React.useMemo(
-    () =>
-      new Set(
-        (executionTrace?.logs ?? [])
-          .map((log) => log.stepId || '')
-          .filter(Boolean),
-      ).size,
-    [executionTrace],
-  );
+  const executionExecutedSteps = React.useMemo(() => {
+    const tracedStepCount = new Set(
+      (executionTrace?.logs ?? [])
+        .map((log) => log.stepId || '')
+        .filter(Boolean),
+    ).size;
+
+    if (tracedStepCount > 0) {
+      return tracedStepCount;
+    }
+
+    return selectedExecutionDetail?.completedSteps ?? 0;
+  }, [executionTrace, selectedExecutionDetail?.completedSteps]);
   const executionTotalSteps =
-    workflowGraph.steps.length || workflowGraph.nodes.length;
+    (workflowGraphAvailable
+      ? workflowGraph.steps.length || workflowGraph.nodes.length
+      : 0) ||
+    selectedExecutionDetail?.totalSteps ||
+    workflowGraph.steps.length ||
+    workflowGraph.nodes.length;
   const executionStatusKey = String(selectedExecutionDetail?.status || '')
     .trim()
     .toLowerCase();
@@ -766,12 +918,14 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     () =>
       buildObserveHealthItems({
         activeExecutionInteraction,
+        baselineExecution,
         executions: currentMemberExecutions,
         selectedExecution: selectedExecutionDetail,
         traceLogCount: executionLogCount,
       }),
     [
       activeExecutionInteraction,
+      baselineExecution,
       currentMemberExecutions,
       executionLogCount,
       selectedExecutionDetail,
@@ -781,6 +935,34 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     () => buildObservePlaybackEntries(executionTrace?.logs),
     [executionTrace?.logs],
   );
+  const workflowGraphFallback = React.useMemo(() => {
+    switch (currentImplementationKind) {
+      case 'script':
+        return {
+          title: 'Script members do not expose a workflow graph.',
+          copy:
+            'Observe still shows runtime logs, audit facts, and run controls below. Workflow graph playback is available for workflow-backed members only.',
+        };
+      case 'gagent':
+        return {
+          title: 'GAgent members do not expose a workflow graph.',
+          copy:
+            'Observe still shows runtime logs, audit facts, and run controls below. Workflow graph playback is available for workflow-backed members only.',
+        };
+      case 'workflow':
+        return {
+          title: 'Workflow graph unavailable for this member.',
+          copy:
+            'Studio could not resolve a matching workflow document for the current member context right now. Logs, audit facts, and run controls are still available below.',
+        };
+      default:
+        return {
+          title: 'Workflow graph unavailable.',
+          copy:
+            'Observe still shows runtime logs, audit facts, and run controls below.',
+        };
+    }
+  }, [currentImplementationKind]);
 
   const copyText = async (value: string): Promise<boolean> => {
     if (!value || typeof navigator === 'undefined' || !navigator.clipboard) {
@@ -834,7 +1016,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
   const handleExecutionInteraction = async (
     interaction: ExecutionInteractionState,
-    action: 'submit' | 'approve' | 'reject',
+    action: 'submit' | 'approve' | 'reject' | 'signal',
   ) => {
     const trimmedInput = executionActionInput.trim();
     if (interaction.kind === 'human_input' && !trimmedInput) {
@@ -1032,11 +1214,15 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 <Typography.Text strong>
                   {activeExecutionInteraction.kind === 'human_approval'
                     ? '等待人工审批'
+                    : activeExecutionInteraction.kind === 'wait_signal'
+                      ? '等待外部信号'
                     : '等待人工输入'}
                 </Typography.Text>
                 <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
                   {activeExecutionInteraction.kind === 'human_approval'
                     ? '查看当前关卡并决定通过或驳回。'
+                    : activeExecutionInteraction.kind === 'wait_signal'
+                      ? '发送当前步骤等待的信号后，运行会继续执行。'
                     : '补充缺失信息后，当前步骤会继续执行。'}
                 </div>
               </div>
@@ -1077,6 +1263,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               placeholder={
                 activeExecutionInteraction.kind === 'human_approval'
                   ? '可选补充说明'
+                  : activeExecutionInteraction.kind === 'wait_signal'
+                    ? '可选 signal payload'
                   : '输入继续执行所需的内容'
               }
             />
@@ -1130,6 +1318,26 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                       : '通过'}
                   </Button>
                 </>
+              ) : activeExecutionInteraction.kind === 'wait_signal' ? (
+                <Button
+                  type="primary"
+                  style={executionActionButtonStyle}
+                  disabled={
+                    executionActionPendingKey ===
+                    `${executionActionKeyBase}:signal`
+                  }
+                  onClick={() =>
+                    void handleExecutionInteraction(
+                      activeExecutionInteraction,
+                      'signal',
+                    )
+                  }
+                >
+                  {executionActionPendingKey ===
+                  `${executionActionKeyBase}:signal`
+                    ? '发送中...'
+                    : '发送信号'}
+                </Button>
               ) : (
                 <Button
                   type="primary"
@@ -1417,8 +1625,29 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 </Typography.Text>
               </div>
               <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Service</Typography.Text>
+                <Typography.Text strong>
+                  {selectedExecutionDetail?.serviceId || 'n/a'}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Revision</Typography.Text>
+                <Typography.Text strong>
+                  {selectedExecutionDetail?.revisionId || 'n/a'}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
                 <Typography.Text type="secondary">Actor</Typography.Text>
                 <Typography.Text strong>{selectedExecutionActorId || 'n/a'}</Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">State Version</Typography.Text>
+                <Typography.Text strong>
+                  {selectedExecutionDetail?.stateVersion !== null &&
+                  selectedExecutionDetail?.stateVersion !== undefined
+                    ? `v${selectedExecutionDetail.stateVersion}`
+                    : 'n/a'}
+                </Typography.Text>
               </div>
               <div style={observeMetricCardStyle}>
                 <Typography.Text type="secondary">Started</Typography.Text>
@@ -1429,9 +1658,23 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 </Typography.Text>
               </div>
               <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Updated</Typography.Text>
+                <Typography.Text strong>
+                  {selectedExecutionDetail?.updatedAtUtc
+                    ? formatDateTime(selectedExecutionDetail.updatedAtUtc)
+                    : 'n/a'}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
                 <Typography.Text type="secondary">Prompt</Typography.Text>
                 <Typography.Text strong>
                   {trimObserveText(executionPromptPreview || 'No prompt yet.', 72)}
+                </Typography.Text>
+              </div>
+              <div style={observeMetricCardStyle}>
+                <Typography.Text type="secondary">Output</Typography.Text>
+                <Typography.Text strong>
+                  {trimObserveText(selectedExecutionDetail?.output || 'No output yet.', 72)}
                 </Typography.Text>
               </div>
             </div>
@@ -1482,22 +1725,73 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           >
             <div style={{ display: 'grid', gap: 12 }}>
               <Space wrap size={[8, 8]}>
-                <Tag color={executionLogCount > 0 ? 'green' : 'default'}>
-                  {executionLogCount > 0 ? 'graph + logs ready' : 'graph only'}
+                <Tag
+                  color={
+                    selectedExecutionDetail?.auditSource === 'run-audit'
+                      ? 'green'
+                      : 'default'
+                  }
+                >
+                  {selectedExecutionDetail?.auditSource === 'run-audit'
+                    ? 'run audit ready'
+                    : 'summary only'}
+                </Tag>
+                <Tag
+                  color={
+                    workflowGraphAvailable
+                      ? 'green'
+                      : currentImplementationKind === 'workflow'
+                        ? 'gold'
+                        : 'default'
+                  }
+                >
+                  {workflowGraphAvailable
+                    ? 'workflow graph ready'
+                    : currentImplementationKind === 'workflow'
+                      ? 'workflow graph unavailable'
+                      : 'workflow-only graph'}
                 </Tag>
                 <Tag color={baselineExecution ? 'blue' : 'default'}>
                   {baselineExecution ? 'baseline available' : 'baseline warming up'}
                 </Tag>
               </Space>
+              <div style={observeMetricGridStyle}>
+                <div style={observeMetricCardStyle}>
+                  <Typography.Text type="secondary">Definition Actor</Typography.Text>
+                  <Typography.Text strong>
+                    {selectedExecutionDetail?.definitionActorId || 'n/a'}
+                  </Typography.Text>
+                </div>
+                <div style={observeMetricCardStyle}>
+                  <Typography.Text type="secondary">Last Event</Typography.Text>
+                  <Typography.Text strong>
+                    {selectedExecutionDetail?.lastEventId || 'n/a'}
+                  </Typography.Text>
+                </div>
+                <div style={observeMetricCardStyle}>
+                  <Typography.Text type="secondary">Audit Updated</Typography.Text>
+                  <Typography.Text strong>
+                    {selectedExecutionDetail?.auditUpdatedAtUtc
+                      ? formatDateTime(selectedExecutionDetail.auditUpdatedAtUtc)
+                      : 'n/a'}
+                  </Typography.Text>
+                </div>
+              </div>
               <Typography.Text type="secondary">
-                {activeWorkflowDescription ||
-                  '当前 Observe 页只展示当前 member 的运行事实；契约与发布信息留在 Bind。'}
+                {selectedExecutionDetail
+                  ? `Selected run facts are coming from service ${trimObserveText(
+                      selectedExecutionDetail.serviceId,
+                    )}, revision ${trimObserveText(
+                      selectedExecutionDetail.revisionId,
+                    )}, actor ${trimObserveText(selectedExecutionDetail.actorId)}.`
+                  : activeWorkflowDescription ||
+                    '当前 Observe 页只展示当前 member 的运行事实；契约与发布信息留在 Bind。'}
               </Typography.Text>
               <Typography.Text type="secondary">
                 {baselineExecution
-                  ? `The compare baseline is ${baselineExecution.executionId}, started ${formatDateTime(
-                      baselineExecution.startedAtUtc,
-                    )}.`
+                  ? `The compare baseline is ${baselineExecution.executionId} on revision ${trimObserveText(
+                      baselineExecution.revisionId,
+                    )}, started ${formatDateTime(baselineExecution.startedAtUtc)}.`
                   : 'Observe can compare more meaningfully after the next run lands and a baseline exists.'}
               </Typography.Text>
             </div>
@@ -1600,29 +1894,46 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               position: 'relative',
             }}
           >
-            <GraphCanvas
-              height="100%"
-              bottomInset={0}
-              variant="studio"
-              nodes={decoratedExecutionNodes}
-              edges={decoratedExecutionEdges}
-              selectedNodeId={
-                activeExecutionLog?.stepId
-                  ? decoratedExecutionNodes.find(
-                      (node) => node.data.stepId === activeExecutionLog.stepId,
-                    )?.id
-                  : undefined
-              }
-              onNodeSelect={(nodeId) => {
-                const stepId =
-                  decoratedExecutionNodes.find((node) => node.id === nodeId)?.data.stepId ||
-                  '';
-                const logIndex = findExecutionLogIndexForStep(executionTrace, stepId);
-                if (logIndex !== null) {
-                  setActiveExecutionLogIndex(logIndex);
+            {workflowGraphAvailable ? (
+              <GraphCanvas
+                height="100%"
+                bottomInset={0}
+                variant="studio"
+                nodes={decoratedExecutionNodes}
+                edges={decoratedExecutionEdges}
+                selectedNodeId={
+                  activeExecutionLog?.stepId
+                    ? decoratedExecutionNodes.find(
+                        (node) => node.data.stepId === activeExecutionLog.stepId,
+                      )?.id
+                    : undefined
                 }
-              }}
-            />
+                onNodeSelect={(nodeId) => {
+                  const stepId =
+                    decoratedExecutionNodes.find((node) => node.id === nodeId)?.data.stepId ||
+                    '';
+                  const logIndex = findExecutionLogIndexForStep(executionTrace, stepId);
+                  if (logIndex !== null) {
+                    setActiveExecutionLogIndex(logIndex);
+                  }
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  alignItems: 'center',
+                  display: 'grid',
+                  height: '100%',
+                  padding: 24,
+                }}
+              >
+                <StudioCatalogEmptyPanel
+                  icon={<FileTextOutlined style={{ color: '#CBD5E1' }} />}
+                  title={workflowGraphFallback.title}
+                  copy={workflowGraphFallback.copy}
+                />
+              </div>
+            )}
           </div>
 
           {renderExecutionLogs(false)}

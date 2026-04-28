@@ -47,6 +47,22 @@ internal static class ChannelBotRegistrationStoreCommands
             },
             ct);
 
+    public static Task DispatchRepairScopeIdAsync(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort,
+        string registrationId,
+        string scopeId,
+        CancellationToken ct = default) =>
+        DispatchAsync(
+            actorRuntime,
+            dispatchPort,
+            new ChannelBotRepairScopeIdCommand
+            {
+                RegistrationId = registrationId ?? string.Empty,
+                ScopeId = scopeId ?? string.Empty,
+            },
+            ct);
+
     private static async Task DispatchAsync<TCommand>(
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,

@@ -77,7 +77,7 @@ internal static class AgentBuilderCardFlow
             try
             {
                 preferredGithubUsername = (await userConfigQueryPort.GetAsync(
-                    NormalizeScopeId(evt.RegistrationScopeId),
+                    ChannelUserConfigScope.FromInboundEvent(evt),
                     ct)).GithubUsername;
             }
             catch (OperationCanceledException)
@@ -594,9 +594,6 @@ internal static class AgentBuilderCardFlow
         var normalized = (value ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : normalized;
     }
-
-    private static string NormalizeScopeId(string? scopeId) =>
-        string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
 
     private static string FormatCreateSocialMediaResult(JsonElement root)
     {
