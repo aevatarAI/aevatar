@@ -5,6 +5,8 @@ using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using Xunit;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

@@ -9,6 +9,8 @@
       "src\\Aevatar.AI.LLMProviders.Tornado\\Aevatar.AI.LLMProviders.Tornado.csproj",
       "src\\Aevatar.AI.ToolProviders.MCP\\Aevatar.AI.ToolProviders.MCP.csproj",
       "src\\Aevatar.AI.ToolProviders.Skills\\Aevatar.AI.ToolProviders.Skills.csproj",
+      "src\\Aevatar.AI.ToolProviders.AgentCatalog\\Aevatar.AI.ToolProviders.AgentCatalog.csproj",
+      "src\\Aevatar.AI.ToolProviders.ChannelAdmin\\Aevatar.AI.ToolProviders.ChannelAdmin.csproj",
       "test\\Aevatar.AI.Tests\\Aevatar.AI.Tests.csproj"
     ]
   }

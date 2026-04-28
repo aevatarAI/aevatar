@@ -22,7 +22,6 @@ using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;

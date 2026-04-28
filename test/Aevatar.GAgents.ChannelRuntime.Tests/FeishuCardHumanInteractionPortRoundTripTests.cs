@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Xunit;
+using Aevatar.GAgents.Authoring.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

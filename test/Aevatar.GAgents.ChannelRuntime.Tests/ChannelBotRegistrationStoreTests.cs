@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

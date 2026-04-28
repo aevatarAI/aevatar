@@ -1,8 +1,11 @@
+using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Platform.Telegram;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +22,10 @@ public sealed class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         var result = services.AddChannelRuntime();
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+        services.AddChannelInteractiveReplyTools();
+        services.AddTelegramPlatform();
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
 
@@ -55,6 +62,9 @@ public sealed class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         services.AddChannelRuntime();
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+        services.AddChannelInteractiveReplyTools();
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
 
@@ -78,6 +88,10 @@ public sealed class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         var result = services.AddChannelRuntime(configuration);
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+        services.AddChannelInteractiveReplyTools();
+        services.AddTelegramPlatform();
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
 
