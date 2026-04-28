@@ -267,6 +267,32 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldStillDestroyActor_WhenIncomingRelayRemovalThrows()
+    {
+        // The incoming-relay removal targets the parent stream's topology — a
+        // transient stream-provider failure there must not abort the destroy +
+        // event-stream reset path that the cleanup is here to perform.
+        var eventStore = new InMemoryEventStore();
+        var projectionScopeActorId =
+            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store";
+        await AppendSingleEventAsync(eventStore, projectionScopeActorId);
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            [projectionScopeActorId] =
+                "Aevatar.CQRS.Projection.Core.Orchestration.ProjectionMaterializationScopeGAgent`1[[Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationMaterializationContext, Aevatar.GAgents.ChannelRuntime]], Aevatar.CQRS.Projection.Core",
+        });
+        var runtime = new RecordingActorRuntime();
+        var streamProvider = new ThrowingRelayStreamProvider("channel-bot-registration-store");
+        var service = CreateService(
+            typeProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec());
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.DestroyedActorIds.Should().Contain(projectionScopeActorId);
+        (await eventStore.GetVersionAsync(projectionScopeActorId)).Should().Be(0);
+    }
+
+    [Fact]
     public async Task StartAsync_ShouldFallBackToCatalogEvents_WhenReadModelDiscoveryThrows()
     {
         // Projection store unavailable (transient error) must NOT abort startup
@@ -557,7 +583,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             throw new NotSupportedException();
     }
 
-    private sealed class RecordingStreamProvider : IStreamProvider
+    private class RecordingStreamProvider : IStreamProvider
     {
         public List<(string Source, string Target)> RemovedRelays { get; } = [];
 
@@ -578,7 +604,41 @@ public sealed class RetiredActorCleanupHostedServiceTests
             });
         }
 
-        public IStream GetStream(string actorId) => new RecordingStream(actorId, RemovedRelays, _relaysBySource);
+        public virtual IStream GetStream(string actorId) => new RecordingStream(actorId, RemovedRelays, _relaysBySource);
+    }
+
+    private sealed class ThrowingRelayStreamProvider(string throwingStreamId) : RecordingStreamProvider
+    {
+        public override IStream GetStream(string actorId)
+        {
+            if (string.Equals(actorId, throwingStreamId, StringComparison.Ordinal))
+                return new ThrowingStream(actorId);
+            return base.GetStream(actorId);
+        }
+    }
+
+    private sealed class ThrowingStream(string streamId) : IStream
+    {
+        public string StreamId => streamId;
+
+        public Task ProduceAsync<T>(T message, CancellationToken ct = default)
+            where T : IMessage =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncDisposable> SubscribeAsync<T>(
+            Func<T, Task> handler,
+            CancellationToken ct = default)
+            where T : IMessage, new() =>
+            throw new NotSupportedException();
+
+        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
+            throw new InvalidOperationException("stream topology unavailable");
+
+        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("stream topology unavailable");
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+            throw new InvalidOperationException("stream topology unavailable");
     }
 
     private sealed class RecordingStream(

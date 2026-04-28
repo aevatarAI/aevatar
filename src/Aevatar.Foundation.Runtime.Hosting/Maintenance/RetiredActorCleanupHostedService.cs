@@ -158,12 +158,7 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
 
         if (!string.IsNullOrWhiteSpace(target.SourceStreamId))
-        {
-            await _streamProvider
-                .GetStream(target.SourceStreamId)
-                .RemoveRelayAsync(target.ActorId, ct)
-                .ConfigureAwait(false);
-        }
+            await CleanupIncomingRelayBestEffortAsync(spec, target, ct).ConfigureAwait(false);
 
         await CleanupOutgoingRelaysBestEffortAsync(spec, target.ActorId, ct).ConfigureAwait(false);
 
@@ -188,6 +183,31 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
             spec.SpecId,
             target.ActorId,
             runtimeTypeName);
+    }
+
+    private async Task CleanupIncomingRelayBestEffortAsync(
+        IRetiredActorSpec spec, RetiredActorTarget target, CancellationToken ct)
+    {
+        try
+        {
+            await _streamProvider
+                .GetStream(target.SourceStreamId!)
+                .RemoveRelayAsync(target.ActorId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Retired actor incoming stream relay removal failed and will be skipped. specId={SpecId} actorId={ActorId} sourceStreamId={SourceStreamId}",
+                spec.SpecId,
+                target.ActorId,
+                target.SourceStreamId);
+        }
     }
 
     private async Task CleanupOutgoingRelaysBestEffortAsync(IRetiredActorSpec spec, string actorId, CancellationToken ct)
