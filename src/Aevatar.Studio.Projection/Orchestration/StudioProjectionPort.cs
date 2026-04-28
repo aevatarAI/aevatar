@@ -14,7 +14,7 @@ namespace Aevatar.Studio.Projection.Orchestration;
 ///
 /// Mirror of
 /// <c>Aevatar.GAgentService.Governance.Projection.Orchestration.ServiceConfigurationProjectionPort</c>
-/// and <c>Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationProjectionPort</c>,
+/// and <c>Aevatar.GAgents.Channel.Runtime.ChannelBotRegistrationProjectionPort</c>,
 /// applied here to the Studio runtime lease.
 /// </summary>
 public sealed class StudioProjectionPort

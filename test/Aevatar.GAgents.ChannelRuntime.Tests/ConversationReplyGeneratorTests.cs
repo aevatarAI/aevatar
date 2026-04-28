@@ -1,9 +1,11 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Xunit;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -15,7 +17,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            relayOptions: new NyxIdRelayOptions
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 WebhookBaseUrl = "https://dev.aevatar.local/",
             });
@@ -53,7 +55,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            relayOptions: new NyxIdRelayOptions
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = "…",
             });
@@ -83,7 +85,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            relayOptions: new NyxIdRelayOptions
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = string.Empty,
             });
@@ -109,7 +111,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            relayOptions: new NyxIdRelayOptions
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = "…",
             });

@@ -5,6 +5,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Aevatar.GAgents.Device;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

@@ -7,6 +7,9 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Xunit;
+using Aevatar.AI.ToolProviders.ChannelAdmin;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package aevatar.gagents.device;
+
+option csharp_namespace = "Aevatar.GAgents.Device";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Device Registration (Actor-backed, #164 pattern) ───
+
+message DeviceRegistrationEntry {
+  string id = 1;
+  string scope_id = 2;                    // Maps to household-{scope_id} actor
+  string hmac_key = 3;                    // HMAC-SHA256 signing key for NyxID relay verification
+  string nyx_conversation_id = 4;         // NyxID conversation ID
+  string description = 5;                 // Human-readable label
+  google.protobuf.Timestamp created_at = 6;
+  // Soft-delete marker retained for projector watermark coordination
+  // (Channel RFC §7.1.1): the registration stays in state after unregister so
+  // the projector can emit a Tombstone verdict → IProjectionWriteDispatcher
+  // .DeleteAsync. Housekeeping cleans watermark-passed entries.
+  bool tombstoned = 7;
+  int64 tombstone_state_version = 8;
+}
+
+message DeviceRegistrationState {
+  repeated DeviceRegistrationEntry registrations = 1;
+}
+
+// Domain events for DeviceRegistrationGAgent
+message DeviceRegisteredEvent {
+  DeviceRegistrationEntry entry = 1;
+}
+
+message DeviceUnregisteredEvent {
+  string registration_id = 1;
+  int64 tombstone_state_version = 2;
+}
+
+// Commands dispatched to DeviceRegistrationGAgent via EventEnvelope
+message DeviceRegisterCommand {
+  string scope_id = 1;
+  string hmac_key = 2;
+  string nyx_conversation_id = 3;
+  string description = 4;
+}
+
+message DeviceUnregisterCommand {
+  string registration_id = 1;
+}
+
+message DeviceCompactTombstonesCommand {
+  int64 safe_state_version = 1;
+}
+
+message DeviceTombstonesCompactedEvent {
+  repeated string registration_ids = 1;
+  int64 safe_state_version = 2;
+}
+
+// Projection read model for device registrations
+message DeviceRegistrationDocument {
+  string id = 1;                          // Registration ID (= document key)
+  string scope_id = 2;
+  string hmac_key = 3;
+  string nyx_conversation_id = 4;
+  string description = 5;
+  int64 state_version = 6;
+  string last_event_id = 7;
+  google.protobuf.Timestamp updated_at_utc = 8;
+  string actor_id = 9;                    // Source actor ID
+}
