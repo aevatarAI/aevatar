@@ -414,6 +414,104 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldDestroyMidMigrationProjectionScope_AtNewScopeKey()
+    {
+        // Mid-migration deploys may have created the durable projection scope
+        // actor at the *new* scope key (UserAgentCatalog: user-agent-catalog-read-model)
+        // while still bound to the old ChannelRuntime materialization context.
+        // The retired-cleanup spec must target both the old and new scope keys
+        // so a single deploy auto-recovers without manual redis surgery.
+        var newScopeKeyActorId =
+            "projection.durable.scope:user-agent-catalog-read-model:agent-registry-store";
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, newScopeKeyActorId);
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            [newScopeKeyActorId] =
+                "Aevatar.CQRS.Projection.Core.Orchestration.ProjectionMaterializationScopeGAgent`1[[Aevatar.GAgents.ChannelRuntime.UserAgentCatalogMaterializationContext, Aevatar.GAgents.ChannelRuntime]], Aevatar.CQRS.Projection.Core",
+        });
+        var runtime = new RecordingActorRuntime();
+        var service = CreateService(
+            typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateScheduledSpec());
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.DestroyedActorIds.Should().Contain(newScopeKeyActorId);
+        (await eventStore.GetVersionAsync(newScopeKeyActorId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldResetStreamPubSub_ForEachCleanedActor()
+    {
+        // Stream pub/sub state (Orleans PubSubRendezvousGrain) lives outside the
+        // event store and the GAgent. Skipping its reset leaves stale rendezvous
+        // entries behind, which then block the next silo wave's
+        // RegisterAsStreamProducer with InconsistentStateException — the bug
+        // this hosted service is meant to prevent. Exercise that the cleanup
+        // calls the IStreamPubSubMaintenance hook for every cleaned actor.
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        await AppendSingleEventAsync(
+            eventStore,
+            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["channel-bot-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+            ["projection.durable.scope:channel-bot-registration:channel-bot-registration-store"] =
+                "Aevatar.CQRS.Projection.Core.Orchestration.ProjectionMaterializationScopeGAgent`1[[Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationMaterializationContext, Aevatar.GAgents.ChannelRuntime]], Aevatar.CQRS.Projection.Core",
+        });
+        var runtime = new RecordingActorRuntime();
+        var pubSub = new RecordingStreamPubSubMaintenance();
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
+        serviceCollection.AddSingleton<IActorTypeProbe>(typeProbe);
+        serviceCollection.AddSingleton<IStreamPubSubMaintenance>(pubSub);
+        var service = CreateService(
+            typeProbe,
+            runtime,
+            new RecordingStreamProvider(),
+            eventStore,
+            CreateChannelRuntimeSpec(),
+            serviceCollection.BuildServiceProvider());
+
+        await service.StartAsync(CancellationToken.None);
+
+        pubSub.ResetActorIds.Should().Contain("channel-bot-registration-store");
+        pubSub.ResetActorIds.Should().Contain(
+            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store");
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldContinue_WhenStreamPubSubResetThrows()
+    {
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["channel-bot-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+        });
+        var runtime = new RecordingActorRuntime();
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
+        serviceCollection.AddSingleton<IActorTypeProbe>(typeProbe);
+        serviceCollection.AddSingleton<IStreamPubSubMaintenance>(new ThrowingStreamPubSubMaintenance());
+        var service = CreateService(
+            typeProbe,
+            runtime,
+            new RecordingStreamProvider(),
+            eventStore,
+            CreateChannelRuntimeSpec(),
+            serviceCollection.BuildServiceProvider());
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
+        (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
+    }
+
+    [Fact]
     public async Task StartAsync_ShouldRunEachRegisteredSpec()
     {
         var eventStore = new InMemoryEventStore();
@@ -764,5 +862,23 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class RecordingStreamPubSubMaintenance : IStreamPubSubMaintenance
+    {
+        public List<string> ResetActorIds { get; } = [];
+
+        public Task<bool> ResetActorStreamPubSubAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ResetActorIds.Add(actorId);
+            return Task.FromResult(true);
+        }
+    }
+
+    private sealed class ThrowingStreamPubSubMaintenance : IStreamPubSubMaintenance
+    {
+        public Task<bool> ResetActorStreamPubSubAsync(string actorId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("pub/sub state reset failed");
     }
 }
