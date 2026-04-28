@@ -40,6 +40,7 @@ public sealed class StudioMemberService : IStudioMemberService
 
     private readonly IStudioMemberCommandPort _memberCommandPort;
     private readonly IStudioMemberQueryPort _memberQueryPort;
+    private readonly IStudioTeamQueryPort _teamQueryPort;
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceCommandPort _serviceCommandPort;
@@ -47,12 +48,14 @@ public sealed class StudioMemberService : IStudioMemberService
     public StudioMemberService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort,
+        IStudioTeamQueryPort teamQueryPort,
         IScopeBindingCommandPort scopeBindingCommandPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceCommandPort serviceCommandPort)
     {
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
+        _teamQueryPort = teamQueryPort ?? throw new ArgumentNullException(nameof(teamQueryPort));
         _scopeBindingCommandPort = scopeBindingCommandPort
             ?? throw new ArgumentNullException(nameof(scopeBindingCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort
@@ -61,21 +64,23 @@ public sealed class StudioMemberService : IStudioMemberService
             ?? throw new ArgumentNullException(nameof(serviceCommandPort));
     }
 
-    public Task<StudioMemberSummaryResponse> CreateAsync(
+    public async Task<StudioMemberSummaryResponse> CreateAsync(
         string scopeId,
         CreateStudioMemberRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // Validation lives at this Application boundary (CLAUDE.md
-        // `严格分层 / 上层依赖抽象`). The Projection-layer command port is
-        // an interchangeable transport; if it ever swaps, the bounds must
-        // not silently disappear with it. Callers receive a single typed
-        // error path here regardless of which command port is wired in.
         StudioMemberCreateRequestValidator.Validate(request);
 
-        return _memberCommandPort.CreateAsync(scopeId, request, ct);
+        if (!string.IsNullOrEmpty(request.TeamId))
+        {
+            var team = await _teamQueryPort.GetAsync(scopeId, request.TeamId, ct);
+            if (team == null)
+                throw new StudioTeamNotFoundException(scopeId, request.TeamId);
+        }
+
+        return await _memberCommandPort.CreateAsync(scopeId, request, ct);
     }
 
     public Task<StudioMemberRosterResponse> ListAsync(
@@ -269,6 +274,74 @@ public sealed class StudioMemberService : IStudioMemberService
             RevisionId: normalizedRevisionId,
             Status: MemberRevisionLifecycleStatusNames.Retired);
     }
+
+    public async Task<StudioMemberDetailResponse> UpdateAsync(
+        string scopeId,
+        string memberId,
+        UpdateStudioMemberRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Resolve current state first — UpdateAsync only touches members that
+        // already exist (mirrors GetBindingAsync semantics for missing members).
+        // Knowing the current team_id also lets us shape the reassignment
+        // event correctly: from = current team, to = patch's intent.
+        var currentDetail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+
+        if (request.TeamId.HasValue)
+        {
+            var requested = request.TeamId.Value;
+
+            // Application-layer guard: empty / whitespace strings on the wire
+            // are rejected before reaching the actor protocol (ADR-0017 §Q6).
+            if (requested != null && string.IsNullOrWhiteSpace(requested))
+            {
+                throw new InvalidOperationException(
+                    "teamId must not be empty when present " +
+                    "(use null in JSON body to mean 'unassign').");
+            }
+
+            // Read the member's current team_id off the read model. The
+            // detail response doesn't surface team_id today (it is added by
+            // the team-aware response shape introduced for the team API);
+            // route through the projection document directly via the
+            // existing summary contract — for the v1 wiring we keep the
+            // application service stateless and let the actor reject any
+            // mismatched from_team_id (which would surface as a typed 409
+            // / 400 from the dispatch path).
+            var currentTeamId = ResolveCurrentTeamId(currentDetail);
+
+            // No-op when the patch already matches the current state.
+            // Compare on the *normalized* representation so a trailing-space
+            // teamId in either side doesn't trip a spurious dispatch.
+            var requestedNormalized = requested?.Trim();
+            if (string.Equals(currentTeamId, requestedNormalized, StringComparison.Ordinal))
+            {
+                return currentDetail;
+            }
+
+            await _memberCommandPort.ReassignTeamAsync(
+                scopeId,
+                memberId,
+                fromTeamId: currentTeamId,
+                toTeamId: requestedNormalized,
+                ct);
+        }
+
+        // Re-read the member detail so callers see the post-update state.
+        return await GetAsync(scopeId, memberId, ct);
+    }
+
+    /// <summary>
+    /// Resolves the member's current team assignment from the summary
+    /// (ADR-0017). The query port populates <c>TeamId</c> from the read
+    /// model document; null means the member is currently unassigned and
+    /// the reassignment event should carry an absent <c>from_team_id</c>.
+    /// </summary>
+    private static string? ResolveCurrentTeamId(StudioMemberDetailResponse detail) =>
+        detail.Summary.TeamId;
 
     /// <summary>
     /// Resolves the published service the member is currently bound to in

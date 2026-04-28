@@ -72,6 +72,14 @@ public sealed class StudioMemberCurrentStateProjector
         ApplyImplementationRef(document, state.ImplementationRef);
         ApplyLastBinding(document, state.LastBinding);
 
+        // Team membership (ADR-0017). Mirror the actor's optional team_id
+        // into the document — absence means "unassigned" on both the actor
+        // and the read model side.
+        if (state.HasTeamId)
+        {
+            document.TeamId = state.TeamId;
+        }
+
         await _writeDispatcher.UpsertAsync(document, ct);
     }
 
