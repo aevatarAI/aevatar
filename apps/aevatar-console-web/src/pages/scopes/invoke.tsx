@@ -57,9 +57,9 @@ import {
 import { studioApi } from '@/shared/studio/api';
 import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  getStudioScopeBindingCurrentRevision,
+  describeStudioDefaultRouteTargetRevisionContext,
+  describeStudioDefaultRouteTargetRevisionTarget,
+  getStudioDefaultRouteTargetCurrentRevision,
 } from '@/shared/studio/models';
 import { buildStudioWorkflowWorkspaceRoute } from '@/shared/studio/navigation';
 import {
@@ -527,10 +527,10 @@ const ScopeInvokePage: React.FC = () => {
   }, [chatMessages]);
 
   const scopeId = activeDraft.scopeId.trim();
-  const bindingQuery = useQuery({
+  const defaultRouteQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ['scopes', 'binding', scopeId],
-    queryFn: () => studioApi.getScopeBinding(scopeId),
+    queryKey: ['scopes', 'default-route', scopeId],
+    queryFn: () => studioApi.getDefaultRouteTarget(scopeId),
   });
   const scopeServicesQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -551,11 +551,13 @@ const ScopeInvokePage: React.FC = () => {
     () =>
       buildPublishedServiceCatalog(
         scopeServicesQuery.data ?? [],
-        bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
+        defaultRouteQuery.data?.available
+          ? defaultRouteQuery.data.serviceId
+          : undefined,
       ),
     [
-      bindingQuery.data?.available,
-      bindingQuery.data?.serviceId,
+      defaultRouteQuery.data?.available,
+      defaultRouteQuery.data?.serviceId,
       scopeServicesQuery.data,
     ],
   );
@@ -564,8 +566,8 @@ const ScopeInvokePage: React.FC = () => {
       scopeId
         ? buildScopeConsoleServiceOptions(
             publishedServices,
-            bindingQuery.data?.available
-              ? bindingQuery.data.serviceId
+            defaultRouteQuery.data?.available
+              ? defaultRouteQuery.data.serviceId
               : undefined,
             {
               sortBy: 'serviceId',
@@ -573,8 +575,8 @@ const ScopeInvokePage: React.FC = () => {
           )
         : [],
     [
-      bindingQuery.data?.available,
-      bindingQuery.data?.serviceId,
+      defaultRouteQuery.data?.available,
+      defaultRouteQuery.data?.serviceId,
       publishedServices,
       scopeId,
     ],
@@ -597,7 +599,9 @@ const ScopeInvokePage: React.FC = () => {
 
     const preferredServiceId = getPreferredScopeConsoleServiceId(
       services,
-      bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
+      defaultRouteQuery.data?.available
+        ? defaultRouteQuery.data.serviceId
+        : undefined,
     );
     const hasSelectedService =
       selectedServiceId &&
@@ -617,7 +621,7 @@ const ScopeInvokePage: React.FC = () => {
       setSelectedServiceId(preferredServiceId);
     }
   }, [
-    bindingQuery.data?.serviceId,
+    defaultRouteQuery.data?.serviceId,
     preserveEmptySelection,
     selectedServiceId,
     services,
@@ -657,18 +661,18 @@ const ScopeInvokePage: React.FC = () => {
   const isChatPlayground = Boolean(
     selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
-  const currentBindingRevision = getStudioScopeBindingCurrentRevision(
-    bindingQuery.data,
+  const currentDefaultRouteRevision = getStudioDefaultRouteTargetCurrentRevision(
+    defaultRouteQuery.data,
   );
-  const currentBindingTarget = describeStudioScopeBindingRevisionTarget(
-    currentBindingRevision,
+  const currentDefaultRouteTarget = describeStudioDefaultRouteTargetRevisionTarget(
+    currentDefaultRouteRevision,
   );
-  const currentBindingContext = describeStudioScopeBindingRevisionContext(
-    currentBindingRevision,
+  const currentDefaultRouteContext = describeStudioDefaultRouteTargetRevisionContext(
+    currentDefaultRouteRevision,
   );
-  const currentBindingActor =
-    currentBindingRevision?.primaryActorId ||
-    bindingQuery.data?.primaryActorId ||
+  const currentDefaultRouteActor =
+    currentDefaultRouteRevision?.primaryActorId ||
+    defaultRouteQuery.data?.primaryActorId ||
     '';
 
   useEffect(() => {
@@ -1143,9 +1147,9 @@ const ScopeInvokePage: React.FC = () => {
   );
   const observedEventCount = observedEvents.length;
 
-  const bindingStatus =
-    bindingQuery.data?.deploymentStatus ||
-    (bindingQuery.data?.available ? 'ready' : 'missing');
+  const defaultRouteStatus =
+    defaultRouteQuery.data?.deploymentStatus ||
+    (defaultRouteQuery.data?.available ? 'ready' : 'missing');
 
   return (
     <AevatarPageShell pageHeaderRender={false} title="Legacy Invoke Lab">
@@ -1308,15 +1312,16 @@ const ScopeInvokePage: React.FC = () => {
                 title={
                   <PaneTitle
                     icon={<LinkOutlined />}
-                    subtitle="Published binding visible beside the playground."
-                    title="Current Binding"
+                    subtitle="Current default route visible beside the playground."
+                    title="Current Default Route"
                   />
                 }
               >
-                {!bindingQuery.data?.available || !currentBindingRevision ? (
+                {!defaultRouteQuery.data?.available ||
+                !currentDefaultRouteRevision ? (
                   <Alert
                     showIcon
-                    title="No published default binding is active for this team yet."
+                    title="No published default route is active for this team yet."
                     type="info"
                   />
                 ) : (
@@ -1325,31 +1330,31 @@ const ScopeInvokePage: React.FC = () => {
                       <Space size={[8, 8]} wrap>
                         <AevatarStatusTag
                           domain="governance"
-                          status={bindingStatus}
+                          status={defaultRouteStatus}
                         />
                         <Typography.Text strong>
-                          {bindingQuery.data.displayName ||
-                            bindingQuery.data.serviceId}
+                          {defaultRouteQuery.data.displayName ||
+                            defaultRouteQuery.data.serviceId}
                         </Typography.Text>
                       </Space>
                       <MetricRow
                         icon={<LinkOutlined />}
                         label="Target"
-                        value={currentBindingTarget}
+                        value={currentDefaultRouteTarget}
                       />
                       <MetricRow
                         icon={<CodeOutlined />}
                         label="Revision"
-                        value={currentBindingRevision.revisionId}
+                        value={currentDefaultRouteRevision.revisionId}
                       />
                       <MetricRow
                         icon={<DeploymentUnitOutlined />}
                         label="Actor"
-                        value={currentBindingActor || 'n/a'}
+                        value={currentDefaultRouteActor || 'n/a'}
                       />
-                      {currentBindingContext ? (
+                      {currentDefaultRouteContext ? (
                         <Typography.Text type="secondary">
-                          {currentBindingContext}
+                          {currentDefaultRouteContext}
                         </Typography.Text>
                       ) : null}
                       <Button
@@ -1358,10 +1363,10 @@ const ScopeInvokePage: React.FC = () => {
                             buildRuntimeGAgentsHref({
                               scopeId,
                               actorId:
-                                currentBindingRevision.primaryActorId ||
+                                currentDefaultRouteRevision.primaryActorId ||
                                 undefined,
                               actorTypeName:
-                                currentBindingRevision.staticActorTypeName ||
+                                currentDefaultRouteRevision.staticActorTypeName ||
                                 undefined,
                             }),
                           )

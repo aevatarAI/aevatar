@@ -31,12 +31,13 @@ export type StepExecutionState = {
 };
 
 export type ExecutionInteractionState = {
-  readonly kind: 'human_input' | 'human_approval';
+  readonly kind: 'human_input' | 'human_approval' | 'wait_signal';
   readonly runId: string;
   readonly stepId: string;
   readonly prompt: string;
   readonly timeoutSeconds: number | null;
   readonly variableName: string;
+  readonly signalName: string;
 };
 
 export type ExecutionTrace = {
@@ -113,7 +114,11 @@ function normalizeExecutionInteractionKind(
   value: unknown,
 ): ExecutionInteractionState['kind'] | null {
   const text = String(value || '').trim().toLowerCase();
-  if (text === 'human_input' || text === 'human_approval') {
+  if (
+    text === 'human_input' ||
+    text === 'human_approval' ||
+    text === 'wait_signal'
+  ) {
     return text;
   }
 
@@ -254,12 +259,16 @@ export function buildExecutionTrace(
       continue;
     }
 
-    if (customName === 'aevatar.human_input.request') {
+    if (
+      customName === 'aevatar.human_input.request' ||
+      customName === 'aevatar.wait_signal.request'
+    ) {
       const stepId = String(customPayload?.stepId || '').trim();
       const runId = String(customPayload?.runId || '').trim();
-      const interactionKind = normalizeExecutionInteractionKind(
-        customPayload?.suspensionType,
-      );
+      const interactionKind =
+        customName === 'aevatar.wait_signal.request'
+          ? 'wait_signal'
+          : normalizeExecutionInteractionKind(customPayload?.suspensionType);
       if (!stepId || !runId || !interactionKind) {
         continue;
       }
@@ -277,6 +286,7 @@ export function buildExecutionTrace(
         prompt: String(customPayload?.prompt || '').trim(),
         timeoutSeconds,
         variableName: String(customPayload?.variableName || '').trim(),
+        signalName: String(customPayload?.signalName || '').trim(),
       };
 
       logs.push({
@@ -284,9 +294,17 @@ export function buildExecutionTrace(
         title:
           interactionKind === 'human_approval'
             ? `${stepId} waiting for approval`
+            : interactionKind === 'wait_signal'
+              ? `${stepId} waiting for signal`
             : `${stepId} waiting for input`,
         meta: [
-          interactionKind === 'human_approval' ? 'human approval' : 'human input',
+          interactionKind === 'human_approval'
+            ? 'human approval'
+            : interactionKind === 'wait_signal'
+              ? `wait signal${
+                  interaction.signalName ? ` ${interaction.signalName}` : ''
+                }`
+              : 'human input',
           interaction.variableName ? `variable ${interaction.variableName}` : null,
           timeoutSeconds ? `timeout ${timeoutSeconds}s` : null,
         ]
@@ -367,10 +385,18 @@ export function buildExecutionTrace(
         title:
           interactionKind === 'human_approval'
             ? `${stepId} ${approved ? 'approved' : 'rejected'}`
+            : interactionKind === 'wait_signal'
+              ? `${stepId} signal sent`
             : `${stepId} input submitted`,
         meta:
           interactionKind === 'human_approval'
             ? `human approval · ${approved ? 'approved' : 'rejected'}`
+            : interactionKind === 'wait_signal'
+              ? `wait signal${
+                  String(customPayload?.signalName || '').trim()
+                    ? ` · ${String(customPayload?.signalName || '').trim()}`
+                    : ''
+                }`
             : 'human input submitted',
         previewText: buildExecutionLogPreview(customPayload?.userInput),
         clipboardText: buildExecutionLogText(customPayload?.userInput),

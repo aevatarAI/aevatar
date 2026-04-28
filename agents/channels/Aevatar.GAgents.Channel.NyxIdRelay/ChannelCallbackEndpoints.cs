@@ -241,7 +241,11 @@ public static class ChannelCallbackEndpoints
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Channel registration query failed before dispatching a manual rebuild");
-            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side observation is currently unavailable; registrations may still refresh asynchronously.";
+            // Surface a known `unavailable` enum value (issue #391 review): callers
+            // must always be able to branch on backfill_status, especially when
+            // the read side is degraded.
+            backfill = ChannelBotRegistrationScopeBackfill.Unavailable(ex.Message);
+            note = $"Projection rebuild dispatched from authoritative channel-bot-registration-store state. {backfill.Note}";
         }
 
         await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
@@ -258,7 +262,13 @@ public static class ChannelCallbackEndpoints
             actor_id = ChannelBotRegistrationGAgent.WellKnownId,
             observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
             empty_scope_registrations_observed = backfill?.EmptyScopeRegistrationsObserved,
-            empty_scope_registrations_backfilled = backfill?.BackfilledRegistrations,
+            empty_scope_registrations_backfilled = backfill?.RepairCommandsDispatched,
+            // Machine-readable backfill outcome so CLI/UI callers do not misread
+            // a 202 rebuild dispatch as a successful backfill (issue #391). The
+            // catch path above guarantees a non-null value even when the read
+            // side throws.
+            backfill_status = backfill?.Status.ToWireString(),
+            warnings = backfill?.Warnings ?? Array.Empty<string>(),
             note,
         });
     }

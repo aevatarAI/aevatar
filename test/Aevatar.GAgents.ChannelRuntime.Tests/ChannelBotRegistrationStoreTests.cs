@@ -111,8 +111,10 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRegister_RejectsLarkRegistrationWithoutScopeId()
+    public async Task HandleRegister_RejectsLarkRegistrationWithoutScopeId_AndPersistsRejectionEvent()
     {
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
         await _agent.HandleRegister(new ChannelBotRegisterCommand
         {
             Platform = "lark",
@@ -121,6 +123,10 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxAgentApiKeyId = "key-1",
         });
 
+        // Audit event recorded for the contract break (issue #391); the
+        // registration set stays empty because the rejection is a no-op
+        // transition.
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
         _agent.State.Registrations.Should().BeEmpty();
     }
 
@@ -168,6 +174,99 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         });
 
         _agent.State.Registrations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRepairScopeId_PreservesCreatedAt_WhenRewritingScope()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-original",
+            RequestedId = "reg-1",
+            NyxAgentApiKeyId = "key-1",
+        });
+
+        var originalCreatedAt = _agent.State.Registrations[0].CreatedAt;
+        originalCreatedAt.Should().NotBeNull();
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
+        {
+            RegistrationId = "reg-1",
+            ScopeId = "scope-repaired",
+        });
+
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
+        var entry = _agent.State.Registrations.Should().ContainSingle().Subject;
+        entry.ScopeId.Should().Be("scope-repaired");
+        entry.CreatedAt.Should().Be(originalCreatedAt);
+        entry.Tombstoned.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleRepairScopeId_IsIdempotent_WhenScopeUnchanged()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            RequestedId = "reg-1",
+        });
+
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
+        {
+            RegistrationId = "reg-1",
+            ScopeId = "scope-1",
+        });
+
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
+    }
+
+    [Fact]
+    public async Task HandleRepairScopeId_IgnoresTombstonedRegistration()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            RequestedId = "reg-1",
+        });
+        await _agent.HandleUnregister(new ChannelBotUnregisterCommand
+        {
+            RegistrationId = "reg-1",
+        });
+
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
+        {
+            RegistrationId = "reg-1",
+            ScopeId = "scope-2",
+        });
+
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
+        _agent.State.Registrations[0].ScopeId.Should().Be("scope-1");
+        _agent.State.Registrations[0].Tombstoned.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleRepairScopeId_IgnoresMissingRegistration()
+    {
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
+        {
+            RegistrationId = "reg-missing",
+            ScopeId = "scope-1",
+        });
+
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
     }
 
     [Fact]

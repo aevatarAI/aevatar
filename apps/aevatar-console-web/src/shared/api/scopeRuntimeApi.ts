@@ -1270,6 +1270,24 @@ export const scopeRuntimeApi = {
     );
   },
 
+  listMemberRuns(
+    scopeId: string,
+    memberId: string,
+    options?: {
+      take?: number;
+    },
+  ): Promise<ScopeServiceRunCatalogSnapshot> {
+    return requestJson(
+      withQuery(
+        `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs`,
+        {
+          take: options?.take,
+        },
+      ),
+      decodeScopeServiceRunCatalogSnapshot,
+    );
+  },
+
   getServiceRunAudit(
     scopeId: string,
     serviceId: string,
@@ -1281,6 +1299,25 @@ export const scopeRuntimeApi = {
     return requestJson(
       withQuery(
         `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/runs/${encodeURIComponent(runId)}/audit`,
+        {
+          actorId: options?.actorId?.trim(),
+        },
+      ),
+      decodeScopeServiceRunAuditSnapshot,
+    );
+  },
+
+  getMemberRunAudit(
+    scopeId: string,
+    memberId: string,
+    runId: string,
+    options?: {
+      actorId?: string;
+    },
+  ): Promise<ScopeServiceRunAuditSnapshot> {
+    return requestJson(
+      withQuery(
+        `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs/${encodeURIComponent(runId)}/audit`,
         {
           actorId: options?.actorId?.trim(),
         },

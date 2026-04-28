@@ -16,8 +16,11 @@ internal static class ChannelBotRegistrationLegacyAliases
     internal const string UnregisterCommandProto = ProtoPrefix + "ChannelBotUnregisterCommand";
     internal const string RebuildProjectionCommandProto = ProtoPrefix + "ChannelBotRebuildProjectionCommand";
     internal const string CompactTombstonesCommandProto = ProtoPrefix + "ChannelBotCompactTombstonesCommand";
+    internal const string RepairScopeIdCommandProto = ProtoPrefix + "ChannelBotRepairScopeIdCommand";
     internal const string ProjectionRebuildRequestedEventProto = ProtoPrefix + "ChannelBotProjectionRebuildRequestedEvent";
     internal const string TombstonesCompactedEventProto = ProtoPrefix + "ChannelBotTombstonesCompactedEvent";
+    internal const string RegistrationRejectedEventProto = ProtoPrefix + "ChannelBotRegistrationRejectedEvent";
+    internal const string ScopeIdRepairedEventProto = ProtoPrefix + "ChannelBotScopeIdRepairedEvent";
     internal const string ChannelInboundEventProto = ProtoPrefix + "ChannelInboundEvent";
 
     internal const string StoreStateClr = ClrPrefix + "ChannelBotRegistrationStoreState";
@@ -51,11 +54,20 @@ public sealed partial class ChannelBotRebuildProjectionCommand;
 [LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.CompactTombstonesCommandProto)]
 public sealed partial class ChannelBotCompactTombstonesCommand;
 
+[LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.RepairScopeIdCommandProto)]
+public sealed partial class ChannelBotRepairScopeIdCommand;
+
 [LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.ProjectionRebuildRequestedEventProto)]
 public sealed partial class ChannelBotProjectionRebuildRequestedEvent;
 
 [LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.TombstonesCompactedEventProto)]
 public sealed partial class ChannelBotTombstonesCompactedEvent;
+
+[LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.RegistrationRejectedEventProto)]
+public sealed partial class ChannelBotRegistrationRejectedEvent;
+
+[LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.ScopeIdRepairedEventProto)]
+public sealed partial class ChannelBotScopeIdRepairedEvent;
 
 [LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.ChannelInboundEventProto)]
 public sealed partial class ChannelInboundEvent;

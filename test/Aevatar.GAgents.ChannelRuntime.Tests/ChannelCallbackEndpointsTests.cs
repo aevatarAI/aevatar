@@ -213,7 +213,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleRebuildRegistrationsAsync_DispatchesRefreshCommand()
+    public async Task HandleRebuildRegistrationsAsync_RepairsScopeIdInPlaceAndDispatches()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
@@ -256,8 +256,12 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("\"status\":\"accepted\"");
         response.Body.Should().Contain("\"observed_registrations_before_rebuild\":1");
         response.Body.Should().Contain("\"empty_scope_registrations_backfilled\":1");
+        response.Body.Should().Contain("\"backfill_status\":\"dispatched\"");
+        response.Body.Should().Contain("\"warnings\":[]");
         capturedEnvelopes.Should().HaveCount(2);
-        capturedEnvelopes[0].Payload.Unpack<ChannelBotRegisterCommand>().ScopeId.Should().Be("scope-1");
+        var repair = capturedEnvelopes[0].Payload.Unpack<ChannelBotRepairScopeIdCommand>();
+        repair.RegistrationId.Should().Be("reg-1");
+        repair.ScopeId.Should().Be("scope-1");
         capturedEnvelopes[1].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
         verifier.Calls.Should().ContainSingle()
             .Which.Should().Be(("test-token", "scope-1", "key-1"));
@@ -307,6 +311,7 @@ public sealed class ChannelCallbackEndpointsTests
 
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("\"empty_scope_registrations_backfilled\":0");
+        response.Body.Should().Contain("\"backfill_status\":\"rejected\"");
         response.Body.Should().Contain("ownership_denied");
         capturedEnvelopes.Should().ContainSingle();
         capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
@@ -352,8 +357,54 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("\"empty_scope_registrations_observed\":1");
         response.Body.Should().Contain("\"empty_scope_registrations_backfilled\":0");
+        response.Body.Should().Contain("\"backfill_status\":\"skipped\"");
         response.Body.Should().Contain("pass registration_id");
         capturedEnvelopes.Should().HaveCount(1);
+        capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
+    }
+
+    [Fact]
+    public async Task HandleRebuildRegistrationsAsync_ReportsNotRequired_WhenNoEmptyScopeRegistrations()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-1",
+                    Platform = "lark",
+                    ScopeId = "scope-1",
+                    NyxAgentApiKeyId = "key-1",
+                },
+            ]));
+
+        List<EventEnvelope> capturedEnvelopes = [];
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var result = await InvokeAsync(
+            "HandleRebuildRegistrationsAsync",
+            CreateHttpContext("scope-1"),
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime,
+            queryPort,
+            (INyxRelayApiKeyOwnershipVerifier?)null,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("\"backfill_status\":\"not_required\"");
+        response.Body.Should().Contain("\"warnings\":[]");
+        response.Body.Should().Contain("\"empty_scope_registrations_observed\":0");
+        capturedEnvelopes.Should().ContainSingle();
         capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("http_api_manual_rebuild");
     }
 
@@ -443,7 +494,8 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("\"status\":\"accepted\"");
         response.Body.Should().Contain("\"observed_registrations_before_rebuild\":null");
-        response.Body.Should().Contain("Query-side observation is currently unavailable");
+        response.Body.Should().Contain("\"backfill_status\":\"unavailable\"");
+        response.Body.Should().Contain("projection reader unavailable");
         capturedEnvelope.Should().NotBeNull();
     }
 
