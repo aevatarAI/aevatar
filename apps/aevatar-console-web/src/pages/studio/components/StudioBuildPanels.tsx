@@ -1962,6 +1962,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const leaveResolverRef = React.useRef<((value: boolean) => void) | null>(null);
   const saveObservationTimerRef = React.useRef<number | null>(null);
   const saveObservationTokenRef = React.useRef(0);
+  const activeScriptIdRef = React.useRef('');
   const availableScripts = React.useMemo(
     () =>
       (scriptsQuery.data ?? []).filter(
@@ -1994,6 +1995,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     pendingScriptDetail ||
     availableScripts[0] ||
     null;
+  activeScriptIdRef.current = activeScript?.script?.scriptId || '';
   const activeScriptIsDraft = Boolean(pendingScriptDetail && activeScript === pendingScriptDetail);
   const activeScriptIsObserved = Boolean(
     selectedObservedAppliedScript && activeScript === selectedObservedAppliedScript,
@@ -2078,8 +2080,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   React.useEffect(
     () => () => {
       cancelSaveObservationPoll();
+      onScriptBuildStateChange?.(null);
     },
-    [cancelSaveObservationPoll],
+    [cancelSaveObservationPoll, onScriptBuildStateChange],
   );
 
   React.useEffect(() => {
@@ -2131,9 +2134,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const hasActiveScript = Boolean(activeScript?.script?.scriptId);
   const lifecycleStatus = !activeScript?.script?.scriptId
     ? 'No script'
-    : activeScriptIsDraft
-      ? 'Draft'
-      : isDirty
+    : isDirty && effectiveSaveStatus !== 'failed'
         ? 'Unsaved edits'
         : saveObservationStatus === 'accepted' || effectiveSaveStatus === 'accepted'
           ? 'Save accepted'
@@ -2141,9 +2142,11 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             ? 'Waiting for catalog'
             : effectiveSaveStatus === 'failed'
               ? 'Save needs attention'
-              : scriptReadyToBind
-                ? 'Catalog applied'
-                : 'Catalog script';
+              : activeScriptIsDraft
+                ? 'Draft'
+                : scriptReadyToBind
+                  ? 'Catalog applied'
+                  : 'Catalog script';
   const lifecycleStatusColor =
     lifecycleStatus === 'Catalog applied'
       ? 'green'
@@ -2170,6 +2173,14 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             : 'Save revision';
   const saveObservationInFlight =
     saveObservationStatus === 'accepted' || saveObservationStatus === 'pending';
+  const saveNoticeType =
+    saveObservationStatus === 'applied'
+      ? 'success'
+      : saveObservationStatus === 'accepted'
+        ? 'info'
+        : saveObservationStatus === 'failed'
+          ? 'error'
+          : 'warning';
   const saveDisabled = Boolean(
     !activeScript?.script?.scriptId ||
       validationPending ||
@@ -2231,6 +2242,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 
   const commitScriptPackage = React.useCallback(
     (nextPackage: typeof scriptPackage, nextSelectedFilePath?: string) => {
+      cancelSaveObservationPoll();
       setScriptPackage(nextPackage);
       if (nextSelectedFilePath) {
         setSelectedFilePath(nextSelectedFilePath);
@@ -2248,7 +2260,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         });
       }
     },
-    [activeScriptIsDraft, onPendingScriptDraftChange, pendingScriptDraft],
+    [activeScriptIsDraft, cancelSaveObservationPoll, onPendingScriptDraftChange, pendingScriptDraft],
   );
 
   const handleValidate = React.useCallback(async () => {
@@ -2314,11 +2326,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       if (!scopeId) {
         return;
       }
+      const observedScriptId = accepted.acceptedScript.scriptId;
 
       try {
         const observation = await scriptsApi.observeSaveScript(
           scopeId,
-          accepted.acceptedScript.scriptId,
+          observedScriptId,
           {
             revisionId: accepted.acceptedScript.revisionId,
             definitionActorId: accepted.acceptedScript.definitionActorId,
@@ -2328,7 +2341,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             acceptedAt: accepted.acceptedScript.acceptedAt,
           },
         );
-        if (saveObservationTokenRef.current !== token) {
+        if (
+          saveObservationTokenRef.current !== token ||
+          activeScriptIdRef.current !== observedScriptId
+        ) {
           return;
         }
 
@@ -2376,7 +2392,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           );
         }, nextDelay);
       } catch (error) {
-        if (saveObservationTokenRef.current !== token) {
+        if (
+          saveObservationTokenRef.current !== token ||
+          activeScriptIdRef.current !== observedScriptId
+        ) {
           return;
         }
         saveObservationTimerRef.current = null;
@@ -2395,11 +2414,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     }
 
     cancelSaveObservationPoll();
+    const savingScriptId = activeScript.script.scriptId;
     setSavePending(true);
     setSaveNotice('');
     try {
       const accepted = await scriptsApi.saveScript(scopeId, {
-        scriptId: activeScript.script.scriptId,
+        scriptId: savingScriptId,
         revisionId: currentRevision,
         expectedBaseRevision: activeScriptIsDraft
           ? undefined
@@ -2412,11 +2432,16 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       const token = saveObservationTokenRef.current;
       await pollSaveObservation(accepted, savedSourceText, 0, token);
     } catch (error) {
+      if (activeScriptIdRef.current !== savingScriptId) {
+        return;
+      }
       setSaveObservationStatus('failed');
       setSaveStatus('failed');
       setSaveNotice(describeError(error));
     } finally {
-      setSavePending(false);
+      if (activeScriptIdRef.current === savingScriptId) {
+        setSavePending(false);
+      }
     }
   }, [
     activeScript?.script?.activeRevision,
@@ -2665,13 +2690,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             <Alert
               message={saveNotice}
               showIcon
-              type={
-                saveObservationStatus === 'applied'
-                  ? 'success'
-                  : saveObservationStatus === 'rejected' || saveObservationStatus === 'failed'
-                    ? 'error'
-                    : 'warning'
-              }
+              type={saveNoticeType}
               action={
                 saveObservationStatus === 'pending' ? (
                   <Button

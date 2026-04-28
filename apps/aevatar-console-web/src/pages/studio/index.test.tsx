@@ -1728,6 +1728,7 @@ jest.mock("./components/StudioBuildPanels", () => {
         validationStatus: dirty ? "unknown" : "valid",
         saveStatus: dirty ? "idle" : "applied",
       });
+      return () => props.onScriptBuildStateChange?.(null);
     }, [dirty, props.onScriptBuildStateChange, selectedScriptId]);
 
     return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
@@ -3506,6 +3507,22 @@ describe("StudioPage", () => {
       expect(searchParams.get("step")).toBe("build");
       expect(searchParams.get("focus")).toBe("script:refund-handler");
     });
+  });
+
+  it("keeps the Script create action disabled when the Script feature is off", async () => {
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Create Script member" })
+    );
+
+    expect(
+      within(createDialog).getByRole("button", { name: "Create Script draft" })
+    ).toBeDisabled();
+    expect(screen.getByRole("dialog", { name: "Create member" })).toBeTruthy();
   });
 
   it("opens the Script create flow from the empty Script build surface", async () => {

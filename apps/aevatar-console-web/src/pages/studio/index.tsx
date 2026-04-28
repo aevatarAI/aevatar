@@ -3542,10 +3542,12 @@ const StudioPage: React.FC = () => {
             ) ?? null
           : null;
       const effectiveScriptState =
-        scriptBuildState?.scriptId ? scriptBuildState : catalogScriptState
+        scriptBuildState?.scriptId && trimOptional(scriptBuildState.scriptId) === selectedId
+          ? scriptBuildState
+          : catalogScriptState
           ? {
               scriptId: trimOptional(catalogScriptState.script?.scriptId),
-              displayName: trimOptional(catalogScriptState.script?.scriptId),
+              displayName: '',
               scriptRevision:
                 trimOptional(catalogScriptState.source?.revision) ||
                 trimOptional(catalogScriptState.script?.activeRevision),
@@ -3559,7 +3561,8 @@ const StudioPage: React.FC = () => {
       const scriptId = trimOptional(effectiveScriptState?.scriptId);
       if (
         scriptId &&
-        (!selectedId || scriptId === selectedId) &&
+        selectedId &&
+        scriptId === selectedId &&
         !effectiveScriptState?.dirty &&
         effectiveScriptState?.saveStatus === 'applied'
       ) {
@@ -7578,7 +7581,9 @@ const StudioPage: React.FC = () => {
                         trimOptional(createMemberDirectoryId) || inventoryDirectoryId,
                       ))) ||
                   (createMemberKind === 'script' &&
-                    (!createScriptId || createScriptIdAlreadyExists)),
+                    (!appContextQuery.data?.features.scripts ||
+                      !createScriptId ||
+                      createScriptIdAlreadyExists)),
                 loading: inventoryBusyAction === 'create',
               }}
               cancelButtonProps={{
