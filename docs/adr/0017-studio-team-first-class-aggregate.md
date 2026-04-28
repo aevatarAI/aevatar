@@ -1,6 +1,6 @@
 ---
 title: "Studio Team as First-Class Aggregate Under Scope"
-status: proposed
+status: accepted
 owner: eanzhao
 ---
 
