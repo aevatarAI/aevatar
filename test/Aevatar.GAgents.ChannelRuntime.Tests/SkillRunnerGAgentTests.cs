@@ -578,6 +578,170 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         assertion.WithMessage("*/daily*");
     }
 
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldUseFailureNotificationSlug_WhenSetAndDistinctFromPrimary()
+    {
+        // Issue #423 §C: when a primary outbound delivery has just been rejected (e.g. cross-
+        // tenant 99992364), retrying the failure notification through the SAME slug also
+        // fails. The fix routes failure-notifications through the inbound channel-bot's slug
+        // captured at agent-create time — by definition reachable, since the user just
+        // messaged it. This test pins that the routing actually changes the proxy slug in
+        // the outbound URL while the receive_id, body, and api key stay identical.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_failure"}}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "Lark message delivery rejected (code=99992364): user id cross tenant.");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot-channel-loning/open-apis/im/v1/messages?receive_id_type=open_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_user_1");
+        // The failure-notification message itself should carry the original error so the user
+        // sees the actionable hint in chat, not just an unsubscribe ping.
+        var contentJson = body.RootElement.GetProperty("content").GetString();
+        contentJson.Should().Contain("99992364");
+        contentJson.Should().Contain("Skill runner failed");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldFallBackToPrimarySlug_WhenFailureNotificationSlugRejects()
+    {
+        // Defense-in-depth: the failure-notification slug MAY have been valid at create time
+        // (in user-services) but become inactive (token revoked, bot uninstalled, etc.) by
+        // the time the agent fires. If its send rejects, we still try the primary slug as
+        // a last-resort attempt — better than the user seeing nothing.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot-channel-revoked",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new SequencedHandler(
+            // Failure-notification slug rejects with a Nyx envelope error (e.g. 401 on the proxy)
+            """{"error":true,"message":"upstream auth failed"}""",
+            // Primary slug succeeds — best-effort recovery.
+            """{"code":0,"msg":"success","data":{"message_id":"om_primary_failure"}}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "report rejected at primary");
+
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot-channel-revoked/");
+        handler.Requests[1].RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot/");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldSkipFailureSlug_WhenEqualToPrimary()
+    {
+        // No-op fallback: if the inbound slug equals the primary slug there is no recovery
+        // benefit — same proxy = same rejection mode. AgentBuilderTool leaves the field
+        // empty in this case, but pin the runtime guard too so a future
+        // mis-capture doesn't pay double-POST cost just to fail twice.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "primary failed");
+
+        // Exactly one POST — no double-attempt against the same slug.
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot/");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldUsePrimary_WhenFailureNotificationSlugIsEmpty()
+    {
+        // Backwards compat: agents created before #423 §C have an empty
+        // FailureNotificationProviderSlug. The runtime must transparently fall back to the
+        // existing single-attempt behavior — this test is the regression guard against the
+        // failure-notification fallback ever introducing a hidden dependency on the new
+        // field being populated.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            // FailureNotificationProviderSlug intentionally not set (legacy state shape).
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "primary failed");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot/");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldSwallow_WhenBothSlugsReject()
+    {
+        // Final guarantee: TrySendFailureAsync MUST NOT throw, ever. HandleTriggerAsync is
+        // already in the failure-event-persist path; an exception here would mask the
+        // SkillRunnerExecutionFailedEvent persist (which surfaces last_error in
+        // /agent-status, the one path users have to recover regardless of Lark visibility).
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new SequencedHandler(
+            """{"error":true,"message":"failure-slug down"}""",
+            """{"code":99992364,"msg":"user id cross tenant"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        // Should complete (not throw) even though both attempts fail.
+        Func<Task> act = () => InvokeTrySendFailureAsync(_agent, "both broken");
+
+        await act.Should().NotThrowAsync();
+        handler.Requests.Should().HaveCount(2);
+    }
+
     private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(
@@ -592,11 +756,27 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static Task InvokeSendOutputAsync(SkillRunnerGAgent agent, string output)
     {
+        // Disambiguate against the 3-arg `SendOutputAsync(output, providerSlugOverride, ct)`
+        // overload introduced for the failure-notification fallback (#423 §C). The 2-arg
+        // overload still routes through the primary `NyxProviderSlug`, which is what every
+        // existing test exercises.
         var method = typeof(SkillRunnerGAgent).GetMethod(
             "SendOutputAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic);
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(string), typeof(CancellationToken)],
+            modifiers: null);
         method.Should().NotBeNull();
         return (Task)method!.Invoke(agent, [output, CancellationToken.None])!;
+    }
+
+    private static Task InvokeTrySendFailureAsync(SkillRunnerGAgent agent, string error)
+    {
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "TrySendFailureAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        return (Task)method!.Invoke(agent, [error, CancellationToken.None])!;
     }
 
     private sealed class RecordingHandler(string responseBody) : HttpMessageHandler

@@ -266,9 +266,22 @@ public sealed class AgentBuilderTool : IAgentTool
             return gitHubAuthorizationResponse;
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
-        var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
-        if (requiredServiceIds.errorJson != null)
-            return requiredServiceIds.errorJson;
+        var serviceResolution = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
+        if (serviceResolution.ErrorJson != null)
+            return serviceResolution.ErrorJson;
+
+        // Issue #423 §C — capture the inbound channel-bot slug as a failure-notification
+        // fallback. By definition the user can be reached through the bot they just
+        // messaged, so when a primary outbound delivery is rejected (e.g. cross-tenant
+        // Lark `99992364`) the failure-notification message can still land if the agent's
+        // API key is allowed to route through the inbound bot. Optional: if the inbound
+        // slug is not registered as a per-user UserService row (or equals the primary,
+        // in which case the fallback would just hit the same proxy), we leave the field
+        // empty and TrySendFailureAsync degrades to the current single-attempt behavior.
+        var failureNotificationContext = ResolveFailureNotificationContext(
+            providerSlug,
+            serviceResolution.RequiredIds!,
+            serviceResolution.EligibleIdBySlug);
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? SkillRunnerDefaults.GenerateActorId()
@@ -276,7 +289,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
             token,
-            BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!),
+            BuildCreateApiKeyPayload(agentId, failureNotificationContext.AllowedServiceIds),
             ct);
 
         if (IsErrorPayload(createKeyResponse))
@@ -328,6 +341,7 @@ public sealed class AgentBuilderTool : IAgentTool
             LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
             LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
             OwnerScope = caller.Clone(),
+            FailureNotificationProviderSlug = failureNotificationContext.FailureSlug ?? string.Empty,
         };
 #pragma warning restore CS0612
 
@@ -445,17 +459,17 @@ public sealed class AgentBuilderTool : IAgentTool
         // hardcoded `[providerSlug, publishProviderSlug]` was fine for two slugs but would
         // drift if a third slug were ever added; route through the spec so the source of
         // truth lives next to the workflow YAML.
-        var requiredServiceIds = await ResolveProxyServiceIdsAsync(
+        var serviceResolution = await ResolveProxyServiceIdsAsync(
             nyxClient,
             token,
             templateSpec!.RequiredServiceSlugs,
             ct);
-        if (requiredServiceIds.errorJson != null)
-            return requiredServiceIds.errorJson;
+        if (serviceResolution.ErrorJson != null)
+            return serviceResolution.ErrorJson;
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
             token,
-            BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!),
+            BuildCreateApiKeyPayload(agentId, serviceResolution.RequiredIds!),
             ct);
 
         if (IsErrorPayload(createKeyResponse))
@@ -1046,29 +1060,45 @@ public sealed class AgentBuilderTool : IAgentTool
     /// slug, and skip org-shared rows the caller cannot use as a proxy target — those would later
     /// surface as a less-actionable <c>org_role_insufficient</c> error.</para>
     /// </remarks>
-    private async Task<(IReadOnlyList<string>? value, string? errorJson)> ResolveProxyServiceIdsAsync(
+    /// <summary>
+    /// Result of <see cref="ResolveProxyServiceIdsAsync"/>. <see cref="RequiredIds"/> /
+    /// <see cref="ErrorJson"/> are mutually exclusive (success vs. blocking error). Even on
+    /// success, callers can use <see cref="EligibleIdBySlug"/> to look up <em>optional</em>
+    /// slugs that were not in <c>requiredSlugs</c> — e.g. the inbound channel-bot slug for
+    /// SkillRunner's failure-notification fallback (issue #423 §C). Optional lookups must
+    /// not block agent creation, so they go through this map instead of being added to
+    /// <c>requiredSlugs</c> (which would cause <see cref="ResolveProxyServiceIdsAsync"/> to
+    /// return a <c>service_not_connected</c> error if the slug is missing).
+    /// </summary>
+    private readonly record struct ProxyServiceResolutionResult(
+        IReadOnlyList<string>? RequiredIds,
+        string? ErrorJson,
+        IReadOnlyDictionary<string, string> EligibleIdBySlug);
+
+    private async Task<ProxyServiceResolutionResult> ResolveProxyServiceIdsAsync(
         NyxIdApiClient client,
         string token,
         IReadOnlyList<string> requiredSlugs,
         CancellationToken ct)
     {
+        var emptyEligible = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (requiredSlugs.Count == 0)
         {
-            return (null, JsonSerializer.Serialize(new
+            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
             {
                 error = "no_required_slugs",
                 hint = "At least one required Nyx proxy service slug must be provided.",
-            }));
+            }), emptyEligible);
         }
 
         var response = await client.ListUserServicesAsync(token, ct);
         if (IsErrorPayload(response))
         {
-            return (null, JsonSerializer.Serialize(new
+            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
             {
                 error = "user_services_unavailable",
                 hint = "Could not list connected Nyx user-services. Try again or check NyxID availability.",
-            }));
+            }), emptyEligible);
         }
 
         try
@@ -1126,17 +1156,29 @@ public sealed class AgentBuilderTool : IAgentTool
                 bestBySlug[slug] = candidate;
             }
 
+            // Snapshot the eligible (slug → id) map before the per-required-slug check so
+            // callers can look up optional slugs (e.g. inbound channel-bot for failure-
+            // notification fallback) without re-listing user-services. Ineligible rows are
+            // intentionally excluded — including them would let optional lookups silently
+            // pick up an inactive or org-viewer-only service the API key cannot route through.
+            var eligibleBySlug = bestBySlug
+                .Where(static pair => pair.Value.IsEligible)
+                .ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value.Id,
+                    StringComparer.OrdinalIgnoreCase);
+
             var ids = new List<string>(requiredSlugs.Count);
             foreach (var slug in requiredSlugs.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (!bestBySlug.TryGetValue(slug, out var resolution))
                 {
-                    return (null, JsonSerializer.Serialize(new
+                    return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
                     {
                         error = "service_not_connected",
                         slug,
                         hint = $"NyxID has no connected user-service for slug `{slug}`. Connect the provider at NyxID before creating this agent.",
-                    }));
+                    }), emptyEligible);
                 }
 
                 if (resolution.IsEligible)
@@ -1148,32 +1190,35 @@ public sealed class AgentBuilderTool : IAgentTool
                 if (string.Equals(resolution.CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) &&
                     resolution.OrgAllowed != true)
                 {
-                    return (null, JsonSerializer.Serialize(new
+                    return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
                     {
                         error = "service_org_viewer_only",
                         slug,
                         hint = $"NyxID user-service for slug `{slug}` is shared by your org but your role does not permit using it as a proxy target. Ask an admin to widen the org role scope, or connect a personal credential.",
-                    }));
+                    }), emptyEligible);
                 }
 
                 // Remaining ineligible reason: !is_active.
-                return (null, JsonSerializer.Serialize(new
+                return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
                 {
                     error = "service_inactive",
                     slug,
                     hint = $"NyxID user-service for slug `{slug}` is inactive. Re-activate it at NyxID before creating this agent.",
-                }));
+                }), emptyEligible);
             }
 
-            return (ids.Distinct(StringComparer.Ordinal).ToArray(), null);
+            return new ProxyServiceResolutionResult(
+                ids.Distinct(StringComparer.Ordinal).ToArray(),
+                null,
+                eligibleBySlug);
         }
         catch (JsonException)
         {
-            return (null, JsonSerializer.Serialize(new
+            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
             {
                 error = "user_services_parse_failed",
                 hint = "NyxID user-services response was not valid JSON.",
-            }));
+            }), emptyEligible);
         }
     }
 
@@ -1186,6 +1231,51 @@ public sealed class AgentBuilderTool : IAgentTool
         public bool IsEligible =>
             IsActive &&
             !(string.Equals(CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) && OrgAllowed != true);
+    }
+
+    /// <summary>
+    /// Result of resolving the inbound channel-bot fallback used by SkillRunner's
+    /// failure-notification path (issue #423 §C). When the inbound slug is reachable
+    /// (registered + eligible + distinct from the primary), <see cref="FailureSlug"/>
+    /// is set and its corresponding <c>UserService.id</c> is appended to
+    /// <see cref="AllowedServiceIds"/> so the agent's API key can route through it
+    /// at runtime. Otherwise <see cref="FailureSlug"/> is null and the agent
+    /// degrades to the existing single-attempt failure notification.
+    /// </summary>
+    private readonly record struct FailureNotificationContext(
+        string? FailureSlug,
+        IReadOnlyList<string> AllowedServiceIds);
+
+    private FailureNotificationContext ResolveFailureNotificationContext(
+        string primarySlug,
+        IReadOnlyList<string> requiredIds,
+        IReadOnlyDictionary<string, string> eligibleIdBySlug)
+    {
+        var inboundSlug = AgentToolRequestContext.TryGet(ChannelMetadataKeys.InboundChannelBotProxySlug)?.Trim();
+        if (string.IsNullOrWhiteSpace(inboundSlug))
+            return new FailureNotificationContext(null, requiredIds);
+
+        // Same-proxy fallback gives no recovery benefit — a primary rejection at
+        // `slug=X` would also fail at `slug=X`. Skip the capture so TrySendFailureAsync
+        // doesn't pay the wasted POST and doesn't double-log the same rejection.
+        if (string.Equals(inboundSlug, primarySlug, StringComparison.Ordinal))
+            return new FailureNotificationContext(null, requiredIds);
+
+        // Optional slug must be a connected, eligible user-service for the API key to
+        // route through it. If it's not, leaving the failure-notification field empty
+        // keeps the runtime on the existing single-attempt path — better than persisting
+        // a slug whose every send would 403 at proxy enforcement time.
+        if (!eligibleIdBySlug.TryGetValue(inboundSlug, out var inboundId))
+            return new FailureNotificationContext(null, requiredIds);
+
+        // Dedupe — if the inbound slug's UserService.id is already in requiredIds the
+        // expanded list is identical, but we still surface the slug on OutboundConfig so
+        // the runtime knows to use it for failure notifications.
+        var allowed = requiredIds.Contains(inboundId, StringComparer.Ordinal)
+            ? requiredIds
+            : requiredIds.Append(inboundId).ToArray();
+
+        return new FailureNotificationContext(inboundSlug, allowed);
     }
 
     private async Task<string?> BuildGitHubAuthorizationResponseAsync(
