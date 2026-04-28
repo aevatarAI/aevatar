@@ -60,7 +60,17 @@ public sealed record StudioMemberSummaryResponse(
     string PublishedServiceId,
     string? LastBoundRevisionId,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    /// <summary>
+    /// Optional team assignment (ADR-0017). Null means the member is not
+    /// currently in any team. Added as a non-positional <c>init</c> property
+    /// so existing callers that construct the record positionally are not
+    /// broken; the query port populates it from the read model document and
+    /// the create/patch flows pass it through unchanged.
+    /// </summary>
+    public string? TeamId { get; init; }
+}
 
 public sealed record StudioMemberDetailResponse(
     StudioMemberSummaryResponse Summary,
@@ -95,7 +105,20 @@ public sealed record CreateStudioMemberRequest(
     string DisplayName,
     string ImplementationKind,
     string? Description = null,
-    string? MemberId = null);
+    string? MemberId = null,
+    // Optional initial team assignment (ADR-0017). Empty string is rejected
+    // at the application boundary; null / absent means "do not assign".
+    string? TeamId = null);
+
+/// <summary>
+/// Wire body for <c>PATCH /api/scopes/{scopeId}/members/{memberId}</c> when
+/// the caller wants to change the member's team assignment (ADR-0017 §Q6).
+/// Uses <see cref="PatchValue{T}"/> so the application layer can distinguish
+/// "absent" (no change) from "explicit null" (unassign) without a sentinel
+/// empty-string value reaching the actor.
+/// </summary>
+public sealed record UpdateStudioMemberRequest(
+    PatchValue<string> TeamId = default);
 
 /// <summary>
 /// Centralized input bounds applied at the create boundary so a single
