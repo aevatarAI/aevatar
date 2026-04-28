@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled.WorkflowModules;
 using Microsoft.Extensions.Configuration;
@@ -35,6 +36,10 @@ public static class ScheduledServiceCollectionExtensions
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
             configuration,
             storeName: "ScheduledAgents");
+
+        // ─── Retired-actor cleanup contribution ───
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IRetiredActorSpec, ScheduledRetiredActorSpec>());
 
         // ─── User Agent Catalog projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<

@@ -1,10 +1,13 @@
 using Microsoft.Extensions.Configuration;
 
-namespace Aevatar.Mainnet.Host.Api.Hosting.Migration;
+namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 
-public sealed class RetiredChannelRuntimeActorCleanupOptions
+/// <summary>
+/// Tunables for the spec-driven retired-actor cleanup hosted service.
+/// </summary>
+public sealed class RetiredActorCleanupOptions
 {
-    private const string SectionName = "Aevatar:RetiredChannelRuntimeActorCleanup";
+    public const string SectionName = "Aevatar:RetiredActorCleanup";
 
     public bool Enabled { get; init; } = true;
 
@@ -16,14 +19,12 @@ public sealed class RetiredChannelRuntimeActorCleanupOptions
 
     public int WaitPollMilliseconds { get; init; } = 1000;
 
-    public int ReadModelCleanupPageSize { get; init; } = 500;
-
-    public static RetiredChannelRuntimeActorCleanupOptions FromConfiguration(IConfiguration configuration)
+    public static RetiredActorCleanupOptions FromConfiguration(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
         var section = configuration.GetSection(SectionName);
-        return new RetiredChannelRuntimeActorCleanupOptions
+        return new RetiredActorCleanupOptions
         {
             Enabled = ResolveBool(section, nameof(Enabled), fallback: true),
             ResetEventStreams = ResolveBool(section, nameof(ResetEventStreams), fallback: true),
@@ -36,10 +37,6 @@ public sealed class RetiredChannelRuntimeActorCleanupOptions
                 section,
                 nameof(WaitPollMilliseconds),
                 fallback: 1000),
-            ReadModelCleanupPageSize = ResolvePositiveInt(
-                section,
-                nameof(ReadModelCleanupPageSize),
-                fallback: 500),
         };
     }
 

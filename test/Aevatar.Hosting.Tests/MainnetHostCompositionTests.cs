@@ -3,12 +3,12 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Mainnet.Host.Api.Hosting;
-using Aevatar.Mainnet.Host.Api.Hosting.Migration;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
@@ -107,7 +107,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldRunRetiredChannelRuntimeCleanup_BeforeProjectionStartupServices()
+    public void AddAevatarMainnetHost_ShouldRunRetiredActorCleanup_BeforeProjectionStartupServices()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -118,7 +118,7 @@ public sealed class MainnetHostCompositionTests
             options.EnableCors = false;
         });
 
-        var cleanupIndex = HostedServiceIndex<RetiredChannelRuntimeActorCleanupHostedService>(builder.Services);
+        var cleanupIndex = HostedServiceIndex<RetiredActorCleanupHostedService>(builder.Services);
 
         HostedServiceIndex<ChannelBotRegistrationStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);
         HostedServiceIndex<DeviceRegistrationStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);

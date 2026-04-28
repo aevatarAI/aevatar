@@ -19,7 +19,7 @@ using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
-using Aevatar.Mainnet.Host.Api.Hosting.Migration;
+using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -72,7 +72,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdChat(builder.Configuration);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
-        builder.Services.AddHostedService<RetiredChannelRuntimeActorCleanupHostedService>();
+        builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);

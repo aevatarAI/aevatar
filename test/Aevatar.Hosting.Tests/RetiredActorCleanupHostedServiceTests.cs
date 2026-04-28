@@ -1,12 +1,14 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
-using Aevatar.Mainnet.Host.Api.Hosting.Migration;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -16,7 +18,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Hosting.Tests;
 
-public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
+public sealed class RetiredActorCleanupHostedServiceTests
 {
     [Fact]
     public async Task StartAsync_ShouldDestroyRetiredActors_RemoveRelays_AndResetEventStreams()
@@ -36,7 +38,7 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         var runtime = new RecordingActorRuntime();
         var streamProvider = new RecordingStreamProvider();
         streamProvider.SeedRelay("channel-bot-registration-store", "stale-child-stream");
-        var service = CreateService(typeProbe, runtime, streamProvider, eventStore);
+        var service = CreateService(typeProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -63,7 +65,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
                 "Aevatar.GAgents.Channel.Runtime.ChannelBotRegistrationGAgent, Aevatar.GAgents.Channel.Runtime",
         });
         var runtime = new RecordingActorRuntime();
-        var service = CreateService(typeProbe, runtime, new RecordingStreamProvider(), eventStore);
+        var service = CreateService(
+            typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateChannelRuntimeSpec());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -82,7 +85,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
                 "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgentProxy, Aevatar.GAgents.ChannelRuntime",
         });
         var runtime = new RecordingActorRuntime();
-        var service = CreateService(typeProbe, runtime, new RecordingStreamProvider(), eventStore);
+        var service = CreateService(
+            typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateChannelRuntimeSpec());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -97,7 +101,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
         var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>());
         var runtime = new RecordingActorRuntime();
-        var service = CreateService(typeProbe, runtime, new RecordingStreamProvider(), eventStore);
+        var service = CreateService(
+            typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateChannelRuntimeSpec());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -151,7 +156,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
                 "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgentProxy, Aevatar.GAgents.ChannelRuntime",
         });
         var runtime = new RecordingActorRuntime();
-        var service = CreateService(typeProbe, runtime, new RecordingStreamProvider(), eventStore);
+        var service = CreateService(
+            typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateScheduledSpec());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -183,9 +189,10 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
                 Id = "agent-doc-keep",
                 ActorId = "other-store",
             });
-        var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentReader<UserAgentCatalogDocument, string>>(documents);
-        services.AddSingleton<IProjectionWriteDispatcher<UserAgentCatalogDocument>>(documents);
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
+        serviceCollection.AddSingleton<IProjectionDocumentReader<UserAgentCatalogDocument, string>>(documents);
+        serviceCollection.AddSingleton<IProjectionWriteDispatcher<UserAgentCatalogDocument>>(documents);
         var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
         {
             ["agent-registry-store"] =
@@ -197,7 +204,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
             runtime,
             new RecordingStreamProvider(),
             eventStore,
-            services.BuildServiceProvider());
+            CreateScheduledSpec(),
+            serviceCollection.BuildServiceProvider());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -210,10 +218,11 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
     {
         var eventStore = new InMemoryEventStore();
         await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
-        var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>(
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
+        serviceCollection.AddSingleton<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>(
             new ThrowingProjectionReader<ChannelBotRegistrationDocument>());
-        services.AddSingleton<IProjectionWriteDispatcher<ChannelBotRegistrationDocument>>(
+        serviceCollection.AddSingleton<IProjectionWriteDispatcher<ChannelBotRegistrationDocument>>(
             new NoopProjectionWriter<ChannelBotRegistrationDocument>());
         var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
         {
@@ -226,7 +235,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
             runtime,
             new RecordingStreamProvider(),
             eventStore,
-            services.BuildServiceProvider());
+            CreateChannelRuntimeSpec(),
+            serviceCollection.BuildServiceProvider());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -234,30 +244,85 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
     }
 
-    private static RetiredChannelRuntimeActorCleanupHostedService CreateService(
+    [Fact]
+    public async Task StartAsync_ShouldRunEachRegisteredSpec()
+    {
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "device-registration-store");
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["device-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.DeviceRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+            ["channel-bot-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+        });
+        var runtime = new RecordingActorRuntime();
+        var service = CreateService(
+            typeProbe,
+            runtime,
+            new RecordingStreamProvider(),
+            eventStore,
+            specs: [CreateDeviceSpec(), CreateChannelRuntimeSpec()]);
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.DestroyedActorIds.Should().Contain("device-registration-store");
+        runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
+        (await eventStore.GetVersionAsync("device-registration-store")).Should().Be(0);
+        (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
+    }
+
+    private static IRetiredActorSpec CreateChannelRuntimeSpec() => new ChannelRuntimeRetiredActorSpec();
+
+    private static IRetiredActorSpec CreateDeviceSpec() => new DeviceRetiredActorSpec();
+
+    private static IRetiredActorSpec CreateScheduledSpec() => new ScheduledRetiredActorSpec();
+
+    private static RetiredActorCleanupHostedService CreateService(
         IActorTypeProbe typeProbe,
         RecordingActorRuntime runtime,
         RecordingStreamProvider streamProvider,
         InMemoryEventStore eventStore,
+        IRetiredActorSpec spec,
+        IServiceProvider? services = null) =>
+        CreateService(typeProbe, runtime, streamProvider, eventStore, [spec], services);
+
+    private static RetiredActorCleanupHostedService CreateService(
+        IActorTypeProbe typeProbe,
+        RecordingActorRuntime runtime,
+        RecordingStreamProvider streamProvider,
+        InMemoryEventStore eventStore,
+        IReadOnlyList<IRetiredActorSpec> specs,
         IServiceProvider? services = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Aevatar:RetiredChannelRuntimeActorCleanup:WaitPollMilliseconds"] = "1",
-                ["Aevatar:RetiredChannelRuntimeActorCleanup:InProgressTimeoutSeconds"] = "1",
+                ["Aevatar:RetiredActorCleanup:WaitPollMilliseconds"] = "1",
+                ["Aevatar:RetiredActorCleanup:InProgressTimeoutSeconds"] = "1",
             })
             .Build();
 
-        return new RetiredChannelRuntimeActorCleanupHostedService(
+        var resolvedServices = services ?? BuildServiceProviderWithEventStore(eventStore);
+
+        return new RetiredActorCleanupHostedService(
+            specs,
             typeProbe,
             runtime,
             streamProvider,
             eventStore,
             eventStore,
-            services ?? new ServiceCollection().BuildServiceProvider(),
+            resolvedServices,
             configuration,
-            NullLogger<RetiredChannelRuntimeActorCleanupHostedService>.Instance);
+            NullLogger<RetiredActorCleanupHostedService>.Instance);
+    }
+
+    private static IServiceProvider BuildServiceProviderWithEventStore(InMemoryEventStore eventStore)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
+        return services.BuildServiceProvider();
     }
 
     private static Task AppendSingleEventAsync(InMemoryEventStore eventStore, string actorId) =>
