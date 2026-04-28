@@ -290,12 +290,24 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
         if (client is null)
+        {
+            // Tests and very early bootstrap can run without an injected NyxID client; falling
+            // back to one-shot SendOutputAsync is correct, but a log line makes the degradation
+            // visible (otherwise streaming-edit silently never engages and the only symptom is
+            // the wall-of-text UX users complained about in #423).
+            Logger.LogWarning(
+                "Skill runner {ActorId} has no NyxIdApiClient registered; streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                Id);
             return null;
+        }
 
         if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
         {
+            Logger.LogWarning(
+                "Skill runner {ActorId} has incomplete outbound config (NyxApiKey/NyxProviderSlug/ConversationId); streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                Id);
             return null;
         }
 

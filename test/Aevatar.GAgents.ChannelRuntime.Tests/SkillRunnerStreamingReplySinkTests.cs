@@ -40,13 +40,16 @@ public sealed class SkillRunnerStreamingReplySinkTests
         await sink.OnDeltaAsync("first chunk and more", CancellationToken.None);
 
         handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].Method.Should().Be(HttpMethod.Patch);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Put);
         handler.Requests[1].RequestUri!.AbsolutePath
             .Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_initial");
 
-        // Edit body shape: text-only `content` with NO `msg_type` (Lark fixes msg_type at create).
+        // Edit body shape: PUT for text/post requires both `msg_type` AND `content`. Lark
+        // splits the edit-message verbs by msg_type — PUT for text/post, PATCH for cards —
+        // so the wrong verb (or omitting msg_type) makes Lark reject every later edit and
+        // streaming-edit silently stops growing past the placeholder.
         using var body = JsonDocument.Parse(handler.Bodies[1]!);
-        body.RootElement.TryGetProperty("msg_type", out _).Should().BeFalse();
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
         var contentString = body.RootElement.GetProperty("content").GetString();
         using var content = JsonDocument.Parse(contentString!);
         content.RootElement.GetProperty("text").GetString().Should().Be("first chunk and more");
@@ -72,7 +75,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
         // Crossing the throttle boundary fires the deferred timer; the LATEST stashed text edits
         // (collapse-on-latest), not every individual delta.
         handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].Method.Should().Be(HttpMethod.Patch);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Put);
         using var body = JsonDocument.Parse(handler.Bodies[1]!);
         var contentString = body.RootElement.GetProperty("content").GetString();
         using var content = JsonDocument.Parse(contentString!);
@@ -90,7 +93,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
         await sink.FinalizeAsync("first chunk plus final", CancellationToken.None);
 
         handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].Method.Should().Be(HttpMethod.Patch);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Put);
         using var body = JsonDocument.Parse(handler.Bodies[1]!);
         var contentString = body.RootElement.GetProperty("content").GetString();
         using var content = JsonDocument.Parse(contentString!);
@@ -112,6 +115,37 @@ public sealed class SkillRunnerStreamingReplySinkTests
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].Method.Should().Be(HttpMethod.Post);
         sink.PlatformMessageId.Should().Be("om_initial");
+    }
+
+    [Fact]
+    public async Task InitialPost_RejectedAsBotNotInChat_ViaHttp400Envelope_RetriesOnceWithFallbackTarget()
+    {
+        // Production failures arrive through `NyxIdApiClient.SendAsync` as an HTTP-400 Nyx
+        // envelope (`{"error": true, "status": 400, "body": "<raw json>"}`) — the same
+        // wrapping shape pinned for the non-streaming path in
+        // `SkillRunnerGAgentTests.SendOutputAsync_ShouldRetryWithFallback_When_PrimaryRejectedAsBotNotInChat_ViaHttp400Envelope`.
+        // The streaming sink relies on the same `LarkProxyResponse.TryGetError` parser, but
+        // pin the wrapped shape end-to-end here so a regression in either layer fails this
+        // test loud (and not the more visible HTTP-200 plain-Lark-error test).
+        // NyxIdApiClient.SendAsync wraps every non-2xx as `{"error":true,"status":N,"body":<raw>}`,
+        // so the mock returns the RAW Lark JSON with HTTP 400 here — the wrapping happens in
+        // the client, not the test handler.
+        var handler = new SequencedHandler(
+            (HttpStatusCode.BadRequest, """{"code":230002,"msg":"Bot is not in the chat"}"""),
+            (HttpStatusCode.OK, """{"code":0,"msg":"success","data":{"message_id":"om_fallback"}}"""));
+        var sink = CreateSink(
+            handler,
+            throttleMs: 0,
+            primary: new LarkReceiveTarget("oc_dm_chat_1", "chat_id", FellBackToPrefixInference: false),
+            fallback: new LarkReceiveTarget("on_user_1", "union_id", FellBackToPrefixInference: false),
+            out _);
+
+        await sink.OnDeltaAsync("first chunk", CancellationToken.None);
+
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].RequestUri!.Query.Should().Contain("receive_id_type=chat_id");
+        handler.Requests[1].RequestUri!.Query.Should().Contain("receive_id_type=union_id");
+        sink.PlatformMessageId.Should().Be("om_fallback");
     }
 
     [Fact]
@@ -204,10 +238,10 @@ public sealed class SkillRunnerStreamingReplySinkTests
         await sink.OnDeltaAsync("first chunk plus more", CancellationToken.None);
 
         handler.Requests.Should().HaveCount(3);
-        handler.Requests[1].Method.Should().Be(HttpMethod.Patch);
-        handler.Requests[2].Method.Should().Be(HttpMethod.Patch);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Put);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Put);
         // Final emitted text reflects the latest delta (rejection didn't lose the accumulator).
-        sink.ChunksEmitted.Should().Be(2, "the rejected edit doesn't count, but the first POST and successful PATCH do");
+        sink.ChunksEmitted.Should().Be(2, "the rejected edit doesn't count, but the first POST and successful PUT do");
     }
 
     [Fact]
@@ -304,18 +338,25 @@ public sealed class SkillRunnerStreamingReplySinkTests
 
     /// <summary>
     /// Returns a different response per request in the order given; falls back to a generic
-    /// success body if the test runs more dispatches than queued responses (lets a test focus
-    /// on the first N interactions without padding the queue).
+    /// 200/success body if the test runs more dispatches than queued responses (lets a test
+    /// focus on the first N interactions without padding the queue). Supports two queueing
+    /// shapes: a bare JSON string (always 200 OK — covers the Lark business-error-on-200
+    /// path) and a <see cref="HttpStatusCode"/>-paired tuple (covers the
+    /// <c>NyxIdApiClient.SendAsync</c> wrapping path where HTTP non-2xx becomes a
+    /// <c>{"error":true,"status":N,"body":"&lt;raw json&gt;"}</c> envelope).
     /// </summary>
     private sealed class SequencedHandler : HttpMessageHandler
     {
-        private readonly Queue<string> _responses;
+        private readonly Queue<(HttpStatusCode Status, string Body)> _responses;
         public List<HttpRequestMessage> Requests { get; } = new();
         public List<string?> Bodies { get; } = new();
 
         public SequencedHandler(params string[] responses)
+            : this(responses.Select(r => (HttpStatusCode.OK, r)).ToArray()) { }
+
+        public SequencedHandler(params (HttpStatusCode Status, string Body)[] responses)
         {
-            _responses = new Queue<string>(responses);
+            _responses = new Queue<(HttpStatusCode, string)>(responses);
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -324,8 +365,10 @@ public sealed class SkillRunnerStreamingReplySinkTests
             Bodies.Add(request.Content == null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken));
-            var body = _responses.Count > 0 ? _responses.Dequeue() : """{"code":0,"msg":"success"}""";
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            var (status, body) = _responses.Count > 0
+                ? _responses.Dequeue()
+                : (HttpStatusCode.OK, """{"code":0,"msg":"success"}""");
+            return new HttpResponseMessage(status)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };

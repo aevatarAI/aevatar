@@ -67,6 +67,12 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
     private const string TruncationMarker = "\n\n…[truncated]";
 
     private readonly NyxIdApiClient _client;
+    // Proxy-scoped agent API key. Treat as a secret: NEVER include it in log messages,
+    // exception messages, or anything that flows to the user. The key authorizes outbound
+    // Lark + GitHub calls on behalf of the agent owner; leaking it lets a reader impersonate
+    // the agent until the key is rotated. The same constraint applies to
+    // SkillRunnerGAgent.SendOutboundAsync — both call sites read the key directly into
+    // ProxyRequestAsync's `token` argument and never echo it.
     private readonly string _nyxApiKey;
     private readonly string _nyxProviderSlug;
     private readonly LarkReceiveTarget _primaryTarget;
@@ -185,6 +191,14 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
             {
                 // Already on the wire; clear any deferred copy. Even for isFinal we can return
                 // here because the latest dispatched text is already the final text.
+                //
+                // Invariant: callers always pass the FULL accumulated text (the
+                // ExecuteSkillAsync foreach builds with `content.Append(...)` and snapshots
+                // `content.ToString()`), so `capped == _lastEmittedText` means any stashed
+                // pending text would also equal _lastEmittedText (it can only be an older or
+                // equal-length prefix that's been re-presented). Clearing the pending stash is
+                // therefore safe even when _dispatchInProgress is true; we don't need to allocate
+                // a drainTcs because there's nothing left to dispatch.
                 _pendingText = string.Empty;
                 _hasPending = false;
                 return;
@@ -271,7 +285,28 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
 
         if (toDispatch is not null)
         {
-            _ = DispatchLoopAsync(toDispatch, firstIsFinal: false, CancellationToken.None);
+            // Fire-and-forget: errors from `DispatchLoopAsync` (final-text PATCH failure that
+            // gets reflushed by a concurrent FinalizeAsync arriving after the timer fired)
+            // would otherwise become `TaskScheduler.UnobservedTaskException`. The
+            // `FinalizeAsync` caller is already notified via `_drainTcs` — this continuation
+            // exists purely to log the fault so the unobserved-exception event handler stays
+            // quiet. Caller-requested cancellation isn't possible here (the timer always
+            // dispatches with `CancellationToken.None`), so any fault is genuinely a bug or a
+            // terminal Lark rejection that the finalize path has already surfaced.
+            _ = DispatchLoopAsync(toDispatch, firstIsFinal: false, CancellationToken.None)
+                .ContinueWith(
+                    static (task, state) =>
+                    {
+                        var sink = (SkillRunnerStreamingReplySink)state!;
+                        sink._logger?.LogWarning(
+                            task.Exception?.Flatten().InnerException,
+                            "SkillRunner streaming sink: timer-driven dispatch faulted (already surfaced to FinalizeAsync via drain TCS). slug={Slug}",
+                            sink._nyxProviderSlug);
+                    },
+                    state: this,
+                    cancellationToken: CancellationToken.None,
+                    continuationOptions: TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    scheduler: TaskScheduler.Default);
         }
     }
 
@@ -349,11 +384,14 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
             {
                 result = await SendInitialAsync(text, ct).ConfigureAwait(false);
             }
-            catch (Exception ex) when (!isFinal && ex is not OperationCanceledException)
+            catch (Exception ex) when (!isFinal && IsTransientFailure(ex, ct))
             {
                 // Mid-stream transport exception (timeout, network blip): log and let the next
                 // delta retry. We only escalate at finalize because that is the moment the run's
-                // success is gated.
+                // success is gated. HttpClient surfaces request-timeout as TaskCanceledException
+                // — a subclass of OperationCanceledException that is NOT tied to our caller's
+                // CancellationToken — so the filter must distinguish caller-requested cancel
+                // (propagate) from transport timeout (transient retry).
                 _logger?.LogWarning(
                     ex,
                     "SkillRunner streaming sink: initial Lark POST threw mid-stream; will retry on next delta. slug={Slug}",
@@ -391,7 +429,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
         {
             edit = await EditAsync(_platformMessageId!, text, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (!isFinal && ex is not OperationCanceledException)
+        catch (Exception ex) when (!isFinal && IsTransientFailure(ex, ct))
         {
             _logger?.LogWarning(
                 ex,
@@ -470,9 +508,15 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
 
     private async Task<(bool Succeeded, int? LarkCode, string Detail)> EditAsync(string platformMessageId, string text, CancellationToken ct)
     {
-        // Lark's edit-message endpoint takes only `content` — msg_type is fixed at creation time.
+        // Lark splits the edit-message verbs by msg_type: PUT /open-apis/im/v1/messages/{id}
+        // edits text / post (rich text) and requires `msg_type` + `content` in the body; PATCH
+        // on the same path is reserved for editing interactive cards. The initial POST emits
+        // `msg_type=text`, so the edit must also be PUT-with-text or Lark rejects every later
+        // PATCH and the streaming-edit message stops growing past the placeholder. See
+        // https://open.feishu.cn/document/server-docs/im-v1/message/update for the verb split.
         var body = JsonSerializer.Serialize(new
         {
+            msg_type = "text",
             content = JsonSerializer.Serialize(new { text }),
         });
 
@@ -480,7 +524,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
             _nyxApiKey,
             _nyxProviderSlug,
             $"open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId)}",
-            "PATCH",
+            "PUT",
             body,
             null,
             ct).ConfigureAwait(false);
@@ -514,6 +558,17 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
             return (null, null, "invalid_send_response_json");
         }
     }
+
+    /// <summary>
+    /// True when the exception should be swallowed mid-stream and retried on the next delta.
+    /// Caller-requested cancellation (the per-turn <see cref="CancellationToken"/>) propagates;
+    /// every other failure — including <see cref="TaskCanceledException"/> from
+    /// <see cref="HttpClient"/> request timeouts, which is a subclass of
+    /// <see cref="OperationCanceledException"/> raised independently of <paramref name="callerCt"/>
+    /// — is treated as a transient transport blip and logged.
+    /// </summary>
+    private static bool IsTransientFailure(Exception ex, CancellationToken callerCt) =>
+        !(ex is OperationCanceledException && callerCt.IsCancellationRequested);
 
     private static string TruncateForLark(string text)
     {
