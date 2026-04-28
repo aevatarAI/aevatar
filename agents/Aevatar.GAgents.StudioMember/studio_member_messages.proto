@@ -139,7 +139,9 @@ message StudioMemberBoundEvent {
 // Constraints (enforced at the application layer):
 //   - At least one of from_team_id / to_team_id must be present.
 //   - from_team_id == to_team_id (both present and equal) is rejected.
-//   - from_team_id and to_team_id (when present) must equal the member's scope_id.
+//   - The teams identified by from_team_id / to_team_id (when present) must be
+//     in the same scope as the member (i.e. TeamGAgent.State.ScopeId must equal
+//     the member's scope_id).
 message StudioMemberReassignedEvent {
   string member_id              = 1;
   string scope_id               = 2;

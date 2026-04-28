@@ -243,7 +243,7 @@ public sealed class StudioTeamGAgent : GAgentBase<StudioTeamState>, IProjectedAc
             case StudioTeamRosterEffect.Noop:
             case StudioTeamRosterEffect.Unspecified:
             default:
-                // No state change.
+                // No roster change (UpdatedAtUtc still advances).
                 break;
         }
         next.UpdatedAtUtc = evt.ChangedAtUtc;

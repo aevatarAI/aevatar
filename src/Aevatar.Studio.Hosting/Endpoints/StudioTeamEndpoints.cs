@@ -238,6 +238,11 @@ internal static class StudioTeamEndpoints
     /// member query port today doesn't expose a typed <c>team_id</c> filter,
     /// so the filter happens after the read model returns. A typed filter on
     /// the query port is a follow-up that does not change the wire shape.
+    ///
+    /// To avoid silent empty pages when team members are spread across
+    /// scope-level pages, this method iterates scope pages until enough
+    /// team-filtered results are collected. The returned page token is
+    /// the scope-level cursor of the page where collection stopped.
     /// </summary>
     internal static async Task<IResult> HandleListMembersAsync(
         HttpContext http,
@@ -258,18 +263,41 @@ internal static class StudioTeamEndpoints
             // with empty roster".
             _ = await teamService.GetAsync(scopeId, teamId, ct);
 
-            var page = (pageSize.HasValue || !string.IsNullOrWhiteSpace(pageToken))
-                ? new StudioMemberRosterPageRequest(pageSize, pageToken)
-                : null;
-            var roster = await memberService.ListAsync(scopeId, page, ct);
+            const int defaultPageSize = 50;
+            const int maxScopePageIterations = 100;
 
-            var filtered = roster.Members
-                .Where(m => string.Equals(m.TeamId, teamId, StringComparison.Ordinal))
-                .ToList();
+            var effectivePageSize = pageSize ?? defaultPageSize;
+            var filtered = new List<Aevatar.Studio.Application.Studio.Contracts.StudioMemberSummaryResponse>();
+            var nextCursor = string.IsNullOrWhiteSpace(pageToken) ? null : pageToken;
+            string? finalNextPageToken = null;
+            var iterations = 0;
+
+            while (filtered.Count < effectivePageSize && iterations < maxScopePageIterations)
+            {
+                iterations++;
+                var page = new StudioMemberRosterPageRequest(effectivePageSize, nextCursor);
+                var roster = await memberService.ListAsync(scopeId, page, ct);
+
+                foreach (var member in roster.Members)
+                {
+                    if (string.Equals(member.TeamId, teamId, StringComparison.Ordinal))
+                        filtered.Add(member);
+                }
+
+                if (string.IsNullOrWhiteSpace(roster.NextPageToken))
+                {
+                    finalNextPageToken = null;
+                    break;
+                }
+
+                nextCursor = roster.NextPageToken;
+                finalNextPageToken = nextCursor;
+            }
+
             return Results.Ok(new StudioMemberRosterResponse(
-                ScopeId: roster.ScopeId,
+                ScopeId: scopeId,
                 Members: filtered,
-                NextPageToken: roster.NextPageToken));
+                NextPageToken: finalNextPageToken));
         }
         catch (StudioTeamNotFoundException ex)
         {
