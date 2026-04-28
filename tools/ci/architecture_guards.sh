@@ -89,6 +89,7 @@ bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
 bash "${SCRIPT_DIR}/channel_inbox_gagent_guard.sh"
 bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
+bash "${SCRIPT_DIR}/agent_tool_delivery_target_reader_guard.sh"
 
 secret_store_scan_roots=()
 while IFS= read -r host_dir; do

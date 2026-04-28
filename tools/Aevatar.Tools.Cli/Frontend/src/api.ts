@@ -808,13 +808,14 @@ type GAgentActorGroup = { gAgentType: string; actorIds: string[] };
 type NyxIdConversationSummary = { actorId: string };
 
 function decodeGAgentActorGroupList(value: unknown): GAgentActorGroup[] {
-  const source = Array.isArray(value)
-    ? value
-    : Array.isArray((value as { groups?: unknown } | null)?.groups)
-      ? (value as { groups: unknown[] }).groups
-      : Array.isArray((value as { Groups?: unknown } | null)?.Groups)
-        ? (value as { Groups: unknown[] }).Groups
-        : [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('GAgent actor registry snapshot must be an object with groups.');
+  }
+
+  const source = (value as { groups?: unknown }).groups;
+  if (!Array.isArray(source)) {
+    throw new Error('GAgent actor registry snapshot groups must be an array.');
+  }
 
   return source.map((entry) => {
     const record = entry as {
@@ -836,13 +837,14 @@ function decodeGAgentActorGroupList(value: unknown): GAgentActorGroup[] {
 }
 
 function decodeNyxIdConversationList(value: unknown): NyxIdConversationSummary[] {
-  const source = Array.isArray(value)
-    ? value
-    : Array.isArray((value as { conversations?: unknown } | null)?.conversations)
-      ? (value as { conversations: unknown[] }).conversations
-      : Array.isArray((value as { Conversations?: unknown } | null)?.Conversations)
-        ? (value as { Conversations: unknown[] }).Conversations
-        : [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('NyxID conversation registry snapshot must be an object with conversations.');
+  }
+
+  const source = (value as { conversations?: unknown }).conversations;
+  if (!Array.isArray(source)) {
+    throw new Error('NyxID conversation registry snapshot conversations must be an array.');
+  }
 
   return source.map((entry) => {
     const record = entry as { actorId?: unknown; ActorId?: unknown };

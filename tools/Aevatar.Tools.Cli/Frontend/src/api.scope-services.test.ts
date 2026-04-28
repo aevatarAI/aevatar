@@ -59,7 +59,7 @@ describe('scope service query helpers', () => {
     );
   });
 
-  it('keeps compatibility with legacy gagent actor group arrays', async () => {
+  it('rejects legacy gagent actor group arrays', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([
       {
         gAgentType: 'Tests.OrdersGAgent',
@@ -67,12 +67,7 @@ describe('scope service query helpers', () => {
       },
     ]));
 
-    await expect(gagent.listActors('scope-a')).resolves.toEqual([
-      {
-        gAgentType: 'Tests.OrdersGAgent',
-        actorIds: ['orders-1'],
-      },
-    ]);
+    await expect(gagent.listActors('scope-a')).rejects.toThrow(/groups/i);
   });
 
   it('decodes nyxid conversations from registry snapshot response shape', async () => {
@@ -91,5 +86,15 @@ describe('scope service query helpers', () => {
         actorId: 'nyxid-chat-1',
       },
     ]);
+  });
+
+  it('rejects legacy nyxid conversation arrays', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([
+      {
+        actorId: 'nyxid-chat-1',
+      },
+    ]));
+
+    await expect(nyxidChat.listConversations('scope-a')).rejects.toThrow(/conversations/i);
   });
 });

@@ -5,6 +5,7 @@ package aevatar.gagents.scheduled;
 option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
+import "user_agent_catalog.proto";
 
 // ─── Skill Runner (persistent scheduled agent) ───
 
@@ -12,11 +13,11 @@ message SkillRunnerOutboundConfig {
   string conversation_id = 1;
   string nyx_provider_slug = 2;
   string nyx_api_key = 3;
-  string owner_nyx_user_id = 4;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 4 [deprecated = true];
   string api_key_id = 5;
-  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
-  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
-  string platform = 6;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 6 [deprecated = true];
   // Authoritative Lark outbound delivery target captured at create time. When
   // both fields are present, SkillRunnerGAgent.SendOutputAsync uses them
   // verbatim; conversation_id stays for LLM metadata propagation only.
@@ -29,6 +30,9 @@ message SkillRunnerOutboundConfig {
   // UserAgentCatalogEntry.lark_receive_id_fallback for the recommended pinning.
   string lark_receive_id_fallback = 9;
   string lark_receive_id_type_fallback = 10;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
+  // for new agents; the deprecated scattered fields remain for legacy state.
+  OwnerScope owner_scope = 11;
 }
 
 message SkillRunnerState {
