@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -21,18 +22,22 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>, IProjected
     [EventHandler(EndpointName = "saveCatalog")]
     public async Task HandleCatalogSaved(RoleCatalogSavedEvent evt)
     {
+        EnsureExpectedVersionMatches(evt.HasExpectedVersion, evt.ExpectedVersion);
         await PersistDomainEventAsync(evt);
     }
 
     [EventHandler(EndpointName = "saveDraft")]
     public async Task HandleDraftSaved(RoleDraftSavedEvent evt)
     {
+        EnsureExpectedVersionMatches(evt.HasExpectedVersion, evt.ExpectedVersion);
         await PersistDomainEventAsync(evt);
     }
 
     [EventHandler(EndpointName = "deleteDraft")]
     public async Task HandleDraftDeleted(RoleDraftDeletedEvent evt)
     {
+        EnsureExpectedVersionMatches(evt.HasExpectedVersion, evt.ExpectedVersion);
+
         if (State.Draft is null)
             return;
 
@@ -55,12 +60,27 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>, IProjected
             .OrCurrent();
     }
 
+    private void EnsureExpectedVersionMatches(bool hasExpectedVersion, long expectedVersion)
+    {
+        if (!hasExpectedVersion)
+            return;
+
+        if (expectedVersion != State.LastAppliedEventVersion)
+        {
+            throw new EventStoreOptimisticConcurrencyException(
+                Id,
+                expectedVersion,
+                State.LastAppliedEventVersion);
+        }
+    }
+
     private static RoleCatalogState ApplyCatalogSaved(
         RoleCatalogState state, RoleCatalogSavedEvent evt)
     {
         var next = state.Clone();
         next.Roles.Clear();
         next.Roles.AddRange(evt.Roles);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -73,6 +93,7 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>, IProjected
             Draft = evt.Draft?.Clone(),
             UpdatedAtUtc = evt.UpdatedAtUtc,
         };
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 
@@ -81,6 +102,7 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>, IProjected
     {
         var next = state.Clone();
         next.Draft = null;
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         return next;
     }
 

@@ -8,6 +8,13 @@ public interface IServiceIdentityContextResolver
 {
     ServiceIdentityContext? Resolve();
 
+    bool TryResolveAuthenticatedScopeRequestContext(
+        string? fallbackTenantId,
+        string? fallbackAppId,
+        string? fallbackNamespace,
+        out ServiceIdentityContext context,
+        out string? failure);
+
     bool TryGetAuthenticatedIdentityFailure(out string message);
 }
 

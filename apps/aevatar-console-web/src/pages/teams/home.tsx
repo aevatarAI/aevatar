@@ -988,6 +988,16 @@ const TeamsHomePage: React.FC = () => {
     }),
     retry: false,
   });
+  const memberRosterIssue = React.useMemo(() => {
+    if (!membersQuery.isError) {
+      return "";
+    }
+
+    return describeError(
+      membersQuery.error,
+      "当前 Scope 的成员清单暂时无法加载。",
+    );
+  }, [membersQuery.error, membersQuery.isError]);
 
   const studioMembers = React.useMemo(
     () => [...(membersQuery.data?.members ?? [])].sort(compareMembers),

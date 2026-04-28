@@ -172,6 +172,33 @@ public sealed class GovernanceEndpointsTests
     }
 
     [Fact]
+    public async Task BindingEndpoints_WhenAuthenticatedScopeMatchesQuery_ShouldUseScopeRequestContext()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+        host.QueryPort.BindingsResult = new ServiceBindingCatalogSnapshot(
+            "scope-1:default:default:orders",
+            [],
+            DateTimeOffset.UtcNow);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/services/orders/bindings?tenantId=scope-1&appId=default&namespace=default");
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Scope-Id", "scope-1");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.QueryPort.LastBindingsIdentity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-1",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "orders",
+        });
+    }
+
+    [Fact]
     public async Task BindingEndpoints_WhenAuthenticatedBoundServiceIdentityConflictsWithClaims_ShouldReturnBadRequest()
     {
         await using var host = await GovernanceEndpointTestHost.StartAsync();
@@ -696,6 +723,7 @@ public sealed class GovernanceEndpointsTests
                     AddClaims(http, "X-Test-Tenant-Id", AevatarStandardClaimTypes.TenantId, claims);
                     AddClaims(http, "X-Test-App-Id", AevatarStandardClaimTypes.AppId, claims);
                     AddClaims(http, "X-Test-Namespace", AevatarStandardClaimTypes.Namespace, claims);
+                    AddClaims(http, "X-Test-Scope-Id", AevatarStandardClaimTypes.ScopeId, claims);
                     http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
                 }
 
