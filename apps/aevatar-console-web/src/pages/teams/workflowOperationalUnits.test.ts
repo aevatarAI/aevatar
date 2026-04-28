@@ -5,48 +5,6 @@ import {
 } from "./workflowOperationalUnits";
 
 describe("workflowOperationalUnits", () => {
-  const binding = {
-    available: true,
-    scopeId: "scope-a",
-    serviceId: "service-alpha",
-    displayName: "Alpha Team",
-    serviceKey: "scope-a:alpha",
-    defaultServingRevisionId: "rev-alpha",
-    activeServingRevisionId: "rev-alpha",
-    deploymentId: "dep-alpha",
-    deploymentStatus: "Active",
-    primaryActorId: "actor://alpha",
-    updatedAt: "2026-04-13T09:00:00Z",
-    revisions: [
-      {
-        revisionId: "rev-alpha",
-        implementationKind: "workflow",
-        status: "Published",
-        artifactHash: "hash-alpha",
-        failureReason: "",
-        isDefaultServing: true,
-        isActiveServing: true,
-        isServingTarget: true,
-        allocationWeight: 100,
-        servingState: "Active",
-        deploymentId: "dep-alpha",
-        primaryActorId: "actor://alpha",
-        createdAt: "2026-04-13T08:00:00Z",
-        preparedAt: "2026-04-13T08:05:00Z",
-        publishedAt: "2026-04-13T08:10:00Z",
-        retiredAt: null,
-        workflowName: "customer-support-triage",
-        workflowDefinitionActorId: "definition://customer-support-triage",
-        inlineWorkflowCount: 1,
-        scriptId: "",
-        scriptRevision: "",
-        scriptDefinitionActorId: "",
-        scriptSourceHash: "",
-        staticActorTypeName: "",
-      },
-    ],
-  } as const;
-
   const workflows = [
     {
       scopeId: "scope-a",
@@ -159,7 +117,6 @@ describe("workflowOperationalUnits", () => {
   it("collects the deduped matched service ids for the roster queries", () => {
     expect(
       collectWorkflowOperationalServiceIds({
-        binding,
         services,
         workflows,
       }),
@@ -168,7 +125,6 @@ describe("workflowOperationalUnits", () => {
 
   it("ignores stale service and run hints when a workflow-backed match exists", () => {
     const unit = resolveWorkflowOperationalUnit({
-      binding,
       preferredRunId: "run-does-not-exist",
       preferredServiceId: "service-stale",
       runs,
@@ -191,7 +147,6 @@ describe("workflowOperationalUnits", () => {
 
   it("marks a workflow with no bound service and no service key as draft only", () => {
     const unit = resolveWorkflowOperationalUnit({
-      binding,
       services,
       signals: {
         servicesAvailable: true,
@@ -206,7 +161,6 @@ describe("workflowOperationalUnits", () => {
 
   it("sorts attention-first roster cards before healthy or draft cards", () => {
     const units = buildWorkflowOperationalUnits({
-      binding,
       workflows: [
         ...workflows,
         {

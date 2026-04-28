@@ -6,6 +6,7 @@ public interface IRoleCatalogStore
 
     Task<StoredRoleCatalog> SaveRoleCatalogAsync(
         StoredRoleCatalog catalog,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 
     Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
@@ -14,9 +15,12 @@ public interface IRoleCatalogStore
 
     Task<StoredRoleDraft> SaveRoleDraftAsync(
         StoredRoleDraft draft,
+        long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 
-    Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default);
+    Task DeleteRoleDraftAsync(
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record ImportedRoleCatalog(

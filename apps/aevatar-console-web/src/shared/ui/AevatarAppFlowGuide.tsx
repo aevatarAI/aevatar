@@ -150,15 +150,15 @@ const flowPaths: FlowPath[] = [
       },
       {
         id: 'bind-scope',
-        label: 'Bind scope',
+        label: 'Update default route',
         description:
-          'Bind scope updates the default project service so /invoke points at the published active revision.',
+          'Updating the default route points /invoke at the published active revision without changing member-owned bind facts.',
       },
       {
         id: 'invoke-services',
         label: 'Project Invoke',
         description:
-          'Invoke reads the scope binding and service catalog, resolves the active serving revision, and starts a new run actor.',
+          'Invoke reads the default route and service catalog, resolves the active serving revision, and starts a new run actor.',
       },
       {
         id: 'open-in-runs',
@@ -173,9 +173,9 @@ const flowPaths: FlowPath[] = [
 const distinctionCards: DistinctionCard[] = [
   {
     id: 'save-vs-bind',
-    title: 'Save is not Bind scope',
+    title: 'Save is not Update default route',
     description:
-      'Save updates named workflow assets. Bind scope updates the default project service that backs /invoke.',
+      'Save updates named workflow assets. Updating the default route switches the project service that backs /invoke.',
   },
   {
     id: 'draft-vs-invoke',

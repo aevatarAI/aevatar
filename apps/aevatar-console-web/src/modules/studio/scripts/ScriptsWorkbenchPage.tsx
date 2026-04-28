@@ -1501,12 +1501,12 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     await queryClient.invalidateQueries({
       queryKey: ['studio-scripts-catalogs', appContext.scopeId],
     });
-    const bindingScopeIds = Array.from(
+    const defaultRouteScopeIds = Array.from(
       new Set([appContext.scopeId, resolvedScopeId].filter(Boolean)),
     );
-    for (const scopeId of bindingScopeIds) {
+    for (const scopeId of defaultRouteScopeIds) {
       await queryClient.invalidateQueries({
-        queryKey: ['studio-scope-binding', scopeId],
+        queryKey: ['studio-default-route', scopeId],
       });
     }
   }, [appContext.scopeId, queryClient, resolvedScopeId]);
@@ -2672,7 +2672,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                     className="console-scripts-solid-action console-scripts-header-text-action"
                     onClick={handleOpenBindScope}
                     disabled={!canBindScope}
-                    aria-label="Bind scope"
+                    aria-label="Update default route"
                   >
                     <SafetyCertificateOutlined />
                     <span>Bind</span>

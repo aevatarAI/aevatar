@@ -128,8 +128,8 @@ const TeamsHomeRosterV0: React.FC<SharedTeamsHomeProps> = ({
               />
               <AevatarStatusTag
                 domain="observation"
-                label={lens.currentBindingTarget}
-                status="live"
+                label={lens.partialSignals.length > 0 ? "Partial truth" : "Live truth"}
+                status={lens.partialSignals.length > 0 ? "partial" : "live"}
               />
             </Space>
           }

@@ -386,10 +386,10 @@ const ChatPage: React.FC = () => {
     queryFn: () => studioApi.getUserConfigModels(),
   });
 
-  const bindingQuery = useQuery({
+  const defaultRouteTargetQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["chat", "binding", scopeId],
-    queryFn: () => studioApi.getScopeBinding(scopeId),
+    queryKey: ["chat", "default-route-target", scopeId],
+    queryFn: () => studioApi.getDefaultRouteTarget(scopeId),
   });
   const servicesQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -407,13 +407,19 @@ const ChatPage: React.FC = () => {
       createOnboardingServiceOption(),
       ...buildScopeConsoleServiceOptions(
         servicesQuery.data ?? [],
-        bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
+        defaultRouteTargetQuery.data?.available
+          ? defaultRouteTargetQuery.data.serviceId
+          : undefined,
         {
           chatOnly: true,
         }
       ).map(mapChatServiceOption),
     ],
-    [bindingQuery.data?.available, bindingQuery.data?.serviceId, servicesQuery.data]
+    [
+      defaultRouteTargetQuery.data?.available,
+      defaultRouteTargetQuery.data?.serviceId,
+      servicesQuery.data,
+    ]
   );
   const providerConfigured = useMemo(
     () => hasConfiguredProviders(settingsQuery.data?.providers ?? []),
@@ -575,14 +581,16 @@ const ChatPage: React.FC = () => {
     const onboardingPreferredServiceId =
       settingsQuery.isSuccess &&
       !providerConfigured &&
-      !bindingQuery.data?.available &&
+      !defaultRouteTargetQuery.data?.available &&
       services.some((service) => service.id === onboardingServiceId)
         ? onboardingServiceId
         : "";
     const preferredServiceId =
       routePreferredServiceId ||
       onboardingPreferredServiceId ||
-      (bindingQuery.data?.available ? bindingQuery.data.serviceId : "") ||
+      (defaultRouteTargetQuery.data?.available
+        ? defaultRouteTargetQuery.data.serviceId
+        : "") ||
       services.find((service) => service.id === nyxIdChatServiceId)?.id ||
       services[0]?.id ||
       "";
@@ -609,8 +617,8 @@ const ChatPage: React.FC = () => {
     }
   }, [
     activeConversationId,
-    bindingQuery.data?.available,
-    bindingQuery.data?.serviceId,
+    defaultRouteTargetQuery.data?.available,
+    defaultRouteTargetQuery.data?.serviceId,
     isStreaming,
     messages.length,
     providerConfigured,
@@ -2197,7 +2205,7 @@ const ChatPage: React.FC = () => {
                               "Open Tools only when you need audit evidence or protocol-level detail.",
                             ]
                           : [
-                              "Ask NyxID to inspect services, credentials, or scope bindings.",
+                              "Ask NyxID to inspect services, credentials, or default route targets.",
                               "Use natural-language prompts first, then open Tools for deeper runtime evidence.",
                               "Keep model and route overrides in the composer footer when you need a specific provider path.",
                             ]

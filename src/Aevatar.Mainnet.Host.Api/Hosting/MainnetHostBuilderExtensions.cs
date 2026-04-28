@@ -42,6 +42,11 @@ public static class MainnetHostBuilderExtensions
             options.ServiceName = "Aevatar.Mainnet.Host.Api";
             options.EnableWebSockets = true;
             configureHost?.Invoke(options);
+            // Mainnet invariant — enforced after the caller's configureHost so
+            // user callbacks cannot re-enable the local file secrets store.
+            // Secrets must come from AEVATAR_-prefixed environment variables;
+            // Set/Remove on the secrets store will throw at the call site.
+            options.AllowLocalFileSecretsStore = false;
         });
         builder.AddMainnetDistributedOrleansHost();
         builder.AddAevatarPlatform(options =>

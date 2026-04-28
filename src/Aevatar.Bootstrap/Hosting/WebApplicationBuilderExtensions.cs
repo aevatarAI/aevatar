@@ -33,6 +33,26 @@ public sealed class AevatarDefaultHostOptions
     public bool EnableOpenApiDocument { get; set; } = true;
 
     public string OpenApiDocumentRoute { get; set; } = "/api/openapi.json";
+
+    /// <summary>
+    /// Whether the host may use the local file secrets store
+    /// (<c>~/.aevatar/secrets.json</c>) and register
+    /// <c>AevatarSecretsStore</c>.
+    /// <para>
+    /// <c>true</c> (default): legacy behavior — secrets.json is loaded into
+    /// <see cref="Microsoft.Extensions.Configuration.IConfiguration"/> and a
+    /// read/write store is registered. Suitable for local dev, CLI tools,
+    /// localnet, and demos.
+    /// </para>
+    /// <para>
+    /// <c>false</c>: production / mainnet hosts. The host must not load or
+    /// persist secrets to disk. <c>secrets.json</c> is skipped and the
+    /// read-only <c>EnvironmentSecretsStore</c> is registered; secrets must
+    /// come from configuration / <c>AEVATAR_</c>-prefixed environment
+    /// variables. Mutation methods on the store throw on call.
+    /// </para>
+    /// </summary>
+    public bool AllowLocalFileSecretsStore { get; set; } = true;
 }
 
 public static class WebApplicationBuilderExtensions
@@ -47,8 +67,10 @@ public static class WebApplicationBuilderExtensions
         configureHost?.Invoke(hostOptions);
 
         AddApplicationBaseConfiguration(builder);
-        builder.Configuration.AddAevatarConfig();
-        builder.Services.AddAevatarBootstrap(builder.Configuration);
+        builder.Configuration.AddAevatarConfig(allowLocalFileStore: hostOptions.AllowLocalFileSecretsStore);
+        builder.Services.AddAevatarBootstrap(
+            builder.Configuration,
+            allowLocalFileSecretsStore: hostOptions.AllowLocalFileSecretsStore);
         builder.Services.AddSingleton(hostOptions);
         builder.Services.AddSingleton(new AevatarHostMetadata
         {

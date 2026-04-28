@@ -260,6 +260,15 @@ public sealed class StudioMemberPRReviewFixesTests
 
         public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default) => throw _ex;
+
+        public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
+            string scopeId, string memberId, string endpointId, CancellationToken ct = default) => throw _ex;
+
+        public Task<StudioMemberBindingActivationResponse> ActivateBindingRevisionAsync(
+            string scopeId, string memberId, string revisionId, CancellationToken ct = default) => throw _ex;
+
+        public Task<StudioMemberBindingRevisionActionResponse> RetireBindingRevisionAsync(
+            string scopeId, string memberId, string revisionId, CancellationToken ct = default) => throw _ex;
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment
