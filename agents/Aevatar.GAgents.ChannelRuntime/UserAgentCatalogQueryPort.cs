@@ -48,26 +48,53 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             : null;
     }
 
+    /// <summary>
+    /// Hard cap on the cumulative count returned to a single caller. Bounds the
+    /// in-memory accumulation so a misbehaving / pathological tenant cannot drag
+    /// unbounded data through the port. 5000 is an order of magnitude above any
+    /// reasonable single-user agent count; if a real user ever approaches it, the
+    /// product question (page in the UI / cap the catalog UX) outweighs the
+    /// aesthetics of "infinite" pagination.
+    /// </summary>
+    private const int MaxCallerCatalogEntries = 5000;
+
     public async Task<IReadOnlyList<UserAgentCatalogEntry>> QueryByCallerAsync(OwnerScope caller, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(caller);
 
-        // Push the strict full-tuple OwnerScope equality into the projection store. The
-        // store applies these filters before paging, so the caller's view of the catalog
-        // is bounded by ownership at the source — not by an in-process .Where(...) on a
-        // sweep that could miss entries past the take boundary or expose other tenants'
-        // cardinality through the take ceiling.
-        var query = new ProjectionDocumentQuery
+        // Push the strict full-tuple OwnerScope equality into the projection store and
+        // page through results until the cursor is exhausted. The store applies these
+        // filters before paging so the caller's view of the catalog is bounded by
+        // ownership at the source — not by an in-process .Where(...) on a sweep that
+        // could miss entries past the take boundary, or by a fixed Take=N that
+        // truncates the back of the index for users with more than N agents (issue
+        // #466 review nit on commit 3b8500e).
+        var filters = BuildOwnerScopeFilters(caller);
+        var entries = new List<UserAgentCatalogEntry>();
+        string? cursor = null;
+        do
         {
-            Take = 200,
-            Filters = BuildOwnerScopeFilters(caller),
-        };
+            var query = new ProjectionDocumentQuery
+            {
+                Take = 200,
+                Filters = filters,
+                Cursor = cursor,
+            };
 
-        var result = await _documentReader.QueryAsync(query, ct);
-        return result.Items
-            .Where(static doc => !doc.Tombstoned)
-            .Select(static doc => ToEntry(doc))
-            .ToArray();
+            var page = await _documentReader.QueryAsync(query, ct);
+            foreach (var doc in page.Items)
+            {
+                if (doc.Tombstoned) continue;
+                entries.Add(ToEntry(doc));
+                if (entries.Count >= MaxCallerCatalogEntries)
+                    return entries;
+            }
+
+            cursor = page.NextCursor;
+        }
+        while (!string.IsNullOrEmpty(cursor));
+
+        return entries;
     }
 
     public async Task<long?> GetStateVersionForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)

@@ -8,8 +8,19 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// outbound delivery components (e.g. <see cref="FeishuCardHumanInteractionPort"/>);
 /// not visible to LLM tools.
 ///
-/// Returns <c>null</c> when the agent doesn't exist, is tombstoned, or the credential
-/// document hasn't been materialized yet.
+/// Returns <c>null</c> when:
+/// <list type="bullet">
+///   <item>the agent doesn't exist or is tombstoned, or</item>
+///   <item>the credential document hasn't been materialized yet, or</item>
+///   <item>the credential document exists but its <c>NyxApiKey</c> is blank.</item>
+/// </list>
+///
+/// The blank-credential case is a fail-closed signal — never construct a delivery
+/// target with an empty <c>NyxApiKey</c>. If the runtime received one,
+/// <see cref="FeishuCardHumanInteractionPort"/> would call the NyxID proxy with an
+/// empty token, surfacing what is really a "credential not yet projected" condition
+/// as an outbound 401/403. Returning null here is the right shape: the caller sees
+/// "delivery target unavailable" and surfaces a re-try / propagating message instead.
 /// </summary>
 public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetReader
 {
@@ -32,7 +43,15 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         if (document is null || document.Tombstoned) return null;
 
         var credential = await _credentialReader.GetAsync(agentId, ct);
-        var nyxApiKey = credential?.NyxApiKey ?? string.Empty;
+        if (credential is null || string.IsNullOrWhiteSpace(credential.NyxApiKey))
+        {
+            // Fail-closed: credential not yet projected (or projected blank). Returning a
+            // target with NyxApiKey="" would push the projection-lag failure mode onto the
+            // outbound NyxID proxy as a 401/403 surface, which is wrong: the caller needs
+            // to know "delivery target unavailable" so retries/propagating messages are
+            // honest about what's missing. Issue #466 review.
+            return null;
+        }
 
         return new UserAgentDeliveryTarget(
             AgentId: document.Id ?? string.Empty,
@@ -41,7 +60,7 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
 #pragma warning restore CS0612
             ConversationId: document.ConversationId ?? string.Empty,
             NyxProviderSlug: document.NyxProviderSlug ?? string.Empty,
-            NyxApiKey: nyxApiKey,
+            NyxApiKey: credential.NyxApiKey,
             LarkReceiveId: document.LarkReceiveId ?? string.Empty,
             LarkReceiveIdType: document.LarkReceiveIdType ?? string.Empty,
             LarkReceiveIdFallback: document.LarkReceiveIdFallback ?? string.Empty,

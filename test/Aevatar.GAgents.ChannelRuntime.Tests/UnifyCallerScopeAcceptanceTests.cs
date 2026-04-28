@@ -404,6 +404,27 @@ public sealed class UnifyCallerScopeAcceptanceTests
 #pragma warning restore CS0612
     }
 
+    // ─── Pagination: QueryByCallerAsync must page until the cursor is exhausted ───
+
+    [Fact]
+    public async Task QueryByCallerAsync_PagesPastFirstWindow_ReturnsAllOwnedEntries()
+    {
+        // Issue #466 review: a caller with more than the projection-store page size
+        // (Take=200) of agents must NOT silently lose entries past the first page.
+        // The query port pages through cursors until NextCursor is null.
+        var caller = OwnerScope.ForNyxIdNative("user-many");
+        var docs = Enumerable.Range(0, 305)
+            .Select(i => BuildDocument($"agent-{i:000}", caller))
+            .ToList<UserAgentCatalogDocument>();
+        var reader = new RecordingDocumentReader(docs);
+
+        var port = new UserAgentCatalogQueryPort(reader);
+        var entries = await port.QueryByCallerAsync(caller, CancellationToken.None);
+
+        entries.Should().HaveCount(305,
+            "all owned agents are returned, not just the first 200; the port pages internally");
+    }
+
     // ─── Actor → projector → query integration (lark caller end-to-end) ───
     //
     // Issue #466 review caught a gap: the previous acceptance tests stubbed at the
@@ -579,9 +600,9 @@ public sealed class UnifyCallerScopeAcceptanceTests
 
     /// <summary>
     /// Minimal projection-document reader that walks an in-memory list and applies
-    /// the same Eq filters that the InMemoryProjectionDocumentStore would. Used by the
-    /// lark-caller integration test to exercise actor → projector → reader without
-    /// pulling in the full projection-pipeline DI graph.
+    /// the same Eq filters + cursor pagination that the InMemoryProjectionDocumentStore
+    /// would. Used by the cross-isolation acceptance tests to exercise actor → projector
+    /// → reader without pulling in the full projection-pipeline DI graph.
     /// </summary>
     private sealed class RecordingDocumentReader : IProjectionDocumentReader<UserAgentCatalogDocument, string>
     {
@@ -607,12 +628,20 @@ public sealed class UnifyCallerScopeAcceptanceTests
             {
                 filtered = filtered.Where(d => MatchesFilter(d, filter));
             }
-            var taken = filtered.Take(query.Take).ToArray();
+            var matchingList = filtered.ToList();
+            var offset = ParseCursor(query.Cursor);
+            var page = matchingList.Skip(offset).Take(query.Take).ToArray();
+            var nextOffset = offset + page.Length;
+            var nextCursor = nextOffset < matchingList.Count ? nextOffset.ToString() : null;
             return Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
             {
-                Items = taken,
+                Items = page,
+                NextCursor = nextCursor,
             });
         }
+
+        private static int ParseCursor(string? cursor) =>
+            int.TryParse(cursor, out var offset) ? offset : 0;
 
         private static bool MatchesFilter(UserAgentCatalogDocument doc, ProjectionDocumentFilter filter)
         {
