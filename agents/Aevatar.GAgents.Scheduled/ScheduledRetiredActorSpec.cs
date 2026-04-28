@@ -7,6 +7,8 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.Compatibility;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -58,13 +60,15 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
     {
         var typeProbe = services.GetRequiredService<IActorTypeProbe>();
         var eventStore = services.GetRequiredService<IEventStore>();
+        var logger = services.GetService<ILogger<ScheduledRetiredActorSpec>>()
+                     ?? NullLogger<ScheduledRetiredActorSpec>.Instance;
 
         if (!await ShouldDiscoverFromCatalogAsync(typeProbe, eventStore, ct).ConfigureAwait(false))
             yield break;
 
         var agentIds = new HashSet<string>(StringComparer.Ordinal);
 
-        await foreach (var actorId in DiscoverFromReadModelAsync(services, ct).ConfigureAwait(false))
+        foreach (var actorId in await DiscoverFromReadModelBestEffortAsync(services, logger, ct).ConfigureAwait(false))
             agentIds.Add(actorId);
 
         foreach (var actorId in await DiscoverFromCatalogEventsAsync(eventStore, ct).ConfigureAwait(false))
@@ -118,14 +122,41 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         return false;
     }
 
-    private static async IAsyncEnumerable<string> DiscoverFromReadModelAsync(
+    private static async Task<IReadOnlyList<string>> DiscoverFromReadModelBestEffortAsync(
         IServiceProvider services,
-        [EnumeratorCancellation] CancellationToken ct)
+        ILogger logger,
+        CancellationToken ct)
     {
         var reader = services.GetService<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
         if (reader == null)
-            yield break;
+            return [];
 
+        try
+        {
+            return await DiscoverFromReadModelAsync(reader, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Read-model probe is the snapshot+compaction patch — never block startup
+            // when the projection store is unavailable. Fall back to event-stream walk;
+            // un-compacted clusters still get cleaned, compacted ones merely degrade.
+            logger.LogWarning(
+                ex,
+                "Retired user-agent discovery from {DocumentType} read model failed; falling back to catalog event stream walk.",
+                nameof(UserAgentCatalogDocument));
+            return [];
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> DiscoverFromReadModelAsync(
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> reader,
+        CancellationToken ct)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
         string? cursor = null;
         do
         {
@@ -149,11 +180,13 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
             foreach (var doc in result.Items)
             {
                 if (IsGeneratedUserAgent(doc.Id, doc.AgentType))
-                    yield return doc.Id.Trim();
+                    ids.Add(doc.Id.Trim());
             }
 
             cursor = result.NextCursor;
         } while (!string.IsNullOrWhiteSpace(cursor));
+
+        return ids.ToArray();
     }
 
     private static async Task<IReadOnlyList<string>> DiscoverFromCatalogEventsAsync(

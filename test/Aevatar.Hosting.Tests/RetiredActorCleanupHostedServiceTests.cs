@@ -267,6 +267,54 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldFallBackToCatalogEvents_WhenReadModelDiscoveryThrows()
+    {
+        // Projection store unavailable (transient error) must NOT abort startup
+        // cleanup. The read-model path is best-effort; the event-stream walk and
+        // static targets must still run.
+        var eventStore = new InMemoryEventStore();
+        await AppendCatalogEventsAsync(eventStore,
+        [
+            new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-recent",
+                AgentType = SkillRunnerDefaults.AgentType,
+            },
+        ]);
+        await AppendSingleEventAsync(eventStore, "skill-runner-recent");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["agent-registry-store"] =
+                "Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgent, Aevatar.GAgents.ChannelRuntime",
+            ["skill-runner-recent"] =
+                "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent, Aevatar.GAgents.ChannelRuntime",
+        });
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
+        serviceCollection.AddSingleton<IActorTypeProbe>(typeProbe);
+        serviceCollection.AddSingleton<IProjectionDocumentReader<UserAgentCatalogDocument, string>>(
+            new ThrowingProjectionReader<UserAgentCatalogDocument>());
+        serviceCollection.AddSingleton<IProjectionWriteDispatcher<UserAgentCatalogDocument>>(
+            new NoopProjectionWriter<UserAgentCatalogDocument>());
+
+        var runtime = new RecordingActorRuntime();
+        var service = CreateService(
+            typeProbe,
+            runtime,
+            new RecordingStreamProvider(),
+            eventStore,
+            CreateScheduledSpec(),
+            serviceCollection.BuildServiceProvider());
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.DestroyedActorIds.Should().Contain("skill-runner-recent");
+        runtime.DestroyedActorIds.Should().Contain("agent-registry-store");
+        (await eventStore.GetVersionAsync("skill-runner-recent")).Should().Be(0);
+        (await eventStore.GetVersionAsync("agent-registry-store")).Should().Be(0);
+    }
+
+    [Fact]
     public async Task StartAsync_ShouldDeleteMatchingReadModels()
     {
         var eventStore = new InMemoryEventStore();
