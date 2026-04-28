@@ -316,14 +316,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _agent = null;
         }
 
-        _state.State.AgentId = string.Empty;
-        _state.State.AgentTypeName = null;
-        _state.State.ParentId = null;
-        _state.State.Children.Clear();
-        _state.State.AgentStateTypeName = null;
-        _state.State.AgentStateSnapshot = null;
-        _state.State.AgentStateSnapshotVersion = 0;
-        await _state.WriteStateAsync();
+        _state.State = new RuntimeActorGrainState();
+        await _state.ClearStateAsync();
     }
 
     private async Task<bool> InitializeAgentInternalAsync(string agentTypeName, CancellationToken ct = default)

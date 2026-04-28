@@ -187,6 +187,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedService : IHostedServ
                 .ConfigureAwait(false);
         }
 
+        await CleanupOutgoingRelaysBestEffortAsync(target.ActorId, ct).ConfigureAwait(false);
+
         if (target.CleanupReadModels && _options.CleanupReadModels)
             await CleanupReadModelsBestEffortAsync(target.ActorId, ct).ConfigureAwait(false);
 
@@ -206,6 +208,31 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedService : IHostedServ
             "Retired ChannelRuntime actor cleaned. actorId={ActorId} runtimeType={RuntimeType}",
             target.ActorId,
             runtimeTypeName);
+    }
+
+    private async Task CleanupOutgoingRelaysBestEffortAsync(string actorId, CancellationToken ct)
+    {
+        try
+        {
+            var stream = _streamProvider.GetStream(actorId);
+            var relays = await stream.ListRelaysAsync(ct).ConfigureAwait(false);
+            foreach (var relay in relays)
+            {
+                if (!string.IsNullOrWhiteSpace(relay.TargetStreamId))
+                    await stream.RemoveRelayAsync(relay.TargetStreamId, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Retired ChannelRuntime actor outgoing stream topology cleanup failed and will be skipped. actorId={ActorId}",
+                actorId);
+        }
     }
 
     private async Task<IReadOnlyList<RetiredActorTarget>> DiscoverRetiredCatalogUserAgentTargetsAsync(CancellationToken ct)

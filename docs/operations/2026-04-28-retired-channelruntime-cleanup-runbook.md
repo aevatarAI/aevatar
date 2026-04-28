@@ -9,6 +9,7 @@ Older deployments persisted runtime actor identities such as:
 
 - `Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent`
 - `Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgent`
+- `Aevatar.GAgents.ChannelRuntime.ChannelUserGAgent`
 - `Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent`
 - `Aevatar.GAgents.ChannelRuntime.WorkflowAgentGAgent`
 - `Aevatar.CQRS.Projection.Core.Orchestration.ProjectionMaterializationScopeGAgent<T>` where `T` is a retired `Aevatar.GAgents.ChannelRuntime.*MaterializationContext`
@@ -39,11 +40,13 @@ At startup the cleanup service:
 4. Reads the retired user-agent catalog event stream before resetting it, extracts
    generated `skill-runner-*` / `workflow-agent-*` actor ids, and cleans those
    actors first when their runtime type is retired.
-5. Removes projection scope relays from their root actor streams.
+5. Removes projection scope relays from their root actor streams and removes
+   outgoing relay topology owned by each destroyed actor.
 6. Deletes stale registration/catalog read-model documents for retired root actors
    on a best-effort basis. Projection store failures are logged and do not abort
    startup.
-7. Destroys the runtime actor and resets its event stream.
+7. Destroys the runtime actor by purging durable callbacks, clearing Orleans grain
+   state storage, and resetting its event stream.
 8. Writes a completed marker so later pods skip the cleanup.
 
 Current actors whose runtime type is already under the new namespaces are skipped.
@@ -62,6 +65,23 @@ but the event stream still exists.
 - `projection.durable.scope:channel-bot-registration:channel-bot-registration-store`
 - `projection.durable.scope:device-registration:device-registration-store`
 - `projection.durable.scope:agent-registry:agent-registry-store`
+
+## Out of Scope
+
+`ChannelUserGAgent` instances keyed as
+`channel-user-{platform}-{registrationId}-{senderId}` were per-conversation actors.
+They were not registered in the user-agent catalog, so the startup cleanup service
+does not discover them automatically.
+
+This is not a startup blocker because these actors are activated only when an old
+channel conversation is used. If production has such actors from before the
+namespace split, they can still fail later with
+`Unable to resolve agent type Aevatar.GAgents.ChannelRuntime.ChannelUserGAgent`.
+
+To clean them manually, scan the Orleans grain storage for `channel-user-*` records
+whose persisted `AgentTypeName` contains
+`Aevatar.GAgents.ChannelRuntime.ChannelUserGAgent`, then delete that grain state
+record and the matching event-store keys for the same actor id.
 
 ## Configuration
 
@@ -107,7 +127,9 @@ During the first cleanup, `IActorTypeProbe` may activate a retired actor long
 enough to read its persisted type name. Orleans can emit transient error logs like
 `Unable to resolve agent type Aevatar.GAgents.ChannelRuntime.*` for those actors
 before the cleanup removes them. Treat those as expected only when they are followed
-by `Retired ChannelRuntime actor cleanup completed.`
+by `Retired ChannelRuntime actor cleanup completed.` If the cleanup does not
+complete, treat those errors as a failed migration and rerun after the marker lease
+expires or after manual intervention.
 
 The failure signatures below should disappear after the cleanup has completed:
 

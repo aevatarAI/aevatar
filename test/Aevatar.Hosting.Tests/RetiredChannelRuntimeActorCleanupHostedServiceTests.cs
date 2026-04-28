@@ -35,6 +35,7 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         });
         var runtime = new RecordingActorRuntime();
         var streamProvider = new RecordingStreamProvider();
+        streamProvider.SeedRelay("channel-bot-registration-store", "stale-child-stream");
         var service = CreateService(typeProbe, runtime, streamProvider, eventStore);
 
         await service.StartAsync(CancellationToken.None);
@@ -45,6 +46,7 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         streamProvider.RemovedRelays.Should().Contain((
             "channel-bot-registration-store",
             "projection.durable.scope:channel-bot-registration:channel-bot-registration-store"));
+        streamProvider.RemovedRelays.Should().Contain(("channel-bot-registration-store", "stale-child-stream"));
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
         (await eventStore.GetVersionAsync(
             "projection.durable.scope:channel-bot-registration:channel-bot-registration-store")).Should().Be(0);
@@ -59,6 +61,25 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         {
             ["channel-bot-registration-store"] =
                 "Aevatar.GAgents.Channel.Runtime.ChannelBotRegistrationGAgent, Aevatar.GAgents.Channel.Runtime",
+        });
+        var runtime = new RecordingActorRuntime();
+        var service = CreateService(typeProbe, runtime, new RecordingStreamProvider(), eventStore);
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldNotDestroyActor_WhenRetiredTypeTokenIsOnlySubstring()
+    {
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["channel-bot-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgentProxy, Aevatar.GAgents.ChannelRuntime",
         });
         var runtime = new RecordingActorRuntime();
         var service = CreateService(typeProbe, runtime, new RecordingStreamProvider(), eventStore);
@@ -105,10 +126,16 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
                 AgentId = "skill-runner-current",
                 AgentType = SkillRunnerDefaults.AgentType,
             },
+            new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-proxy",
+                AgentType = SkillRunnerDefaults.AgentType,
+            },
         ]);
         await AppendSingleEventAsync(eventStore, "skill-runner-old");
         await AppendSingleEventAsync(eventStore, "workflow-agent-old");
         await AppendSingleEventAsync(eventStore, "skill-runner-current");
+        await AppendSingleEventAsync(eventStore, "skill-runner-proxy");
 
         var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
         {
@@ -120,6 +147,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
                 "Aevatar.GAgents.ChannelRuntime.WorkflowAgentGAgent, Aevatar.GAgents.ChannelRuntime",
             ["skill-runner-current"] =
                 "Aevatar.GAgents.Scheduled.SkillRunnerGAgent, Aevatar.GAgents.Scheduled",
+            ["skill-runner-proxy"] =
+                "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgentProxy, Aevatar.GAgents.ChannelRuntime",
         });
         var runtime = new RecordingActorRuntime();
         var service = CreateService(typeProbe, runtime, new RecordingStreamProvider(), eventStore);
@@ -130,9 +159,11 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         runtime.DestroyedActorIds.Should().Contain("workflow-agent-old");
         runtime.DestroyedActorIds.Should().Contain("agent-registry-store");
         runtime.DestroyedActorIds.Should().NotContain("skill-runner-current");
+        runtime.DestroyedActorIds.Should().NotContain("skill-runner-proxy");
         (await eventStore.GetVersionAsync("skill-runner-old")).Should().Be(0);
         (await eventStore.GetVersionAsync("workflow-agent-old")).Should().Be(0);
         (await eventStore.GetVersionAsync("skill-runner-current")).Should().Be(1);
+        (await eventStore.GetVersionAsync("skill-runner-proxy")).Should().Be(1);
         (await eventStore.GetVersionAsync("agent-registry-store")).Should().Be(0);
     }
 
@@ -308,12 +339,30 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
     {
         public List<(string Source, string Target)> RemovedRelays { get; } = [];
 
-        public IStream GetStream(string actorId) => new RecordingStream(actorId, RemovedRelays);
+        private readonly Dictionary<string, List<StreamForwardingBinding>> _relaysBySource = new(StringComparer.Ordinal);
+
+        public void SeedRelay(string sourceStreamId, string targetStreamId)
+        {
+            if (!_relaysBySource.TryGetValue(sourceStreamId, out var relays))
+            {
+                relays = [];
+                _relaysBySource[sourceStreamId] = relays;
+            }
+
+            relays.Add(new StreamForwardingBinding
+            {
+                SourceStreamId = sourceStreamId,
+                TargetStreamId = targetStreamId,
+            });
+        }
+
+        public IStream GetStream(string actorId) => new RecordingStream(actorId, RemovedRelays, _relaysBySource);
     }
 
     private sealed class RecordingStream(
         string streamId,
-        List<(string Source, string Target)> removedRelays) : IStream
+        List<(string Source, string Target)> removedRelays,
+        Dictionary<string, List<StreamForwardingBinding>> relaysBySource) : IStream
     {
         public string StreamId => streamId;
 
@@ -334,11 +383,30 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedServiceTests
         {
             ct.ThrowIfCancellationRequested();
             removedRelays.Add((streamId, targetStreamId));
+            if (relaysBySource.TryGetValue(streamId, out var relays))
+                relays.RemoveAll(relay => string.Equals(relay.TargetStreamId, targetStreamId, StringComparison.Ordinal));
+
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!relaysBySource.TryGetValue(streamId, out var relays))
+                return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
+
+            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(
+                relays.Select(static relay => new StreamForwardingBinding
+                {
+                    SourceStreamId = relay.SourceStreamId,
+                    TargetStreamId = relay.TargetStreamId,
+                    ForwardingMode = relay.ForwardingMode,
+                    DirectionFilter = new HashSet<TopologyAudience>(relay.DirectionFilter),
+                    EventTypeFilter = new HashSet<string>(relay.EventTypeFilter, StringComparer.Ordinal),
+                    Version = relay.Version,
+                    LeaseId = relay.LeaseId,
+                }).ToArray());
+        }
     }
 
     private sealed class RecordingProjectionStore<TReadModel> :
