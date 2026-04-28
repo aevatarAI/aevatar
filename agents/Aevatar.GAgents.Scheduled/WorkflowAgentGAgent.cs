@@ -196,6 +196,16 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         };
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
+        // Propagate the outbound Lark delivery target so workflow modules that need to surface
+        // their own status messages back into the originating chat (e.g. TwitterPublishModule
+        // posting "已发布: <url>" or "Twitter OAuth 过期…") can do so via the same api-lark-bot
+        // proxy this agent already uses, without re-resolving the catalog at run time.
+        if (!string.IsNullOrWhiteSpace(State.LarkReceiveId))
+            metadata[ChannelMetadataKeys.LarkReceiveId] = State.LarkReceiveId;
+        if (!string.IsNullOrWhiteSpace(State.LarkReceiveIdType))
+            metadata[ChannelMetadataKeys.LarkReceiveIdType] = State.LarkReceiveIdType;
+        if (!string.IsNullOrWhiteSpace(State.NyxProviderSlug))
+            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = State.NyxProviderSlug;
         return metadata;
     }
 

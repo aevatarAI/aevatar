@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Scheduled.WorkflowModules;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -101,6 +102,12 @@ public static class ScheduledServiceCollectionExtensions
             services.AddInMemoryDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
                 static doc => doc.Id, static key => key);
         }
+
+        // Register the scheduled-agent workflow module pack so the social_media template's
+        // `twitter_publish` step type resolves at workflow run time (issue #216).
+        // AddWorkflowModulePack uses TryAddEnumerable, so calling alongside AddAevatarWorkflow
+        // is idempotent.
+        services.AddScheduledWorkflowExtensions();
 
         return services;
     }

@@ -1890,14 +1890,24 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        // Issue #216: social_media now requires both api-lark-bot (delivery) AND api-twitter
+        // (publish) so the agent api-key carries both entitlements. The api-twitter slug entry
+        // is what gates `service_not_connected` at create time; without it the user gets a
+        // structured error pointing them at NyxID's connect-twitter flow.
         handler.Add(HttpMethod.Get, "/api/v1/user-services", """
             {
               "services": [
-                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-twitter","slug":"api-twitter","is_active":true,"credential_source":{"type":"personal"}}
               ]
             }
             """);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-2","full_key":"full-key-2"}""");
+        // Twitter preflight (#216 mirror of #418 GitHub preflight): GET /users/me with the
+        // freshly minted key must succeed before the workflow gets upserted. NyxID forwards
+        // the Twitter v2 user payload verbatim on success (no `error` envelope).
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-twitter/users/me",
+            """{"data":{"id":"123456","name":"Alice","username":"alice"}}""");
 
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -1981,15 +1991,37 @@ public sealed class AgentBuilderToolTests
                 .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
                 .Subject;
             using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
+            // Issue #216: api-key now carries both `svc-lark` (approval delivery) and
+            // `svc-twitter` (publish). Order is irrelevant — `BeEquivalentTo` ignores it.
             apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
                 .Select(static item => item.GetString())
                 .Should()
-                .BeEquivalentTo(["svc-lark"]);
+                .BeEquivalentTo(["svc-lark", "svc-twitter"]);
             // PR #418 review (4175529548): NyxID's `allow_all_services` defaults to `true`
             // (api_keys.rs:105) and proxy enforcement only fires when `!allow_all_services`
             // (proxy.rs:1030). Pin that the field is *present* and `false` so the resolved
             // `allowed_service_ids` actually constrains the key's reach.
             apiKeyDoc.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+
+            // Workflow YAML must now route the approval `true` branch to the new
+            // `publish_to_twitter` step instead of straight to `done` — the publish step is
+            // what fulfills issue #216's "approve → publish to X" path. PR #461 review fix:
+            // also pin `on_error: skip` so a Twitter-side rejection (401/403/429/5xx) advances
+            // the run to `done` instead of terminating the entire workflow as failed; the
+            // module already surfaces categorized errors to Lark independently.
+            await workflowCommandPort.Received(1).UpsertAsync(
+                Arg.Is<ScopeWorkflowUpsertRequest>(request =>
+                    request.WorkflowYaml.Contains("type: twitter_publish", StringComparison.Ordinal) &&
+                    request.WorkflowYaml.Contains("publish_provider_slug: \"api-twitter\"", StringComparison.Ordinal) &&
+                    request.WorkflowYaml.Contains("\"true\": publish_to_twitter", StringComparison.Ordinal) &&
+                    request.WorkflowYaml.Contains("strategy: skip", StringComparison.Ordinal)),
+                Arg.Any<CancellationToken>());
+
+            // Twitter preflight must fire with the freshly minted api-key against /users/me
+            // before the workflow is upserted (mirror of GitHub preflight in #418).
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Get &&
+                r.Path == "/api/v1/proxy/s/api-twitter/users/me");
         }
         finally
         {
@@ -2804,6 +2836,373 @@ public sealed class AgentBuilderToolTests
             await workflowAgentPort.Received(1).DisableAsync(
                 "workflow-agent-1",
                 "disable_agent",
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_SocialMedia_FailsClosed_When_TwitterProxyReturns401()
+    {
+        // Issue aevatarAI/aevatar#216: social_media now publishes approved drafts to Twitter via
+        // NyxID's api-twitter proxy. Mirror of the GitHub preflight (#418): probe /users/me with
+        // the freshly minted api-key; if NyxID has no OAuth grant for the user (401), abort
+        // creation, return a structured `twitter_oauth_required` error, and best-effort revoke
+        // the orphan key so retries don't accumulate.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-twitter","slug":"api-twitter","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-401","full_key":"full-key-401"}""");
+        // 401 from /users/me through NyxID — common when the user has not connected Twitter
+        // yet at NyxID, or when the OAuth grant was revoked at x.com/settings.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-twitter/users/me",
+            """{"error": true, "status": 401, "body": "{\"title\":\"Unauthorized\",\"detail\":\"Authenticating with OAuth 2.0 Application-Only is forbidden for this endpoint.\"}"}""");
+        // Pin the orphan-key revocation: per #418's pattern, every preflight failure must
+        // best-effort delete the api-key so retries don't pile up keys in the user's account.
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-401", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(workflowCommandPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "social_media",
+                  "agent_id": "workflow-agent-twitter-401",
+                  "topic": "Launch update",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("twitter_oauth_required");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(401);
+            doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("re-authorize");
+
+            // Workflow upsert and agent init must NOT have run — preflight aborts before that.
+            await workflowCommandPort.DidNotReceiveWithAnyArgs().UpsertAsync(default!, default);
+            await workflowAgentPort.DidNotReceiveWithAnyArgs().InitializeAsync(default!, default!, default);
+
+            // Orphan-key revocation fires (mirror of #418 r3141846175 for daily_report).
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-401");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_SocialMedia_FailsClosed_When_TwitterProxyReturns403()
+    {
+        // 403 here means "the OAuth token reached Twitter but tweet.write was not in scope".
+        // Default NyxID seed includes tweet.write (provider_service.rs:405-450), so a 403 in
+        // production typically means a regression on the seed side or the bound token was
+        // issued before tweet.write was added — surface this as `twitter_proxy_access_denied`
+        // (distinct from 401) so the user-facing hint can steer ops vs the user.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-twitter","slug":"api-twitter","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-403","full_key":"full-key-403"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-twitter/users/me",
+            """{"error": true, "status": 403, "body": "{\"title\":\"Forbidden\",\"detail\":\"Your client app is not configured with the appropriate oauth2 app permissions.\"}"}""");
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-403", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(workflowCommandPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "social_media",
+                  "agent_id": "workflow-agent-twitter-403",
+                  "topic": "Launch update",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("twitter_proxy_access_denied");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
+            doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("tweet.write");
+
+            await workflowCommandPort.DidNotReceiveWithAnyArgs().UpsertAsync(default!, default);
+            await workflowAgentPort.DidNotReceiveWithAnyArgs().InitializeAsync(default!, default!, default);
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-403");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_SocialMedia_FailsClosed_When_TwitterServiceNotConnected()
+    {
+        // The flip side of the preflight: if api-twitter is not present in user-services at all,
+        // the existing ResolveProxyServiceIdsAsync path returns `service_not_connected` BEFORE
+        // we mint the api-key. This is the "user has not added Twitter at NyxID at all" signal.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        // Notice: no api-twitter row.
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(workflowCommandPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "social_media",
+                  "agent_id": "workflow-agent-no-twitter",
+                  "topic": "Launch update",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("service_not_connected");
+            doc.RootElement.GetProperty("slug").GetString().Should().Be("api-twitter");
+            // Critical invariant: no api-key was ever minted because the slug check failed up
+            // front. Catching this here matters because the daily_report tests already pin the
+            // same invariant for api-github — keep parity.
+            handler.Requests.Should().NotContain(r =>
+                r.Method == HttpMethod.Post && r.Path == "/api/v1/api-keys");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_SocialMedia_PreflightProbesConfiguredPublishSlug_NotHardcodedApiTwitter()
+    {
+        // PR #461 review (commit d9f6df81 follow-up): when a caller passes a custom
+        // `publish_provider_slug` (e.g. a tenant-staged Twitter mirror like `api-x-staging`),
+        // the preflight must validate THAT slug — not the hardcoded `"api-twitter"` default.
+        // Otherwise we mint a key for the custom slug, generate workflow YAML pointing at the
+        // custom slug, but green-light the create flow against an unrelated proxy (or 404 on
+        // the unmocked default route). Pin that the GET probe lands on the configured slug's
+        // path so this regresses loudly if anyone reverts to a literal "api-twitter".
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+        queryPort.GetAsync("workflow-agent-custom-slug", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "workflow-agent-custom-slug",
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+                Status = WorkflowAgentDefaults.StatusRunning,
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
+        workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ScopeWorkflowUpsertResult(
+                new ScopeWorkflowSummary(
+                    "scope-1",
+                    "social-media-workflow-agent-custom-slug",
+                    "Social Media Approval workflow-agent-custom-slug",
+                    "service-key",
+                    "social_media_workflow_agent_custom_slug",
+                    "workflow-actor-1",
+                    "rev-1",
+                    "deploy-1",
+                    "active",
+                    DateTimeOffset.UtcNow),
+                "rev-1",
+                "workflow-actor-prefix",
+                "workflow-actor-1")));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-x-staging","slug":"api-x-staging","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-custom","full_key":"full-key-custom"}""");
+        // Mock ONLY the configured slug's preflight path. The default `api-twitter` path
+        // is intentionally NOT mocked — RoutingJsonHandler returns 404 for unknown routes,
+        // which would land in the preflight's "non-401/403 → success" branch and silently
+        // green-light the create. The successful response below proves we hit the right slug.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-x-staging/users/me",
+            """{"data":{"id":"123456","name":"Alice","username":"alice"}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(workflowCommandPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "social_media",
+                  "agent_id": "workflow-agent-custom-slug",
+                  "topic": "Launch update",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "publish_provider_slug": "api-x-staging"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().BeOneOf("created", "accepted");
+
+            // The preflight must fire against the configured slug, NOT the default api-twitter.
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Get &&
+                r.Path == "/api/v1/proxy/s/api-x-staging/users/me");
+            handler.Requests.Should().NotContain(r =>
+                r.Method == HttpMethod.Get &&
+                r.Path == "/api/v1/proxy/s/api-twitter/users/me");
+
+            // Workflow YAML must reference the custom slug end-to-end (not just at preflight).
+            await workflowCommandPort.Received(1).UpsertAsync(
+                Arg.Is<ScopeWorkflowUpsertRequest>(request =>
+                    request.WorkflowYaml.Contains("publish_provider_slug: \"api-x-staging\"", StringComparison.Ordinal)),
                 Arg.Any<CancellationToken>());
         }
         finally
