@@ -39,25 +39,7 @@ public sealed class CompositeCallerScopeResolver : ICallerScopeResolver
         return null;
     }
 
-    /// <summary>
-    /// Resolves the caller's scope and throws when no resolver matches. Use this from the
-    /// tool layer's per-request entry point so a missing scope becomes a structured error
-    /// rather than silently downgrading to "no filter".
-    /// </summary>
-    public async Task<OwnerScope> RequireAsync(CancellationToken ct = default)
-    {
-        var scope = await TryResolveAsync(ct);
-        if (scope is null)
-        {
-            throw new CallerScopeUnavailableException(
-                "No caller scope resolver matched the current request context. The request must come from either a NyxID-authenticated native client (cli/web) or a channel surface with platform/sender_id metadata.");
-        }
-
-        if (!scope.TryValidate(out var error))
-        {
-            throw new CallerScopeUnavailableException($"Resolved caller scope is invalid: {error}");
-        }
-
-        return scope;
-    }
+    // RequireAsync lives on the interface as a default method (issue #466 review).
+    // Tools call `resolver.RequireAsync(ct)` against ICallerScopeResolver directly;
+    // this composite picks up the default implementation, no override needed.
 }

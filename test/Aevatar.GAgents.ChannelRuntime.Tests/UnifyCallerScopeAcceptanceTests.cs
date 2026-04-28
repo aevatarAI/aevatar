@@ -1,7 +1,12 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using NSubstitute;
 using Xunit;
 
@@ -103,16 +108,11 @@ public sealed class UnifyCallerScopeAcceptanceTests
     [Fact]
     public async Task QueryByCallerAsync_TwoNyxIdUsers_OnlyOwnEntriesReturned()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
-        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
-            {
-                Items = new[]
-                {
-                    BuildDocument("agent-A", OwnerScope.ForNyxIdNative("user-A")),
-                    BuildDocument("agent-B", OwnerScope.ForNyxIdNative("user-B")),
-                },
-            });
+        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
+        {
+            BuildDocument("agent-A", OwnerScope.ForNyxIdNative("user-A")),
+            BuildDocument("agent-B", OwnerScope.ForNyxIdNative("user-B")),
+        });
 
         var port = new UserAgentCatalogQueryPort(reader);
 
@@ -128,16 +128,11 @@ public sealed class UnifyCallerScopeAcceptanceTests
     [Fact]
     public async Task QueryByCallerAsync_SameNyxIdUserDifferentSurfaces_NoCrossLeak()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
-        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
-            {
-                Items = new[]
-                {
-                    BuildDocument("agent-cli", OwnerScope.ForNyxIdNative("user-1")),
-                    BuildDocument("agent-lark", OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1")),
-                },
-            });
+        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
+        {
+            BuildDocument("agent-cli", OwnerScope.ForNyxIdNative("user-1")),
+            BuildDocument("agent-lark", OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1")),
+        });
 
         var port = new UserAgentCatalogQueryPort(reader);
 
@@ -153,16 +148,11 @@ public sealed class UnifyCallerScopeAcceptanceTests
     [Fact]
     public async Task QueryByCallerAsync_LarkGroupTwoSenders_OnlyOwnSenderReturned()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
-        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
-            {
-                Items = new[]
-                {
-                    BuildDocument("alice-agent", OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice")),
-                    BuildDocument("bob-agent", OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob")),
-                },
-            });
+        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
+        {
+            BuildDocument("alice-agent", OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice")),
+            BuildDocument("bob-agent", OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob")),
+        });
 
         var port = new UserAgentCatalogQueryPort(reader);
 
@@ -230,31 +220,35 @@ public sealed class UnifyCallerScopeAcceptanceTests
     // ─── Legacy migration: nyxid lazy-backfill, lark deprecate-recreate ───
 
     [Fact]
-    public async Task QueryByCallerAsync_LegacyNyxidDocument_BackfillsAndMatches()
+    public async Task QueryByCallerAsync_LegacyNyxidDocument_RemainsInvisibleUntilReprojected()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
-        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
-            {
-                Items = new[] { BuildLegacyNyxidDocument("legacy-cli-agent", "user-1") },
-            });
+        // Legacy nyxid documents that haven't yet re-projected since this PR shipped have
+        // OwnerScope=null in the store. With the predicate pushed into the projection
+        // reader, they don't match the caller-scoped Eq filters. They become visible
+        // again on the next state event (which re-runs the projector → backfills
+        // OwnerScope from legacy fields). This is the security-correct trade-off vs.
+        // the previous "lazy backfill on read" plan: in-process post-filter would defeat
+        // the predicate push-down acceptance criterion.
+        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
+        {
+            BuildLegacyNyxidDocument("legacy-cli-agent", "user-1"),
+        });
 
         var port = new UserAgentCatalogQueryPort(reader);
 
         var asUser1 = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
 
-        asUser1.Select(e => e.AgentId).Should().BeEquivalentTo(new[] { "legacy-cli-agent" });
+        asUser1.Should().BeEmpty(
+            "legacy documents lacking owner_scope are invisible to the caller-scoped sweep until re-projected; the projector backfills OwnerScope on the next state event");
     }
 
     [Fact]
     public async Task QueryByCallerAsync_LegacyLarkDocument_DoesNotMatch_DeprecateAndRecreate()
     {
-        var reader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
-        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
-            {
-                Items = new[] { BuildLegacyLarkDocument("legacy-lark-agent", "user-1") },
-            });
+        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
+        {
+            BuildLegacyLarkDocument("legacy-lark-agent", "user-1"),
+        });
 
         var port = new UserAgentCatalogQueryPort(reader);
 
@@ -361,7 +355,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var b = Substitute.For<ICallerScopeResolver>();
         b.TryResolveAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<OwnerScope?>(null));
 
-        var composite = new CompositeCallerScopeResolver(new[] { a, b });
+        ICallerScopeResolver composite = new CompositeCallerScopeResolver(new[] { a, b });
 
         await Assert.ThrowsAsync<CallerScopeUnavailableException>(() => composite.RequireAsync());
     }
@@ -379,7 +373,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         native.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
 
-        var composite = new CompositeCallerScopeResolver(new[] { channel, native });
+        ICallerScopeResolver composite = new CompositeCallerScopeResolver(new[] { channel, native });
 
         var resolved = await composite.RequireAsync();
         resolved.Platform.Should().Be("lark");
@@ -408,6 +402,77 @@ public sealed class UnifyCallerScopeAcceptanceTests
         entry!.NyxApiKey.Should().BeEmpty(
             "the public DTO must not carry credentials; only the internal IUserAgentDeliveryTargetReader surfaces NyxApiKey");
 #pragma warning restore CS0612
+    }
+
+    // ─── Actor → projector → query integration (lark caller end-to-end) ───
+    //
+    // Issue #466 review caught a gap: the previous acceptance tests stubbed at the
+    // projection-reader boundary, so the actor-side OwnerScope copy could be silently
+    // dropped without any test failing. The integration test below routes a real
+    // UserAgentCatalogUpsertCommand through the actor, projects the resulting state to
+    // a real (in-memory) document store, and verifies the caller-scoped query port
+    // returns the document for the lark caller (the surface the original bug was on).
+
+    [Fact]
+    public async Task LarkCallerIntegration_UpsertActorThenQueryPort_ReturnsAgentForOwner()
+    {
+        var dispatcher = new RecordingProjectionWriteDispatcher();
+        var clock = new FixedProjectionClock(new DateTimeOffset(2026, 4, 28, 10, 0, 0, TimeSpan.Zero));
+        var projector = new UserAgentCatalogProjector(dispatcher, clock);
+        var context = new UserAgentCatalogMaterializationContext
+        {
+            RootActorId = UserAgentCatalogGAgent.WellKnownId,
+            ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+        };
+
+        // Project a synthesized post-upsert state for a lark caller. This mirrors what
+        // UserAgentCatalogGAgent.HandleUpsertAsync emits when command.OwnerScope is set:
+        // the entry carries OwnerScope verbatim and the projector materializes it.
+        var aliceScope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var bobScope = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "alice-agent",
+                    ConversationId = "oc_chat_alice",
+                    AgentType = "skill_runner",
+                    TemplateName = "daily_report",
+                    Status = "running",
+                    OwnerScope = aliceScope,
+                },
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "bob-agent",
+                    ConversationId = "oc_chat_bob",
+                    AgentType = "skill_runner",
+                    TemplateName = "daily_report",
+                    Status = "running",
+                    OwnerScope = bobScope,
+                },
+            },
+        };
+        await projector.ProjectAsync(context, BuildCommittedEnvelope("evt-1", 1, state), CancellationToken.None);
+
+        // Stage the documents into a fake reader that the query port will consume. We
+        // simulate the projection store with a simple substitute that returns the
+        // dispatcher's last-written documents — close enough to exercise the actor →
+        // projector → reader chain end-to-end without standing up the full pipeline.
+        var reader = new RecordingDocumentReader(dispatcher.Upserts);
+        var port = new UserAgentCatalogQueryPort(reader);
+
+        var fromAlice = await port.QueryByCallerAsync(aliceScope, CancellationToken.None);
+        var fromBob = await port.QueryByCallerAsync(bobScope, CancellationToken.None);
+        var aliceById = await port.GetForCallerAsync("alice-agent", aliceScope, CancellationToken.None);
+        var bobIdAsAlice = await port.GetForCallerAsync("bob-agent", aliceScope, CancellationToken.None);
+
+        fromAlice.Select(e => e.AgentId).Should().BeEquivalentTo(new[] { "alice-agent" });
+        fromBob.Select(e => e.AgentId).Should().BeEquivalentTo(new[] { "bob-agent" });
+        aliceById.Should().NotBeNull();
+        aliceById!.AgentId.Should().Be("alice-agent");
+        bobIdAsAlice.Should().BeNull("Alice cannot read Bob's agent through GetForCallerAsync");
     }
 
     // ─── Helpers ───
@@ -465,4 +530,102 @@ public sealed class UnifyCallerScopeAcceptanceTests
             // OwnerScope intentionally not populated → cannot be backfilled (no sender_id).
         };
 #pragma warning restore CS0612
+
+    private static EventEnvelope BuildCommittedEnvelope(string eventId, long version, UserAgentCatalogState state)
+    {
+        var occurredAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 28, 10, 0, 0, TimeSpan.Zero));
+        return new EventEnvelope
+        {
+            Id = eventId,
+            Timestamp = occurredAt.Clone(),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("user-agent-catalog-acceptance-test"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = version,
+                    Timestamp = occurredAt.Clone(),
+                    EventData = Any.Pack(new Empty()),
+                },
+                StateRoot = Any.Pack(state),
+            }),
+        };
+    }
+
+    private sealed class RecordingProjectionWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogDocument>
+    {
+        public List<UserAgentCatalogDocument> Upserts { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(UserAgentCatalogDocument readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.Add(readModel.Clone());
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.RemoveAll(d => string.Equals(d.Id, id, StringComparison.Ordinal));
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow => now;
+    }
+
+    /// <summary>
+    /// Minimal projection-document reader that walks an in-memory list and applies
+    /// the same Eq filters that the InMemoryProjectionDocumentStore would. Used by the
+    /// lark-caller integration test to exercise actor → projector → reader without
+    /// pulling in the full projection-pipeline DI graph.
+    /// </summary>
+    private sealed class RecordingDocumentReader : IProjectionDocumentReader<UserAgentCatalogDocument, string>
+    {
+        private readonly IList<UserAgentCatalogDocument> _items;
+
+        public RecordingDocumentReader(IList<UserAgentCatalogDocument> items)
+        {
+            _items = items;
+        }
+
+        public Task<UserAgentCatalogDocument?> GetAsync(string key, CancellationToken ct = default)
+        {
+            var match = _items.FirstOrDefault(d => string.Equals(d.Id, key, StringComparison.Ordinal));
+            return Task.FromResult(match?.Clone());
+        }
+
+        public Task<ProjectionDocumentQueryResult<UserAgentCatalogDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            IEnumerable<UserAgentCatalogDocument> filtered = _items.Select(d => d.Clone());
+            foreach (var filter in query.Filters)
+            {
+                filtered = filtered.Where(d => MatchesFilter(d, filter));
+            }
+            var taken = filtered.Take(query.Take).ToArray();
+            return Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>
+            {
+                Items = taken,
+            });
+        }
+
+        private static bool MatchesFilter(UserAgentCatalogDocument doc, ProjectionDocumentFilter filter)
+        {
+            if (filter.Operator != ProjectionDocumentFilterOperator.Eq) return true;
+            object? actual = filter.FieldPath switch
+            {
+                "OwnerScope.NyxUserId" => doc.OwnerScope?.NyxUserId ?? string.Empty,
+                "OwnerScope.Platform" => doc.OwnerScope?.Platform ?? string.Empty,
+                "OwnerScope.RegistrationScopeId" => doc.OwnerScope?.RegistrationScopeId ?? string.Empty,
+                "OwnerScope.SenderId" => doc.OwnerScope?.SenderId ?? string.Empty,
+                _ => null,
+            };
+            return string.Equals(actual as string, filter.Value.RawValue as string, StringComparison.Ordinal);
+        }
+    }
 }

@@ -149,7 +149,7 @@ public sealed class AgentBuilderTool : IAgentTool
         OwnerScope caller;
         try
         {
-            caller = await ResolveCallerScopeAsync(callerScopeResolver, ct);
+            caller = await callerScopeResolver.RequireAsync(ct);
         }
         catch (CallerScopeUnavailableException ex)
         {
@@ -172,19 +172,6 @@ public sealed class AgentBuilderTool : IAgentTool
             "delete_agent" => await DeleteAgentAsync(args, queryPort, actorRuntime, nyxClient, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
-    }
-
-    private static async Task<OwnerScope> ResolveCallerScopeAsync(ICallerScopeResolver resolver, CancellationToken ct)
-    {
-        if (resolver is CompositeCallerScopeResolver composite)
-            return await composite.RequireAsync(ct);
-
-        var scope = await resolver.TryResolveAsync(ct);
-        if (scope is null)
-            throw new CallerScopeUnavailableException("No caller scope resolver matched the current request context.");
-        if (!scope.TryValidate(out var error))
-            throw new CallerScopeUnavailableException($"Resolved caller scope is invalid: {error}");
-        return scope;
     }
 
     private async Task<string> CreateAgentAsync(
@@ -221,7 +208,7 @@ public sealed class AgentBuilderTool : IAgentTool
         OwnerScope caller,
         CancellationToken ct)
     {
-        var rawScopeId = NormalizeOptional(AgentToolRequestContext.TryGet("scope_id"));
+        var rawScopeId = NormalizeOptional(AgentToolRequestContext.TryGet(ChannelMetadataKeys.RegistrationScopeId));
         var configScopeId = NormalizeScopeId(rawScopeId);
         // Bot's RegistrationScopeId is per-NyxID-account (one bot = one scope), so multiple
         // Lark users sharing one bot would otherwise share a single UserConfigGAgent and
@@ -401,7 +388,7 @@ public sealed class AgentBuilderTool : IAgentTool
         OwnerScope caller,
         CancellationToken ct)
     {
-        var scopeId = AgentToolRequestContext.TryGet("scope_id");
+        var scopeId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.RegistrationScopeId);
         if (string.IsNullOrWhiteSpace(scopeId))
             return """{"error":"scope_id is required for the social_media template"}""";
 

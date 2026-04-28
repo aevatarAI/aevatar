@@ -52,7 +52,7 @@ public sealed class ChannelMetadataCallerScopeResolver : ICallerScopeResolver
 
         // Bot's registration scope. Empty/missing is a misconfiguration on a channel surface;
         // every channel bot has a registration scope by construction.
-        var registrationScopeId = NormalizeOptional(AgentToolRequestContext.TryGet("scope_id"));
+        var registrationScopeId = NormalizeOptional(AgentToolRequestContext.TryGet(ChannelMetadataKeys.RegistrationScopeId));
         if (registrationScopeId is null)
         {
             throw new CallerScopeUnavailableException(

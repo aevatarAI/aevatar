@@ -26,6 +26,45 @@ public interface ICallerScopeResolver
 }
 
 /// <summary>
+/// Convenience extensions for <see cref="ICallerScopeResolver"/>. Tools call these from a
+/// per-request entry point so a missing or invalid scope becomes a structured exception
+/// rather than silently degrading to "no filter".
+///
+/// (An earlier iteration used a default interface method; that didn't compose with
+/// NSubstitute's proxy behavior in tests, which intercepts default methods and returns
+/// the default Task — bypassing the body. Extension methods aren't intercepted, so tests
+/// can mock <see cref="ICallerScopeResolver.TryResolveAsync"/> and have <see cref="RequireAsync"/>
+/// run the validate-or-throw logic against the mocked return.)
+/// </summary>
+public static class CallerScopeResolverExtensions
+{
+    /// <summary>
+    /// Resolves the caller's scope and throws when no resolver matches or the resolved
+    /// scope fails validation. Centralizes the "fail-closed" contract so both
+    /// <c>AgentBuilderTool</c> and <c>AgentDeliveryTargetTool</c> use the same error
+    /// shape (issue #466 review: avoid duplicating ResolveCallerScopeAsync per tool).
+    /// </summary>
+    public static async Task<OwnerScope> RequireAsync(this ICallerScopeResolver resolver, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+
+        var scope = await resolver.TryResolveAsync(ct);
+        if (scope is null)
+        {
+            throw new CallerScopeUnavailableException(
+                "No caller scope resolver matched the current request context. The request must come from either a NyxID-authenticated native client (cli/web) or a channel surface with platform/sender_id metadata.");
+        }
+
+        if (!scope.TryValidate(out var error))
+        {
+            throw new CallerScopeUnavailableException($"Resolved caller scope is invalid: {error}");
+        }
+
+        return scope;
+    }
+}
+
+/// <summary>
 /// Thrown when caller-scope resolution should have succeeded but the upstream identity
 /// source returned an error envelope, malformed payload, or expired credentials. The
 /// per-id ops surface this as a specific error rather than falling through to permissive

@@ -10,8 +10,17 @@ public sealed partial class OwnerScope
     public const string NyxIdPlatform = "nyxid";
 
     /// <summary>
+    /// Closed canonical set of platform values. Every <see cref="OwnerScope"/> at command-
+    /// handler / resolver-output ingress must carry one of these — anything else is a
+    /// resolver bug or a hand-constructed scope that bypassed the factory normalization.
+    /// </summary>
+    private static readonly System.Collections.Generic.HashSet<string> CanonicalPlatforms =
+        new(System.StringComparer.Ordinal) { "nyxid", "lark", "telegram" };
+
+    /// <summary>
     /// Validates that the scope is well-formed at the command-handler / resolver-output
-    /// boundary. Empty <c>nyx_user_id</c> or empty <c>platform</c> is rejected. Non-native
+    /// boundary. Empty <c>nyx_user_id</c> or empty <c>platform</c> is rejected; the
+    /// <c>platform</c> must be one of the canonical values (issue #466 §B). Non-native
     /// platforms additionally require <c>registration_scope_id</c> and <c>sender_id</c>.
     /// Returns <c>true</c> with no error message on success; otherwise sets
     /// <paramref name="error"/> to a human-readable reason.
@@ -26,6 +35,11 @@ public sealed partial class OwnerScope
         if (string.IsNullOrWhiteSpace(Platform))
         {
             error = "OwnerScope.platform is required (\"nyxid\" for native cli/web; \"lark\"/\"telegram\"/… for channel surfaces)";
+            return false;
+        }
+        if (!CanonicalPlatforms.Contains(Platform))
+        {
+            error = $"OwnerScope.platform '{Platform}' is not in the canonical set ({{nyxid, lark, telegram}}). Resolvers must produce a canonical lower-case value.";
             return false;
         }
 
@@ -50,14 +64,17 @@ public sealed partial class OwnerScope
     public bool IsNyxIdNative => string.Equals(Platform, NyxIdPlatform, System.StringComparison.Ordinal);
 
     /// <summary>
-    /// Strict full-tuple equality used at the readmodel filter boundary. Two scopes match iff
-    /// every field is character-equal. <c>null</c> on either side never matches.
+    /// Strict full-tuple equality used at the readmodel filter boundary. Two scopes match
+    /// iff every field is character-equal — except <c>Platform</c>, which is matched
+    /// case-insensitively (defense-in-depth: factories always lowercase, but proto round-
+    /// trips and hand-written tests can land non-canonical casing here).
+    /// <c>null</c> on either side never matches.
     /// </summary>
     public bool MatchesStrictly(OwnerScope? other)
     {
         if (other is null) return false;
         return string.Equals(NyxUserId, other.NyxUserId, System.StringComparison.Ordinal)
-               && string.Equals(Platform, other.Platform, System.StringComparison.Ordinal)
+               && string.Equals(Platform, other.Platform, System.StringComparison.OrdinalIgnoreCase)
                && string.Equals(RegistrationScopeId, other.RegistrationScopeId, System.StringComparison.Ordinal)
                && string.Equals(SenderId, other.SenderId, System.StringComparison.Ordinal);
     }

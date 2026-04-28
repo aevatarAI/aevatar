@@ -40,8 +40,9 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
     public string Description =>
         "Manage agent delivery targets for workflow human interaction cards and outbound channel delivery. " +
-        "Actions: list, upsert, delete. " +
-        "Use this to bind an agent_id/delivery_target_id to a Lark conversation and Nyx provider slug. " +
+        "Actions: list, upsert (rebind existing only), delete. " +
+        "Use this to rebind an agent_id/delivery_target_id to a different Lark conversation or Nyx provider slug; " +
+        "creating new delivery targets (which mints credentials) is the agent_builder tool's job. " +
         "Operations are scoped to the caller's own delivery targets.";
 
     // Note (issue #466): no `owner_nyx_user_id` and no `nyx_api_key` parameters. Owner
@@ -95,7 +96,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         OwnerScope caller;
         try
         {
-            caller = await ResolveCallerScopeAsync(callerScopeResolver, ct);
+            caller = await callerScopeResolver.RequireAsync(ct);
         }
         catch (CallerScopeUnavailableException ex)
         {
@@ -118,19 +119,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             "delete" => await DeleteAsync(queryPort, actorRuntime, caller, root, ct),
             _ => await ListAsync(queryPort, caller, ct),
         };
-    }
-
-    private static async Task<OwnerScope> ResolveCallerScopeAsync(ICallerScopeResolver resolver, CancellationToken ct)
-    {
-        if (resolver is CompositeCallerScopeResolver composite)
-            return await composite.RequireAsync(ct);
-
-        var scope = await resolver.TryResolveAsync(ct);
-        if (scope is null)
-            throw new CallerScopeUnavailableException("No caller scope resolver matched the current request context.");
-        if (!scope.TryValidate(out var error))
-            throw new CallerScopeUnavailableException($"Resolved caller scope is invalid: {error}");
-        return scope;
     }
 
     private static string? GetStr(JsonElement el, params string[] properties)
@@ -208,6 +196,22 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         // We disregard it to avoid the LLM steering an upsert into a different platform
         // bucket than the surface the request actually came from.
         var platform = caller.Platform;
+
+        // Issue #466 review: this tool no longer accepts NyxApiKey as an argument
+        // (avoiding LLM credential exposure). The actor's MergeNonEmpty policy preserves
+        // the existing key on partial upserts — but a *create* with no existing entry
+        // would land a credential-less delivery target that can't dispatch outbound. Fail
+        // closed instead of silently producing a broken entry. Real creation flows go
+        // through AgentBuilderTool which mints the key inline.
+        var existingForCaller = await queryPort.GetForCallerAsync(agentId.value!, caller, ct);
+        if (existingForCaller is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "delivery_target_not_found_for_caller",
+                hint = "agent_delivery_targets.upsert is a rebind operation only — it preserves the existing API key. To create a new agent (which mints credentials), use the agent_builder tool instead.",
+            });
+        }
 
         var projectionPort = _serviceProvider.GetService<UserAgentCatalogProjectionPort>();
         if (projectionPort != null)
