@@ -65,14 +65,17 @@ public class SkillRunnerToolFailureSafetyNetTests
             .Should().Be(NyxIdProxyToolFailureCountingMiddleware.ResultClassification.Error);
     }
 
-    [Fact]
-    public void Classify_NyxIdApprovalEnvelope_IsError()
+    [Theory]
+    [InlineData(7000)]
+    [InlineData(7001)]
+    public void Classify_NyxIdApprovalCode_IsError(long code)
     {
-        // NyxID approval gate (codes 7000/7001) blocks the proxy until the user approves.
-        // The data was not retrieved, so the call is a failure from the runner's view.
-        // The `message` field paired with non-zero `code` is what makes this match the
-        // narrowed envelope rule.
-        var input = """{"code":7000,"approval_request_id":"req-1","message":"approval_required"}""";
+        // NyxID approval-required (7000) and approval-rejected (7001) block the proxy:
+        // the data was not retrieved, so the call counts as a failure. The classifier
+        // matches the code directly (mirroring the existing IsApprovalError detection)
+        // rather than relying on a paired message field that future NyxID payloads
+        // could omit.
+        var input = $$"""{"code":{{code}},"approval_request_id":"req-1","message":"approval_required"}""";
 
         NyxIdProxyToolFailureCountingMiddleware.ClassifyResult(input)
             .Should().Be(NyxIdProxyToolFailureCountingMiddleware.ResultClassification.Error);
@@ -89,15 +92,19 @@ public class SkillRunnerToolFailureSafetyNetTests
             .Should().Be(NyxIdProxyToolFailureCountingMiddleware.ResultClassification.Error);
     }
 
-    [Fact]
-    public void Classify_DomainFieldNamedCode_IsOk()
+    [Theory]
+    [InlineData("""{"code":42,"data":{"id":"x"}}""")]
+    [InlineData("""{"code":200,"message":"success","data":{}}""")]
+    [InlineData("""{"code":1,"message":"ok"}""")]
+    public void Classify_GenericCodeFieldWithoutLarkMsg_IsOk(string input)
     {
-        // PR #471 reviewer concern: `nyxid_proxy` is a general proxy, not Lark-specific.
-        // A legitimate downstream domain response that happens to use a top-level `code`
-        // field for non-error meaning (no paired `msg`/`message`) must NOT be flagged as
-        // an error — otherwise a successful single-proxy-call run trips the safety net.
-        var input = """{"code":42,"data":{"id":"x"}}""";
-
+        // PR #471 reviewer concern (round 2): `nyxid_proxy` is a general proxy, not
+        // Lark-specific. Generic SaaS APIs commonly return `{"code": 200, "message":
+        // "success"}` style success envelopes; the previous narrowed rule still
+        // false-flagged these because it accepted `code != 0` paired with `message`.
+        // The classifier now requires the Lark-specific short field `msg` (or one of
+        // the known NyxID approval codes) — generic `code + message` envelopes pass
+        // through as ok.
         NyxIdProxyToolFailureCountingMiddleware.ClassifyResult(input)
             .Should().Be(NyxIdProxyToolFailureCountingMiddleware.ResultClassification.Ok);
     }

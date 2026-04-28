@@ -56,12 +56,14 @@ internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddlew
     /// <list type="bullet">
     ///   <item><description>JSON object with truthy <c>error</c> property → <see cref="ResultClassification.Error"/>
     ///     (matches NyxIdApiClient.SendAsync's HTTP non-2xx wrapper and exception wrapper).</description></item>
-    ///   <item><description>JSON object with numeric non-zero <c>code</c> AND a recognized message field
-    ///     (<c>msg</c>, <c>message</c>, or <c>error_msg</c>) → <see cref="ResultClassification.Error"/>
-    ///     (matches Lark/Feishu error envelopes <c>{code, msg}</c> and NyxID approval codes
-    ///     7000/7001 which carry <c>message</c>). The message-field requirement narrows the
-    ///     check so legitimate domain responses with a <c>code</c> field — e.g.
-    ///     <c>{"code": 42, "data": ...}</c> — aren't false-flagged.</description></item>
+    ///   <item><description>JSON object with <c>code</c> equal to a known NyxID approval-blocked code
+    ///     (7000/7001) → <see cref="ResultClassification.Error"/>. The data was not retrieved.</description></item>
+    ///   <item><description>JSON object with numeric non-zero <c>code</c> AND a <c>msg</c> field
+    ///     → <see cref="ResultClassification.Error"/> (Lark/Feishu envelope shape
+    ///     <c>{code, msg, ...}</c> is the only envelope that pairs <c>code</c> with the
+    ///     short-form <c>msg</c> field; generic SaaS APIs that use <c>code + message</c>
+    ///     for success envelopes — e.g. <c>{"code": 200, "message": "success"}</c> — do
+    ///     not match and are classified ok).</description></item>
     ///   <item><description>Any other valid JSON (objects without error markers, arrays, primitives)
     ///     → <see cref="ResultClassification.Ok"/>. Arrays specifically cover discovery-style
     ///     responses (<c>nyxid_proxy</c> with no slug, list endpoints) so they count as
@@ -96,22 +98,33 @@ internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddlew
         }
     }
 
+    /// <summary>
+    /// NyxID approval-required (7000) and approval-rejected (7001). Mirrors the existing
+    /// <c>IsApprovalError</c> detection inside NyxIdProxyTool — when this fires, the proxy
+    /// did not deliver the requested data, so it counts as a failure.
+    /// </summary>
+    private static readonly HashSet<long> NyxIdApprovalErrorCodes = new() { 7000, 7001 };
+
     private static bool LooksLikeCodeBasedErrorEnvelope(JsonElement root)
     {
         if (!root.TryGetProperty("code", out var codeProp)
             || codeProp.ValueKind != JsonValueKind.Number
-            || !codeProp.TryGetInt64(out var code)
-            || code == 0)
+            || !codeProp.TryGetInt64(out var code))
         {
             return false;
         }
 
-        // Require a paired message field so we don't false-flag domain responses that
-        // happen to use `code` for a non-error meaning. The Lark/Feishu envelope is
-        // {code, msg, ...}; NyxID approval is {code, message, approval_request_id, ...}.
-        return root.TryGetProperty("msg", out _)
-            || root.TryGetProperty("message", out _)
-            || root.TryGetProperty("error_msg", out _);
+        if (NyxIdApprovalErrorCodes.Contains(code))
+            return true;
+
+        if (code == 0)
+            return false;
+
+        // Require the Lark/Feishu-specific `msg` short field. Generic SaaS APIs use
+        // `message` for success envelopes (e.g., `{"code": 200, "message": "success"}`),
+        // so checking `message` here would false-flag normal proxy responses. `msg` is
+        // narrower and the only match for Lark's `{code: <int>, msg: "..."}` shape.
+        return root.TryGetProperty("msg", out _);
     }
 
     private static bool IsTruthy(JsonElement value) => value.ValueKind switch
