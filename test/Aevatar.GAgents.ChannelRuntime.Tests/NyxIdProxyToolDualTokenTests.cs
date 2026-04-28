@@ -142,4 +142,30 @@ public class NyxIdProxyToolDualTokenTests
         cache.GetSlugs("org-hash").Should().Contain("org-service");
         cache.GetSlugs("org-hash").Should().NotContain("user-service");
     }
+
+    // ─── LooksLikeErrorEnvelope ───
+
+    [Theory]
+    [InlineData("""{"error":true,"status":401,"body":""}""")]
+    [InlineData("""{"error":"unauthorized"}""")]
+    public void LooksLikeErrorEnvelope_TruthyError_True(string input)
+    {
+        // Used by DiscoverMergedServicesAsync to short-circuit when both user and org
+        // discovery returned NyxID error envelopes — without it, the merge synthesizes
+        // an empty array and the SkillRunner safety net misclassifies the run as
+        // successful (PR #471 review round 2).
+        NyxIdProxyTool.LooksLikeErrorEnvelope(input).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("""{"error":false,"data":{}}""")]
+    [InlineData("""{"error":null}""")]
+    [InlineData("""{"data":[]}""")]
+    [InlineData("""[{"slug":"api-github"}]""")]
+    [InlineData("plain text")]
+    [InlineData("")]
+    public void LooksLikeErrorEnvelope_NotAnEnvelope_False(string input)
+    {
+        NyxIdProxyTool.LooksLikeErrorEnvelope(input).Should().BeFalse();
+    }
 }
