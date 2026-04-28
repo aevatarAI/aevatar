@@ -17,6 +17,14 @@ internal sealed class SkillRunnerToolFailureCounter
 
     public int SuccessCount => Volatile.Read(ref _successCount);
 
+    /// <summary>
+    /// Two non-atomic field writes. Safe in practice because the runner only calls
+    /// <c>Reset()</c> from <c>ExecuteSkillAsync</c> at the top of a run, when no
+    /// concurrent middleware invocation can be in flight (the prior <c>ChatStreamAsync</c>
+    /// has fully drained or this is the first run). A reader observing a transient
+    /// <c>(0, N)</c> state mid-Reset would only happen if Reset and middleware ran
+    /// concurrently, which the actor's single-threaded turn discipline prevents.
+    /// </summary>
     public void Reset()
     {
         Volatile.Write(ref _failureCount, 0);
