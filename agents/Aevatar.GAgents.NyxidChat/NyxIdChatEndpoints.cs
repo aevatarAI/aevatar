@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -86,6 +87,9 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IActorRuntime actorRuntime,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         // Conversation creation is fail-fast on registry persistence.
         // NyxId chat depends on the registry being available; there is no
         // degraded mode where a conversation can run without being registered.
@@ -165,6 +169,9 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
         var actorIds = snapshot.Groups
             .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
@@ -189,6 +196,9 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var admissionError = await AuthorizeConversationAsync(
             admissionPort,
             scopeId,
