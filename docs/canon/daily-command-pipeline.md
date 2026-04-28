@@ -402,16 +402,25 @@ string lark_receive_id_type_fallback = 10;
 
 ## 8. Outbound 投递行为
 
-**主路径**：`POST {NyxID}/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type={primary_type}` Body: `{receive_id, msg_type:"text", content:"{\"text\":\"...\"}"}`
+**默认路径（streaming-edit）**：SkillRunner 在 LLM 流式输出过程中，第一条非空 delta 走 `POST {NyxID}/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type={primary_type}`（`{receive_id, msg_type:"text", content:"{\"text\":\"...\"}"}`），从响应 `data.message_id` 捕获平台消息 id；之后每条 delta 走 `PUT .../open-apis/im/v1/messages/{message_id}`（`{msg_type:"text", content:"{\"text\":\"...\"}"}`）。Lark 编辑接口按 `msg_type` 分动词：**PUT** 编辑 text/post (rich text)，**PATCH** 编辑 interactive card——发 text 必须用 PUT，否则 Lark 会拒绝每一次编辑，streaming-edit 在占位之后无法增长（参考 [Lark Edit message 文档](https://open.feishu.cn/document/server-docs/im-v1/message/update)）。Throttle 默认 300ms（`SkillRunnerDefaults.StreamingEditThrottle`）：throttle 窗口内多条 delta 折叠到最新文本，单 turn 平均编辑速率 ≤3.3/s 安全在 Lark 限速以下。Finalize 阶段强制再编辑一次最终文本以保证一致性，跳过 throttle。详见 [SkillRunnerStreamingReplySink.cs](../../agents/Aevatar.GAgents.Scheduled/SkillRunnerStreamingReplySink.cs)。
 
-**Fallback**：主投返回 Lark `230002 bot_not_in_chat` 时，重试用 `lark_receive_id_fallback` + `lark_receive_id_type_fallback`。已观察到但不重试的身份错误：
+**Fallback（仅作用于初次 POST）**：初次 POST 返回 Lark `230002 bot_not_in_chat` 时，用 `lark_receive_id_fallback` + `lark_receive_id_type_fallback` 重试一次以拿到可编辑的 `message_id`。一旦初次 POST 成功捕获 `message_id`，后续 PUT 不再 fallback——同一目标内 retry 即可。已观察到但不触发 fallback 的身份错误（直接进入失败路径并给 `/agent-status` 留下重建提示）：
 - `99992361`：open_id cross app
 - `99992364`：union_id cross tenant
+
+**失败语义**：
+- 初次 POST 在流式中段失败：日志告警，**下一条 delta 重试**（流式失败不等于 turn 失败，LLM 仍在出 token）。Finalize 时若 POST 仍失败 → 抛 `InvalidOperationException`，主链路 catch 进 `SkillRunnerExecutionFailedEvent` 持久化路径。
+- 中段编辑（PUT）失败：日志告警，下一条 delta 用最新累积文本重试（latest-wins 折叠保证旧文本不会卡住）。
+- Finalize 阶段的编辑失败：抛异常，同上。
+
+**One-shot 兜底（无 streaming sink 时）**：当 `NyxIdApiClient` 未注入或 `OutboundConfig` 缺关键字段（`NyxApiKey`/`NyxProviderSlug`/`ConversationId`），`ExecuteSkillAsync` 会回退到原本的一次性 `SendOutputAsync(POST)` 路径——同步发整段文本，沿用同样的 230002 fallback 重试。失败通知 `TrySendFailureAsync` 始终走这条 one-shot 路径（无需 streaming，且失败文案本来就短）。
+
+**长度上限**：流入 sink 的累积文本超过 `SkillRunnerStreamingReplySink.MaxLarkTextLength=30000` 字符时被截断并尾缀 `…[truncated]`。Lark 平台文本 body 实际上限远高于这个值，但 JSON 包装 + 多字节 UTF-8 余量下 30K 安全。富报告若需要更细粒度的分段（按 section 拆成多条消息），目前未实现，跟踪在 issue #423 §C。
 
 **已知边界**（已记入 issues，QA 复测时要能判别）：
 - `lark_receive_id*` 在 agent 创建时被冻结。如果用户从 chat A 创建 agent，后来 chat A 解散或机器人被踢，agent 投递就永远失败 → 必须 `/delete-agent` + 重建。
 - 如果创建侧的 inbound bot 和 outbound bot 是不同 Lark App（同租户跨 app 部署），`chat_id` 可能在 outbound 侧不可用，需要 fallback 到 `union_id`。
-- Lark 文本消息体上限约 30KB，富报告可能超限（issue #423 §C）。
+- Lark 编辑接口对**已删除消息**返回错误，sink 在中段会日志告警并继续；finalize 时仍 throw（极端 edge case：用户在 LLM 输出过程中手动删除了在编辑的消息）。
 
 ---
 
@@ -726,12 +735,13 @@ Lark 开发者后台：
 
 为防止 QA 把已知未实现项当 bug 报，下表列出**当前实现没有但 issue 里已规划**的能力：
 
-- 报告内容更丰富 + 渐进式投递 (#423)
+- ~~报告内容更丰富~~ ✅ #423 §A 已由 [#458](https://github.com/aevatarAI/aevatar/pull/458) 实现（结构化 9 段、omit-if-empty、source-health footer）
+- ~~渐进式投递（streaming-edit）~~ ✅ #423 §B 已实现（`SkillRunnerStreamingReplySink`：POST 占位 + PUT 增量编辑，详见 §8）
 - GitHub 工具失败需明确暴露给用户（#439 修复后）
 - ~~多 Lark 用户独立 `github_username`~~ ✅ 已由 [#438](https://github.com/aevatarAI/aevatar/pull/438) 修复（composite scope）；结构性升级到 `LarkUserGAgent` 仍是未来选项
 - `/agent-status` 首次执行后秒级反映（#440 修复后）
-- 失败通知通道与主投递解耦，避免一起死（#423 §C）
-- 富 / 长报告超 Lark 30KB 体限的分段处理（#423 §C）
+- 失败通知通道与主投递解耦，避免一起死（#423 §C；目前 `TrySendFailureAsync` 仍走相同 `s/api-lark-bot` proxy）
+- 富 / 长报告超 Lark 30KB 体限的**分段**处理（截断已实现，按 section 切分多条消息仍是 #423 §C 跟踪项）
 - 跨 app 部署的 `lark_receive_id` 自动更新（目前只能 `/delete-agent` 重建）
 
 QA 对照本表与 issue 复现步骤即可在每个 PR landing 后系统性回归。
