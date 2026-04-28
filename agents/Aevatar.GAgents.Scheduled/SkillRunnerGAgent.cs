@@ -271,14 +271,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             if (string.IsNullOrWhiteSpace(output))
                 output = "No update generated.";
 
-            if (sink is not null)
-                await sink.FinalizeAsync(output, ct);
-            else
-                // No streaming sink (no NyxID client, missing outbound config, or
-                // tests injecting a null client). Fall back to a one-shot send so the
-                // user still receives the report and tests that don't construct a sink
-                // keep working.
-                await SendOutputAsync(output, ct);
+            // Issue #423 §C — chunked delivery for outputs that exceed the Lark body cap.
+            // For ≤30 KB outputs the chunker returns a single-element list and the dispatch
+            // loop below collapses to the existing single-message path. Larger outputs split
+            // at `\n\n` boundaries (or hard-split for no-paragraph inputs) so the full report
+            // lands as a sequence of "[part k/N]" messages instead of being silently truncated
+            // at the cap.
+            var chunks = SkillRunnerOutputChunker.Split(output);
+            await DispatchOutputChunksAsync(sink, chunks, ct);
 
             return output;
         }
@@ -286,6 +286,41 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             sink?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Sends the chunk sequence produced by <see cref="SkillRunnerOutputChunker.Split"/>:
+    /// chunk[0] flows through the streaming-edit sink (so the in-flight message the user has
+    /// been watching grow lands cleanly as "part 1"); chunks 1..N go as fresh one-shot POSTs
+    /// through the primary <see cref="SendOutputAsync(string, CancellationToken)"/> path
+    /// since edit-in-place only applies to the message captured at sink-creation time.
+    /// </summary>
+    /// <remarks>
+    /// Failure semantics match the pre-chunking single-message path: any send rejection
+    /// throws and propagates to <c>HandleTriggerAsync</c>'s retry/persist contract. A failure
+    /// on chunk N &gt; 0 means chunks 0..N-1 already landed in chat — that's intentional
+    /// partial visibility. Atomic multi-message delivery would require either a Lark-side
+    /// transactional API (none exists) or buffering until all chunks succeed (loses the
+    /// streaming-edit UX), neither of which is worth the complexity here.
+    /// </remarks>
+    private async Task DispatchOutputChunksAsync(
+        SkillRunnerStreamingReplySink? sink,
+        IReadOnlyList<string> chunks,
+        CancellationToken ct)
+    {
+        if (chunks.Count == 0)
+            return;
+
+        if (sink is not null)
+            await sink.FinalizeAsync(chunks[0], ct);
+        else
+            // No streaming sink (no NyxID client, missing outbound config, or tests injecting
+            // a null client). Fall back to a one-shot send so the user still receives the
+            // report and tests that don't construct a sink keep working.
+            await SendOutputAsync(chunks[0], ct);
+
+        for (var i = 1; i < chunks.Count; i++)
+            await SendOutputAsync(chunks[i], ct);
     }
 
     /// <summary>
@@ -346,7 +381,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             Logger);
     }
 
-    private async Task SendOutputAsync(string output, CancellationToken ct)
+    private Task SendOutputAsync(string output, CancellationToken ct) =>
+        SendOutputAsync(output, providerSlugOverride: null, ct);
+
+    /// <summary>
+    /// Posts <paramref name="output"/> as a Lark text message. <paramref name="providerSlugOverride"/>
+    /// is non-null only on the failure-notification fallback path (#423 §C); when set, the proxy
+    /// routing slug temporarily replaces the agent's primary <c>NyxProviderSlug</c> so a message
+    /// can still reach the user via the inbound channel-bot after the primary outbound has been
+    /// rejected (e.g. cross-tenant <c>99992364</c>). All other call sites — main report send,
+    /// chunked overflow continuations — pass <c>null</c> and stay on the primary slug.
+    /// </summary>
+    private async Task SendOutputAsync(string output, string? providerSlugOverride, CancellationToken ct)
     {
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
         if (client is null)
@@ -362,6 +408,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             Logger.LogWarning("Skill runner {ActorId} has incomplete outbound config; skipping outbound delivery", Id);
             return;
         }
+
+        var slug = string.IsNullOrWhiteSpace(providerSlugOverride)
+            ? State.OutboundConfig.NyxProviderSlug
+            : providerSlugOverride!;
 
         var deliveryTarget = LarkConversationTargets.Resolve(
             State.OutboundConfig.LarkReceiveId,
@@ -379,7 +429,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 deliveryTarget.ReceiveIdType);
         }
 
-        var outcome = await TrySendWithFallbackAsync(client, output, deliveryTarget, ct);
+        var outcome = await TrySendWithFallbackAsync(client, output, slug, deliveryTarget, ct);
 
         if (!outcome.Succeeded)
         {
@@ -412,10 +462,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task<SendOutcome> TrySendWithFallbackAsync(
         NyxIdApiClient client,
         string output,
+        string slug,
         LarkReceiveTarget primary,
         CancellationToken ct)
     {
-        var primaryResponse = await SendOutboundAsync(client, output, primary, ct);
+        var primaryResponse = await SendOutboundAsync(client, output, slug, primary, ct);
         if (!LarkProxyResponse.TryGetError(primaryResponse, out var larkCode, out var detail))
             return SendOutcome.Success();
 
@@ -436,7 +487,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             fallbackType);
 
         var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-        var fallbackResponse = await SendOutboundAsync(client, output, fallbackTarget, ct);
+        var fallbackResponse = await SendOutboundAsync(client, output, slug, fallbackTarget, ct);
         if (!LarkProxyResponse.TryGetError(fallbackResponse, out var fallbackCode, out var fallbackDetail))
             return SendOutcome.Success();
 
@@ -446,6 +497,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task<string> SendOutboundAsync(
         NyxIdApiClient client,
         string output,
+        string slug,
         LarkReceiveTarget target,
         CancellationToken ct)
     {
@@ -458,7 +510,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         return await client.ProxyRequestAsync(
             State.OutboundConfig.NyxApiKey,
-            State.OutboundConfig.NyxProviderSlug,
+            slug,
             $"open-apis/im/v1/messages?receive_id_type={target.ReceiveIdType}",
             "POST", body, null, ct);
     }
@@ -497,9 +549,53 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             : $"Lark message delivery rejected: {detail}";
     }
 
+    /// <summary>
+    /// Best-effort delivery of a failure-notification message after the run has already failed.
+    /// Issue #423 §C: when the primary outbound proxy was just rejected with a structural code
+    /// (e.g. cross-tenant <c>99992364</c>), retrying through the same proxy obviously also
+    /// fails. If a failure-notification slug was captured at agent-create time (the inbound
+    /// channel-bot the user just successfully messaged), try IT first so the user actually
+    /// sees that the run failed; on its failure, fall back to the primary slug as a last
+    /// resort so single-tenant deployments (no separate failure slug) still get the same
+    /// single-attempt behavior they had before this fix.
+    /// </summary>
+    /// <remarks>
+    /// All exceptions are swallowed — by definition we are already in the failure path, and a
+    /// failed notification must not raise above HandleTriggerAsync's own
+    /// <c>SkillRunnerExecutionFailedEvent</c> persist (which is what surfaces
+    /// <c>last_error</c> in <c>/agent-status</c> regardless of whether the user got a Lark
+    /// message). Logs a warning for each unsuccessful attempt so the regression is observable.
+    /// </remarks>
     private async Task TrySendFailureAsync(string error, CancellationToken ct)
     {
-        try { await SendOutputAsync($"Skill runner failed: {error}", ct); }
+        var message = $"Skill runner failed: {error}";
+        var failureSlug = State.OutboundConfig?.FailureNotificationProviderSlug?.Trim();
+        var primarySlug = State.OutboundConfig?.NyxProviderSlug?.Trim();
+
+        // Try the captured failure-notification slug first when it is set AND distinct from
+        // the primary slug. Equal values would just hit the same proxy again, so we skip the
+        // duplicate POST and go straight to the primary path.
+        if (!string.IsNullOrEmpty(failureSlug) &&
+            !string.Equals(failureSlug, primarySlug, StringComparison.Ordinal))
+        {
+            try
+            {
+                await SendOutputAsync(message, providerSlugOverride: failureSlug, ct);
+                return;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(
+                    ex,
+                    "Skill runner {ActorId} failed-notification via failure-notification slug rejected; falling back to primary slug",
+                    Id);
+            }
+        }
+
+        try
+        {
+            await SendOutputAsync(message, providerSlugOverride: null, ct);
+        }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Skill runner {ActorId} failed to send failure notification", Id);

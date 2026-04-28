@@ -55,4 +55,21 @@ public static class ChannelMetadataKeys
     /// <c>outbound_proxy_slug</c> form makes the routing-side semantics explicit.
     /// </summary>
     public const string LarkOutboundProxySlug = "channel.lark.outbound_proxy_slug";
+
+    /// <summary>
+    /// NyxID provider slug of the inbound channel-bot that received this turn's webhook
+    /// event. Equivalent to <c>ChannelInboundEvent.NyxProviderSlug</c>, surfaced as request
+    /// metadata so the agent-builder tool can capture it on the new agent's
+    /// <c>SkillRunnerOutboundConfig.FailureNotificationProviderSlug</c> at create time.
+    /// </summary>
+    /// <remarks>
+    /// The inbound channel-bot is the bot the user just successfully messaged. When the
+    /// agent's primary outbound proxy fails with a structural rejection (e.g. Lark
+    /// <c>99992364 user id cross tenant</c> from a cross-tenant relay/outbound mismatch),
+    /// the inbound bot's slug is the only known proxy that can still deliver to the user.
+    /// SkillRunner uses this for failure notifications only — primary outbound stays on the
+    /// caller-provided <c>nyx_provider_slug</c> argument so existing deployments are not
+    /// rerouted unexpectedly. See issue #423 §C.
+    /// </remarks>
+    public const string InboundChannelBotProxySlug = "channel.inbound.channel_bot_provider_slug";
 }
