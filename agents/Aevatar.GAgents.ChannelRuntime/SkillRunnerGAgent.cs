@@ -254,6 +254,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                     continue;
                 content.Append(chunk.DeltaContent);
                 if (sink is not null)
+                    // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
+                    // turn. Acceptable for daily-report-sized output (≤30 KB capped, and the
+                    // sink dedupes against `_lastEmittedText` so most allocations don't even
+                    // make it onto the wire). If a future skill produces materially longer
+                    // output, switch the sink contract to `(StringBuilder, Range)` snapshots
+                    // or a `ReadOnlyMemory<char>` view so the accumulator isn't re-stringified
+                    // every delta.
                     await sink.OnDeltaAsync(content.ToString(), ct);
             }
 
