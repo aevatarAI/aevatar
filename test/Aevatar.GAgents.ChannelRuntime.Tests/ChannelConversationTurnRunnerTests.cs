@@ -112,7 +112,7 @@ public sealed class ChannelConversationTurnRunnerTests
         nyxHandler.Requests.Should().ContainSingle();
         nyxHandler.Requests[0].Path.Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions");
         nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
-        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"OK\"");
+        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"Typing\"");
     }
 
     [Fact]
@@ -1106,6 +1106,116 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunLlmReplyAsync_ShouldSwapTypingReactionToDone_AfterSuccessfulRelayReply()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-swap-1"}""");
+        // Expect 3 nyx calls fired by the post-reply swap: list Typing → delete bot's
+        // Typing reaction → add DONE. The list response carries one bot-owned reaction
+        // ("operator_type":"app") and one user-owned ("operator_type":"user") that the
+        // swap must leave alone.
+        var nyxHandler = new SequencedJsonHandler(
+            expectedCallCount: 3,
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-1","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}},{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{}}""",
+            """{"code":0,"data":{}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-swap-1",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-swap-1",
+                CorrelationId = "corr-relay-swap-1",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_swap_1",
+            });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-swap-1",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "relay reply" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-swap-1", replyMessageId: "relay-msg-swap-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        await nyxHandler.Completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        nyxHandler.Requests.Should().HaveCount(3);
+        // 1. List the Typing reactions on the inbound message id.
+        nyxHandler.Requests[0].Method.Should().Be("GET");
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions?reaction_type=Typing&page_size=50");
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
+        // 2. Only the bot-owned reaction is deleted; the user-owned one is preserved.
+        nyxHandler.Requests[1].Method.Should().Be("DELETE");
+        nyxHandler.Requests[1].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions/r-bot-1");
+        // 3. DONE reaction is added on the same message.
+        nyxHandler.Requests[2].Method.Should().Be("POST");
+        nyxHandler.Requests[2].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions");
+        nyxHandler.Requests[2].Body.Should().Contain("\"emoji_type\":\"DONE\"");
+    }
+
+    [Fact]
+    public async Task RunLlmReplyAsync_ShouldNotSwapReaction_WhenReplyFails()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter
+        {
+            ReplyDeliveryResult = new PlatformReplyDeliveryResult(
+                false,
+                "recipient blocked bot",
+                PlatformReplyFailureKind.Permanent),
+        };
+        // Any nyx call here would be the post-reply swap firing. Fail early on it so
+        // the test still proves the swap was skipped — Requests.Should().BeEmpty() below
+        // makes the assertion explicit.
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-failed-reply",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-failed-reply",
+                    transportExtras: new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                        NyxUserAccessToken = "user-token-1",
+                        NyxPlatformMessageId = "om_fail_1",
+                    }),
+                Outbound = new MessageContent { Text = "direct reply" },
+            },
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunLlmReplyAsync_ShouldDispatchInteractiveRelayReply_WhenOutboundContainsActions()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -1815,7 +1925,7 @@ public sealed class ChannelConversationTurnRunnerTests
         IServiceProvider? services = null,
         IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort = null,
         RecordingJsonHandler? relayHandler = null,
-        RecordingJsonHandler? nyxHandler = null,
+        HttpMessageHandler? nyxHandler = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
         services ??= new ServiceCollection().BuildServiceProvider();
@@ -2042,6 +2152,45 @@ public sealed class ChannelConversationTurnRunnerTests
             Started.TrySetResult();
             await Release.Task.WaitAsync(cancellationToken);
             return await base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    // Returns a different body for each successive call; signals Completed once expectedCallCount
+    // requests have been served. Records HTTP method as well so tests can assert GET/DELETE/POST
+    // ordering — RecordingJsonHandler tracks path+body but not method, which the typing→done swap
+    // tests need to distinguish list vs delete vs add.
+    private sealed class SequencedJsonHandler : HttpMessageHandler
+    {
+        private readonly Queue<string> _bodies;
+        private readonly int _expectedCallCount;
+
+        public SequencedJsonHandler(int expectedCallCount, params string[] bodies)
+        {
+            _expectedCallCount = expectedCallCount;
+            _bodies = new Queue<string>(bodies);
+        }
+
+        public List<(string Path, string Method, string? Authorization, string Body)> Requests { get; } = [];
+        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var body = _bodies.Count > 0 ? _bodies.Dequeue() : """{"code":0,"data":{}}""";
+            var content = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            Requests.Add((
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Method.Method,
+                request.Headers.Authorization?.ToString(),
+                content));
+            if (Requests.Count >= _expectedCallCount)
+                Completed.TrySetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
         }
     }
 }
