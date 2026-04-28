@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.Compatibility;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
@@ -23,6 +24,8 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedService : IHostedServ
     private const string MarkerStreamId = "__maintenance:retired-channelruntime-cleanup:v1";
     private const int MarkerInProgress = 1;
     private const int MarkerCompleted = 2;
+    private const string RetiredSkillRunnerType = "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent";
+    private const string RetiredWorkflowAgentType = "Aevatar.GAgents.ChannelRuntime.WorkflowAgentGAgent";
 
     private static readonly RetiredActorTarget[] Targets =
     [
@@ -109,6 +112,21 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedService : IHostedServ
 
         try
         {
+            var userAgentTargets = await DiscoverRetiredCatalogUserAgentTargetsAsync(cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var target in userAgentTargets)
+            {
+                if (!await IsLeaseOwnerAsync(lease, cancellationToken).ConfigureAwait(false))
+                {
+                    _logger.LogWarning(
+                        "Retired ChannelRuntime actor cleanup lease lost before processing {ActorId}.",
+                        target.ActorId);
+                    return;
+                }
+
+                await CleanupTargetAsync(target, cancellationToken).ConfigureAwait(false);
+            }
+
             foreach (var target in Targets)
             {
                 if (!await IsLeaseOwnerAsync(lease, cancellationToken).ConfigureAwait(false))
@@ -141,8 +159,25 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedService : IHostedServ
         var runtimeTypeName = await _typeProbe
             .GetRuntimeAgentTypeNameAsync(target.ActorId, ct)
             .ConfigureAwait(false);
-        if (!MatchesRetiredType(target, runtimeTypeName))
-            return;
+        var matchesRetiredRuntimeType = MatchesRetiredType(target, runtimeTypeName);
+        var shouldContinueReset = false;
+        if (!matchesRetiredRuntimeType)
+        {
+            if (!string.IsNullOrWhiteSpace(runtimeTypeName))
+                return;
+
+            shouldContinueReset = target.ResetWhenRuntimeTypeUnavailable &&
+                                  await HasEventStreamAsync(target.ActorId, ct).ConfigureAwait(false);
+            if (!shouldContinueReset)
+                return;
+        }
+
+        if (shouldContinueReset)
+        {
+            _logger.LogInformation(
+                "Retired ChannelRuntime actor stream cleanup continuing after actor state was already cleared. actorId={ActorId}",
+                target.ActorId);
+        }
 
         if (!string.IsNullOrWhiteSpace(target.SourceStreamId))
         {
@@ -153,16 +188,136 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedService : IHostedServ
         }
 
         if (target.CleanupReadModels && _options.CleanupReadModels)
-            await CleanupReadModelsAsync(target.ActorId, ct).ConfigureAwait(false);
+            await CleanupReadModelsBestEffortAsync(target.ActorId, ct).ConfigureAwait(false);
 
         await _actorRuntime.DestroyAsync(target.ActorId, ct).ConfigureAwait(false);
         if (_options.ResetEventStreams)
             await _eventStoreMaintenance.ResetStreamAsync(target.ActorId, ct).ConfigureAwait(false);
 
+        if (!matchesRetiredRuntimeType)
+        {
+            _logger.LogInformation(
+                "Retired ChannelRuntime actor stream cleaned. actorId={ActorId}",
+                target.ActorId);
+            return;
+        }
+
         _logger.LogInformation(
             "Retired ChannelRuntime actor cleaned. actorId={ActorId} runtimeType={RuntimeType}",
             target.ActorId,
             runtimeTypeName);
+    }
+
+    private async Task<IReadOnlyList<RetiredActorTarget>> DiscoverRetiredCatalogUserAgentTargetsAsync(CancellationToken ct)
+    {
+        var catalogTarget = Targets.Single(static target => target.ActorId == UserAgentCatalogGAgent.WellKnownId);
+        var catalogRuntimeTypeName = await _typeProbe
+            .GetRuntimeAgentTypeNameAsync(UserAgentCatalogGAgent.WellKnownId, ct)
+            .ConfigureAwait(false);
+        var catalogIsRetired = MatchesRetiredType(catalogTarget, catalogRuntimeTypeName);
+        if (!catalogIsRetired &&
+            !(string.IsNullOrWhiteSpace(catalogRuntimeTypeName) &&
+              await HasEventStreamAsync(UserAgentCatalogGAgent.WellKnownId, ct).ConfigureAwait(false)))
+        {
+            return [];
+        }
+
+        var agentIds = await DiscoverCatalogUserAgentIdsAsync(ct).ConfigureAwait(false);
+        if (agentIds.Count == 0)
+            return [];
+
+        return agentIds
+            .Select(static actorId => new RetiredActorTarget(
+                actorId,
+                [RetiredSkillRunnerType, RetiredWorkflowAgentType],
+                ResetWhenRuntimeTypeUnavailable: true))
+            .ToArray();
+    }
+
+    private async Task<IReadOnlyList<string>> DiscoverCatalogUserAgentIdsAsync(CancellationToken ct)
+    {
+        var events = await _eventStore
+            .GetEventsAsync(UserAgentCatalogGAgent.WellKnownId, ct: ct)
+            .ConfigureAwait(false);
+        if (events.Count == 0)
+            return [];
+
+        var agentIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var evt in events)
+        {
+            if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogUpsertedEvent>(evt.EventData, out var upserted))
+                AddCatalogAgentId(agentIds, upserted!.Entry);
+            else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogTombstonedEvent>(evt.EventData, out var tombstoned))
+                AddCatalogAgentId(agentIds, tombstoned!.AgentId);
+            else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogExecutionUpdatedEvent>(
+                         evt.EventData,
+                         out var executionUpdated))
+                AddCatalogAgentId(agentIds, executionUpdated!.AgentId);
+            else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogTombstonesCompactedEvent>(
+                         evt.EventData,
+                         out var compacted))
+            {
+                foreach (var agentId in compacted!.AgentIds)
+                    AddCatalogAgentId(agentIds, agentId);
+            }
+        }
+
+        return agentIds.ToArray();
+    }
+
+    private static void AddCatalogAgentId(HashSet<string> agentIds, UserAgentCatalogEntry? entry)
+    {
+        if (entry == null)
+            return;
+
+        if (IsGeneratedUserAgent(entry.AgentId, entry.AgentType))
+            agentIds.Add(entry.AgentId.Trim());
+    }
+
+    private static void AddCatalogAgentId(HashSet<string> agentIds, string? agentId)
+    {
+        if (!IsGeneratedUserAgent(agentId, agentType: null))
+            return;
+
+        agentIds.Add(agentId!.Trim());
+    }
+
+    private static bool IsGeneratedUserAgent(string? agentId, string? agentType)
+    {
+        var normalizedId = agentId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedId))
+            return false;
+
+        if (string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) ||
+            string.Equals(agentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return normalizedId.StartsWith($"{SkillRunnerDefaults.ActorIdPrefix}-", StringComparison.Ordinal) ||
+               normalizedId.StartsWith($"{WorkflowAgentDefaults.ActorIdPrefix}-", StringComparison.Ordinal);
+    }
+
+    private async Task<bool> HasEventStreamAsync(string actorId, CancellationToken ct) =>
+        await _eventStore.GetVersionAsync(actorId, ct).ConfigureAwait(false) > 0;
+
+    private async Task CleanupReadModelsBestEffortAsync(string actorId, CancellationToken ct)
+    {
+        try
+        {
+            await CleanupReadModelsAsync(actorId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Retired ChannelRuntime read-model cleanup failed and will be skipped. actorId={ActorId}",
+                actorId);
+        }
     }
 
     private async Task CleanupReadModelsAsync(string actorId, CancellationToken ct)
@@ -342,14 +497,39 @@ public sealed class RetiredChannelRuntimeActorCleanupHostedService : IHostedServ
             return false;
 
         return target.RetiredTypeTokens.Any(token =>
-            runtimeTypeName.Contains(token, StringComparison.Ordinal));
+            ContainsTypeNameToken(runtimeTypeName, token));
     }
+
+    private static bool ContainsTypeNameToken(string runtimeTypeName, string token)
+    {
+        var startIndex = 0;
+        while (startIndex < runtimeTypeName.Length)
+        {
+            var index = runtimeTypeName.IndexOf(token, startIndex, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            var beforeOk = index == 0 || IsTypeNameBoundary(runtimeTypeName[index - 1]);
+            var afterIndex = index + token.Length;
+            var afterOk = afterIndex == runtimeTypeName.Length || IsTypeNameBoundary(runtimeTypeName[afterIndex]);
+            if (beforeOk && afterOk)
+                return true;
+
+            startIndex = index + token.Length;
+        }
+
+        return false;
+    }
+
+    private static bool IsTypeNameBoundary(char value) =>
+        value is '[' or ']' or ',' or ' ';
 
     private sealed record RetiredActorTarget(
         string ActorId,
         IReadOnlyList<string> RetiredTypeTokens,
         string? SourceStreamId = null,
-        bool CleanupReadModels = false);
+        bool CleanupReadModels = false,
+        bool ResetWhenRuntimeTypeUnavailable = true);
 
     private sealed record CleanupLease(string Token);
 

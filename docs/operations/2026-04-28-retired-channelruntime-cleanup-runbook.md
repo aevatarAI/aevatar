@@ -9,6 +9,8 @@ Older deployments persisted runtime actor identities such as:
 
 - `Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent`
 - `Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgent`
+- `Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent`
+- `Aevatar.GAgents.ChannelRuntime.WorkflowAgentGAgent`
 - `Aevatar.CQRS.Projection.Core.Orchestration.ProjectionMaterializationScopeGAgent<T>` where `T` is a retired `Aevatar.GAgents.ChannelRuntime.*MaterializationContext`
 
 After the split into `Aevatar.GAgents.Channel.Runtime`, `Aevatar.GAgents.Device`,
@@ -34,18 +36,29 @@ At startup the cleanup service:
 2. Probes each known retired actor id through `IActorTypeProbe`.
 3. Deletes only actors whose persisted runtime type still references the retired
    `Aevatar.GAgents.ChannelRuntime` implementation or materialization context.
-4. Removes projection scope relays from their root actor streams.
-5. Deletes stale registration/catalog read-model documents for retired root actors.
-6. Destroys the runtime actor and resets its event stream.
-7. Writes a completed marker so later pods skip the cleanup.
+4. Reads the retired user-agent catalog event stream before resetting it, extracts
+   generated `skill-runner-*` / `workflow-agent-*` actor ids, and cleans those
+   actors first when their runtime type is retired.
+5. Removes projection scope relays from their root actor streams.
+6. Deletes stale registration/catalog read-model documents for retired root actors
+   on a best-effort basis. Projection store failures are logged and do not abort
+   startup.
+7. Destroys the runtime actor and resets its event stream.
+8. Writes a completed marker so later pods skip the cleanup.
 
 Current actors whose runtime type is already under the new namespaces are skipped.
+If a previous pod already destroyed an actor but died before resetting its event
+stream, the next pod continues the reset path when the actor type is unavailable
+but the event stream still exists.
 
 ## Targets
 
 - `channel-bot-registration-store`
 - `device-registration-store`
 - `agent-registry-store`
+- generated actors referenced by the retired `agent-registry-store` stream:
+  - `skill-runner-*`
+  - `workflow-agent-*`
 - `projection.durable.scope:channel-bot-registration:channel-bot-registration-store`
 - `projection.durable.scope:device-registration:device-registration-store`
 - `projection.durable.scope:agent-registry:agent-registry-store`
@@ -89,6 +102,12 @@ Healthy startup logs should include either:
 
 - `Retired ChannelRuntime actor cleanup completed.`
 - `Retired ChannelRuntime actor cleanup already completed.`
+
+During the first cleanup, `IActorTypeProbe` may activate a retired actor long
+enough to read its persisted type name. Orleans can emit transient error logs like
+`Unable to resolve agent type Aevatar.GAgents.ChannelRuntime.*` for those actors
+before the cleanup removes them. Treat those as expected only when they are followed
+by `Retired ChannelRuntime actor cleanup completed.`
 
 The failure signatures below should disappear after the cleanup has completed:
 
