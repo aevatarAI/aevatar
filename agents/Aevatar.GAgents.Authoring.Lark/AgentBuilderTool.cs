@@ -275,6 +275,7 @@ public sealed class AgentBuilderTool : IAgentTool
             nyxClient,
             apiKeyValue!,
             githubUsernameResolution.GithubUsername ?? string.Empty,
+            templateSpec!.Repositories,
             providerSlug,
             ct);
         if (preflight is not null)
@@ -1674,33 +1675,36 @@ public sealed class AgentBuilderTool : IAgentTool
     /// relay surfaced <c>union_id</c> at agent-create time.
     /// </summary>
     /// <summary>
-    /// Preflights GitHub proxy access using the newly created agent API key. Two-step probe:
+    /// Preflights GitHub proxy access using the newly created agent API key. Three-step probe:
     /// first <c>/rate_limit</c> (catches token-level OAuth-grant revocation as 401/403), then
-    /// <c>/search/issues</c> + <c>/search/commits</c> with the bound github_username (catches
-    /// the search-API-only failure mode that <c>/rate_limit</c> never exercises — GitHub's
-    /// search engine enforces stricter scope than the basic user/rate endpoints, returning
-    /// 422 "users... cannot be searched either because the resources do not exist or you do
-    /// not have permission to view them" when the OAuth grant lacks <c>public_repo</c> /
-    /// <c>repo</c>, or when the bound username is unreachable). Returns a structured error
-    /// JSON suitable for returning verbatim from the tool on hard-fail shapes; returns
-    /// <c>null</c> on success or on probe shapes we don't classify as "fundamentally broken"
-    /// (rate limits, 5xx).
+    /// global <c>/search/issues</c> + <c>/search/commits</c> with the bound github_username
+    /// (catches scope insufficiency for global search), then per-repo
+    /// <c>/search/{issues,commits}?q=repo:{owner}/{repo}+author:{username}</c> for every
+    /// repository in the configured allowlist (catches the case where global public search
+    /// works but a specific repo in the allowlist is private and the token lacks <c>repo</c>
+    /// scope — codex review PR #479 r3152148327).
+    ///
+    /// Returns a structured error JSON suitable for returning verbatim from the tool on
+    /// hard-fail shapes; returns <c>null</c> on success or on probe shapes we don't classify
+    /// as "fundamentally broken" (rate limits, 5xx).
     /// </summary>
     /// <remarks>
     /// Issue aevatarAI/aevatar#411 added the original <c>/rate_limit</c> step to fail fast on
     /// a misdiagnosed root cause (we thought the api-key was missing a GitHub binding). Issue
     /// #417 fixed that real cause — the api-key now carries the right per-user
     /// <c>UserService.id</c>s. The probe was retained because the OAuth grant can still be
-    /// revoked outside our control. Issue #474 widens the probe surface: <c>/rate_limit</c> is
-    /// scope-light (succeeds with any valid token) so it never caught the production failure
-    /// mode where <c>/search/*</c> 422s every call — agents got persisted but every scheduled
-    /// run produced an empty report. The freshly minted api-key is best-effort revoked at the
-    /// call site on any preflight failure so retries don't accumulate orphan proxy-scoped keys.
+    /// revoked outside our control. Issue #474 widens the probe surface to <c>/search/*</c>
+    /// because <c>/rate_limit</c> is scope-light (succeeds with any valid token) and never
+    /// caught the production failure mode where <c>/search/*</c> 422s every call — agents got
+    /// persisted but every scheduled run produced an empty report. The freshly minted api-key
+    /// is best-effort revoked at the call site on any preflight failure so retries don't
+    /// accumulate orphan proxy-scoped keys.
     /// </remarks>
     private async Task<string?> PreflightGitHubProxyAsync(
         NyxIdApiClient nyxClient,
         string apiKey,
         string githubUsername,
+        IReadOnlyList<string> repositories,
         string nyxProviderSlug,
         CancellationToken ct)
     {
@@ -1719,24 +1723,26 @@ public sealed class AgentBuilderTool : IAgentTool
         if (rateLimitFailure is not null)
             return rateLimitFailure;
 
-        // Step 2: search-API probes. /rate_limit is scope-light — it returns 200 even with a
-        // token that GitHub's search engine will reject. Issue #474: all of /search/issues and
-        // /search/commits return 422 "invalid user/permission" when the bound OAuth grant lacks
-        // public_repo/repo or the username is unreachable, and the daily report is useless if
-        // those endpoints don't work. Probe both with per_page=1 so we exercise the same auth
-        // surface the runtime will hit, without paying for full result pages. Skip when no
-        // username is bound — the rate_limit step is the only signal we have in that case.
+        // Step 2: global search-API probes. /rate_limit is scope-light — it returns 200 even
+        // with a token that GitHub's search engine will reject. Issue #474: all of
+        // /search/issues and /search/commits return 422 "invalid user/permission" when the
+        // bound OAuth grant lacks public_repo/repo or the username is unreachable, and the
+        // daily report is useless if those endpoints don't work. Probe both with per_page=1 so
+        // we exercise the same auth surface the runtime will hit, without paying for full
+        // result pages. Skip when no username is bound — the rate_limit step is the only
+        // signal we have in that case (and CreateDailyReportAgentAsync rejects empty
+        // github_username earlier, so this guard is defensive only).
         var normalizedUser = (githubUsername ?? string.Empty).Trim();
         if (string.IsNullOrEmpty(normalizedUser))
             return null;
 
         var encodedUser = Uri.EscapeDataString(normalizedUser);
-        var searchPaths = new (string Path, string Label)[]
+        var globalSearchPaths = new (string Path, string Label)[]
         {
             ($"/search/issues?q=author:{encodedUser}&per_page=1", "/search/issues"),
             ($"/search/commits?q=author:{encodedUser}&per_page=1", "/search/commits"),
         };
-        foreach (var (path, label) in searchPaths)
+        foreach (var (path, label) in globalSearchPaths)
         {
             var searchProbe = await nyxClient.ProxyRequestAsync(
                 apiKey,
@@ -1750,6 +1756,49 @@ public sealed class AgentBuilderTool : IAgentTool
             var searchFailure = ClassifySearchProbeFailure(searchProbe, label, normalizedUser, nyxProviderSlug);
             if (searchFailure is not null)
                 return searchFailure;
+        }
+
+        // Step 3: per-repo search-API probes when a repository allowlist is configured. The
+        // runtime daily report runs `repo:{owner}/{repo}+author:{username}` queries (see
+        // AgentBuilderTemplates.cs repo-mode URL list) — different auth surface from the
+        // global search above, because GitHub enforces per-repo visibility. A token with
+        // public_repo can pass global search yet 422 every repo-scoped call when one of the
+        // listed repos is private. Codex review PR #479 r3152148327: probing only global
+        // queries leaves that case persisting broken agents, so loop the repos here.
+        if (repositories is null || repositories.Count == 0)
+            return null;
+
+        foreach (var repoEntry in repositories)
+        {
+            var trimmedRepo = (repoEntry ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(trimmedRepo))
+                continue;
+
+            // GitHub usernames and repo names are restricted to [a-zA-Z0-9-._] per the
+            // github.com identifier rules — none of which need percent-encoding. The slash
+            // separator must be preserved literally (Uri.EscapeDataString would emit %2F,
+            // which GitHub's q= parser does not consistently accept). Pass repoEntry through
+            // unescaped; defense-in-depth escaping happens on the username segment.
+            var repoSearchPaths = new (string Path, string Label)[]
+            {
+                ($"/search/issues?q=repo:{trimmedRepo}+author:{encodedUser}&per_page=1", $"/search/issues (repo={trimmedRepo})"),
+                ($"/search/commits?q=repo:{trimmedRepo}+author:{encodedUser}&per_page=1", $"/search/commits (repo={trimmedRepo})"),
+            };
+            foreach (var (path, label) in repoSearchPaths)
+            {
+                var searchProbe = await nyxClient.ProxyRequestAsync(
+                    apiKey,
+                    "api-github",
+                    path,
+                    "GET",
+                    body: null,
+                    extraHeaders: null,
+                    ct);
+
+                var searchFailure = ClassifySearchProbeFailure(searchProbe, label, normalizedUser, nyxProviderSlug);
+                if (searchFailure is not null)
+                    return searchFailure;
+            }
         }
 
         return null;
@@ -1779,7 +1828,9 @@ public sealed class AgentBuilderTool : IAgentTool
         {
             using var doc = JsonDocument.Parse(probe);
             var root = doc.RootElement;
-            if (!IsErrorEnvelope(root, out var status, out var detail, out var body))
+            // `envelopeMessage` is the proxy envelope's `message` field; named to avoid
+            // shadowing the anonymous-type `detail` property below (codex review PR #479).
+            if (!IsErrorEnvelope(root, out var status, out var envelopeMessage, out var body))
                 return null;
 
             if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
@@ -1788,7 +1839,7 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new
             {
                 error = "github_proxy_access_denied",
-                detail = string.IsNullOrWhiteSpace(detail) ? "GitHub proxy returned 401/403 for the new agent API key." : detail,
+                detail = string.IsNullOrWhiteSpace(envelopeMessage) ? "GitHub proxy returned 401/403 for the new agent API key." : envelopeMessage,
                 http_status = status,
                 proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
                 hint = "GitHub returned 401/403 through the NyxID proxy. Common causes: (a) the OAuth grant for GitHub was revoked at github.com/settings/applications or its scopes were downgraded — re-authorize the GitHub provider at NyxID; (b) the request reached GitHub without a User-Agent header (NyxIdApiClient now sends a default; if you see this, check that the deployed binary includes that fix). The agent will not produce a useful daily report until proxy access succeeds.",
@@ -1834,7 +1885,9 @@ public sealed class AgentBuilderTool : IAgentTool
         {
             using var doc = JsonDocument.Parse(probe);
             var root = doc.RootElement;
-            if (!IsErrorEnvelope(root, out var status, out var detail, out var body))
+            // `envelopeMessage` is the proxy envelope's `message` field; named to avoid
+            // shadowing the anonymous-type `detail` property below (codex review PR #479).
+            if (!IsErrorEnvelope(root, out var status, out var envelopeMessage, out var body))
                 return null;
 
             if (status != (int)HttpStatusCode.UnprocessableEntity)
@@ -1844,15 +1897,18 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new
             {
                 error = "github_search_unauthorized",
-                detail = string.IsNullOrWhiteSpace(detail)
+                detail = string.IsNullOrWhiteSpace(envelopeMessage)
                     ? $"GitHub {githubPath} returned 422 for github_username `{githubUsername}` with the new agent API key. The /rate_limit probe succeeded, so the api-key itself is valid; the failure is specific to GitHub's search API."
-                    : detail,
+                    : envelopeMessage,
                 http_status = status,
                 github_path = githubPath,
                 github_username = githubUsername,
                 reason_code = reason,
                 proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
-                hint = "GitHub returned 422 from /search/* with the bound username. /search/commits and /search/issues enforce stricter scope than /rate_limit (which succeeded), so a token that passes /rate_limit can still fail every search call. Most common causes: (a) the OAuth grant for GitHub at NyxID is missing the scope GitHub's search engine requires (need `public_repo` to search public commits/issues, `repo` for private) — re-authorize the GitHub provider at NyxID with appropriate scopes; (b) the bound github_username does not exist, was renamed, or has been restricted (verify https://github.com/{username} resolves). The agent will not produce a useful daily report until /search/* succeeds.",
+                // Hint references the `github_username` field above instead of inlining it
+                // a second time; codex review PR #479 caught a stray `{username}` literal in
+                // an earlier draft.
+                hint = "GitHub returned 422 from /search/* with the bound username. /search/commits and /search/issues enforce stricter scope than /rate_limit (which succeeded), so a token that passes /rate_limit can still fail every search call. Most common causes: (a) the OAuth grant for GitHub at NyxID is missing the scope GitHub's search engine requires (need `public_repo` to search public commits/issues, `repo` for private) — re-authorize the GitHub provider at NyxID with appropriate scopes; (b) the bound github_username (see field above) does not exist, was renamed, or has been restricted — verify it resolves at https://github.com/. The agent will not produce a useful daily report until /search/* succeeds.",
                 nyx_provider_slug = nyxProviderSlug,
             });
         }

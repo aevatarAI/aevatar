@@ -575,6 +575,15 @@ public sealed class AgentBuilderToolTests
             handler.Requests.Should().Contain(r =>
                 r.Method == HttpMethod.Delete &&
                 r.Path == "/api/v1/api-keys/key-403");
+
+            // Issue #474 review (eanzhao on PR #479): /rate_limit failure must short-circuit
+            // ALL of step 2 (global /search/*) and step 3 (per-repo /search/*). Pinning that
+            // no /search/* call was made guards against a future regression where someone
+            // re-orders preflight steps or removes the early return on rate_limit failure —
+            // the 401/403 path is the cheapest fail-fast and should never wastefully fan out
+            // to scope-stricter endpoints.
+            handler.Requests.Should().NotContain(r =>
+                r.Path.Contains("/proxy/s/api-github/search/", StringComparison.Ordinal));
         }
         finally
         {
@@ -889,6 +898,205 @@ public sealed class AgentBuilderToolTests
             handler.Requests.Should().NotContain(r =>
                 r.Method == HttpMethod.Delete &&
                 r.Path.StartsWith("/api/v1/api-keys/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubSearchReturns422_WithUnknown422Body()
+    {
+        // Issue #474 review (eanzhao on PR #479): only `scope_insufficient_or_user_not_found`
+        // was exercised; pin that a 422 body that does NOT match the "cannot be searched"
+        // surface (e.g. a malformed query) collapses to the conservative `validation_failed`
+        // code so callers can still distinguish actionable cases without regex'ing the body
+        // themselves. This protects the fall-through branch in
+        // `ClassifyGitHubSearch422Body` from regression: any future heuristic change that
+        // routes unknown 422 bodies to a more specific code by guessing would fail this.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-422-q","full_key":"full-key-422-q"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+        // 422 body without the "cannot be searched" / "permission" markers — represents the
+        // query-malformed case (e.g. illegal qualifier, exceeded query length). The conservative
+        // fall-through is `validation_failed`.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=author:alice&per_page=1",
+            """{"error":true,"status":422,"body":"{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"Search\",\"field\":\"q\",\"code\":\"invalid\"}],\"documentation_url\":\"https://docs.github.com/v3/search/\"}"}""");
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-422-q", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-search-422-q",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_search_unauthorized");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(422);
+            // Conservative fall-through — no specific marker matched.
+            doc.RootElement.GetProperty("reason_code").GetString().Should().Be("validation_failed");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RepoScopedSearchReturns422()
+    {
+        // Codex review (PR #479 r3152148327, P1): a token can pass the global /search/*
+        // probes (public_repo lets you search public commits/issues globally) yet 422 every
+        // repo-qualified call when the configured allowlist contains a private repo the
+        // token cannot see. Pre-this-fix, the daily-report runtime ran `repo:{owner}/{repo}+
+        // author:{username}` queries (per AgentBuilderTemplates.cs repo-mode URLs) and 422'd
+        // every one, persisting a broken agent. Pin: when global /search/issues and
+        // /search/commits return 200 but a repo-qualified probe 422s, preflight fails fast
+        // with `github_search_unauthorized`, the github_path label includes the failing
+        // repo, and the api-key is revoked.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-422-repo","full_key":"full-key-422-repo"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+        // Global probes succeed — token has public_repo scope, can search public globally.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=author:alice&per_page=1",
+            """{"total_count":0,"incomplete_results":false,"items":[]}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/commits?q=author:alice&per_page=1",
+            """{"total_count":0,"incomplete_results":false,"items":[]}""");
+        // Repo-qualified probe 422s — the configured allowlist points at a private repo the
+        // token cannot see. This is the new failure mode that global probes don't catch.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=repo:acme/private-svc+author:alice&per_page=1",
+            """{"error":true,"status":422,"body":"{\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"The listed users, organizations or repositories cannot be searched either because the resources do not exist or you do not have permission to view them.\",\"resource\":\"Search\",\"field\":\"q\",\"code\":\"invalid\"}]}"}""");
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-422-repo", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(nyxClient);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-search-422-repo",
+                  "github_username": "alice",
+                  "repositories": "acme/private-svc",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_search_unauthorized");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(422);
+            // The label carries the failing repo so operators can distinguish "global search
+            // is broken" from "this specific repo can't be reached" without rerunning.
+            doc.RootElement.GetProperty("github_path").GetString()!.Should().Contain("acme/private-svc");
+            doc.RootElement.GetProperty("reason_code").GetString().Should().Be("scope_insufficient_or_user_not_found");
+
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-422-repo");
         }
         finally
         {
