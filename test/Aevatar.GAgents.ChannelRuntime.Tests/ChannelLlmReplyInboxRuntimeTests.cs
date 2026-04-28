@@ -40,8 +40,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -80,8 +79,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -119,8 +117,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -159,8 +156,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -193,8 +189,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -228,8 +223,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
@@ -264,8 +258,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
@@ -298,7 +291,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     [Fact]
     public async Task ProcessAsync_ShouldDropSilently_WhenTargetActorIdMissing()
     {
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -329,8 +322,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         EventEnvelope? handled = null;
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -362,8 +354,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         var handled = new List<EventEnvelope>();
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -400,8 +391,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         var handled = new List<EventEnvelope>();
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -434,8 +424,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         var handled = new List<EventEnvelope>();
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
             actorRuntime,
@@ -483,8 +472,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
 
         var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
@@ -561,8 +549,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
 
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("actor-1").Returns(Task.FromResult<IActor?>(actor));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
 
         var runtime = new ChannelLlmReplyInboxRuntime(
             Substitute.For<IStreamProvider>(),
@@ -612,6 +599,56 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
                 CorrelationId = "corr-1",
             },
         };
+
+    private sealed class DispatchingActorRuntime(params (string Id, IActor Actor)[] actors) :
+        IActorRuntime,
+        IActorDispatchPort
+    {
+        private readonly Dictionary<string, IActor> _actors = actors.ToDictionary(
+            static pair => pair.Id,
+            static pair => pair.Actor,
+            StringComparer.Ordinal);
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent
+        {
+            var actorId = id ?? Guid.NewGuid().ToString("N");
+            if (_actors.TryGetValue(actorId, out var existing))
+                return Task.FromResult(existing);
+
+            var actor = Substitute.For<IActor>();
+            actor.Id.Returns(actorId);
+            _actors[actorId] = actor;
+            return Task.FromResult(actor);
+        }
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            CreateAsync<ConversationGAgent>(id, ct);
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            _actors.Remove(id);
+            return Task.CompletedTask;
+        }
+
+        public Task<IActor?> GetAsync(string id) =>
+            Task.FromResult(_actors.TryGetValue(id, out var actor) ? actor : null);
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            if (!_actors.TryGetValue(actorId, out var actor))
+                throw new InvalidOperationException($"Actor {actorId} not found.");
+            await actor.HandleEventAsync(envelope, ct);
+        }
+    }
 
     private sealed class RecordingReplyGenerator(Func<bool> captureAction) : IConversationReplyGenerator
     {

@@ -44,7 +44,10 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// </remarks>
 public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 {
-    private readonly IActor _targetActor;
+    private const string PublisherActorId = "channel-runtime.streaming-reply";
+
+    private readonly IActorDispatchPort _actorDispatchPort;
+    private readonly string _targetActorId;
     private readonly string _correlationId;
     private readonly string _registrationId;
     private readonly ChatActivity _activityTemplate;
@@ -68,7 +71,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private TaskCompletionSource<bool>? _drainTcs;
 
     public TurnStreamingReplySink(
-        IActor targetActor,
+        IActorDispatchPort actorDispatchPort,
+        string targetActorId,
         string correlationId,
         string registrationId,
         ChatActivity activityTemplate,
@@ -76,7 +80,10 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         TimeProvider timeProvider,
         ILogger? logger = null)
     {
-        _targetActor = targetActor ?? throw new ArgumentNullException(nameof(targetActor));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        if (string.IsNullOrWhiteSpace(targetActorId))
+            throw new ArgumentException("Target actor id is required.", nameof(targetActorId));
+        _targetActorId = targetActorId.Trim();
         if (string.IsNullOrWhiteSpace(correlationId))
             throw new ArgumentException("Correlation id is required.", nameof(correlationId));
         _correlationId = correlationId.Trim();
@@ -318,15 +325,12 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(chunk),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = _targetActor.Id },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, _targetActorId),
         };
 
         try
         {
-            await _targetActor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
+            await _actorDispatchPort.DispatchAsync(_targetActorId, envelope, ct).ConfigureAwait(false);
             lock (_lock)
             {
                 _lastEmittedText = text;

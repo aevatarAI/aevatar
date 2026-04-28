@@ -21,6 +21,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
 
     private readonly IStreamProvider _streamProvider;
     private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -39,10 +40,14 @@ public sealed class ChannelLlmReplyInboxRuntime :
         ILogger<ChannelLlmReplyInboxRuntime> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IActorDispatchPort? actorDispatchPort = null)
     {
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _actorDispatchPort = actorDispatchPort
+            ?? actorRuntime as IActorDispatchPort
+            ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
@@ -142,7 +147,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
         var terminalState = LlmReplyTerminalState.Completed;
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
-        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, actor);
+        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
 
         try
         {
@@ -214,16 +219,13 @@ public sealed class ChannelLlmReplyInboxRuntime :
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(ready),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(InboxStreamId, request.TargetActorId),
         };
 
-        await actor.HandleEventAsync(envelope, CancellationToken.None);
+        await _actorDispatchPort.DispatchAsync(request.TargetActorId, envelope, CancellationToken.None);
     }
 
-    private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, IActor targetActor)
+    private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, string targetActorId)
     {
         if (_relayOptions is not { StreamingRepliesEnabled: true })
             return null;
@@ -240,7 +242,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
 
         var throttle = TimeSpan.FromMilliseconds(Math.Max(0, _relayOptions.StreamingFlushIntervalMs));
         return new TurnStreamingReplySink(
-            targetActor,
+            _actorDispatchPort,
+            targetActorId,
             request.CorrelationId,
             request.RegistrationId,
             request.Activity.Clone(),
@@ -392,15 +395,12 @@ public sealed class ChannelLlmReplyInboxRuntime :
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(dropped),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(InboxStreamId, request.TargetActorId),
         };
 
         try
         {
-            await actor.HandleEventAsync(envelope, CancellationToken.None);
+            await _actorDispatchPort.DispatchAsync(request.TargetActorId, envelope, CancellationToken.None);
         }
         catch (Exception ex)
         {

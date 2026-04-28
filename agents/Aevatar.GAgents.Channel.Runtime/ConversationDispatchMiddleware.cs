@@ -7,11 +7,19 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 internal sealed class ConversationDispatchMiddleware : IChannelMiddleware
 {
-    private readonly IActorRuntime _actorRuntime;
+    private const string PublisherActorId = "channel-runtime.conversation-dispatch";
 
-    public ConversationDispatchMiddleware(IActorRuntime actorRuntime)
+    private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _actorDispatchPort;
+
+    public ConversationDispatchMiddleware(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort? actorDispatchPort = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _actorDispatchPort = actorDispatchPort
+            ?? actorRuntime as IActorDispatchPort
+            ?? throw new ArgumentNullException(nameof(actorDispatchPort));
     }
 
     public async Task InvokeAsync(ITurnContext context, Func<Task> next, CancellationToken ct)
@@ -34,16 +42,10 @@ internal sealed class ConversationDispatchMiddleware : IChannelMiddleware
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(context.Activity),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute
-                {
-                    TargetActorId = actor.Id,
-                },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, actor.Id),
         };
 
-        await actor.HandleEventAsync(envelope, ct);
+        await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct);
         await next();
     }
 }

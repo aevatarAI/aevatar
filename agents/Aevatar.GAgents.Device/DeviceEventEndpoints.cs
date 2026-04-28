@@ -21,6 +21,9 @@ public sealed class DeviceEventOptions
 
 public static class DeviceEventEndpoints
 {
+    private const string DeviceCallbackPublisherActorId = "device-events.callback";
+    private const string DeviceRegistrationPublisherActorId = "device-events.registration";
+
     public static IEndpointRouteBuilder MapDeviceEventEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/device-events").WithTags("DeviceEvents");
@@ -53,6 +56,7 @@ public static class DeviceEventEndpoints
         HttpContext http,
         string registrationId,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IDeviceRegistrationQueryPort queryPort,
         [FromServices] IOptions<DeviceEventOptions> options,
         [FromServices] ILoggerFactory loggerFactory,
@@ -103,7 +107,7 @@ public static class DeviceEventEndpoints
         // Synchronous dispatch — failure returns 502 so NyxID retries at transport level
         try
         {
-            await DispatchToHouseholdAsync(inbound, householdActorId, actorRuntime, loggerFactory);
+            await DispatchToHouseholdAsync(inbound, householdActorId, actorRuntime, dispatchPort, loggerFactory, ct);
         }
         catch (Exception ex)
         {
@@ -121,10 +125,12 @@ public static class DeviceEventEndpoints
     /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
     /// CreateAsync calls from multiple requests safely converge to the same grain.
     /// </summary>
-    private static async Task<IActor> GetOrCreateRegistrationActorAsync(IActorRuntime actorRuntime)
+    private static async Task<IActor> GetOrCreateRegistrationActorAsync(
+        IActorRuntime actorRuntime,
+        CancellationToken ct)
     {
         return await actorRuntime.GetAsync(DeviceRegistrationGAgent.WellKnownId)
-               ?? await actorRuntime.CreateAsync<DeviceRegistrationGAgent>(DeviceRegistrationGAgent.WellKnownId);
+               ?? await actorRuntime.CreateAsync<DeviceRegistrationGAgent>(DeviceRegistrationGAgent.WellKnownId, ct);
     }
 
     internal static bool VerifyHmacSignature(
@@ -216,25 +222,24 @@ public static class DeviceEventEndpoints
         DeviceInbound inbound,
         string householdActorId,
         IActorRuntime actorRuntime,
-        ILoggerFactory loggerFactory)
+        IActorDispatchPort dispatchPort,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.DeviceEvent");
 
         var actor = await actorRuntime.GetAsync(householdActorId)
-                    ?? await actorRuntime.CreateAsync<HouseholdEntity>(householdActorId);
+                    ?? await actorRuntime.CreateAsync<HouseholdEntity>(householdActorId, ct);
 
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(inbound),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(DeviceCallbackPublisherActorId, actor.Id),
         };
 
-        await actor.HandleEventAsync(envelope);
+        await dispatchPort.DispatchAsync(actor.Id, envelope, ct);
 
         logger.LogInformation(
             "Device event dispatched: event_id={EventId}, target={HouseholdActorId}",
@@ -246,6 +251,7 @@ public static class DeviceEventEndpoints
     private static async Task<IResult> HandleRegisterDeviceAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -267,7 +273,7 @@ public static class DeviceEventEndpoints
             return Results.BadRequest(new { error = "scope_id is required" });
         }
 
-        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
+        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime, ct);
 
         // Dispatch register command to actor
         var cmd = new DeviceRegisterCommand
@@ -283,13 +289,10 @@ public static class DeviceEventEndpoints
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(cmd),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(DeviceRegistrationPublisherActorId, actor.Id),
         };
 
-        await actor.HandleEventAsync(cmdEnvelope);
+        await dispatchPort.DispatchAsync(actor.Id, cmdEnvelope, ct);
 
         // Command accepted — the projection pipeline will materialize the read model.
         // Return accepted with the command details (eventual consistency).
@@ -320,6 +323,7 @@ public static class DeviceEventEndpoints
     private static async Task<IResult> HandleDeleteDeviceRegistrationAsync(
         string registrationId,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IDeviceRegistrationQueryPort queryPort,
         CancellationToken ct)
     {
@@ -327,20 +331,17 @@ public static class DeviceEventEndpoints
         if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
+        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime, ct);
         var cmd = new DeviceUnregisterCommand { RegistrationId = registrationId };
         var cmdEnvelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(cmd),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(DeviceRegistrationPublisherActorId, actor.Id),
         };
 
-        await actor.HandleEventAsync(cmdEnvelope);
+        await dispatchPort.DispatchAsync(actor.Id, cmdEnvelope, ct);
         return Results.Ok(new { status = "deleted" });
     }
 
