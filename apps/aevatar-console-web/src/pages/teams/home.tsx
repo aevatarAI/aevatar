@@ -18,6 +18,8 @@ import {
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import { ensureActiveAuthSession } from "@/shared/auth/client";
+import { getNyxIDRuntimeConfig } from "@/shared/auth/config";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
@@ -33,8 +35,11 @@ import {
   type StudioMemberSummary,
 } from "@/shared/studio/models";
 import {
+  findStudioMemberServiceIdInCatalog,
+  resolveStudioMemberRuntimeServiceId,
+} from "@/shared/studio/memberRuntime";
+import {
   buildStudioRoute,
-  buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
@@ -372,7 +377,10 @@ function resolveMemberPreviewService(input: {
   readonly member: StudioMemberSummary;
   readonly services: readonly ServiceCatalogSnapshot[];
 }): ServiceCatalogSnapshot | null {
-  const boundServiceId = trimOptional(input.member.publishedServiceId);
+  const boundServiceId = findStudioMemberServiceIdInCatalog(
+    input.member,
+    input.services,
+  );
   if (!boundServiceId) {
     return null;
   }
@@ -418,11 +426,14 @@ function buildMemberRosterPreview(input: {
     services: input.services,
   });
   const memberId = trimOptional(input.member.memberId);
+  const visibleServiceId =
+    trimOptional(matchedService?.serviceId) ||
+    findStudioMemberServiceIdInCatalog(input.member, input.services);
   const serviceId =
-    trimOptional(input.member.publishedServiceId) ||
-    trimOptional(matchedService?.serviceId);
+    visibleServiceId ||
+    resolveStudioMemberRuntimeServiceId(input.member, input.services);
   const runtimeRelevant = Boolean(
-    serviceId || trimOptional(input.member.lastBoundRevisionId),
+    visibleServiceId || trimOptional(input.member.lastBoundRevisionId),
   );
   const runtimeUnavailable =
     runtimeRelevant &&
@@ -439,9 +450,10 @@ function buildMemberRosterPreview(input: {
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
     (trimOptional(input.member.lastBoundRevisionId) ? "已绑定待确认" : "未绑定");
   const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
-  const studioHref = buildStudioWorkflowWorkspaceRoute({
+  const studioHref = buildStudioRoute({
     scopeId: input.scopeId,
     memberId,
+    tab: "studio",
   });
 
   let attention: WorkflowOperationalAttention = "draft";
@@ -790,12 +802,23 @@ const TeamsHomePage: React.FC = () => {
     "cards" | "list" | null
   >(null);
   const [showScopePicker, setShowScopePicker] = React.useState(false);
+  const [authRecoveryAttempted, setAuthRecoveryAttempted] = React.useState(false);
+  const [authRecoveryPending, setAuthRecoveryPending] = React.useState(false);
+  const isMountedRef = React.useRef(true);
+  const nyxIdConfig = React.useMemo(() => getNyxIDRuntimeConfig(), []);
+
+  React.useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
+  const refetchAuthSession = authSessionQuery.refetch;
   const localScopeId = trimOptional(loadRestorableAuthSession()?.user.sub);
   const locallyResolvedScope = React.useMemo(() => {
     if (!localScopeId) {
@@ -821,6 +844,78 @@ const TeamsHomePage: React.FC = () => {
       "登录状态暂时不可用，请刷新后重试。",
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
+  const authSessionAccessResolved =
+    !authSessionQuery.isLoading && !authSessionQuery.isError;
+  const authSessionAuthenticated =
+    authSessionQuery.data?.enabled === false ||
+    Boolean(authSessionQuery.data?.authenticated);
+  const authenticatedScopeId = trimOptional(authSessionQuery.data?.scopeId);
+
+  React.useEffect(() => {
+    if (authSessionQuery.isLoading || authSessionQuery.isError) {
+      return;
+    }
+
+    if (!authSessionQuery.data?.enabled || authSessionQuery.data.authenticated) {
+      setAuthRecoveryAttempted(false);
+      setAuthRecoveryPending(false);
+      return;
+    }
+
+    if (!nyxIdConfig.enabled || authRecoveryAttempted) {
+      return;
+    }
+
+    setAuthRecoveryAttempted(true);
+    setAuthRecoveryPending(true);
+
+    void (async () => {
+      try {
+        await ensureActiveAuthSession(nyxIdConfig);
+        await refetchAuthSession();
+      } finally {
+        if (isMountedRef.current) {
+          setAuthRecoveryPending(false);
+        }
+      }
+    })();
+  }, [
+    authRecoveryAttempted,
+    authSessionQuery.data?.authenticated,
+    authSessionQuery.data?.enabled,
+    authSessionQuery.isError,
+    authSessionQuery.isLoading,
+    nyxIdConfig,
+    refetchAuthSession,
+  ]);
+
+  React.useEffect(() => {
+    if (
+      !authSessionAccessResolved ||
+      !authSessionAuthenticated ||
+      authSessionQuery.data?.enabled === false ||
+      !authenticatedScopeId
+    ) {
+      return;
+    }
+
+    setActiveDraft((currentDraft) =>
+      currentDraft.scopeId.trim() === authenticatedScopeId
+        ? currentDraft
+        : { scopeId: authenticatedScopeId },
+    );
+    setDraft((currentDraft) =>
+      showScopePicker || currentDraft.scopeId.trim() === authenticatedScopeId
+        ? currentDraft
+        : { scopeId: authenticatedScopeId },
+    );
+  }, [
+    authSessionAccessResolved,
+    authSessionAuthenticated,
+    authSessionQuery.data?.enabled,
+    authenticatedScopeId,
+    showScopePicker,
+  ]);
 
   React.useEffect(() => {
     if (!resolvedScope?.scopeId) {
@@ -840,19 +935,50 @@ const TeamsHomePage: React.FC = () => {
   }, [resolvedScope?.scopeId]);
 
   const scopeId = activeDraft.scopeId.trim();
+  const rosterScopeMismatch =
+    scopeId.length > 0 &&
+    authSessionAccessResolved &&
+    authSessionAuthenticated &&
+    authSessionQuery.data?.enabled !== false &&
+    authenticatedScopeId.length > 0 &&
+    scopeId !== authenticatedScopeId;
+  const rosterMissingAuthorizedScope =
+    scopeId.length > 0 &&
+    !authSessionQuery.isError &&
+    authSessionAccessResolved &&
+    authSessionAuthenticated &&
+    authSessionQuery.data?.enabled !== false &&
+    !authenticatedScopeId &&
+    !authRecoveryPending;
+  const scopeQueriesEnabled =
+    scopeId.length > 0 &&
+    !authRecoveryPending &&
+    !rosterScopeMismatch &&
+    !rosterMissingAuthorizedScope &&
+    (authSessionQuery.isError ||
+      (authSessionAccessResolved && authSessionAuthenticated));
+  const rosterAuthPending =
+    scopeId.length > 0 &&
+    (authSessionQuery.isLoading || authRecoveryPending || rosterScopeMismatch);
+  const rosterAuthUnavailable =
+    scopeId.length > 0 &&
+    !authSessionQuery.isError &&
+    authSessionAccessResolved &&
+    !authSessionAuthenticated &&
+    !authRecoveryPending;
 
   React.useEffect(() => {
     history.replace(buildScopeHref("/teams", activeDraft));
   }, [activeDraft]);
 
   const membersQuery = useQuery({
-    enabled: scopeId.length > 0,
+    enabled: scopeQueriesEnabled,
     queryKey: ["teams", "members", scopeId],
     queryFn: () => studioApi.listMembers(scopeId),
     retry: false,
   });
   const servicesQuery = useQuery({
-    enabled: scopeId.length > 0,
+    enabled: scopeQueriesEnabled,
     queryKey: ["teams", "services", scopeId],
     queryFn: () =>
       servicesApi.listServices({
@@ -871,10 +997,15 @@ const TeamsHomePage: React.FC = () => {
     () =>
       studioMembers.filter(
         (member) =>
-          Boolean(trimOptional(member.publishedServiceId)) ||
+          Boolean(
+            findStudioMemberServiceIdInCatalog(
+              member,
+              servicesQuery.data ?? [],
+            ),
+          ) ||
           Boolean(trimOptional(member.lastBoundRevisionId)),
       ),
-    [studioMembers],
+    [servicesQuery.data, studioMembers],
   );
   const runtimeSampleMembers = React.useMemo(
     () => runtimeTrackableMembers.slice(0, WORKFLOW_RUNTIME_GUARDRAIL),
@@ -892,7 +1023,7 @@ const TeamsHomePage: React.FC = () => {
   );
   const memberRunQueries = useQueries({
     queries: runtimeSampleMembers.map((member) => ({
-      enabled: scopeId.length > 0 && membersQuery.isSuccess,
+      enabled: scopeQueriesEnabled && membersQuery.isSuccess,
       queryKey: ["teams", "member-runs", scopeId, member.memberId],
       queryFn: () =>
         scopeRuntimeApi.listMemberRuns(scopeId, member.memberId, {
@@ -901,6 +1032,16 @@ const TeamsHomePage: React.FC = () => {
       retry: false,
     })),
   });
+  const memberRosterIssue = React.useMemo(() => {
+    if (!membersQuery.isError) {
+      return "";
+    }
+
+    return describeError(
+      membersQuery.error,
+      "当前 Scope 的成员清单暂时无法加载。",
+    );
+  }, [membersQuery.error, membersQuery.isError]);
   const runtimeAvailableByMemberId = React.useMemo(() => {
     const available = new Set<string>();
     memberRunQueries.forEach((query, index) => {
@@ -945,10 +1086,13 @@ const TeamsHomePage: React.FC = () => {
     () =>
       studioMembers.filter(
         (member) =>
-          !trimOptional(member.publishedServiceId) ||
+          !findStudioMemberServiceIdInCatalog(
+            member,
+            servicesQuery.data ?? [],
+          ) ||
           !trimOptional(member.lastBoundRevisionId),
       ).length,
-    [studioMembers],
+    [servicesQuery.data, studioMembers],
   );
   const visibleTeamCount = memberPreviews.length;
   const resolvedRosterView =
@@ -963,7 +1107,7 @@ const TeamsHomePage: React.FC = () => {
   ).length;
   const emptyRosterHint =
     scopeId.length > 0
-      ? "当前 Scope 下还没有创建任何 member。进入 Studio 创建成员后，这里会按成员逐个展示。"
+      ? "当前 Scope 下还没有创建任何 team。进入 Studio 创建 team 后，再到 team 里添加 member。"
       : "先导入一个 Scope，首页才能渲染出这组成员卡片。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
@@ -1126,7 +1270,7 @@ const TeamsHomePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
               <Typography.Text type="secondary">
-                首页按这个 Scope 汇总成员本身的绑定与运行状态，Scope 只做上下文，不再直接当团队名展示。
+                Scope 只提供团队访问上下文；首页先展示当前 Scope 下的 teams，再从 team 进入 member 工作台。
               </Typography.Text>
             </div>
           </div>
@@ -1186,15 +1330,17 @@ const TeamsHomePage: React.FC = () => {
                   <Button
                     onClick={() =>
                       history.push(
-                        buildStudioWorkflowWorkspaceRoute({
+                        buildStudioRoute({
                           scopeId,
+                          intent: "create-member",
+                          tab: "studio",
                         }),
                       )
                     }
                     size="small"
                     type="primary"
                   >
-                    打开 Studio
+                    进入 Studio 创建 Team
                   </Button>
                 }
                 description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的可调用入口。`}
@@ -1204,10 +1350,33 @@ const TeamsHomePage: React.FC = () => {
               />
             ) : null}
 
-            {membersQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在整理当前 Scope 的成员清单。" />
+            {rosterAuthPending || membersQuery.isLoading ? (
+              <AevatarInspectorEmpty
+                description={
+                  rosterScopeMismatch
+                    ? "正在对齐当前登录态允许访问的 Scope。"
+                    : authRecoveryPending
+                    ? "正在恢复当前登录态并整理成员清单。"
+                    : "正在整理当前 Scope 的成员清单。"
+                }
+              />
+            ) : rosterMissingAuthorizedScope ? (
+              <Alert
+                description="当前登录态已经通过认证，但没有解析出 canonical scope_id，所以无法读取受保护的 Scope 资源。请重新登录；如果仍然失败，请检查 NyxID claims transformer 是否生效。"
+                showIcon
+                title="当前登录态缺少 Scope 绑定"
+                type="warning"
+              />
+            ) : rosterAuthUnavailable ? (
+              <Alert
+                description="成员清单会在登录态恢复完成后再加载；如果长时间停留在这里，请重新登录。"
+                showIcon
+                title="当前登录态尚未准备好"
+                type="info"
+              />
             ) : membersQuery.isError ? (
               <Alert
+                description={memberRosterIssue}
                 showIcon
                 title="当前 Scope 的成员清单暂时无法加载。"
                 type="error"
@@ -1299,14 +1468,16 @@ const TeamsHomePage: React.FC = () => {
                 <Button
                   onClick={() =>
                     history.push(
-                      buildStudioWorkflowWorkspaceRoute({
+                      buildStudioRoute({
                         scopeId,
+                        intent: "create-member",
+                        tab: "studio",
                       }),
                     )
                   }
                   type="primary"
                 >
-                  打开 Studio
+                  进入 Studio 创建 Team
                 </Button>
               </Empty>
             )}

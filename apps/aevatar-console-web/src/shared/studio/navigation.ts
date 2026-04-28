@@ -32,6 +32,17 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function isLifecycleStudioStep(
+  step: StudioStep | string | null | undefined,
+): boolean {
+  const normalizedStep = trimOptional(step);
+  return (
+    normalizedStep === 'bind' ||
+    normalizedStep === 'invoke' ||
+    normalizedStep === 'observe'
+  );
+}
+
 function readWorkflowFileStem(fileName: string | null | undefined): string {
   return trimOptional(fileName).replace(/\.(ya?ml)$/i, '');
 }
@@ -82,11 +93,7 @@ function normalizeStudioMemberKey(
   fallbackMemberId?: string | null | undefined,
 ): StudioMemberKey | undefined {
   const normalizedValue = trimOptional(value);
-  if (
-    normalizedValue.startsWith('member:') ||
-    normalizedValue.startsWith('workflow:') ||
-    normalizedValue.startsWith('script:')
-  ) {
+  if (normalizedValue.startsWith('member:')) {
     return normalizedValue as StudioMemberKey;
   }
 
@@ -94,6 +101,21 @@ function normalizeStudioMemberKey(
   return normalizedMemberId
     ? (`member:${normalizedMemberId}` as const)
     : undefined;
+}
+
+function resolveStableStudioMemberId(
+  value: StudioMemberKey | string | null | undefined,
+  fallbackMemberId?: string | null | undefined,
+): string {
+  const normalizedMemberId = trimOptional(fallbackMemberId);
+  if (normalizedMemberId) {
+    return normalizedMemberId;
+  }
+
+  const normalizedValue = trimOptional(value);
+  return normalizedValue.startsWith('member:')
+    ? trimOptional(normalizedValue.slice('member:'.length))
+    : '';
 }
 
 function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
@@ -131,20 +153,26 @@ function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
 
 export function buildStudioRoute(options?: StudioRouteOptions): string {
   const params = new URLSearchParams();
+  const lifecycleStep = isLifecycleStudioStep(options?.step);
   if (options?.scopeId?.trim()) {
     params.set('scopeId', options.scopeId.trim());
   }
-  const memberKey = normalizeStudioMemberKey(
+  const memberId = resolveStableStudioMemberId(
     options?.memberKey,
     options?.memberId,
   );
-  if (memberKey) {
-    params.set('member', memberKey);
+  if (memberId) {
+    params.set('memberId', memberId);
   }
   if (options?.step) {
     params.set('step', options.step);
   }
-  const focus = normalizeStudioBuildFocus(options?.focus);
+  const legacyMemberFocus = !lifecycleStep && !memberId
+    ? normalizeStudioBuildFocus(options?.memberKey)
+    : undefined;
+  const focus =
+    (!lifecycleStep ? normalizeStudioBuildFocus(options?.focus) : undefined) ||
+    legacyMemberFocus;
   if (focus) {
     params.set('focus', focus);
   }
@@ -194,14 +222,15 @@ export function buildStudioWorkflowEditorRoute(options?: {
     options?.memberKey,
     options?.memberId,
   );
-  const hasWorkflowMemberKey = memberKey?.startsWith('workflow:');
   const workflowFocus = workflowId
     ? (`workflow:${workflowId}` as const)
     : undefined;
   return buildStudioRoute({
     ...options,
     focus:
-      !hasWorkflowMemberKey && workflowFocus && workflowFocus !== memberKey
+      workflowFocus &&
+      workflowFocus !== memberKey &&
+      workflowFocus !== template
         ? workflowFocus
         : template
         ? `template:${template}`
@@ -247,8 +276,7 @@ export function buildStudioScriptsWorkspaceRoute(options?: {
   const scriptFocus = scriptId ? (`script:${scriptId}` as const) : undefined;
   return buildStudioRoute({
     ...options,
-    focus:
-      scriptFocus && scriptFocus !== memberKey ? scriptFocus : undefined,
+    focus: scriptFocus && scriptFocus !== memberKey ? scriptFocus : undefined,
     tab: 'scripts',
   });
 }
