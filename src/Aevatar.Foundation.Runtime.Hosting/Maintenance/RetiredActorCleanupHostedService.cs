@@ -29,6 +29,11 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
     private const int MarkerInProgress = 1;
     private const int MarkerReleased = 2;
 
+    // Stable cleanupReason values for log/metric distinguishing of normal-match
+    // vs orphaned-stream recovery paths. Ops dashboards group on these strings.
+    private const string CleanupReasonRetiredTypeMatch = "retired-type-match";
+    private const string CleanupReasonOrphanedEventStream = "orphaned-event-stream";
+
     private readonly IEnumerable<IRetiredActorSpec> _specs;
     private readonly IActorTypeProbe _typeProbe;
     private readonly IActorRuntime _actorRuntime;
@@ -149,12 +154,17 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
                 return;
         }
 
+        var cleanupReason = matchesRetiredRuntimeType
+            ? CleanupReasonRetiredTypeMatch
+            : CleanupReasonOrphanedEventStream;
+
         if (shouldContinueReset)
         {
             _logger.LogInformation(
-                "Retired actor stream cleanup continuing after actor state was already cleared. specId={SpecId} actorId={ActorId}",
+                "Retired actor stream cleanup recovering orphaned stream after partial cleanup. specId={SpecId} actorId={ActorId} cleanupReason={CleanupReason}",
                 spec.SpecId,
-                target.ActorId);
+                target.ActorId,
+                cleanupReason);
         }
 
         if (!string.IsNullOrWhiteSpace(target.SourceStreamId))
@@ -169,20 +179,12 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         if (_options.ResetEventStreams)
             await _eventStoreMaintenance.ResetStreamAsync(target.ActorId, ct).ConfigureAwait(false);
 
-        if (!matchesRetiredRuntimeType)
-        {
-            _logger.LogInformation(
-                "Retired actor stream cleaned. specId={SpecId} actorId={ActorId}",
-                spec.SpecId,
-                target.ActorId);
-            return;
-        }
-
         _logger.LogInformation(
-            "Retired actor cleaned. specId={SpecId} actorId={ActorId} runtimeType={RuntimeType}",
+            "Retired actor cleaned. specId={SpecId} actorId={ActorId} runtimeType={RuntimeType} cleanupReason={CleanupReason}",
             spec.SpecId,
             target.ActorId,
-            runtimeTypeName);
+            runtimeTypeName ?? string.Empty,
+            cleanupReason);
     }
 
     private async Task CleanupIncomingRelayBestEffortAsync(
