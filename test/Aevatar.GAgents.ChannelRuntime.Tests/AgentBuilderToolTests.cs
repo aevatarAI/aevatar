@@ -2853,7 +2853,7 @@ public sealed class AgentBuilderToolTests
         // creation, return a structured `twitter_oauth_required` error, and best-effort revoke
         // the orphan key so retries don't accumulate.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -2892,6 +2892,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(workflowCommandPort);
         services.AddSingleton(nyxClient);
+        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(__callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2944,7 +2948,7 @@ public sealed class AgentBuilderToolTests
         // issued before tweet.write was added — surface this as `twitter_proxy_access_denied`
         // (distinct from 401) so the user-facing hint can steer ops vs the user.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -2979,6 +2983,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(workflowCommandPort);
         services.AddSingleton(nyxClient);
+        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(__callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -3053,6 +3061,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(workflowCommandPort);
         services.AddSingleton(nyxClient);
+        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(__callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -3102,9 +3114,9 @@ public sealed class AgentBuilderToolTests
         // the unmocked default route). Pin that the GET probe lands on the configured slug's
         // path so this regresses loudly if anyone reverts to a literal "api-twitter".
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
-        queryPort.GetAsync("workflow-agent-custom-slug", Arg.Any<CancellationToken>())
+        queryPort.GetForCallerAsync("workflow-agent-custom-slug", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "workflow-agent-custom-slug",
@@ -3164,6 +3176,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton(workflowCommandPort);
         services.AddSingleton(nyxClient);
+        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(__callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
