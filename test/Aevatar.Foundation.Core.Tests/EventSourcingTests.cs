@@ -221,6 +221,136 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task ConfirmEventsAsync_WhenStoreVersionIsAhead_ShouldRefreshCurrentVersionAndAllowRetry()
+    {
+        // Reproduces the prod incident behind issue #502: a previous activation
+        // committed up to v=N in the store, but this behavior's in-memory
+        // _currentVersion is behind. Without the catch-path refresh, every
+        // retry rebuilds stateEvents at the same expectedVersion and conflicts
+        // forever. Verify (1) the conflict surfaces, (2) _currentVersion is
+        // refreshed to ex.ActualVersion, (3) the next ConfirmEventsAsync uses
+        // the refreshed version and commits cleanly.
+        var store = new InMemoryEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-conflict");
+
+        // Out-of-band commits that leave the store ahead of behavior's view.
+        await store.AppendAsync(
+            "agent-conflict",
+            [BuildEvent(version: 1, amount: 10)],
+            expectedVersion: 0);
+        await store.AppendAsync(
+            "agent-conflict",
+            [BuildEvent(version: 2, amount: 20)],
+            expectedVersion: 1);
+
+        // behavior thinks store is at v=0, raises one event, attempts commit.
+        behavior.RaiseEvent(new IncrementEvent { Amount = 30 });
+
+        await Should.ThrowAsync<EventStoreOptimisticConcurrencyException>(
+            () => behavior.ConfirmEventsAsync());
+
+        behavior.CurrentVersion.ShouldBe(2);
+
+        // Retry without re-raising: _pending is preserved so the runtime
+        // envelope retry policy gets to drive recovery without the caller
+        // duplicating the event.
+        await behavior.ConfirmEventsAsync();
+
+        behavior.CurrentVersion.ShouldBe(3);
+        var version = await store.GetVersionAsync("agent-conflict");
+        version.ShouldBe(3);
+        var events = await store.GetEventsAsync("agent-conflict");
+        events.Count.ShouldBe(3);
+        events[^1].Version.ShouldBe(3);
+        events[^1].EventData.Unpack<IncrementEvent>().Amount.ShouldBe(30);
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenStoreVersionIsAheadOfEvents_ShouldUseStoreVersionAsAuthority()
+    {
+        // The exact production failure mode behind issue #502: after a partial
+        // compaction (events sorted set wiped, version key intact) the actor
+        // reactivates with no events to replay but the store's version key
+        // ahead of the in-memory _currentVersion. ReplayAsync must reconcile
+        // _currentVersion to the store-authoritative version, otherwise the
+        // first AppendAsync expects v=0 against an actual v=N and conflicts
+        // permanently.
+        var store = new InMemoryEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-version-drift");
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 2 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 3 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 4 });
+        await behavior.ConfirmEventsAsync();
+
+        // Simulate compaction that drained the events sorted set without
+        // rewinding the version key — InMemoryEventStore.DeleteEventsUpToAsync
+        // mirrors the Garnet semantics exactly.
+        await store.DeleteEventsUpToAsync("agent-version-drift", 4);
+
+        var versionKey = await store.GetVersionAsync("agent-version-drift");
+        versionKey.ShouldBe(4);
+        (await store.GetEventsAsync("agent-version-drift")).Count.ShouldBe(0);
+
+        var freshBehavior = new CounterEventSourcingBehavior(store, "agent-version-drift");
+        var replayed = await freshBehavior.ReplayAsync("agent-version-drift");
+
+        replayed.ShouldBeNull();
+        freshBehavior.CurrentVersion.ShouldBe(4);
+
+        // And subsequent commits proceed from the floor instead of conflicting.
+        freshBehavior.RaiseEvent(new IncrementEvent { Amount = 5 });
+        await freshBehavior.ConfirmEventsAsync();
+        freshBehavior.CurrentVersion.ShouldBe(5);
+        (await store.GetVersionAsync("agent-version-drift")).ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenSnapshotPresentAndStoreVersionAhead_ShouldUseStoreVersionAsFloor()
+    {
+        // Mirror of the no-snapshot drift case but with a snapshot present:
+        // snapshot.Version may be ≤ store version after compaction; using
+        // snapshot.Version alone keeps _currentVersion stale.
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+
+        await snapshotStore.SaveAsync(
+            "agent-snapshot-drift",
+            new EventSourcingSnapshot<CounterState>(
+                new CounterState { Count = 6, Name = "snap" },
+                Version: 2));
+
+        // Seed a higher store version with no events past the snapshot.
+        await store.AppendAsync(
+            "agent-snapshot-drift",
+            [BuildEvent(version: 1, amount: 1), BuildEvent(version: 2, amount: 2), BuildEvent(version: 3, amount: 3)],
+            expectedVersion: 0);
+        await store.DeleteEventsUpToAsync("agent-snapshot-drift", 3);
+
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot-drift",
+            snapshotStore: snapshotStore);
+
+        var replayed = await behavior.ReplayAsync("agent-snapshot-drift");
+
+        replayed.ShouldNotBeNull();
+        replayed!.Count.ShouldBe(6);
+        behavior.CurrentVersion.ShouldBe(3);
+    }
+
+    private static StateEvent BuildEvent(long version, int amount) => new()
+    {
+        EventId = $"e-{version}",
+        Timestamp = TimestampHelper.Now(),
+        Version = version,
+        EventType = typeof(IncrementEvent).FullName ?? nameof(IncrementEvent),
+        EventData = Any.Pack(new IncrementEvent { Amount = amount }),
+        AgentId = "agent-conflict",
+    };
+
+    [Fact]
     public async Task ReplayAsync_WhenSnapshotExists_ShouldReplayOnlyDeltaEvents()
     {
         var store = new InMemoryEventStore();

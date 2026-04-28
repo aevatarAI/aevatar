@@ -101,6 +101,28 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 "ok");
             return commitResult;
         }
+        catch (EventStoreOptimisticConcurrencyException ex)
+        {
+            // In-memory _currentVersion is behind the store's authoritative
+            // version. Without refreshing, every retry would rebuild the same
+            // stateEvents at the same expectedVersion and conflict again,
+            // wedging the actor until it deactivates. Update to the store's
+            // version so the next ConfirmEventsAsync (typically driven by the
+            // runtime envelope retry policy) recomputes versions and commits
+            // cleanly. Pending events are left intact: they have not yet been
+            // accepted, and the next attempt will re-stamp them with versions
+            // computed from the refreshed _currentVersion.
+            _logger.LogWarning(
+                ex,
+                "Event sourcing commit hit optimistic concurrency conflict; refreshing _currentVersion so the next retry can recover. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} elapsedMs={ElapsedMs}",
+                _agentId,
+                eventType,
+                ex.ExpectedVersion,
+                ex.ActualVersion,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+            _currentVersion = ex.ActualVersion;
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(
@@ -156,12 +178,28 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         var snapshot = await TryLoadSnapshotAsync(agentId, ct);
         long? fromVersion = snapshot?.Version;
         var events = await _eventStore.GetEventsAsync(agentId, fromVersion, ct);
+
+        // Use the store's authoritative version key as a floor for
+        // _currentVersion. The events sequence and the version key can drift
+        // (interrupted Lua append in Garnet, snapshot+compaction that wiped
+        // events but left the version key, externally-seeded store, etc.) — if
+        // we trust events[^1].Version alone, the actor reactivates with a
+        // _currentVersion that's behind the store and every subsequent
+        // AppendAsync hits EventStoreOptimisticConcurrencyException
+        // permanently. State may be slightly stale (transitions for missing
+        // events are not applied), but commits make forward progress and
+        // ConfirmEventsAsync's catch path can refresh further on conflict.
+        var storeVersion = await _eventStore.GetVersionAsync(agentId, ct);
+
         if (events.Count == 0)
         {
             if (snapshot == null)
+            {
+                _currentVersion = storeVersion;
                 return null;
+            }
 
-            _currentVersion = snapshot.Version;
+            _currentVersion = Math.Max(snapshot.Version, storeVersion);
             return snapshot.State;
         }
 
@@ -172,7 +210,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 state = TransitionState(state, stateEvent.EventData);
         }
 
-        _currentVersion = events[^1].Version;
+        _currentVersion = Math.Max(events[^1].Version, storeVersion);
         return state;
     }
 
