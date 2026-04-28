@@ -9,6 +9,7 @@ filters=(
   "aevatar.foundation.slnf"
   "aevatar.channels.slnf"
   "aevatar.platforms.slnf"
+  "aevatar.agents.slnf"
   "aevatar.ai.slnf"
   "aevatar.cqrs.slnf"
   "aevatar.workflow.slnf"

@@ -14,6 +14,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Xunit;
+using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Scheduled;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -33,10 +36,10 @@ public sealed class AgentBuilderToolTests
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
 
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -59,11 +62,140 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public void TryBuildDailyReportSpec_SkillContent_PinsStructuredSectionSchema_AndOmitWhenEmptyRule()
+    {
+        // Pinning test for issue #423: the daily prompt is treated as a fetch-and-summarize
+        // SPEC, not a freeform brief. This test fails fast on copy edits that would silently
+        // regress the multi-section schema, the per-section line budgets, the "omit empty
+        // section" rule, or the "no measurable activity" empty-day fallback.
+        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+            githubUsername: "alice",
+            repositories: null,
+            out var spec,
+            out var error);
+
+        ok.Should().BeTrue();
+        error.Should().BeNull();
+        spec.Should().NotBeNull();
+
+        var skillContent = spec!.SkillContent;
+
+        // All nine section slots must be pinned in order — the section position itself is
+        // load-bearing for the LLM's emission order, even when section 7 (Trend) is optional
+        // and section 9 (Source health) is conditional. Skipping any number here would let
+        // copy edits silently drop or reorder a section.
+        skillContent.Should().Contain("# Output sections");
+        skillContent.Should().Contain("1. Title");
+        skillContent.Should().Contain("2. Shipped");
+        skillContent.Should().Contain("3. In flight");
+        skillContent.Should().Contain("4. Reviews");
+        skillContent.Should().Contain("5. Issues");
+        skillContent.Should().Contain("6. CI");
+        skillContent.Should().Contain("7. Trend");
+        skillContent.Should().Contain("8. Blockers");
+        skillContent.Should().Contain("9. Source health");
+
+        // Empty-handling rules — the bug we're guarding against is the LLM padding sections
+        // with "no activity in this area" boilerplate when sources are silent.
+        skillContent.Should().Contain("OMIT THE SECTION ENTIRELY");
+        skillContent.Should().Contain("No measurable activity in the last 24h.");
+        skillContent.Should().Contain("Do not invent activity.");
+
+        // Section ordering must be unambiguous when both §8 Blockers and §9 Source health are
+        // present (eanzhao P2 review of PR #458, second pass): the previous "always last"
+        // qualifier on §8 conflicted with "Source health at the very bottom after Blockers".
+        // Promote §9 to a real schema slot and pin §8 as position-locked at slot 8 with §9
+        // as the only section permitted below.
+        skillContent.Should().Contain("Position-locked at slot 8");
+        skillContent.Should().Contain("the only section that may sit below it is the §9 Source health footer");
+        // The empty-day fallback must explicitly forbid both §8 Blockers AND §9 Source health
+        // emission, so a weaker model cannot synthesize a footer onto a genuine empty day.
+        skillContent.Should().Contain("do NOT emit Blockers or Source health");
+
+        // Source-health distinction (eanzhao P1 review of PR #458, refs issue #439):
+        // collapsing 4xx/5xx/error-shaped tool results into "zero data" silently masks
+        // revoked OAuth grants and proxy outages as healthy empty-day reports. Pin the
+        // 2xx-empty vs source-failure distinction AND the rule that the empty-day fallback
+        // only applies when every source returned 2xx, so a copy edit cannot regress this
+        // back to the original "4xx/5xx/empty → treat as zero" wording.
+        skillContent.Should().Contain("2xx with an empty list");
+        skillContent.Should().Contain("Source health:");
+        skillContent.Should().Contain("ONLY valid when EVERY source returned 2xx");
+        skillContent.Should().NotContain("4xx, 5xx, or empty, treat that source as zero");
+
+        // Substitution-variable documentation must be present and tied to the actual
+        // username; otherwise the LLM may emit literal `{username}` placeholders in URLs.
+        skillContent.Should().Contain("`{username}` → `alice`");
+        skillContent.Should().Contain("`{iso_date}` → start of the 24h window");
+
+        // Username substitution must remain intact (other tests check it under the saved-user
+        // / derived-user paths; this assertion guards the no-args path).
+        skillContent.Should().Contain("Primary GitHub username: alice");
+
+        // No-repo mode must include a commit query (Shipped section claims to cover commits)
+        // and must explicitly skip the CI section (no global Actions run endpoint exists).
+        skillContent.Should().Contain("/search/commits?q=author:{username}+author-date:>={iso_date}");
+        skillContent.Should().Contain("CI section is omitted in no-repo mode");
+    }
+
+    [Fact]
+    public void TryBuildDailyReportSpec_RepoAllowlist_SwitchesToPerRepoQueryGuidance()
+    {
+        // Per issue #423: when `repositories=` is provided, the prompt must steer the LLM toward
+        // per-repo searches and explicitly refuse the collapsed-allowlist global query. PR #458
+        // review further required: shipped PRs must filter by author + merge time (search-API
+        // form, not /pulls?state=closed which is keyed on update time and ignores author),
+        // commit shipping must have its own source, repo-scoped issues must include the
+        // commenter case, and the CI query must not embed a {default_branch} placeholder.
+        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+            githubUsername: "alice",
+            repositories: "acme/api, acme/web",
+            out var spec,
+            out var error);
+
+        ok.Should().BeTrue();
+        error.Should().BeNull();
+        spec.Should().NotBeNull();
+
+        var skillContent = spec!.SkillContent;
+        skillContent.Should().Contain("Repository scope: acme/api, acme/web");
+        skillContent.Should().Contain("Repository allowlist provided");
+        skillContent.Should().Contain("do NOT collapse into one global query");
+
+        // Shipped PRs in repo mode: search-API form keyed on author + merge time. The previous
+        // /repos/{owner}/{repo}/pulls?state=closed shape (a) returned closed-but-unmerged PRs
+        // and (b) had no reliable pagination across active repos — codex P1 + eanzhao inline
+        // both flagged this. Guard against regression.
+        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+author:{username}+is:pr+is:merged+merged:>={iso_date}");
+        skillContent.Should().NotContain("/repos/{owner}/{repo}/pulls?state=closed");
+
+        // Shipped commits in repo mode (Shipped section schema includes commits).
+        skillContent.Should().Contain("/search/commits?q=repo:{owner}/{repo}+author:{username}+author-date:>={iso_date}");
+
+        // Issues commented on in repo mode (codex P2: schema says "opened, closed, or
+        // commented on" but author-only query drops the commenter case).
+        skillContent.Should().Contain("/search/issues?q=repo:{owner}/{repo}+commenter:{username}+is:issue+updated:>={iso_date}");
+
+        // CI query must NOT embed a {default_branch} placeholder (the LLM has no way to fill
+        // it without an extra round-trip and a literal `{default_branch}` would land in the
+        // outbound URL). Filter conclusion + created_at client-side instead.
+        skillContent.Should().NotContain("{default_branch}");
+        skillContent.Should().Contain("/repos/{owner}/{repo}/actions/runs?per_page=10");
+
+        // The execution prompt is what the runner sends per-trigger; it must echo the
+        // per-repo constraint so the LLM sees it on every run, not only at agent-create time.
+        spec.ExecutionPrompt.Should().Contain("acme/api, acme/web");
+        spec.ExecutionPrompt.Should().Contain("one pass per repo");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CreateAgent_RejectsGroupChats()
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
-        services.AddSingleton(Substitute.For<IActorRuntime>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IWorkflowAgentCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
@@ -71,10 +203,10 @@ public sealed class AgentBuilderToolTests
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
 
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -116,13 +248,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -156,12 +284,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -195,30 +325,23 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("run_immediately_requested").GetBoolean().Should().BeTrue();
             doc.RootElement.GetProperty("github_username_preference_saved").GetBoolean().Should().BeFalse();
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().TemplateName == "daily_report" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().ScopeId == "scope-1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.ConversationId == "oc_chat_1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.NyxApiKey == "full-key-1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.ApiKeyId == "key-1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.OwnerNyxUserId == "user-1" &&
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-1",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    c.TemplateName == "daily_report" &&
+                    c.ScopeId == "scope-1" &&
+                    c.OutboundConfig.ConversationId == "oc_chat_1" &&
+                    c.OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
+                    c.OutboundConfig.NyxApiKey == "full-key-1" &&
+                    c.OutboundConfig.ApiKeyId == "key-1" &&
+                    c.OutboundConfig.OwnerNyxUserId == "user-1" &&
                     // p2p inbound without LarkUnionId in the request context falls back to the
                     // sender open_id. Lark accepts this only when the relay-side and outbound
                     // apps match; cross-app deployments must populate LarkUnionId at ingress
                     // (see test below) to avoid `code:99992361 open_id cross app` rejections.
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "ou_user_1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "open_id"),
-                Arg.Any<CancellationToken>());
-
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
-                    e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "create_agent"),
+                    c.OutboundConfig.LarkReceiveId == "ou_user_1" &&
+                    c.OutboundConfig.LarkReceiveIdType == "open_id"),
+                true,
                 Arg.Any<CancellationToken>());
 
             var apiKeyRequest = handler.Requests.Should()
@@ -262,13 +385,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-union-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-union-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-union-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -302,12 +421,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -336,12 +457,12 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveId == "oc_dm_chat_1" &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.LarkReceiveIdType == "chat_id"),
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-union-1",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    c.OutboundConfig.LarkReceiveId == "oc_dm_chat_1" &&
+                    c.OutboundConfig.LarkReceiveIdType == "chat_id"),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -369,12 +490,9 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-github-403");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-github-403").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-github-403", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -420,12 +538,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -459,10 +579,12 @@ public sealed class AgentBuilderToolTests
             // is "hint mentions re-authorization", not "hint matches one specific prefix".
             doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("re-authorize");
 
-            // The actor must NOT receive InitializeSkillRunnerCommand — preflight aborts
-            // BEFORE the actor is invoked so we don't leave a broken agent in the catalog.
-            await skillRunnerActor.DidNotReceive().HandleEventAsync(
-                Arg.Any<EventEnvelope>(),
+            // The port must NOT be invoked — preflight aborts BEFORE the lifecycle
+            // dispatch so we don't leave a broken agent in the catalog.
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
             // Codex review (PR #418 r3141846175): even though the api-key carries the right
@@ -502,13 +624,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-fallback-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-fallback-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-fallback-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -542,14 +660,16 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
 
         var logger = new ListLogger<AgentBuilderTool>();
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider(), logger);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -615,13 +735,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-no-fallback-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-no-fallback-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-no-fallback-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -654,14 +770,16 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
 
         var logger = new ListLogger<AgentBuilderTool>();
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider(), logger);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -711,13 +829,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-pref-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-pref-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-pref-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         // Issue #436 PR #438 review: pin that the no-username `/daily` relay path reads the
         // saved github_username from the per-end-user composite scope, not the bot's
@@ -764,13 +878,15 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(userConfigQueryPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -797,12 +913,12 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal)),
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-pref-1",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    c.SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal) &&
+                    c.ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal)),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
             // Direct evidence the per-end-user scope is what reaches the query port.
@@ -834,13 +950,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-derived-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-derived-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-derived-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
         userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
@@ -878,13 +990,15 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(userConfigQueryPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -909,12 +1023,12 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("created");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().SkillContent.Contains("Primary GitHub username: derived-user", StringComparison.Ordinal) &&
-                    e.Payload.Unpack<InitializeSkillRunnerCommand>().ExecutionPrompt.Contains("derived-user", StringComparison.Ordinal)),
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-derived-1",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    c.SkillContent.Contains("Primary GitHub username: derived-user", StringComparison.Ordinal) &&
+                    c.ExecutionPrompt.Contains("derived-user", StringComparison.Ordinal)),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
             handler.Requests.Should().Contain(x => x.Path == "/api/v1/proxy/s/api-github/user");
@@ -929,7 +1043,9 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequired_WhenUsernameCannotBeResolved()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
         userConfigQueryPort.GetAsync("scope-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new StudioUserConfig(string.Empty)));
@@ -964,13 +1080,15 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(userConfigQueryPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -996,7 +1114,11 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("authorization_url").GetString().Should().Be("https://github.example.com/oauth/start");
             doc.RootElement.GetProperty("note").GetString().Should().Contain("run /daily again");
 
-            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -1019,13 +1141,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-save-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-save-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-save-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var userConfigCommandService = Substitute.For<IUserConfigCommandService>();
 
@@ -1060,13 +1178,15 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(userConfigCommandService);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1115,7 +1235,9 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredProxyServices_AreMissing()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -1147,12 +1269,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1176,14 +1300,18 @@ public sealed class AgentBuilderToolTests
 
             // #417: when a required slug has no UserService row, surface a structured
             // `service_not_connected` error naming the slug (was: free-text "Missing required
-            // Nyx proxy services" wrapped in `{error: "..."}`). The actor must NOT be created
-            // and no api-key request should fire.
+            // Nyx proxy services" wrapped in `{error: "..."}`). The lifecycle dispatch
+            // must NOT fire and no api-key request should fire.
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("error").GetString().Should().Be("service_not_connected");
             doc.RootElement.GetProperty("slug").GetString().Should().Be("api-github");
             doc.RootElement.GetProperty("hint").GetString().Should().Contain("api-github");
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
-            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -1198,7 +1326,9 @@ public sealed class AgentBuilderToolTests
         // `is_active: false`, surface `service_inactive` rather than persisting an api-key
         // that NyxID's enforcement will reject at proxy time.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -1224,12 +1354,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1270,7 +1402,9 @@ public sealed class AgentBuilderToolTests
         // call later as `org_role_insufficient`. Surface `service_org_viewer_only` so the
         // user knows to ask an admin or connect a personal credential.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -1296,12 +1430,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1356,12 +1492,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-id-pin");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-id-pin").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-id-pin", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -1390,12 +1523,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1458,12 +1593,9 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-dup");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-dup").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<SkillRunnerGAgent>("skill-runner-dup", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -1497,12 +1629,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1549,7 +1683,9 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsOAuthRequirementBeforeCreatingAgent()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -1581,12 +1717,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1616,7 +1754,11 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("provider_id").GetString().Should().Be("provider-github");
             doc.RootElement.GetProperty("authorization_url").GetString().Should().Be("https://github.example.com/oauth/start");
 
-            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
         }
         finally
@@ -1629,7 +1771,9 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequirementBeforeOAuth()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
@@ -1656,12 +1800,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1693,7 +1839,11 @@ public sealed class AgentBuilderToolTests
 
             handler.Requests.Should().NotContain(x => x.Path == "/api/v1/providers/provider-github/connect/oauth");
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
-            await actorRuntime.DidNotReceive().CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -1716,13 +1866,9 @@ public sealed class AgentBuilderToolTests
                 Status = WorkflowAgentDefaults.StatusRunning,
             }));
 
-        var workflowAgentActor = Substitute.For<IActor>();
-        workflowAgentActor.Id.Returns("workflow-agent-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("workflow-agent-1").Returns(Task.FromResult<IActor?>(null));
-        actorRuntime.CreateAsync<WorkflowAgentGAgent>("workflow-agent-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IActor>(workflowAgentActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
         workflowCommandPort.UpsertAsync(Arg.Any<ScopeWorkflowUpsertRequest>(), Arg.Any<CancellationToken>())
@@ -1742,15 +1888,6 @@ public sealed class AgentBuilderToolTests
                     "workflow-actor-prefix",
                     "workflow-actor-1")));
 
-        var activationService = Substitute.For<IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease>>();
-        activationService.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogMaterializationRuntimeLease(new UserAgentCatalogMaterializationContext
-            {
-                RootActorId = UserAgentCatalogGAgent.WellKnownId,
-                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
-            })));
-        var projectionPort = new UserAgentCatalogProjectionPort(activationService);
-
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
         handler.Add(HttpMethod.Get, "/api/v1/user-services", """
@@ -1768,14 +1905,15 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(workflowCommandPort);
         services.AddSingleton(nyxClient);
-        services.AddSingleton(projectionPort);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1818,32 +1956,25 @@ public sealed class AgentBuilderToolTests
                     request.WorkflowYaml.Contains("delivery_target_id: \"workflow-agent-1\"", StringComparison.Ordinal)),
                 Arg.Any<CancellationToken>());
 
-            await workflowAgentActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(InitializeWorkflowAgentCommand.Descriptor) &&
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().WorkflowActorId == "workflow-actor-1" &&
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ConversationId == "oc_chat_1" &&
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().NyxApiKey == "full-key-2" &&
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().ApiKeyId == "key-2" &&
+            await workflowAgentPort.Received(1).InitializeAsync(
+                "workflow-agent-1",
+                Arg.Is<InitializeWorkflowAgentCommand>(c =>
+                    c.WorkflowActorId == "workflow-actor-1" &&
+                    c.ConversationId == "oc_chat_1" &&
+                    c.NyxApiKey == "full-key-2" &&
+                    c.ApiKeyId == "key-2" &&
                     // Mirror of the daily_report p2p assertion: BuildFromInbound must pin the
                     // sender open_id at delivery-target creation time so FeishuCardHumanInteraction
                     // Port reads it through the catalog projection without re-deriving the type.
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().LarkReceiveId == "ou_user_1" &&
-                    e.Payload.Unpack<InitializeWorkflowAgentCommand>().LarkReceiveIdType == "open_id"),
+                    c.LarkReceiveId == "ou_user_1" &&
+                    c.LarkReceiveIdType == "open_id"),
+                false,
                 Arg.Any<CancellationToken>());
 
-            await workflowAgentActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
-                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "create_agent"),
-                Arg.Any<CancellationToken>());
-
-            await activationService.Received(1).EnsureAsync(
-                Arg.Is<ProjectionScopeStartRequest>(request =>
-                    request.RootActorId == UserAgentCatalogGAgent.WellKnownId &&
-                    request.ProjectionKind == UserAgentCatalogProjectionPort.ProjectionKind),
+            await workflowAgentPort.Received(1).TriggerAsync(
+                "workflow-agent-1",
+                "create_agent",
+                null,
                 Arg.Any<CancellationToken>());
 
             var apiKeyRequest = handler.Requests.Should()
@@ -1878,20 +2009,17 @@ public sealed class AgentBuilderToolTests
                     AgentType = SkillRunnerDefaults.AgentType,
                     TemplateName = "daily_report",
                     ApiKeyId = "key-1",
-                    OwnerNyxUserId = "user-1",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                 }),
                 Task.FromResult<UserAgentCatalogEntry?>(null));
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(Array.Empty<UserAgentCatalogEntry>()));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
-        var registryActor = Substitute.For<IActor>();
-        registryActor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
-        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed)));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
@@ -1902,12 +2030,14 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -1930,18 +2060,13 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("agents").GetArrayLength().Should().Be(0);
             doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Deleted agent");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(DisableSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<DisableSkillRunnerCommand>().Reason == "delete_agent"),
+            await skillRunnerPort.Received(1).DisableAsync(
+                "skill-runner-1",
+                "delete_agent",
                 Arg.Any<CancellationToken>());
 
-            await registryActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
-                    e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "skill-runner-1"),
+            await catalogCommandPort.Received(1).TombstoneAsync(
+                "skill-runner-1",
                 Arg.Any<CancellationToken>());
 
             handler.Requests.Should().ContainSingle(x =>
@@ -1971,7 +2096,7 @@ public sealed class AgentBuilderToolTests
                 AgentType = SkillRunnerDefaults.AgentType,
                 TemplateName = "daily_report",
                 ApiKeyId = "key-stuck",
-                OwnerNyxUserId = "user-1",
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             }));
         // Read-model lags forever in this test: GetStateVersionAsync keeps
         // returning the same version (the projector never advances past it),
@@ -1980,16 +2105,16 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<long?>(7L));
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
-                [new UserAgentCatalogEntry { AgentId = "skill-runner-stuck", OwnerNyxUserId = "user-1" }]));
+                [new UserAgentCatalogEntry { AgentId = "skill-runner-stuck", OwnerScope = OwnerScope.ForNyxIdNative("user-1") }]));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-stuck");
-        var registryActor = Substitute.For<IActor>();
-        registryActor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-stuck").Returns(Task.FromResult<IActor?>(skillRunnerActor));
-        actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Tombstone is dispatched but the projection has not yet caught up; the
+        // port surfaces an Accepted outcome and the tool reports the propagating
+        // notice so the user knows to re-check /agents.
+        catalogCommandPort.TombstoneAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-stuck", """{"ok":true}""");
@@ -1999,7 +2124,9 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(nyxClient);
         // Inject a shrunk wait budget per-instance (3 attempts × 1 ms) so the
         // not-reflected branch fires in <100 ms instead of the production
@@ -2007,10 +2134,10 @@ public sealed class AgentBuilderToolTests
         // approach (codex review r3141706856) so concurrent test classes
         // that exercise other AgentBuilderTool paths cannot be poisoned by
         // shrunk values leaking through process-global state.
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(
             services.BuildServiceProvider(),
             projectionWaitAttempts: 3,
@@ -2041,11 +2168,8 @@ public sealed class AgentBuilderToolTests
                 .Should().Contain("propagating")
                 .And.Contain("/agents");
 
-            await registryActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor) &&
-                    e.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId == "skill-runner-stuck"),
+            await catalogCommandPort.Received(1).TombstoneAsync(
+                "skill-runner-stuck",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -2066,25 +2190,25 @@ public sealed class AgentBuilderToolTests
                 TemplateName = "daily_report",
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
             {
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2104,11 +2228,9 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-1");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
-                    e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "run_agent"),
+            await skillRunnerPort.Received(1).TriggerAsync(
+                "skill-runner-1",
+                "run_agent",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -2130,25 +2252,25 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusDisabled,
             }));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
             {
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2165,7 +2287,10 @@ public sealed class AgentBuilderToolTests
                 """);
 
             result.Should().Contain("is disabled");
-            await skillRunnerActor.DidNotReceive().HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().TriggerAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -2186,25 +2311,25 @@ public sealed class AgentBuilderToolTests
                 Status = WorkflowAgentDefaults.StatusRunning,
             }));
 
-        var workflowAgentActor = Substitute.For<IActor>();
-        workflowAgentActor.Id.Returns("workflow-agent-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("workflow-agent-1").Returns(Task.FromResult<IActor?>(workflowAgentActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
             {
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2226,12 +2351,10 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("workflow-agent-1");
             doc.RootElement.GetProperty("note").GetString().Should().Contain("revision feedback");
 
-            await workflowAgentActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
-                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "run_agent" &&
-                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().RevisionFeedback == "Need stronger hook"),
+            await workflowAgentPort.Received(1).TriggerAsync(
+                "workflow-agent-1",
+                "run_agent",
+                "Need stronger hook",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -2289,24 +2412,25 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(42L),
                 Task.FromResult<long?>(43L));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-fast");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-fast").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
             {
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2378,14 +2502,15 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync("skill-runner-stale", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(7L));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-stale");
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-stale").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
@@ -2393,10 +2518,10 @@ public sealed class AgentBuilderToolTests
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
         // Shrunk budget so the version-stale path finishes in <100 ms.
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(
             services.BuildServiceProvider(),
             projectionWaitAttempts: 3,
@@ -2478,25 +2603,25 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(5L),
                 Task.FromResult<long?>(6L));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
             {
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2516,11 +2641,9 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
             doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling paused");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(DisableSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<DisableSkillRunnerCommand>().Reason == "disable_agent"),
+            await skillRunnerPort.Received(1).DisableAsync(
+                "skill-runner-1",
+                "disable_agent",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -2560,25 +2683,25 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(5L),
                 Task.FromResult<long?>(6L));
 
-        var skillRunnerActor = Substitute.For<IActor>();
-        skillRunnerActor.Id.Returns("skill-runner-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
             {
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2598,11 +2721,9 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
             doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling resumed");
 
-            await skillRunnerActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(EnableSkillRunnerCommand.Descriptor) &&
-                    e.Payload.Unpack<EnableSkillRunnerCommand>().Reason == "enable_agent"),
+            await skillRunnerPort.Received(1).EnableAsync(
+                "skill-runner-1",
+                "enable_agent",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -2642,25 +2763,25 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(5L),
                 Task.FromResult<long?>(6L));
 
-        var workflowAgentActor = Substitute.For<IActor>();
-        workflowAgentActor.Id.Returns("workflow-agent-1");
-
-        var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync("workflow-agent-1").Returns(Task.FromResult<IActor?>(workflowAgentActor));
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
-        services.AddSingleton(actorRuntime);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler())
             {
                 BaseAddress = new Uri("https://nyx.example.com"),
             }));
-        var __callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        __callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        services.AddSingleton(__callerScopeResolver);
+        services.AddSingleton(callerScopeResolver);
         var tool = new AgentBuilderTool(services.BuildServiceProvider());
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
@@ -2680,11 +2801,9 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be(WorkflowAgentDefaults.StatusDisabled);
             doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling paused");
 
-            await workflowAgentActor.Received(1).HandleEventAsync(
-                Arg.Is<EventEnvelope>(e =>
-                    e.Payload != null &&
-                    e.Payload.Is(DisableWorkflowAgentCommand.Descriptor) &&
-                    e.Payload.Unpack<DisableWorkflowAgentCommand>().Reason == "disable_agent"),
+            await workflowAgentPort.Received(1).DisableAsync(
+                "workflow-agent-1",
+                "disable_agent",
                 Arg.Any<CancellationToken>());
         }
         finally

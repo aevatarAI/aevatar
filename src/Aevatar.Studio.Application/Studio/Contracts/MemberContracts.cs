@@ -26,6 +26,18 @@ public static class MemberLifecycleStageNames
 }
 
 /// <summary>
+/// Wire-format status values returned in
+/// <see cref="StudioMemberBindingRevisionActionResponse.Status"/>. Centralizing
+/// the literal lets future lifecycle actions (e.g. "deprecated") declare
+/// themselves alongside <see cref="Retired"/> instead of rotting as a magic
+/// string scattered across handler bodies.
+/// </summary>
+public static class MemberRevisionLifecycleStatusNames
+{
+    public const string Retired = "retired";
+}
+
+/// <summary>
 /// Implementation reference returned to the caller. Always typed — never a
 /// generic property bag — so the frontend can dispatch on
 /// <see cref="ImplementationKind"/> without parsing arbitrary keys.
@@ -134,3 +146,60 @@ public sealed record StudioMemberBindingResponse(
     string ImplementationKind,
     string ScopeId,
     string ExpectedActorId);
+
+/// <summary>
+/// Member-first endpoint contract. Mirrors the existing scope-default
+/// <c>ScopeServiceEndpointContractHttpResponse</c> shape so the frontend can
+/// keep its rendering, while pinning <see cref="MemberId"/> and exposing the
+/// member-first <see cref="InvokePath"/>. <see cref="PublishedServiceId"/> is
+/// included for parity with the legacy serviceId-based payload, not as a
+/// required field for the caller.
+/// </summary>
+public sealed record StudioMemberEndpointContractResponse(
+    string ScopeId,
+    string MemberId,
+    string PublishedServiceId,
+    string EndpointId,
+    string InvokePath,
+    string Method,
+    string RequestContentType,
+    string ResponseContentType,
+    string RequestTypeUrl,
+    string ResponseTypeUrl,
+    bool SupportsSse,
+    bool SupportsWebSocket,
+    bool SupportsAguiFrames,
+    string? StreamFrameFormat,
+    bool SmokeTestSupported,
+    string DefaultSmokeInputMode,
+    string? DefaultSmokePrompt,
+    string? SampleRequestJson,
+    string DeploymentStatus,
+    string RevisionId,
+    string? CurlExample = null,
+    string? FetchExample = null);
+
+/// <summary>
+/// Activation result for a member's binding revision. Carries
+/// <see cref="MemberId"/> as the stable identity; <see cref="PublishedServiceId"/>
+/// is included so the frontend can fall back to the legacy serviceId-keyed
+/// store while it migrates, but no caller should require it.
+/// </summary>
+public sealed record StudioMemberBindingActivationResponse(
+    string ScopeId,
+    string MemberId,
+    string PublishedServiceId,
+    string DisplayName,
+    string RevisionId);
+
+/// <summary>
+/// Generic member-first revision lifecycle action result, mirroring the
+/// legacy <c>ScopeServiceRevisionActionHttpResponse</c>. <see cref="Status"/>
+/// is the lowercase verb (e.g. <c>retired</c>) the legacy payload uses.
+/// </summary>
+public sealed record StudioMemberBindingRevisionActionResponse(
+    string ScopeId,
+    string MemberId,
+    string PublishedServiceId,
+    string RevisionId,
+    string Status);

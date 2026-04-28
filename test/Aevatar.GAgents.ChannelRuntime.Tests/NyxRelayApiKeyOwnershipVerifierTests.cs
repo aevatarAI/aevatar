@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Xunit;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

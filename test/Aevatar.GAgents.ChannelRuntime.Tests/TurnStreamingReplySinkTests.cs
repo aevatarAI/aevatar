@@ -13,8 +13,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task OnDeltaAsync_FirstDelta_DispatchesChunkEventToActor()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 0, out _);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
 
         await sink.OnDeltaAsync("hello", CancellationToken.None);
 
@@ -28,8 +28,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task OnDeltaAsync_WithinThrottle_DefersUntilTimerFires()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 750, out var time);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
 
         await sink.OnDeltaAsync("chunk 1", CancellationToken.None);
         time.Advance(TimeSpan.FromMilliseconds(200));
@@ -55,8 +55,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task OnDeltaAsync_AfterThrottleElapses_DispatchesAgain()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 750, out var time);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
 
         await sink.OnDeltaAsync("chunk one", CancellationToken.None);
         time.Advance(TimeSpan.FromMilliseconds(800));
@@ -69,8 +69,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task FinalizeAsync_BypassesThrottle()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 750, out var time);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
 
         await sink.OnDeltaAsync("chunk one", CancellationToken.None);
         time.Advance(TimeSpan.FromMilliseconds(100));
@@ -83,8 +83,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task FinalizeAsync_NoNewText_DoesNotEmitRedundantChunk()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 0, out _);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
 
         await sink.OnDeltaAsync("same text", CancellationToken.None);
         await sink.FinalizeAsync("same text", CancellationToken.None);
@@ -95,8 +95,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task FinalizeAsync_CancelsPendingFlushTimer()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 750, out var time);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
 
         await sink.OnDeltaAsync("chunk one", CancellationToken.None);
         time.Advance(TimeSpan.FromMilliseconds(200));
@@ -123,9 +123,8 @@ public sealed class TurnStreamingReplySinkTests
         var envelopes = new List<EventEnvelope>();
         var dispatchCount = 0;
 
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("target-actor");
-        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
                 envelopes.Add(call.Arg<EventEnvelope>());
@@ -133,7 +132,7 @@ public sealed class TurnStreamingReplySinkTests
                 return dispatchCount == 1 ? firstDispatchGate.Task : Task.CompletedTask;
             });
 
-        var sink = CreateSink(actor, throttleMs: 0, out _);
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
 
         // First dispatch enters the actor and suspends on firstDispatchGate.
         var deltaTask = sink.OnDeltaAsync("first", CancellationToken.None);
@@ -162,8 +161,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task PendingTimerEqualsLastEmitted_DoesNotEmitDuplicate()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 750, out var time);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
 
         await sink.OnDeltaAsync("hello", CancellationToken.None);
         time.Advance(TimeSpan.FromMilliseconds(100));
@@ -180,8 +179,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task OnDeltaAsync_EmptyText_IsIgnored()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 0, out _);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
 
         await sink.OnDeltaAsync("   ", CancellationToken.None);
         await sink.OnDeltaAsync(string.Empty, CancellationToken.None);
@@ -192,8 +191,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task OnDeltaAsync_SameAsPreviousText_IsIgnored()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 0, out _);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
 
         await sink.OnDeltaAsync("hello", CancellationToken.None);
         await sink.OnDeltaAsync("hello", CancellationToken.None);
@@ -205,11 +204,10 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task OnDeltaAsync_ActorDispatchThrows_DropsChunkWithoutPropagating()
     {
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("target-actor");
-        actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new InvalidOperationException("boom")));
-        var sink = CreateSink(actor, throttleMs: 0, out _);
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
 
         var act = async () => await sink.OnDeltaAsync("hello", CancellationToken.None);
 
@@ -220,8 +218,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task Dispose_PreventsLaterTimerFlush()
     {
-        var (actor, envelopes) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 750, out var time);
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
 
         await sink.OnDeltaAsync("first", CancellationToken.None);
         time.Advance(TimeSpan.FromMilliseconds(100));
@@ -237,8 +235,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task Dispose_AfterFinalize_IsIdempotent()
     {
-        var (actor, _) = BuildRecordingActor();
-        var sink = CreateSink(actor, throttleMs: 0, out _);
+        var (dispatchPort, _) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
 
         await sink.OnDeltaAsync("first", CancellationToken.None);
         await sink.FinalizeAsync("first plus", CancellationToken.None);
@@ -248,13 +246,14 @@ public sealed class TurnStreamingReplySinkTests
     }
 
     private static TurnStreamingReplySink CreateSink(
-        IActor actor,
+        IActorDispatchPort dispatchPort,
         int throttleMs,
         out FakeTimeProvider timeProvider)
     {
         timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 4, 24, 9, 0, 0, TimeSpan.Zero));
         return new TurnStreamingReplySink(
-            actor,
+            dispatchPort,
+            "target-actor",
             correlationId: "corr-1",
             registrationId: "reg-1",
             activityTemplate: new ChatActivity
@@ -280,13 +279,14 @@ public sealed class TurnStreamingReplySinkTests
             NullLogger<TurnStreamingReplySink>.Instance);
     }
 
-    private static (IActor actor, List<EventEnvelope> envelopes) BuildRecordingActor()
+    private static (IActorDispatchPort dispatchPort, List<EventEnvelope> envelopes) BuildRecordingDispatchPort()
     {
         var envelopes = new List<EventEnvelope>();
-        var actor = Substitute.For<IActor>();
-        actor.Id.Returns("target-actor");
-        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        dispatchPort.When(x => x.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => envelopes.Add(call.Arg<EventEnvelope>()));
-        return (actor, envelopes);
+        return (dispatchPort, envelopes);
     }
 }

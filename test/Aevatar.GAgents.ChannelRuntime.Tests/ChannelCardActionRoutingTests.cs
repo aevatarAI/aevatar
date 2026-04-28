@@ -1,3 +1,5 @@
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Xunit;

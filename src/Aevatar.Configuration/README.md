@@ -13,11 +13,21 @@
 ## 核心类型
 
 - `AevatarConfigLoader`：把本地配置合并到 `IConfigurationBuilder`
-- `AevatarSecretsStore`：按 key 读取/写入敏感配置
+- `AevatarSecretsStore`：按 key 读写本地文件 secrets store（`~/.aevatar/secrets.json`），开发/CLI/localnet 默认实现
+- `EnvironmentSecretsStore`：只读 secrets store，仅从 `IConfiguration`（含 `AEVATAR_` 环境变量）读取，`Set`/`Remove` 直接抛 `InvalidOperationException`；mainnet 等生产宿主必须使用此实现，禁止把 secrets 落地到本地文件
 - `AevatarMCPConfig`：读取 MCP 服务器配置
 - `AevatarConnectorConfig`：读取命名 connector 配置（含 allowlist/timeout/retry）
 - `AevatarAgentYamlLoader`：扫描并读取 Agent/Workflow YAML
 - `AevatarPaths`：统一路径定义与目录初始化；另提供 `RepoRoot` / `RepoRootWorkflows`，宿主（如 Api）会从仓库根目录的 `workflows/` 加载 YAML（若存在），用户无需拷贝到 `~/.aevatar`。
+
+### 选择 secrets store
+
+`AddAevatarConfig` 的 `bool allowLocalFileStore = true` 参数控制注册哪个 store：
+
+- `true`（默认）：注册 `AevatarSecretsStore`，并把 `~/.aevatar/secrets.json` 加入 `IConfiguration`。
+- `false`：注册 `EnvironmentSecretsStore`，跳过 `secrets.json` 加载。供 mainnet/生产宿主使用。
+
+宿主层通过 `AevatarDefaultHostOptions.AllowLocalFileSecretsStore` 暴露此开关，由 `AddAevatarDefaultHost` 透传到 `AddAevatarBootstrap` 与 `AddAevatarConfig`。`Aevatar.Mainnet.Host.Api` 在 bootstrap 链路中显式设置为 `false`。
 
 ## Connector 作用与配置
 
