@@ -5,6 +5,8 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using NSubstitute;

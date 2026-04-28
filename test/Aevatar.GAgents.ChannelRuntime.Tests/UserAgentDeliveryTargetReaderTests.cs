@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using NSubstitute;
 using Xunit;

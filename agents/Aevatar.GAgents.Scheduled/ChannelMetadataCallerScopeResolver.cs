@@ -1,7 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgents.Channel.Runtime;
 
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Channel-surface caller-scope resolver. Reads the caller identity tuple from the

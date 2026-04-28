@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Resolves the current caller's <see cref="OwnerScope"/> at the surface boundary.

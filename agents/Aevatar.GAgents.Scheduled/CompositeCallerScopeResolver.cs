@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Tries each registered <see cref="ICallerScopeResolver"/> in order; returns the first

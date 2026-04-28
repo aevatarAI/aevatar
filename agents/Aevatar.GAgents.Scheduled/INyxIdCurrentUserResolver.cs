@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Narrow port that resolves the current NyxID user id from a session token.
@@ -52,18 +52,48 @@ public sealed class NyxIdCurrentUserResolver : INyxIdCurrentUserResolver
         }
     }
 
+    /// <summary>
+    /// Defense-in-depth error detection for NyxID `/me` responses. <c>NyxIdApiClient</c>
+    /// synthesizes <c>{"error": true, "status": &lt;http&gt;, "body": "..."}</c> on HTTP
+    /// failures, but downstream proxies / future error wrappers may use other shapes
+    /// (string message, nested object, etc.). This treats *any* non-null / non-false
+    /// <c>error</c> value as an error envelope, so a stricter wrapper change downstream
+    /// doesn't silently degrade caller-scope resolution to "treat error as success and
+    /// parse a missing user id" — which would surface as a misleading
+    /// <c>CallerScopeUnavailableException("malformed payload")</c> instead of an honest
+    /// "NyxID returned an error envelope".
+    ///
+    /// Parse failures fail closed (return <c>true</c>): a corrupt payload IS an error
+    /// state, not a success state. Returning <c>false</c> here would let the caller try
+    /// to extract an id from undefined ground.
+    /// </summary>
     private static bool IsErrorPayload(string payload)
     {
+        if (string.IsNullOrWhiteSpace(payload))
+            return true;
+
         try
         {
             using var doc = JsonDocument.Parse(payload);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
-            return doc.RootElement.TryGetProperty("error", out var errorProp)
-                   && errorProp.ValueKind == JsonValueKind.True;
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (!doc.RootElement.TryGetProperty("error", out var errorProp))
+                return false;
+
+            return errorProp.ValueKind switch
+            {
+                // Explicit absence: e.g. {"error": null} or {"error": false} → not an error
+                JsonValueKind.Null => false,
+                JsonValueKind.False => false,
+                // Any other shape — boolean true, string message ("502 Bad Gateway"),
+                // nested object ({"code": 401, ...}), array, number — is an error.
+                _ => true,
+            };
         }
         catch (JsonException)
         {
-            return false;
+            return true;
         }
     }
 

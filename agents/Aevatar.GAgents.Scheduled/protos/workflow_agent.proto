@@ -5,6 +5,7 @@ package aevatar.gagents.scheduled;
 option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
+import "user_agent_catalog.proto";
 
 // ─── Workflow Agent (persistent scheduled workflow trigger) ───
 
@@ -18,7 +19,8 @@ message WorkflowAgentState {
   string conversation_id = 7;
   string nyx_provider_slug = 8;
   string nyx_api_key = 9;
-  string owner_nyx_user_id = 10;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
   string api_key_id = 11;
   google.protobuf.Timestamp last_run_at = 12;
   google.protobuf.Timestamp next_run_at = 13;
@@ -26,9 +28,8 @@ message WorkflowAgentState {
   string last_error = 15;
   bool enabled = 16;
   string scope_id = 17;
-  // Channel platform identifier (e.g. "lark", "telegram"). Empty = unspecified;
-  // UserAgentCatalog upsert defaults to "lark" for backward compatibility.
-  string platform = 18;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 18 [deprecated = true];
   // See UserAgentCatalogEntry.lark_receive_id for semantics; copied verbatim
   // into the catalog entry on UpsertRegistryAsync so downstream Lark senders
   // (e.g. FeishuCardHumanInteractionPort) read the typed target.
@@ -38,6 +39,9 @@ message WorkflowAgentState {
   // .lark_receive_id_fallback for runtime fallback semantics.
   string lark_receive_id_fallback = 21;
   string lark_receive_id_type_fallback = 22;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
+  // for new agents; the deprecated scattered fields remain for legacy state.
+  OwnerScope owner_scope = 23;
 }
 
 message InitializeWorkflowAgentCommand {
@@ -50,18 +54,21 @@ message InitializeWorkflowAgentCommand {
   string conversation_id = 7;
   string nyx_provider_slug = 8;
   string nyx_api_key = 9;
-  string owner_nyx_user_id = 10;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
-  // Channel platform identifier; empty → default "lark" at upsert time.
-  string platform = 14;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 14 [deprecated = true];
   string lark_receive_id = 15;
   string lark_receive_id_type = 16;
   // Secondary outbound delivery target. See UserAgentCatalogEntry
   // .lark_receive_id_fallback for runtime fallback semantics.
   string lark_receive_id_fallback = 17;
   string lark_receive_id_type_fallback = 18;
+  // Caller scope captured at create time. Required for new commands.
+  OwnerScope owner_scope = 19;
 }
 
 message WorkflowAgentInitializedEvent {
@@ -74,18 +81,21 @@ message WorkflowAgentInitializedEvent {
   string conversation_id = 7;
   string nyx_provider_slug = 8;
   string nyx_api_key = 9;
-  string owner_nyx_user_id = 10;
+  // Deprecated: superseded by owner_scope.nyx_user_id. Issue #466.
+  string owner_nyx_user_id = 10 [deprecated = true];
   string api_key_id = 11;
   bool enabled = 12;
   string scope_id = 13;
-  // Channel platform identifier; empty → default "lark" at upsert time.
-  string platform = 14;
+  // Deprecated: superseded by owner_scope.platform. Issue #466.
+  string platform = 14 [deprecated = true];
   string lark_receive_id = 15;
   string lark_receive_id_type = 16;
   // Secondary outbound delivery target. See UserAgentCatalogEntry
   // .lark_receive_id_fallback for runtime fallback semantics.
   string lark_receive_id_fallback = 17;
   string lark_receive_id_type_fallback = 18;
+  // Caller scope captured at create time. Replaces owner_nyx_user_id+platform.
+  OwnerScope owner_scope = 19;
 }
 
 message TriggerWorkflowAgentExecutionCommand {

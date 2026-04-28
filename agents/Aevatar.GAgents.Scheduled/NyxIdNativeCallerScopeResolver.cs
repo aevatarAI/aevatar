@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Native NyxID-surface caller-scope resolver (cli + web). Resolves the caller's

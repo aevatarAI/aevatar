@@ -1,6 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Internal-only delivery target reader. Combines the public projection document

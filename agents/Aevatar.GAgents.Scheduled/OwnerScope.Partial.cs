@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 public sealed partial class OwnerScope
 {

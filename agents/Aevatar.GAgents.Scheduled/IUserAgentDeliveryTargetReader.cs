@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.ChannelRuntime;
+namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Internal reader for outbound delivery: returns the agent's delivery target plus the
