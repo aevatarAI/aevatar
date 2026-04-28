@@ -62,12 +62,16 @@ describe("runtimeGAgentApi", () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => [
-        {
-          gAgentType: "Tests.OrdersGAgent",
-          actorIds: ["orders-1", "orders-2"],
-        },
-      ],
+      json: async () => ({
+        scopeId: "scope-1",
+        stateVersion: 42,
+        groups: [
+          {
+            gAgentType: "Tests.OrdersGAgent",
+            actorIds: ["orders-1", "orders-2"],
+          },
+        ],
+      }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
@@ -82,31 +86,29 @@ describe("runtimeGAgentApi", () => {
     expect(input).toBe("/api/scopes/scope-1/gagent-actors");
   });
 
-  it("persists a saved actor for the current scope", async () => {
+  it("keeps compatibility with legacy saved actor arrays", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => "",
+      json: async () => [
+        {
+          gAgentType: "Tests.OrdersGAgent",
+          actorIds: ["orders-1"],
+        },
+      ],
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(
-      runtimeGAgentApi.addActor("scope-1", "Tests.OrdersGAgent", "orders-3")
-    ).resolves.toBeUndefined();
+    await expect(runtimeGAgentApi.listActors("scope-1")).resolves.toEqual([
+      {
+        gAgentType: "Tests.OrdersGAgent",
+        actorIds: ["orders-1"],
+      },
+    ]);
+  });
 
-    const [input, init] = fetchMock.mock.calls[0] as [
-      string,
-      RequestInit | undefined,
-    ];
-    expect(input).toBe("/api/scopes/scope-1/gagent-actors");
-    expect(init?.method).toBe("POST");
-    expect(new Headers(init?.headers).get("Authorization")).toBe(
-      "Bearer access-token"
-    );
-    expect(JSON.parse(String(init?.body))).toEqual({
-      gagentType: "Tests.OrdersGAgent",
-      actorId: "orders-3",
-    });
+  it("does not expose direct actor registration", () => {
+    expect("addActor" in runtimeGAgentApi).toBe(false);
   });
 
   it("removes a saved actor for the current scope", async () => {

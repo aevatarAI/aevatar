@@ -5,6 +5,7 @@ using System.Text.Json;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -144,7 +145,10 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
                 options.EnableScriptingCapability = false;
             });
             builder.AddGAgentServiceCapabilityBundle();
-            builder.Services.AddSingleton<IGAgentActorStore, InMemoryGAgentActorStore>();
+            builder.Services.AddSingleton<InMemoryGAgentActorStore>();
+            builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
+            builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
+            builder.Services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddAuthentication("Test")
                 .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
             builder.Services.AddAuthorization();
@@ -204,52 +208,58 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
         }
     }
 
-    private sealed class InMemoryGAgentActorStore : IGAgentActorStore
+    private sealed class InMemoryGAgentActorStore :
+        IGAgentActorRegistryCommandPort,
+        IGAgentActorRegistryQueryPort,
+        IScopeResourceAdmissionPort
     {
         private readonly List<ActorRegistration> _registrations = [];
 
-        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(BuildGroups(_registrations));
-
-        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
+        public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
             string scopeId,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(BuildGroups(_registrations.Where(registration =>
-                string.Equals(registration.ScopeId, scopeId, StringComparison.Ordinal))));
+            Task.FromResult(new GAgentActorRegistrySnapshot(
+                scopeId,
+                BuildGroups(_registrations.Where(registration =>
+                    string.Equals(registration.ScopeId, scopeId, StringComparison.Ordinal))),
+                0,
+                DateTimeOffset.MinValue,
+                DateTimeOffset.UtcNow));
 
-        public Task AddActorAsync(
-            string gagentType,
-            string actorId,
-            CancellationToken cancellationToken = default) =>
-            AddActorAsync(string.Empty, gagentType, actorId, cancellationToken);
-
-        public Task AddActorAsync(
-            string scopeId,
-            string gagentType,
-            string actorId,
+        public Task<GAgentActorRegistryCommandReceipt> RegisterActorAsync(
+            GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
-            _registrations.Add(new ActorRegistration(scopeId, gagentType, actorId));
-            return Task.CompletedTask;
+            _registrations.Add(new ActorRegistration(registration.ScopeId, registration.GAgentType, registration.ActorId));
+            return Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                GAgentActorRegistryCommandStage.AdmissionVisible));
         }
 
-        public Task RemoveActorAsync(
-            string gagentType,
-            string actorId,
-            CancellationToken cancellationToken = default) =>
-            RemoveActorAsync(string.Empty, gagentType, actorId, cancellationToken);
-
-        public Task RemoveActorAsync(
-            string scopeId,
-            string gagentType,
-            string actorId,
+        public Task<GAgentActorRegistryCommandReceipt> UnregisterActorAsync(
+            GAgentActorRegistration target,
             CancellationToken cancellationToken = default)
         {
             _registrations.RemoveAll(registration =>
-                string.Equals(registration.ScopeId, scopeId, StringComparison.Ordinal) &&
-                string.Equals(registration.GAgentType, gagentType, StringComparison.Ordinal) &&
-                string.Equals(registration.ActorId, actorId, StringComparison.Ordinal));
-            return Task.CompletedTask;
+                string.Equals(registration.ScopeId, target.ScopeId, StringComparison.Ordinal) &&
+                string.Equals(registration.GAgentType, target.GAgentType, StringComparison.Ordinal) &&
+                string.Equals(registration.ActorId, target.ActorId, StringComparison.Ordinal));
+            return Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                target,
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
+        }
+
+        public Task<ScopeResourceAdmissionResult> AuthorizeTargetAsync(
+            ScopeResourceTarget target,
+            CancellationToken cancellationToken = default)
+        {
+            var exists = _registrations.Any(registration =>
+                string.Equals(registration.ScopeId, target.ScopeId, StringComparison.Ordinal) &&
+                string.Equals(registration.GAgentType, target.GAgentType, StringComparison.Ordinal) &&
+                string.Equals(registration.ActorId, target.ActorId, StringComparison.Ordinal));
+            return Task.FromResult(exists
+                ? ScopeResourceAdmissionResult.Allowed()
+                : ScopeResourceAdmissionResult.NotFound());
         }
 
         private static IReadOnlyList<GAgentActorGroup> BuildGroups(IEnumerable<ActorRegistration> registrations) =>

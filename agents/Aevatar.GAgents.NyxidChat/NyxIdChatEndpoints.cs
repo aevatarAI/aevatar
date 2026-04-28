@@ -4,6 +4,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -81,54 +82,132 @@ public static partial class NyxIdChatEndpoints
     private static async Task<IResult> HandleCreateConversationAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
+        [FromServices] IActorRuntime actorRuntime,
         CancellationToken ct)
     {
-        // Conversation creation is fail-fast on IGAgentActorStore persistence.
+        // Conversation creation is fail-fast on registry persistence.
         // NyxId chat depends on the registry being available; there is no
         // degraded mode where a conversation can run without being registered.
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
-        await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+        try
+        {
+            var receipt = await registryCommandPort.RegisterActorAsync(
+                new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
+                ct);
+            if (!receipt.IsAdmissionVisible)
+            {
+                await TryRollbackConversationCreationAsync(
+                    http,
+                    scopeId,
+                    actorId,
+                    registryCommandPort,
+                    actorRuntime);
+                return Results.Json(
+                    new { error = "Conversation registration is not admission-visible" },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+        }
+        catch
+        {
+            await TryRollbackConversationCreationAsync(
+                http,
+                scopeId,
+                actorId,
+                registryCommandPort,
+                actorRuntime);
+            throw;
+        }
+
         return Results.Ok(new { actorId });
+    }
+
+    private static async Task TryRollbackConversationCreationAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        IGAgentActorRegistryCommandPort registryCommandPort,
+        IActorRuntime actorRuntime)
+    {
+        var logger = http.RequestServices?.GetService<ILoggerFactory>()
+            ?.CreateLogger("Aevatar.NyxId.Chat.CreateConversation");
+
+        try
+        {
+            await registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to unregister NyxId chat conversation during create rollback: scope={ScopeId}, actor={ActorId}",
+                scopeId,
+                actorId);
+            return;
+        }
+
+        try
+        {
+            await actorRuntime.DestroyAsync(actorId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Failed to destroy NyxId chat actor {ActorId} during create rollback", actorId);
+        }
     }
 
     private static async Task<IResult> HandleListConversationsAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         CancellationToken ct)
     {
-        try
+        var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
+        var actorIds = snapshot.Groups
+            .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
+            ?.ActorIds
+            ?? [];
+        return Results.Ok(new
         {
-            var groups = await actorStore.GetAsync(scopeId, ct);
-            var actorIds = groups
-                .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
-                ?.ActorIds
-                ?? [];
-            return Results.Ok(actorIds.Select(actorId => new { actorId }));
-        }
-        catch (InvalidOperationException)
-        {
-            return Results.Ok(Array.Empty<object>());
-        }
+            snapshot.ScopeId,
+            snapshot.StateVersion,
+            snapshot.UpdatedAt,
+            snapshot.ObservedAt,
+            Conversations = actorIds.Select(actorId => new { actorId }),
+        });
     }
 
     private static async Task<IResult> HandleDeleteConversationAsync(
         HttpContext http,
         string scopeId,
         string actorId,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IChatHistoryStore chatHistoryStore,
         CancellationToken ct)
     {
-        await actorStore.RemoveActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            scopeId,
+            actorId,
+            ScopeResourceOperation.Delete,
+            ct);
+        if (admissionError != null)
+            return admissionError;
+
+        await registryCommandPort.UnregisterActorAsync(
+            new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
+            ct);
         try
         {
             await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
         }
         catch
         {
-            await TryRestoreConversationRegistrationAsync(http, scopeId, actorId, actorStore);
+            await TryRestoreConversationRegistrationAsync(http, scopeId, actorId, registryCommandPort);
             throw;
         }
 
@@ -139,11 +218,13 @@ public static partial class NyxIdChatEndpoints
         HttpContext http,
         string scopeId,
         string actorId,
-        IGAgentActorStore actorStore)
+        IGAgentActorRegistryCommandPort registryCommandPort)
     {
         try
         {
-            await actorStore.AddActorAsync(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId, CancellationToken.None);
+            await registryCommandPort.RegisterActorAsync(
+                new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
+                CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -153,8 +234,53 @@ public static partial class NyxIdChatEndpoints
                     ex,
                     "Failed to restore NyxId chat conversation registration after history deletion failure: scope={ScopeId}, actor={ActorId}",
                     scopeId,
-                    actorId);
+                actorId);
         }
+    }
+
+    private static async Task<IResult?> AuthorizeConversationAsync(
+        IScopeResourceAdmissionPort admissionPort,
+        string scopeId,
+        string actorId,
+        ScopeResourceOperation operation,
+        CancellationToken ct)
+    {
+        var admission = await admissionPort.AuthorizeTargetAsync(
+            new ScopeResourceTarget(
+                scopeId,
+                ScopeResourceKind.GAgentActor,
+                NyxIdChatServiceDefaults.GAgentTypeName,
+                actorId,
+                operation),
+            ct);
+        return admission.Status switch
+        {
+            ScopeResourceAdmissionStatus.Allowed => null,
+            ScopeResourceAdmissionStatus.NotFound => Results.NotFound(new { error = "Conversation not found" }),
+            ScopeResourceAdmissionStatus.Denied or ScopeResourceAdmissionStatus.ScopeMismatch =>
+                Results.Json(new { error = "Conversation access denied" }, statusCode: StatusCodes.Status403Forbidden),
+            ScopeResourceAdmissionStatus.Unavailable =>
+                Results.Json(new { error = "Conversation admission unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Json(new { error = "Conversation admission failed" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
+    }
+
+    private static async Task<bool> TryAuthorizeConversationAsync(
+        HttpContext http,
+        IScopeResourceAdmissionPort admissionPort,
+        string scopeId,
+        string actorId,
+        ScopeResourceOperation operation,
+        CancellationToken ct)
+    {
+        var admissionError = await AuthorizeConversationAsync(admissionPort, scopeId, actorId, operation, ct);
+        if (admissionError == null)
+            return true;
+
+        http.Response.StatusCode = admissionError is IStatusCodeHttpResult { StatusCode: { } statusCode }
+            ? statusCode
+            : StatusCodes.Status500InternalServerError;
+        return false;
     }
 
     private static async Task InjectUserConfigMetadataAsync(
