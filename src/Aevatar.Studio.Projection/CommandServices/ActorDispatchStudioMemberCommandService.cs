@@ -69,14 +69,13 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
 
         await DispatchAsync(normalizedScopeId, memberId, evt, ct);
 
-        // Two-event create-with-team protocol (ADR-0017 §Locked Rule 3 +
-        // §Cutover Order step 4). When the request carries a non-empty
-        // teamId, immediately dispatch a Reassigned event to the same
-        // actor. The serial actor processing guarantees Created lands
-        // before Reassigned even if the inbox interleaves with other
-        // commands. The team's roster is updated through the same
-        // ReassignTeamAsync dispatch (idempotent set ops) so a partial
-        // outcome cannot leave the team's count drifting.
+        // Two-event create-with-team protocol (ADR-0017 §Locked Rule 3).
+        // When the request carries a non-empty teamId, dispatch a
+        // Reassigned event after the Created event. The two dispatches
+        // are sequential — not atomic within one actor turn — so there
+        // is a brief window where the member exists without a team
+        // assignment. The team's roster update is eventually consistent:
+        // idempotent set ops ensure duplicates/retries collapse to NOOP.
         if (!string.IsNullOrEmpty(request.TeamId))
         {
             var initialTeamId = StudioTeamConventions.NormalizeTeamId(request.TeamId);

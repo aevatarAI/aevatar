@@ -216,9 +216,21 @@ public sealed class StudioMemberServiceBindingTests
         new(
             memberCommandPort,
             memberQueryPort,
+            new InertTeamQueryPort(),
             scopeBindingCommandPort,
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
+
+    private sealed class InertTeamQueryPort : IStudioTeamQueryPort
+    {
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) =>
+            Task.FromResult(new StudioTeamRosterResponse(scopeId, []));
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId, string teamId, CancellationToken ct = default) =>
+            Task.FromResult<StudioTeamSummaryResponse?>(null);
+    }
 
     private static StudioMemberDetailResponse NewDetail(string implementationKindWire)
     {

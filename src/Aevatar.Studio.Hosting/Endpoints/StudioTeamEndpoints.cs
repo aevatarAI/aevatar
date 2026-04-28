@@ -258,18 +258,18 @@ internal static class StudioTeamEndpoints
             // with empty roster".
             _ = await teamService.GetAsync(scopeId, teamId, ct);
 
-            // Today the member detail / summary contract does not surface
-            // team_id, so a true team-scoped roster requires a query port
-            // extension. v1 ships the endpoint as the canonical path (so the
-            // frontend can wire to it once) and returns the scope roster as
-            // a placeholder; the typed filter follows in the same area as
-            // the cross-actor wiring follow-up. Documented in ADR-0017
-            // §Cutover Order step 7.
             var page = (pageSize.HasValue || !string.IsNullOrWhiteSpace(pageToken))
                 ? new StudioMemberRosterPageRequest(pageSize, pageToken)
                 : null;
             var roster = await memberService.ListAsync(scopeId, page, ct);
-            return Results.Ok(roster);
+
+            var filtered = roster.Members
+                .Where(m => string.Equals(m.TeamId, teamId, StringComparison.Ordinal))
+                .ToList();
+            return Results.Ok(new StudioMemberRosterResponse(
+                ScopeId: roster.ScopeId,
+                Members: filtered,
+                NextPageToken: roster.NextPageToken));
         }
         catch (StudioTeamNotFoundException ex)
         {

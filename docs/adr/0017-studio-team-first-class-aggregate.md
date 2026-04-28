@@ -125,8 +125,8 @@ Rationale:
   destination TeamGAgents subscribe to member events and apply set operations:
   - `from = "T1"` matches → T1 removes the member_id (idempotent: no-op if absent)
   - `to = "T2"` matches → T2 adds the member_id (idempotent: no-op if present)
-  - Pure assignment (`from == ""`) is the same protocol with `from` empty.
-  - Pure unassignment (`to == ""`) is the same protocol with `to` empty.
+  - Pure assignment (`from_team_id` absent) is the same protocol with `from` absent.
+  - Pure unassignment (`to_team_id` absent) is the same protocol with `to` absent.
   This collapses three event types into one and removes the leave-old / join-new
   ordering hazard.
 - The Team read model materializes from TeamGAgent's committed state version
@@ -328,11 +328,12 @@ Concretely:
 - "Team aggregate facts (`member_count`)": derived from `member_ids`, written
   alongside in the same `StudioTeamMemberRosterChangedEvent`.
 - "Member create with initial team": when `POST /api/scopes/{scopeId}/members`
-  carries a non-empty `teamId`, `StudioMemberGAgent` commits two events in
-  one actor turn — `StudioMemberCreatedEvent` first (no team field), then
+  carries a non-empty `teamId`, the application service validates that the team
+  exists (read-model check), then the command port dispatches two events
+  sequentially — `StudioMemberCreatedEvent` first (no team field), then
   `StudioMemberReassignedEvent { from_team_id absent, to_team_id = T }`.
-  Atomicity is provided by the actor's serial processing; TeamGAgent observes
-  the `StudioMemberReassignedEvent` and applies the standard idempotent add.
+  Member-side event ordering is guaranteed; TeamGAgent observes the
+  reassignment asynchronously (eventually consistent).
   `StudioMemberCreatedEvent` is **not** extended with a `team_id` field.
 - The Team read model has no fact that is not authoritative in `StudioTeamGAgent`.
 
@@ -355,8 +356,8 @@ Concretely:
 - TeamGAgents must handle the event idempotently: "remove if present" /
   "add if not present" against `member_ids`.
 - Cross-scope reassignment is **not** allowed in v1. `from_team_id` and
-  `to_team_id` (when present) must equal the member's `scope_id`. A guard
-  test enforces this.
+  `to_team_id` (when present) must resolve to a team whose `scope_id` equals
+  the member's `scope_id`. A guard test enforces this.
 
 ### 5. Lifecycle and archive
 
@@ -499,7 +500,7 @@ optional string team_id = 50;
 // Constraints (enforced at the application layer with CI guard):
 //   - At least one of from_team_id / to_team_id must be present.
 //   - from_team_id == to_team_id (both present and equal) is rejected.
-//   - from_team_id and to_team_id (when present) must equal the member's scope_id.
+//   - from_team_id and to_team_id (when present) must resolve to a team whose scope_id equals the member's scope_id.
 message StudioMemberReassignedEvent {
   string member_id              = 1;
   string scope_id               = 2;
@@ -523,9 +524,12 @@ message StudioMemberReassignedEvent {
 >    single responsibility), and immediately
 > 2. `StudioMemberReassignedEvent { from_team_id absent, to_team_id = T }`.
 >
-> Both commits happen inside one actor turn, so atomicity is provided by the
-> actor's serial processing — a partial state where the member exists but the
-> Team's roster has not been notified is not reachable. TeamGAgent only
+> The two events are dispatched sequentially by the application command port.
+> Member-side event ordering is guaranteed (Created lands before Reassigned),
+> but TeamGAgent observes the reassignment asynchronously — there is a brief
+> eventually-consistent window where the member exists but the Team's roster
+> has not yet materialized the addition. This is normal projection lag.
+> TeamGAgent only
 > subscribes to `StudioMemberReassignedEvent`; `StudioMemberCreatedEvent`
 > never feeds the team pipeline. This keeps the event vocabulary minimal and
 > avoids extending `StudioMemberCreatedEvent` with a `team_id` field. See

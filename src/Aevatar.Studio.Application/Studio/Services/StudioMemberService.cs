@@ -40,6 +40,7 @@ public sealed class StudioMemberService : IStudioMemberService
 
     private readonly IStudioMemberCommandPort _memberCommandPort;
     private readonly IStudioMemberQueryPort _memberQueryPort;
+    private readonly IStudioTeamQueryPort _teamQueryPort;
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceCommandPort _serviceCommandPort;
@@ -47,12 +48,14 @@ public sealed class StudioMemberService : IStudioMemberService
     public StudioMemberService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort,
+        IStudioTeamQueryPort teamQueryPort,
         IScopeBindingCommandPort scopeBindingCommandPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceCommandPort serviceCommandPort)
     {
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
+        _teamQueryPort = teamQueryPort ?? throw new ArgumentNullException(nameof(teamQueryPort));
         _scopeBindingCommandPort = scopeBindingCommandPort
             ?? throw new ArgumentNullException(nameof(scopeBindingCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort
@@ -61,21 +64,23 @@ public sealed class StudioMemberService : IStudioMemberService
             ?? throw new ArgumentNullException(nameof(serviceCommandPort));
     }
 
-    public Task<StudioMemberSummaryResponse> CreateAsync(
+    public async Task<StudioMemberSummaryResponse> CreateAsync(
         string scopeId,
         CreateStudioMemberRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // Validation lives at this Application boundary (CLAUDE.md
-        // `严格分层 / 上层依赖抽象`). The Projection-layer command port is
-        // an interchangeable transport; if it ever swaps, the bounds must
-        // not silently disappear with it. Callers receive a single typed
-        // error path here regardless of which command port is wired in.
         StudioMemberCreateRequestValidator.Validate(request);
 
-        return _memberCommandPort.CreateAsync(scopeId, request, ct);
+        if (!string.IsNullOrEmpty(request.TeamId))
+        {
+            var team = await _teamQueryPort.GetAsync(scopeId, request.TeamId, ct);
+            if (team == null)
+                throw new StudioTeamNotFoundException(scopeId, request.TeamId);
+        }
+
+        return await _memberCommandPort.CreateAsync(scopeId, request, ct);
     }
 
     public Task<StudioMemberRosterResponse> ListAsync(

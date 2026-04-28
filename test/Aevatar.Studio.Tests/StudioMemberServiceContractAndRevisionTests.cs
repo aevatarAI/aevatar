@@ -69,6 +69,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
@@ -106,6 +107,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             new RecordingServiceCommandPort());
@@ -122,6 +124,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             new InMemoryServiceLifecycleQueryPort(),
             new RecordingServiceCommandPort());
@@ -143,6 +146,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             new RecordingServiceCommandPort());
@@ -172,6 +176,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
@@ -216,6 +221,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
@@ -247,6 +253,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
@@ -276,6 +283,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
@@ -312,6 +320,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
@@ -425,6 +434,17 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             string scopeId, string memberId, string? fromTeamId, string? toTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not reassign teams.");
+    }
+
+    private sealed class InertTeamQueryPort : IStudioTeamQueryPort
+    {
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) =>
+            Task.FromResult(new StudioTeamRosterResponse(scopeId, []));
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId, string teamId, CancellationToken ct = default) =>
+            Task.FromResult<StudioTeamSummaryResponse?>(null);
     }
 
     private sealed class InertScopeBindingCommandPort : IScopeBindingCommandPort
