@@ -405,9 +405,12 @@ public sealed class ChannelRegistrationTool : IAgentTool
             if (backfill.EmptyScopeRegistrationsObserved > 0)
                 note = $"{note} {backfill.Note}";
         }
-        catch
+        catch (Exception ex)
         {
-            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side observation is currently unavailable; registrations may still refresh asynchronously.";
+            // Mirror the HTTP endpoint catch path so tool callers always receive
+            // a non-null backfill_status enum value (issue #391 review).
+            backfill = ChannelBotRegistrationScopeBackfill.Unavailable(ex.Message);
+            note = $"Projection rebuild dispatched from authoritative channel-bot-registration-store state. {backfill.Note}";
         }
 
         await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
@@ -422,7 +425,13 @@ public sealed class ChannelRegistrationTool : IAgentTool
             actor_id = ChannelBotRegistrationGAgent.WellKnownId,
             observed_registrations_before_rebuild = observedRegistrationsBeforeRebuild,
             empty_scope_registrations_observed = backfill?.EmptyScopeRegistrationsObserved,
-            empty_scope_registrations_backfilled = backfill?.BackfilledRegistrations,
+            empty_scope_registrations_backfilled = backfill?.RepairCommandsDispatched,
+            // Machine-readable backfill outcome + warnings (issue #391); CLI/UI
+            // callers should branch on backfill_status, not infer success from
+            // the 202 rebuild dispatch alone. The catch path guarantees a
+            // non-null value even when the read side throws.
+            backfill_status = backfill?.Status.ToWireString(),
+            warnings = backfill?.Warnings ?? Array.Empty<string>(),
             note,
         });
     }
