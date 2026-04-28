@@ -18,8 +18,10 @@ public static class SkillRunnerDefaults
     public static readonly TimeSpan RetryBackoff = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Throttle for streaming-edit (Lark <c>PATCH /open-apis/im/v1/messages/{id}</c>) deltas.
-    /// Lark's documented edit rate limit is ~5 edits/sec; 300 ms gives us ~3.3 edits/sec which
+    /// Throttle for streaming-edit (Lark <c>PUT /open-apis/im/v1/messages/{id}</c>) deltas.
+    /// PUT is the correct verb for editing text/post messages — PATCH on the same path is
+    /// reserved for editing interactive cards. Lark's documented edit rate limit is ~5
+    /// edits/sec; 300 ms gives us ~3.3 edits/sec which
     /// stays safely under the limit even when the LLM produces tokens in bursts. The first delta
     /// always dispatches immediately (the throttle gate is "elapsed since last emit" and starts
     /// from <c>DateTimeOffset.MinValue</c>) so the placeholder lands as soon as the LLM warms up.

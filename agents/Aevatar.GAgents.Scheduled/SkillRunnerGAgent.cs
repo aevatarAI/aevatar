@@ -142,9 +142,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
             // Streaming-edit delivery happens in-line during ExecuteSkillAsync via the
-            // SkillRunnerStreamingReplySink (POST initial + PATCH each delta). When streaming
-            // can't be configured (no NyxID client, missing outbound config) ExecuteSkillAsync
-            // falls back to a one-shot SendOutputAsync at finalize, so we never need a second
+            // SkillRunnerStreamingReplySink (POST initial + PUT each delta — Lark's text-edit
+            // verb; PATCH on the same path is reserved for cards). When streaming can't be
+            // configured (no NyxID client, missing outbound config) ExecuteSkillAsync falls
+            // back to a one-shot SendOutputAsync at finalize, so we never need a second
             // outbound call here. Persist the run as completed using the buffered final text.
             await PersistDomainEventAsync(new SkillRunnerExecutionCompletedEvent
             {
@@ -291,9 +292,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// Constructs the streaming-edit sink for this run, or returns null when streaming cannot be
     /// configured. The sink writes the first non-empty delta as a Lark
     /// <c>POST /open-apis/im/v1/messages</c> (capturing the returned <c>message_id</c>) and edits
-    /// the same message via <c>PATCH /open-apis/im/v1/messages/{id}</c> for every later delta —
+    /// the same message via <c>PUT /open-apis/im/v1/messages/{id}</c> for every later delta —
     /// so the user sees the daily report land and grow in place rather than receiving one wall of
-    /// text after the LLM finishes.
+    /// text after the LLM finishes. PUT is the correct verb for editing text/post messages;
+    /// <c>PATCH</c> on the same path is reserved for editing interactive cards (see
+    /// <c>SkillRunnerStreamingReplySink.EditAsync</c> for the verb-split rationale).
     /// </summary>
     private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
     {
