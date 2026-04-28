@@ -435,6 +435,354 @@ public sealed class AgentDeliveryTargetToolTests
         tools[0].Name.Should().Be("agent_delivery_targets");
     }
 
+    // ─── Patch coverage gap-fillers (issue #466 / codecov/patch) ───
+
+    [Fact]
+    public async Task ExecuteAsync_Returns_CallerScopeUnavailable_When_Resolver_Throws()
+    {
+        // Catches the ICallerScopeResolver.RequireAsync throw path: the tool surfaces
+        // a structured `caller_scope_unavailable` error rather than falling through
+        // (issue #466 fail-closed acceptance).
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns<Task<OwnerScope?>>(_ => throw new CallerScopeUnavailableException("test resolver failure"));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(resolver);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list"}""");
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("caller_scope_unavailable");
+            doc.RootElement.GetProperty("detail").GetString().Should().Contain("test resolver failure");
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("Re-authenticate");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Returns_Error_When_CommandPort_Missing_For_Upsert()
+    {
+        // Hits the IUserAgentCatalogCommandPort missing branch on the upsert/delete path.
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
+        services.AddSingleton(resolver);
+        // No IUserAgentCatalogCommandPort registered.
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"upsert","agent_id":"agent-1"}""");
+            result.Should().Contain("IUserAgentCatalogCommandPort");
+            result.Should().Contain("not registered");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Upsert_Requires_ConversationId()
+    {
+        var (tool, _, _) = BuildBasicHarness();
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"upsert","agent_id":"agent-1"}""");
+            result.Should().Contain("conversation_id");
+            result.Should().Contain("required");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Upsert_Requires_NyxProviderSlug()
+    {
+        var (tool, _, _) = BuildBasicHarness();
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {"action":"upsert","agent_id":"agent-1","conversation_id":"oc_chat_1"}
+                """);
+            result.Should().Contain("nyx_provider_slug");
+            result.Should().Contain("required");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Upsert_RejectsCreateWhenNoExistingEntry()
+    {
+        // Issue #466 review: upsert is rebind-only. When no existing entry exists for
+        // the caller, fail closed with `delivery_target_not_found_for_caller` instead
+        // of dispatching a credential-less upsert command.
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-new", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(null));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(resolver);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "upsert",
+                  "agent_id": "agent-new",
+                  "conversation_id": "oc_chat_new",
+                  "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("delivery_target_not_found_for_caller");
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("rebind");
+            await commandPort.DidNotReceive().UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Upsert_ReturnsAccepted_WhenCommandPortReportsAccepted()
+    {
+        // Hits the !Observed branch on the upsert path: command port reports Accepted
+        // (projection wait timed out) and the tool surfaces "accepted" + propagating note.
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-pending", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "agent-pending",
+                ConversationId = "oc_chat_old",
+                NyxProviderSlug = "api-lark-bot",
+                OwnerScope = caller,
+            }));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogUpsertResult(CatalogCommandOutcome.Accepted)));
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(resolver);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "upsert",
+                  "agent_id": "agent-pending",
+                  "conversation_id": "oc_chat_new",
+                  "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("note").GetString().Should().Contain("not yet confirmed");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_RequiresAgentId()
+    {
+        var (tool, _, _) = BuildBasicHarness();
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete"}""");
+            result.Should().Contain("agent_id");
+            result.Should().Contain("required");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_ReturnsAccepted_WhenCommandPortReportsAccepted()
+    {
+        // Hits the !Observed branch on the delete path: command port reports Accepted
+        // and the tool maps it to "accepted" + propagating note.
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-slow", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "agent-slow",
+                ConversationId = "oc_chat_slow",
+                NyxProviderSlug = "api-lark-bot",
+                OwnerScope = caller,
+            }));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.TombstoneAsync("agent-slow", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(resolver);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-slow","confirm":true}""");
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("note").GetString().Should().Contain("propagating");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_ReturnsNotFound_WhenCommandPortReportsNotFound()
+    {
+        // Race condition: GetForCallerAsync saw the entry, but by the time we dispatch
+        // the tombstone the command port can't find it (e.g. another delete won the race).
+        // Tool should map NotFound → "not found" rather than swallowing it as success.
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-race", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "agent-race",
+                ConversationId = "oc_chat_race",
+                NyxProviderSlug = "api-lark-bot",
+                OwnerScope = caller,
+            }));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.TombstoneAsync("agent-race", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.NotFound)));
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(resolver);
+        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-race","confirm":true}""");
+            result.Should().Contain("not found");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    /// <summary>
+    /// Minimal harness for tests that only need the early required-field validation
+    /// branches (no real query/command response wiring). Returns a tool with a stub
+    /// query port, a stub command port, and a deterministic caller-scope resolver.
+    /// </summary>
+    private static (AgentDeliveryTargetTool tool, IUserAgentCatalogQueryPort queryPort, IUserAgentCatalogCommandPort commandPort) BuildBasicHarness()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(resolver);
+        return (new AgentDeliveryTargetTool(services.BuildServiceProvider()), queryPort, commandPort);
+    }
+
     private sealed class StaticJsonHandler(string json) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
